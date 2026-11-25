@@ -78,8 +78,13 @@
     "retention-apply": 600000,
     // A schedule preview plans the scheduled pool's retention over the backup list, like retention-plan.
     "schedule-set": 180000, "schedule-run-now": 120000,
-    "ha-check-start": 120000, "ha-convert-start": 120000, "ha-delete": 120000
+    "ha-check-start": 120000, "ha-convert-start": 120000, "ha-import-start": 120000, "ha-delete": 120000
   };
+  // UI-22: a start that does not answer in time is no failure: the job may have started. The same request is sent again
+  // with the same request id (the engine answers with the job it already started) up to HA_START_TRIES times in all,
+  // HA_START_PAUSE_MS apart; only then the page says so and offers 「重新確認狀態」.
+  const HA_START_TRIES = 3;
+  const HA_START_PAUSE_MS = 3000;
   // upload-finish hashes the whole file before it answers: allow 20 MB/s plus two minutes, at least 15 minutes.
   const finishTimeout = size => Math.max(TIMEOUTS["upload-finish"], 120000 + Math.ceil((Number(size) || 0) / (20 * 1000 * 1000)) * 1000);
   const UPLOADING = new Set(["begin", "sending", "finishing"]);
@@ -177,6 +182,14 @@
   // The uploaded HA file holds all of HA, its passwords and tokens too, and stays until deleted (review HA-SEC-06).
   const HA_DELETE_REMINDER = "匯入完成後，建議刪除這份 HA 備份檔（裡面可能有 HA 的密碼與權杖）。";
   const HA_JOB_TITLES = { check: "檢查 HA 備份", convert: "轉換 HA 備份" };
+  // HAOS parity (2026-11-25): the one confirmation of an import and the chain of jobs that follows it. HaIssue levels
+  // (CONTRACT §7): stop = this app cannot be imported, the others go on; confirm = a line of the one confirmation;
+  // auto = the system does it; notice = a reminder. `_shared` holds what belongs to no single app.
+  const HA_LEVELS = ["stop", "confirm", "auto", "notice"];
+  const HA_ISSUE_KEY_RE = /^[a-z0-9.-]{4,70}:[0-9a-f]{16}$/;
+  const HA_SHARED = "_shared";
+  const GROUP_ID_RE = /^g[0-9a-f]{16}$/;
+  const GROUP_STATUS = ["imported", "converted", "rolled-back", "failed", "skipped", "not-started"];
 
   // A scheduled backup is a manual backup the schedule's registry lists (BackupMeta.scheduled): 「排程」.
   const TYPE_LABELS = { manual: "手動", scheduled: "排程", safety: "還原前備份", uploaded: "上傳" };
@@ -399,7 +412,18 @@
   // The HA import jobs reuse known types, so every page accepts their records (DESIGN §1): a check is a `verify` job
   // and a conversion a `backup` job, both with `params.source` "ha".
   const haJobKind = job => (job?.params?.source !== "ha" ? null : job.type === "verify" ? "check" : job.type === "backup" ? "convert" : null);
-  const jobLabel = job => (scheduleOf(job) ? "排程備份作業" : HA_JOB_TITLES[haJobKind(job)] || jobTitle(job?.type));
+  // The jobs of one HA import (hachain.py): `params.group {id, index, count, kind, step, app_id}`.
+  function groupOf(job) {
+    const group = job?.params?.group;
+    return isObject(group) && isString(group.id) && GROUP_ID_RE.test(group.id) && ["ha-import", "ha-restore"].includes(group.kind)
+      && ["convert", "restore"].includes(group.step) && isString(group.app_id) && APP_ID_RE.test(group.app_id) ? group : null;
+  }
+  function jobLabel(job) {
+    if (scheduleOf(job)) return "排程備份作業";
+    const group = groupOf(job);
+    if (group) return `${group.step === "convert" ? "轉換 HA 備份" : "匯入 HA 備份"}「${haAppName(group.app_id)}」`;
+    return HA_JOB_TITLES[haJobKind(job)] || jobTitle(job?.type);
+  }
   const partialRun = job => Boolean(scheduleOf(job)) && job.state === "succeeded" && job.result?.partial === true;
   const skippedApps = result => list(result?.skipped_apps).filter(item => isObject(item) && isString(item.id))
     .map(item => ({ id: item.id, name: str(item.name || item.id), reason: str(item.reason) }));
@@ -779,7 +803,10 @@
       state.jobCache.set(id, entry);
       jobChanged(id);
       return entry;
-    } catch (error) {
+    } catch (cause) {
+      // X-JOB-03: a record that is gone or unreadable only means its progress cannot be seen; the job may still run.
+      const error = cause.code === "not-found" ? new HelperError(`${cause.message}看不到進度不代表作業停了，它可能還在執行；請按「重試」重新讀取，或到「活動紀錄」確認。`,
+        { code: "not-found", details: cause.details }) : cause;
       const previous = state.jobCache.get(id);
       state.jobCache.set(id, { job: previous?.job || null, log: previous?.log || [], error, at: Date.now() });
       jobChanged(id);
@@ -840,6 +867,15 @@
     }
     // The HA import wizard follows its own check and conversion on its page.
     haJobFinished(job);
+    // A job of an import is followed by the next one (written before this one ended): a page that shows it moves on.
+    const following = groupOf(job) ? haGroupInfo(job)?.next : null;
+    if (following) {
+      const route = currentRoute();
+      watchJob(following);
+      if (route.page === "jobs" && route.arg === job.id) {
+        try { cockpit.location.replace(["jobs", following]); } catch { go(["jobs", following]); }
+      }
+    }
   }
 
   function jobChanged(id) {
@@ -3034,6 +3070,8 @@
           ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，並封裝成還原前備份（空間足夠時在應用恢復後才封裝）。"
           : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
+        haIssuesOf(app.issues).length ? h("ul", { class: "ha-issues", "aria-label": `${str(app.name || app.id)} 的還原檢查` },
+          haIssuesOf(app.issues).map(issue => haIssueItem(issue, HA_LEVEL_LABELS[issue.level]))) : null,
         settingsReview(wizard, app),
         content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
     });
@@ -3066,6 +3104,11 @@
           primary: true, disabled: !canContinue || wizard.busy, focus: "pf-next"
         }))
     ];
+  }
+
+  // The lines of the restore check that have a consequence (level confirm), of the apps selected, with the app's name.
+  function restoreConfirmLines(wizard, apps) {
+    return apps.flatMap(app => haIssuesOf(app.issues).filter(issue => issue.level === "confirm").map(issue => ({ app: str(app.name || app.id), id: app.id, issue })));
   }
 
   function stepConfirm(wizard) {
@@ -3111,12 +3154,16 @@
     const checkboxText = !inplace.length ? `我了解還原會在這台設備全新部署上列 ${apps.length} 個應用`
       : !fresh.length ? `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料`
         : `我了解還原會停止並覆寫 ${inplace.length} 個應用的資料，並全新部署 ${fresh.length} 個應用`;
-    const checkboxHint = inplace.length && (sourceSafety || noSafety)
+    const restoreLines = restoreConfirmLines(wizard, apps);
+    const checkboxHint = (inplace.length && (sourceSafety || noSafety)
       ? "已確認受影響的應用與停機時間；若無法建立新的還原前備份，仍會直接還原，且還原失敗時無法自動回復。"
-      : "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。";
+      : "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。") + (restoreLines.length ? "也已確認上面「還原前請確認」列的事。" : "");
     return [
       h("h3", { class: "step-title", text: "確認還原" }),
       h("p", { class: "muted", text: "請確認以下影響。按下「開始還原」後，作業會在背景執行，關閉瀏覽器也會繼續。" }),
+      restoreLines.length ? h("section", { class: "ha-confirm", "aria-labelledby": "restore-confirm-title" },
+        h("h4", { id: "restore-confirm-title", class: "subheading", text: "還原前請確認" }),
+        h("ul", { id: "restore-confirm-list", class: "ha-issues ha-confirm-list" }, restoreLines.map(({ app, issue }) => haIssueItem(issue, app)))) : null,
       h("h4", { class: "subheading", text: "受影響的應用" }),
       h("ul", { class: "card item-list affected" }, apps.map(app => h("li", { class: "item-row" }, tile("package-variant-closed", true),
         h("div", { class: "item-main" }, h("strong", { class: "item-title", text: str(app.name || app.id) }),
@@ -3191,12 +3238,17 @@
     if (noSafety && !wizard.confirmedNoSafety) return;
     const unauthenticated = wizard.backup?.unauthenticated === true;
     if (unauthenticated && !wizard.acceptUnauthenticated) return;
-    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key), noSafety, unauthenticated]);
+    const acknowledged = {};
+    for (const { id, issue } of restoreConfirmLines(wizard, selected)) {
+      if (issue.key && !(acknowledged[id] ||= []).includes(issue.key)) acknowledged[id].push(issue.key);
+    }
+    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key), noSafety, unauthenticated, acknowledged]);
     if (!wizard.requestId || wizard.signature !== signature) {
       wizard.requestId = requestId();
       wizard.signature = signature;
     }
     const request = { backup_id: wizard.backupId, apps, request_id: wizard.requestId, confirm: true };
+    if (Object.keys(acknowledged).length) request.acknowledged = acknowledged;
     if (wizard.key) request.key = wizard.key;
     if (noSafety) request.allow_no_safety = true;
     if (unauthenticated) request.accept_unauthenticated = true;
@@ -3214,6 +3266,12 @@
       loadStatus({ quiet: true });
     } catch (error) {
       wizard.error = error;
+      // What has to be confirmed is not what the page showed (e.g. another service uses the same folder now): check again.
+      if (error.code === "confirmation-required") {
+        wizard.error = null;
+        wizard.notice = `${error.message || "還原前還有事情要確認。"}這和剛才看到的不一樣，已經重新檢查；請看過新的內容後再確認一次。`;
+        queueMicrotask(() => runInspect(wizard, wizard.key, false));
+      }
     } finally {
       wizard.busy = false;
       render();
@@ -3309,6 +3367,9 @@
       workflows: Array.isArray(info.workflows_to_fix) ? haWorkflows(info.workflows_to_fix) : list(fallback.workflows),
       notes: lines(info.notes),
       reminders: lines(info.reminders),
+      // HAOS parity: the Odoo databases that stayed on HA (S6) and the full copy kept before an import (S4, by its id).
+      leftDatabases: list(info.left_databases).filter(item => isString(item) && item.trim()),
+      kept: isString(info.kept) && info.kept.trim() ? info.kept.trim() : null,
       remindersByApp: isObject(info.reminders_by_app) ? Object.fromEntries(Object.entries(info.reminders_by_app)
         .filter(([id]) => APP_ID_RE.test(id)).map(([id, items]) => [id, lines(items)])) : null,
       addons: list(info.addons).filter(item => isObject(item) && isString(item.app_id) && isString(item.name) && item.name.trim())
@@ -3443,6 +3504,8 @@
           h("li", { text: replaces }),
           // What the engine says about this import, e.g. the custom modules that come along (UI-3).
           info.notes.map(note => h("li", { text: note })),
+          // What stays behind (HAOS parity): the Odoo databases that stay on HA, a full copy kept before the import.
+          haStayedLines(info, info.apps).map(line => h("li", { text: line })),
           h("li", { text: "開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。" }),
           h("li", { text: info.testMode ? haTestText(info.apps)
             : `還原完成後，請把 HA 那邊的${addons || "對應"}附加元件停掉，避免同一件事兩邊各做一次。` }))));
@@ -3454,6 +3517,15 @@
     return (wizard && wizardFromHa(wizard)) || fromHaOf(state.backups?.find(item => item.id === job.params?.backup_id));
   }
 
+  // What stays behind, from what the conversion recorded (HAOS parity): Odoo databases that stay on HA, the copy kept before.
+  function haStayedLines(info, apps) {
+    return [
+      apps.includes("odoo") && info.leftDatabases.length
+        ? `HA 的 Odoo 還有 ${quoted(info.leftDatabases)} 沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。` : null,
+      info.kept ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${info.kept}），不會自動刪除；確定用不到時再請工程人員清掉。` : null
+    ].filter(Boolean);
+  }
+
   function haAfterImport(info, restored) {
     const apps = info.apps.length ? restored.filter(id => info.apps.includes(id)) : restored;
     const workflows = apps.includes("n8n") ? info.workflows : [];
@@ -3463,7 +3535,7 @@
     return [
       h("h4", { class: "subheading", text: "匯入之後請做" }),
       h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" },
-        haReminderLines(info, apps).filter(line => !own(line)).map(line => h("li", { text: line })),
+        [...haReminderLines(info, apps), ...haStayedLines(info, apps)].filter(line => !own(line)).map(line => h("li", { text: line })),
         ha ? h("li", { class: "ha-delete-reminder" }, `${HA_DELETE_REMINDER} `,
           link(`前往 HA 備份「${haName(ha)}」`, ["ha", ha.id], { class: "text-link", dataset: { focus: "result-ha-delete" } })) : null),
       workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，可能需要修改：" }),
@@ -3500,34 +3572,68 @@
   // to know before moving it: Odoo's warnings are only there, review P-02), n8n with its counts; `section` is the app's
   // own part, keyed by its id (batch 1: omnigent, hermes, emqx, headscale). An app the check could not open (e.g. a hot
   // EMQX backup whose database did not load) has blockers and no section.
+  // HAOS parity (2026-11-25): `schema: 2` adds `shared`, and per app `importable`, `issues` and `choices`; without it the
+  // engine is older and the two-step flow stays (it would refuse the new fields and commands).
+  function haIssueOf(item) {
+    if (!isObject(item) || !isString(item.message) || !item.message) return null;
+    return {
+      id: isString(item.id) ? item.id : "",
+      // A level this page does not know is shown as a reminder, never hidden.
+      level: HA_LEVELS.includes(item.level) ? item.level : "notice",
+      message: item.message, items: list(item.items).filter(isString),
+      more: isNumber(item.more) && item.more > 0 ? Math.floor(item.more) : 0,
+      action: isString(item.action) ? item.action : "",
+      database: isString(item.database) && item.database ? item.database : null,
+      key: isString(item.key) && HA_ISSUE_KEY_RE.test(item.key) ? item.key : null
+    };
+  }
+  const haIssuesOf = value => list(value).map(haIssueOf).filter(Boolean);
+
+  // `choices` (CONTRACT §7 HaCheck): what the customer may choose for an app. `ok` only matters for databases.
+  function haChoicesOf(value) {
+    const source = isObject(value) ? value : {};
+    const rows = kind => list(source[kind]).filter(row => isObject(row) && isString(row.value) && row.value)
+      .map(row => ({ value: row.value, label: str(row.label) || row.value, ok: row.ok !== false, default: row.default === true }));
+    return { addon: rows("addon"), database: rows("database"), node: rows("node") };
+  }
+
+  // `{schema, shared, apps}`; `apps` as before (blockers and warnings for an older engine) plus, for schema 2, `issues`.
   function haCheckOf(result) {
     const check = isObject(result?.ha_check) ? result.ha_check : null;
     if (!check || !Array.isArray(check.apps)) return null;
-    return check.apps.filter(item => isObject(item) && isString(item.app_id)).map(item => ({
+    const v2 = check.schema === 2;
+    const apps = check.apps.filter(item => isObject(item) && isString(item.app_id)).map(item => ({
       ...item, ok: item.ok === true, blockers: list(item.blockers).filter(isString), warnings: list(item.warnings).filter(isString),
       databases: list(item.odoo?.databases).filter(db => isObject(db) && isString(db.name))
         .map(db => ({ ...db, ok: db.ok === true, blockers: list(db.blockers).filter(isString), warnings: list(db.warnings).filter(isString) })),
       n8n: isObject(item.n8n) ? item.n8n : null,
-      section: Object.hasOwn(item, item.app_id) && isObject(item[item.app_id]) ? item[item.app_id] : null
+      section: Object.hasOwn(item, item.app_id) && isObject(item[item.app_id]) ? item[item.app_id] : null,
+      v2, importable: v2 && item.importable === true, issues: v2 ? haIssuesOf(item.issues) : [], choices: haChoicesOf(v2 ? item.choices : null)
     }));
+    return { schema: v2 ? 2 : 1, shared: v2 ? haIssuesOf(check.shared) : [], apps };
   }
-  // Blockers, then warnings, of an app or an Odoo database.
+  // Blockers, then warnings, of an app or an Odoo database (an older engine's words).
   const haIssues = (item, prefix = "") => [...item.blockers.map((message, index) => ({ id: `${prefix}blocker-${index}`, status: "fail", message })),
     ...item.warnings.map((message, index) => ({ id: `${prefix}warning-${index}`, status: "warn", message }))];
-  // An app can be imported when its check passed and, for Odoo, at least one database did.
-  const haImportable = app => app.ok && (app.app_id !== "odoo" || app.databases.some(db => db.ok));
+  // An app can be imported when its check passed and, for Odoo, at least one database did; schema 2 says it itself.
+  const haImportable = app => (app.v2 ? app.importable : app.ok && (app.app_id !== "odoo" || app.databases.some(db => db.ok)));
 
   // A finished check in the job view (the wizard shows the same verdicts with its choices).
   function haCheckResult(job, result) {
-    const apps = haCheckOf(result);
+    const check = haCheckOf(result);
+    const apps = check?.apps;
     if (!apps) return [h("p", { text: "檢查已完成。" })];
     const ok = apps.length > 0 && apps.every(haImportable);
+    const can = apps.filter(haImportable).length;
     return [
-      h("p", { text: ok ? "所選的應用都可以匯入這台。檢查沒有變更任何資料。" : "有應用沒有通過檢查，要先處理下列問題才能匯入。檢查沒有變更任何資料。" }),
+      check.schema === 2
+        ? h("p", { text: `可以匯入 ${can} 個，不能匯入 ${apps.length - can} 個。檢查沒有變更任何資料。` })
+        : h("p", { text: ok ? "所選的應用都可以匯入這台。檢查沒有變更任何資料。" : "有應用沒有通過檢查，要先處理下列問題才能匯入。檢查沒有變更任何資料。" }),
       ...apps.map(app => h("article", { class: "app-content", dataset: { haApp: app.app_id } },
         h("h4", null, h("span", { text: haAppName(app.app_id) }), " ",
           haImportable(app) ? chip("可以匯入", "ok", "check-circle-outline") : chip("無法匯入", "fail", "close-circle-outline")),
-        haIssues(app).length ? checkList(haIssues(app), `${haAppName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
+        app.v2 ? haIssueGroups(app.issues, `${haAppName(app.app_id)} 的檢查結果`)
+          : haIssues(app).length ? checkList(haIssues(app), `${haAppName(app.app_id)} 的檢查結果`) : h("p", { class: "muted", text: "沒有發現問題。" }),
         haDatabaseSummary(app))),
       h("p", { class: "muted", text: `要匯入，請回到 HA 備份按「檢查並匯入…」${job.params?.key_provided ? "，並重新輸入 HA 備份金鑰" : ""}。` })
     ];
@@ -3538,8 +3644,9 @@
     if (app.app_id !== "odoo" || !app.databases.length) return null;
     return h("ul", { class: "ha-database-list", "aria-label": "HA 的 Odoo 資料庫" }, app.databases.map((db, index) => h("li", { dataset: { database: db.name } },
       h("p", { class: "ha-database-name" }, h("strong", { text: db.name }), " ",
-        db.ok ? chip("可以搬", "ok", "check-circle-outline") : chip("不能搬", "fail", "close-circle-outline")),
-      haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null)));
+        haDatabaseOk(app, db) ? chip("可以搬", "ok", "check-circle-outline") : chip("不能搬", "fail", "close-circle-outline")),
+      app.v2 ? haIssueGroups(app.issues.filter(issue => issue.database === db.name), `資料庫 ${db.name} 的檢查結果`, { empty: false })
+        : haIssues(db).length ? checkList(haIssues(db, `db-${index}-`), `資料庫 ${db.name} 的檢查結果`) : null)));
   }
 
   // A finished conversion in the job view: the new backup, and the way on to restoring it.
@@ -3649,7 +3756,7 @@
       ...apps.map(app => row(app.addon, app.slug, app.version, app.installed
         ? [h("span", { class: "chips" }, chip("可以匯入", "ok", "check-circle-outline")), h("span", { class: "secondary", text: `這台的「${app.name}」` })]
         : [h("span", { class: "chips" }, chip("還沒安裝", "warn", "alert-outline")),
-          h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先到「應用軟體」安裝同版本` })])),
+          h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它` })])),
       ...haOtherAddons(ha).map(item => row(str(item.name) || str(item.slug), str(item.slug), str(item.version),
         haNotMovedText(item)
           ? [h("span", { class: "chips" }, chip("不會搬過來", "warn", "alert-outline")),
@@ -3667,7 +3774,7 @@
         notMoved.length ? h("ul", { class: "bullet-list ha-not-moved" }, notMoved.map(line => h("li", { text: line }))) : null,
         !apps.length ? infoNotice("這份 HA 備份沒有這台可以匯入的應用。")
           : !apps.some(app => app.installed)
-            ? infoNotice("要匯入，請先到「應用軟體」安裝這台還沒有的應用（版本要和 HA 那邊相同），再回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
+            ? infoNotice("要匯入，請先用安裝套件在這台安裝並啟動這台還沒有的應用（版本要和 HA 那邊相同），再到「應用設定」加入它，然後回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
   }
 
   function deleteHaBackup(ha) {
@@ -3706,7 +3813,11 @@
     return {
       haId: ha.id, step: "apps", selected, keyNeeded: haNeedsKey(ha, [...selected]), keyForced: false, keyText: "",
       keyError: null, check: null, odooDatabase: null, testMode: false, jobId: null, finishedJob: null, ui: null, cancelBusy: false,
-      requestId: null, signature: "", busy: false, error: null, notice: null, announced: ""
+      requestId: null, signature: "", busy: false, error: null, notice: null, announced: "",
+      // HAOS parity: `v2` once a check came back with schema 2 (the one-confirmation flow); `shared` its lines of no single
+      // app; `choices` the customer's picks; `ackSignature` the confirmation that was ticked; the import's chain.
+      v2: false, shared: [], choices: {}, checkedChoices: {}, sentChoices: {}, ackSignature: null, checkJobId: null,
+      group: null, groupEnded: null, thenRestore: true, keyCreated: false, importApps: [], groupJobs: []
     };
   }
 
@@ -3728,18 +3839,24 @@
     }
   }
 
-  const haSteps = wizard => [["apps", "選擇應用"], wizard.keyNeeded ? ["key", "金鑰"] : null, ["check", "檢查"], ["options", "結果與選項"],
-    ["convert", "轉換"], ["restore", "還原"]].filter(Boolean);
+  // The one-confirmation flow (schema 2) ends in 結果與確認 and 匯入; an engine without it keeps the two steps.
+  const haSteps = wizard => (wizard.v2 || wizard.step === "import"
+    ? [["apps", "選擇應用"], wizard.keyNeeded ? ["key", "金鑰"] : null, ["check", "檢查"], ["options", "結果與確認"], ["import", "匯入"]]
+    : [["apps", "選擇應用"], wizard.keyNeeded ? ["key", "金鑰"] : null, ["check", "檢查"], ["options", "結果與選項"],
+      ["convert", "轉換"], ["restore", "還原"]]).filter(Boolean);
 
   function haWizardView(ha, wizard) {
-    const body = { apps: haStepApps, key: haStepKey, check: haStepJob, options: haStepOptions, convert: haStepJob }[wizard.step]?.(ha, wizard) || [];
+    const body = { apps: haStepApps, key: haStepKey, check: haStepJob, options: wizard.v2 ? haStepConfirm : haStepOptions, convert: haStepJob,
+      import: haStepImport }[wizard.step]?.(ha, wizard) || [];
     const side = h("aside", { class: "card side-card", "aria-labelledby": "ha-side" },
       h("h3", { id: "ha-side", text: "匯入怎麼進行" }),
       h("ul", { class: "bullet-list" }, [
         "檢查和轉換都不會停止或變更這台的應用，HA 備份檔本身也不會被改動。",
         ...haRules(haApps(ha).map(app => app.id)),
         "HA 備份金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
-        "轉換完成後，要在還原步驟確認才會取代這台的資料；開始前會先自動保存一份還原前備份，失敗會自動回復。"
+        wizard.v2 || wizard.step === "import"
+          ? "看過檢查結果、勾選一次確認後，系統會一個應用接著一個應用匯入：每個應用開始前先自動保存一份匯入前備份，失敗只退回它自己，其他應用照常。"
+          : "轉換完成後，要在還原步驟確認才會取代這台的資料；開始前會先自動保存一份還原前備份，失敗會自動回復。"
       ].map(item => h("li", { text: item }))));
     return [
       backLink("返回備份列表", ["backups"]),
@@ -3755,6 +3872,10 @@
   const haDeviceKeyNotice = () => infoNotice("尚未建立加密金鑰。轉換好的備份會依「預設加密備份」用這台設備的金鑰加密，所以要先完成金鑰設定才能轉換。"
     + "設定好後，請回到這份 HA 備份重新開始匯入。", "warn", "key-outline",
     link("設定加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
+  // UI-17: this device's key is made when the import starts (a backup component that does not do it is told by its check);
+  // the banner on top then asks for the emergency key until it is saved.
+  const haKeyAutoNotice = () => infoNotice("這台還沒有加密金鑰。匯入開始時會自動建立一把，完成後請下載並保存緊急金鑰（沒有它，換機或重灌後就解不開加密的備份）。",
+    "info", "key-outline", link("加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
 
   const haActiveNotice = active => infoNotice(`目前有作業正在進行（${jobLabel(active)}），要等它完成後才能開始。`, "info", "progress-clock",
     link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "ha-active-job" } }));
@@ -3791,12 +3912,12 @@
           h("span", { class: "choice-body" }, h("strong", { text: `這台的「${app.name}」` }),
             h("small", { id: `${id}-help`, text: app.installed
               ? `資料來自 HA 附加元件「${app.addon}」${app.version ? `（版本 ${app.version}）` : ""}。`
-              : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
+              : "這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它。" })));
       })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
       haNotMoved(ha).length ? h("ul", { class: "bullet-list ha-not-moved" }, haNotMoved(ha).map(line => h("li", { text: line }))) : null,
       slow ? h("p", { class: "hint ha-slow", text: slow }) : null,
-      haNoDeviceKey() ? haDeviceKeyNotice() : null,
+      haNoDeviceKey() ? haKeyAutoNotice() : null,
       active && !wizard.keyNeeded ? haActiveNotice(active) : null,
       wizardError(wizard),
       h("div", { class: "form-footer button-group" },
@@ -3820,11 +3941,14 @@
   }
 
   function haStepKey(ha, wizard) {
+    // UI-12: a Tab or another invisible character is a reminder, not a stop; the key is tried as it is typed.
+    const odd = h("p", { id: "ha-key-odd", class: "hint", role: "status", hidden: !HA_KEY_ODD_RE.test(str(wizard.keyText)),
+      text: "金鑰裡有 Tab 或換行等看不見的字元。如果是複製時多出來的，請刪掉；也可以照原樣按「下一步」試試看。" });
     const input = h("input", {
       id: "ha-key", type: "text", class: "mono", autocomplete: "off", autocapitalize: "off", spellcheck: "false", maxLength: HA_KEY_MAX,
       placeholder: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12", "aria-describedby": "ha-key-hint", disabled: wizard.busy, dataset: { focus: "ha-key" },
       on: {
-        input: event => { wizard.keyText = event.target.value; },
+        input: event => { wizard.keyText = event.target.value; odd.hidden = !HA_KEY_ODD_RE.test(event.target.value); },
         keydown: event => {
           if (event.key !== "Enter" || event.isComposing) return;
           event.preventDefault();
@@ -3838,7 +3962,7 @@
       h("h3", { class: "step-title", text: "輸入 HA 備份金鑰" }),
       h("p", { class: "muted", text: "這份 HA 備份有加密，檢查和轉換都要用 HA 備份金鑰把它解開。" }),
       h("div", { class: "field" }, h("label", { htmlFor: "ha-key", text: "HA 備份金鑰" }), input,
-        h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE })),
+        h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE }), odd),
       h("p", { class: "hint", text: "金鑰只留在這個頁面，交給這次的檢查和轉換使用，不會存到這台設備；離開這一頁或結束這次匯入後，就要重新輸入。" }),
       wizard.keyError ? h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("p", { text: wizard.keyError })) : null,
       active ? haActiveNotice(active) : null,
@@ -3851,13 +3975,17 @@
     ];
   }
 
+  // UI-12: only what can never be a key stops here (empty, too long, a NUL, which the engine refuses too). A Tab or another
+  // control character may belong to an old password that worked, so the key is tried as it is, and a refusal says why it may be.
+  const HA_KEY_ODD_RE = /[\u0001-\u001f\u007f-\u009f]/;
   function haKeyProblem(text) {
     const value = str(text);
     if (!value.trim()) return "請輸入 HA 備份金鑰。";
     if (value.length > HA_KEY_MAX) return "內容太長，不像是 HA 備份金鑰。";
-    if (CONTROL_RE.test(value)) return "金鑰不能包含換行或其他控制字元。";
+    if (value.includes("\u0000")) return "金鑰不能包含空字元（NUL）。";
     return null;
   }
+  const HA_KEY_ODD_HINT = "你輸入的金鑰含有 Tab 或換行等看不見的字元。如果是複製時多出來的，請刪掉後再試一次；金鑰本來就有這些字元時，請確認和 HA 上的完全一樣。";
 
   // HA uses the key exactly as typed (HA-FACTS §1.8): spaces around a key in HA's own format can only come from copying
   // it, any other password is sent as it is.
@@ -3884,8 +4012,10 @@
 
   // A refusal of a job start: a key problem goes back to the key step, an engine without HA imports says so.
   function haStartFailed(wizard, error) {
-    if (["key-required", "wrong-key"].includes(error.code)) Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", keyError: error.message });
-    else wizard.error = unsupported(error) ? new HelperError(HA_UNSUPPORTED, { code: "unsupported" }) : error;
+    if (["key-required", "wrong-key"].includes(error.code)) {
+      const odd = error.code === "wrong-key" && HA_KEY_ODD_RE.test(str(wizard.keyText));
+      Object.assign(wizard, { keyNeeded: true, keyForced: true, step: "key", keyError: odd ? `${error.message}${HA_KEY_ODD_HINT}` : error.message });
+    } else wizard.error = unsupported(error) ? new HelperError(HA_UNSUPPORTED, { code: "unsupported" }) : error;
   }
 
   async function startHaCheck(wizard) {
@@ -3898,15 +4028,19 @@
     }
     const apps = [...wizard.selected];
     const key = haKey(wizard);
-    const request = { ha_backup_id: wizard.haId, apps, request_id: haRequestId(wizard, ["check", wizard.haId, apps, Boolean(key)]) };
+    // The picks go back to the engine only once it has shown that it takes them (schema 2).
+    const choices = wizard.v2 ? haCheckChoices(wizard) : {};
+    const request = { ha_backup_id: wizard.haId, apps, request_id: haRequestId(wizard, ["check", wizard.haId, apps, Boolean(key), choices]) };
+    if (Object.keys(choices).length) request.choices = choices;
     if (key) request.key = key;
     Object.assign(wizard, { busy: true, error: null, notice: null, keyError: null });
     render();
     try {
-      const data = await call("ha-check-start", request);
+      const data = await haStartCall(wizard, "ha-check-start", request, job => job.type === "verify" && job.params?.source === "ha" && job.params.ha_backup_id === wizard.haId);
       requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
       if (state.haWizard !== wizard) return;
-      Object.assign(wizard, { requestId: null, signature: "", step: "check", jobId: data.job_id, check: null });
+      Object.assign(wizard, { requestId: null, signature: "", step: "check", jobId: data.job_id, check: null, checkJobId: data.job_id,
+        sentChoices: structuredClone(choices), notice: null });
       announce(data.deduplicated ? "這個檢查要求先前已送出，正在顯示同一個作業。" : "已開始檢查 HA 備份。");
       watchJob(data.job_id);
       loadStatus({ quiet: true });
@@ -3972,22 +4106,32 @@
     ui.nodes.progress.value = percent;
     text(ui.nodes.percent, `${percent}%`);
     text(ui.nodes.message, job ? str(job.progress?.message) || JOB_STATES[job.state] || "" : "正在載入作業狀態…");
-    ui.nodes.cancel.hidden = !job || !ACTIVE.has(job.state) || !job.cancellable;
+    // The import has its own controls (the whole import, or after this app); the block shows only the progress there.
+    ui.nodes.cancel.hidden = wizard.step === "import" || !job || !ACTIVE.has(job.state) || !job.cancellable;
     ui.nodes.cancel.disabled = wizard.cancelBusy;
   }
 
   function cancelHaJob(wizard) {
     const id = wizard.jobId;
     if (!id) return;
+    const importing = wizard.step === "import";
     confirmDialog({
-      title: wizard.step === "convert" ? "取消轉換？" : "取消檢查？",
-      body: [h("p", { text: "作業會在下一個安全的檢查點停止。這台的應用不受影響，也不會建立備份。" })],
-      confirmLabel: "取消作業", cancelLabel: "繼續執行",
+      title: importing ? "取消匯入？" : wizard.step === "convert" ? "取消轉換？" : "取消檢查？",
+      body: [h("p", { text: importing
+        ? "正在處理的應用會在下一個安全的檢查點停止，後面的應用不會開始。已經匯入完成的應用不會退回，它們各有一份匯入前備份；這台其他的應用不受影響。"
+        : "作業會在下一個安全的檢查點停止。這台的應用不受影響，也不會建立備份。" })],
+      confirmLabel: importing ? "取消匯入" : "取消作業", cancelLabel: "繼續執行",
       action: async () => {
         wizard.cancelBusy = true;
         updateHaJobUi(wizard);
         try {
-          await call("job-cancel", { job_id: id });
+          try {
+            await call("job-cancel", { job_id: id });
+          } catch (error) {
+            // The restore of an app has a stage that cannot be interrupted: finishing this app is the way to stop.
+            if (importing && error.code === "not-cancellable") throw new HelperError(`${error.message} 可以改按「做完這個應用就停止」。`, { code: error.code });
+            throw error;
+          }
         } finally {
           wizard.cancelBusy = false;
           try {
@@ -4009,6 +4153,10 @@
     const wizard = state.haWizard;
     if (!wizard || wizard.jobId !== job.id || wizard.finishedJob === job.id) return;
     wizard.finishedJob = job.id;
+    if (wizard.step === "import") {
+      haImportJobFinished(wizard, job);
+      return;
+    }
     const convert = wizard.step === "convert";
     if (job.state === "succeeded" && convert) {
       haHandOver(wizard, job);
@@ -4033,12 +4181,26 @@
   }
 
   // A new check replaces the last one; a chosen Odoo database stays chosen while it still passes, and the only one that
-  // passes is chosen for the administrator.
-  function applyHaCheck(wizard, apps) {
+  // passes is chosen for the administrator (UI-16). Schema 2 says which databases can move in `choices.database`.
+  function applyHaCheck(wizard, check) {
+    const apps = check.apps;
     const odoo = apps.find(app => app.app_id === "odoo");
-    const usable = odoo?.ok ? odoo.databases.filter(db => db.ok) : [];
-    Object.assign(wizard, { check: apps, step: "options",
-      odooDatabase: usable.some(db => db.name === wizard.odooDatabase) ? wizard.odooDatabase : usable.length === 1 ? usable[0].name : null });
+    let usable = [];
+    if (check.schema === 2) {
+      usable = odoo && haImportable(odoo) ? odoo.databases.map(db => db.name).concat(odoo.choices.database.map(row => row.value))
+        .filter((name, index, all) => all.indexOf(name) === index && haDatabaseOk(odoo, { name })) : [];
+    } else usable = odoo?.ok ? odoo.databases.filter(db => db.ok).map(db => db.name) : [];
+    const preferred = check.schema === 2 ? odoo?.choices.database.find(row => row.ok && row.default)?.value : null;
+    Object.assign(wizard, { check: apps, shared: check.shared, v2: check.schema === 2, step: "options", ackSignature: null,
+      checkedChoices: structuredClone(wizard.sentChoices || {}),
+      odooDatabase: usable.includes(wizard.odooDatabase) ? wizard.odooDatabase : usable.length === 1 ? usable[0] : usable.includes(preferred) ? preferred : null });
+    // A pick that the new check no longer offers is dropped.
+    for (const app of apps) {
+      for (const kind of ["addon", "node"]) {
+        const picked = haChoice(wizard, app.app_id, kind);
+        if (picked && !app.choices[kind].some(row => row.value === picked)) haSetChoice(wizard, app.app_id, kind, null);
+      }
+    }
   }
 
   const haChosen = wizard => [...wizard.selected].filter(id => list(wizard.check).some(app => app.app_id === id && haImportable(app)));
@@ -4046,16 +4208,21 @@
   function haStepOptions(ha, wizard) {
     const apps = list(wizard.check).filter(app => wizard.selected.has(app.app_id));
     const unanswered = [...wizard.selected].filter(id => !apps.some(app => app.app_id === id));
-    const blocked = !apps.length || unanswered.length > 0 || !apps.every(haImportable);
-    const needDatabase = !blocked && apps.some(app => app.app_id === "odoo") && !wizard.odooDatabase;
+    const can = apps.filter(haImportable);
+    const cannot = apps.filter(app => !haImportable(app));
+    // UI-14, UI-15: one app that does not pass (or has no result) never holds back the others; only none at all stops here.
+    const blocked = !can.length;
+    const needDatabase = !blocked && can.some(app => app.app_id === "odoo") && !wizard.odooDatabase;
     const active = activeJob();
-    const ids = apps.map(app => app.app_id);
+    // The words about code and about a test import are for the apps that go; when none can, for the ones that were asked.
+    const ids = (can.length ? can : apps).map(app => app.app_id);
     return [
       h("h3", { class: "step-title", text: "檢查結果與選項" }),
       h("p", { class: "muted", text: "以下是剛才檢查的結果，沒有變更任何資料。" }),
       wizard.notice ? infoNotice(wizard.notice) : null,
       h("div", { class: "app-preflight-list" }, apps.map(app => haAppCard(ha, wizard, app))),
-      unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(haAppName))}，請重新檢查。`, "fail", "close-circle-outline") : null,
+      unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(haAppName))}，這次不會匯入${unanswered.length > 1 ? "它們" : "它"}；可以按「重新檢查」再試。`, "warn", "alert-outline") : null,
+      cannot.length && !blocked ? infoNotice(`${quoted(cannot.map(app => haAppName(app.app_id)))}沒有通過檢查，這次不會匯入，這台的${cannot.length > 1 ? "它們" : "它"}也不會有任何變更；其他應用可以繼續轉換。`, "warn", "alert-outline") : null,
       infoNotice(haTrustText(ids), "info", "shield-check-outline"),
       h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
         h("input", {
@@ -4064,8 +4231,7 @@
         }),
         h("span", { class: "choice-body" }, h("strong", { text: haTestLabel(ids) }),
           h("small", { id: "ha-test-mode-help", text: haTestHelp(ids, apps) }))),
-      blocked ? infoNotice(`有應用沒有通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」${apps.some(haImportable)
-        ? "，或按「上一步」取消勾選沒有通過的應用，只匯入其他應用" : ""}。`, "fail", "close-circle-outline") : null,
+      blocked ? infoNotice("沒有應用通過檢查，無法轉換。請依上面的說明處理後按「重新檢查」，或按「上一步」改選其他應用。", "fail", "close-circle-outline") : null,
       needDatabase ? h("p", { class: "hint", text: "請先選擇要搬過來的 Odoo 資料庫。" }) : null,
       haNoDeviceKey() ? haDeviceKeyNotice() : null,
       active ? haActiveNotice(active) : null,
@@ -4114,6 +4280,8 @@
       // A check cut short (e.g. HA's EMQX database did not load) has no section and no version of this device.
       return `HA 附加元件版本 ${ha}${product ? `（${short} ${product}）` : ""}${app.target_version ? `，這台的 ${short} ${here}` : ""}。`;
     }
+    // Schema 2 lists a module that differs as a line of its own (it informs, it no longer stops): nothing is claimed here.
+    if (app.v2) return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}。`;
     const verdict = haImportable(app) ? "，模組版本相同" : app.databases.length ? "，結果見下方各資料庫" : "的版本";
     return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}；Odoo 逐一比對每個模組${verdict}。`;
   }
@@ -4368,7 +4536,8 @@
     if (key) request.key = key;
     let data;
     try {
-      data = await call("ha-convert-start", request);
+      data = await haStartCall(wizard, "ha-convert-start", request, job => job.type === "backup" && job.params?.source === "ha" && !groupOf(job)
+        && job.params.ha_backup_id === wizard.haId);
     } catch (error) {
       if (unsupported(error)) throw new HelperError(HA_UNSUPPORTED, { code: "unsupported" });
       if (!["key-required", "wrong-key"].includes(error.code) || state.haWizard !== wizard) throw error;
@@ -4393,7 +4562,10 @@
     const result = isObject(job.result) ? job.result : {};
     const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
     if (!backupId) {
-      wizard.error = new HelperError("轉換已完成，但作業沒有回報新的備份。請到「備份列表」找標示「由 HA 轉換」的備份，再按「還原」。", { code: "bad-output" });
+      // UI-21: the backup is in the list all the same; this is a hint, not an error.
+      Object.assign(wizard, { step: "options", jobId: null, error: null,
+        notice: "轉換已完成，但作業沒有回報新的備份編號。轉換好的備份已經在「備份列表」，標示「由 HA 轉換」；請到那裡找它，再按「還原」。" });
+      loadBackups();
       render();
       return;
     }
@@ -4404,6 +4576,621 @@
     closeHaWizard();
     announce("HA 備份已轉換成這台的備份，接著檢查能否還原。");
     haRestore(backupId, info);
+  }
+
+  // ------------------------------------------------------------------ HA import with one confirmation (HAOS parity)
+
+  // CONTRACT §7 (HaCheck schema 2, ha-import-start) and §8 "HA import chain": the check lists, per app, what stops it, what
+  // the customer must confirm, what the system does and what to know afterwards; one list and one tick start the whole import,
+  // which then runs app after app, each with its own pre-restore backup and its own automatic rollback. Everything in an
+  // issue comes from a backup or this device: textContent only.
+  const HA_LEVEL_LABELS = { stop: "不能匯入", confirm: "要確認", auto: "系統會自動做", notice: "請留意" };
+
+  // Whether a database of an Odoo check can move: schema 2 says it in `choices.database` (a stop of the database counts).
+  function haDatabaseOk(app, db) {
+    const row = app.v2 ? app.choices.database.find(item => item.value === db.name) : null;
+    return row ? row.ok : db.ok === true;
+  }
+
+  function haNames(issue) {
+    if (!issue.items.length && !issue.more) return null;
+    return h("ul", { class: "ha-names", "aria-label": "相關名稱" }, issue.items.map(name => h("li", { text: name })),
+      issue.more ? h("li", { class: "ha-more", text: `另有 ${num(issue.more)} 個沒有列出` }) : null);
+  }
+
+  // One line: who it is about (an app or a kind), the message, the names and, for a stop, what the customer can do.
+  function haIssueItem(issue, label = null) {
+    return h("li", { class: `ha-issue ha-issue-${issue.level}`, dataset: { issue: issue.id || null } },
+      label ? h("strong", { class: "ha-issue-label", text: label }) : null,
+      h("span", { class: "ha-issue-text", text: issue.message }),
+      haNames(issue),
+      issue.action ? h("span", { class: "ha-issue-action", text: issue.action }) : null);
+  }
+
+  // Read-only lists of issues, each with its kind (the finished check in a job view).
+  function haIssueGroups(issues, label, { empty = true } = {}) {
+    if (!issues.length) return empty ? h("p", { class: "muted", text: "沒有發現問題。" }) : null;
+    return h("ul", { class: "ha-issues", "aria-label": label }, issues.map(issue => haIssueItem(issue, HA_LEVEL_LABELS[issue.level])));
+  }
+
+  // The lines of an app that belong to what will be imported: those of an Odoo database only for the chosen one.
+  const haApplies = (wizard, app, issue) => issue.database === null || (app.app_id === "odoo" && issue.database === wizard.odooDatabase);
+  const haLevelOf = (wizard, app, level) => list(app.issues).filter(issue => issue.level === level && haApplies(wizard, app, issue));
+  // What stops the whole app (a stop of one Odoo database is shown with that database).
+  const haStops = app => list(app.issues).filter(issue => issue.level === "stop" && issue.database === null);
+
+  // The apps of the check the customer selected, the ones that can go and those that cannot (UI-14, UI-15).
+  function haCheckedApps(wizard) {
+    const apps = list(wizard.check).filter(app => wizard.selected.has(app.app_id));
+    return {
+      apps, missing: [...wizard.selected].filter(id => !apps.some(app => app.app_id === id)),
+      can: apps.filter(haImportable), cannot: apps.filter(app => !haImportable(app))
+    };
+  }
+
+  // Every line of the one confirmation: those of the shared part, then of each app that will be imported.
+  function haConfirmLines(wizard) {
+    const { can } = haCheckedApps(wizard);
+    return [
+      ...list(wizard.shared).filter(issue => issue.level === "confirm").map(issue => ({ app: null, issue })),
+      ...can.flatMap(app => haLevelOf(wizard, app, "confirm").map(issue => ({ app: app.app_id, issue })))
+    ];
+  }
+
+  // `acknowledged` of the start: the keys of every line shown, by app; `_shared` for the lines of no single app. A key the
+  // engine would refuse as malformed is never sent (the app then stops with confirmation-required instead of the request).
+  function haAcknowledged(lines) {
+    const result = {};
+    for (const { app, issue } of lines) {
+      if (!issue.key) continue;
+      const keys = (result[app || HA_SHARED] ||= []);
+      if (!keys.includes(issue.key)) keys.push(issue.key);
+    }
+    return result;
+  }
+  // The confirmation as the customer saw it: a new check, another database or another name makes it a new one.
+  const haConfirmSignature = lines => JSON.stringify(lines.map(({ app, issue }) => [app, issue.id, issue.database, issue.key || issue.message]).sort());
+
+  // Choices: the customer's own pick for an app (`addon`, `node`, `database`), none until picked.
+  const haChoice = (wizard, appId, kind) => wizard.choices?.[appId]?.[kind] ?? null;
+  function haSetChoice(wizard, appId, kind, value) {
+    wizard.choices = { ...wizard.choices, [appId]: { ...wizard.choices?.[appId], [kind]: value } };
+  }
+  // What `ha-check-start` is given again: the picks of the kinds that change the check (not the database).
+  function haCheckChoices(wizard) {
+    const result = {};
+    for (const id of wizard.selected) {
+      const picks = {};
+      for (const kind of ["addon", "node"]) if (haChoice(wizard, id, kind)) picks[kind] = haChoice(wizard, id, kind);
+      if (Object.keys(picks).length) result[id] = picks;
+    }
+    return result;
+  }
+  const haChoiceChanged = (wizard, appId, kind) => haChoice(wizard, appId, kind) !== (wizard.checkedChoices?.[appId]?.[kind] ?? null);
+
+  // Why the import cannot start yet, besides the tick (null: nothing).
+  function haPendingChoice(wizard, can) {
+    if (can.some(app => app.app_id === "odoo") && !wizard.odooDatabase) return "請先選擇要搬過來的 Odoo 資料庫。";
+    if (can.some(app => ["addon", "node"].some(kind => haChoiceChanged(wizard, app.app_id, kind)))) return "你改了選項，請先按「重新檢查」，用新的選擇再檢查一次。";
+    return null;
+  }
+
+  // The choices the import request carries: the database of Odoo, and the picks that were checked.
+  function haImportChoices(wizard, ids) {
+    const result = {};
+    for (const id of ids) {
+      const picks = {};
+      for (const kind of ["addon", "node"]) if (haChoice(wizard, id, kind)) picks[kind] = haChoice(wizard, id, kind);
+      if (id === "odoo" && wizard.odooDatabase) picks.database = wizard.odooDatabase;
+      if (Object.keys(picks).length) result[id] = picks;
+    }
+    return result;
+  }
+
+  // Radios for what the customer may choose (the same add-on from two stores, the EMQX node). The check has to run again with
+  // the pick: the footer's 「重新檢查」 does it.
+  function haChoiceRadios(wizard, app, kind, legend, help) {
+    const rows = app.choices[kind];
+    if (rows.length < 2) return null;
+    const current = haChoice(wizard, app.app_id, kind) ?? rows.find(row => row.default)?.value ?? null;
+    return h("fieldset", { class: "form-section ha-choices", dataset: { choice: kind } },
+      h("legend", { text: legend }),
+      h("p", { class: "muted", text: help }),
+      h("div", { class: "choices" }, rows.map((row, index) => {
+        const id = `ha-${kind}-${app.app_id}-${index}`;
+        return h("label", { class: "choice", htmlFor: id },
+          h("input", {
+            type: "radio", id, name: `ha-${kind}-${app.app_id}`, value: row.value, checked: current === row.value, disabled: wizard.busy,
+            dataset: { focus: id }, on: { change: event => { if (event.target.checked) { haSetChoice(wizard, app.app_id, kind, row.value); render(); } } }
+          }),
+          h("span", { class: "choice-body" }, h("strong", { text: row.label }), row.default ? h("small", { text: "預設" }) : null));
+      })),
+      haChoiceChanged(wizard, app.app_id, kind) ? h("p", { class: "hint", text: "選好後，請按下方的「重新檢查」。" }) : null);
+  }
+
+  // Odoo: one database moves and replaces this device's; its counts help to pick the right one, and the ones that cannot
+  // move say why (UI-19: only a database with a real reason is out; UI-16: the only one that can move is chosen already).
+  function haOdooDatabasesV2(wizard, app) {
+    const names = [...new Set([...app.choices.database.map(row => row.value), ...app.databases.map(db => db.name)])];
+    if (!names.length) return h("p", { class: "muted", text: "HA 的 Odoo 裡沒有找到可以搬的資料庫。" });
+    const movable = names.filter(name => haDatabaseOk(app, { name })).length;
+    return h("fieldset", { class: "form-section ha-databases" },
+      h("legend", { text: "要搬過來的 Odoo 資料庫" }),
+      h("p", { class: "muted", text: names.length > 1
+        ? "HA 的 Odoo 有多個資料庫，一次只能搬一個；選好的資料庫會取代這台 Odoo 的資料庫。"
+        : "這個資料庫會取代這台 Odoo 的資料庫。" }),
+      movable === 1 && names.length > 1 ? h("p", { class: "hint", text: "只有一個資料庫可以搬，已經幫你選好。" }) : null,
+      h("div", { class: "choices" }, names.map((name, index) => {
+        const db = app.databases.find(item => item.name === name) || { name };
+        const id = `ha-db-${index}`;
+        const usable = haDatabaseOk(app, db);
+        const modules = list(db.custom_modules).filter(item => isObject(item) && isString(item.name));
+        const lines = app.issues.filter(issue => issue.database === name && issue.level !== "confirm");
+        return h("div", { class: "ha-database", dataset: { database: name } },
+          h("label", { class: usable ? "choice" : "choice is-disabled", htmlFor: id },
+            h("input", {
+              type: "radio", id, name: "ha-odoo-database", value: name, checked: wizard.odooDatabase === name,
+              disabled: !usable || wizard.busy, "aria-describedby": `${id}-help`, dataset: { focus: id },
+              on: { change: event => { if (event.target.checked) { wizard.odooDatabase = name; render(); } } }
+            }),
+            h("span", { class: "choice-body" }, h("strong", { text: name }),
+              isNumber(db.partners) ? h("small", { id: `${id}-help`, text: `聯絡人 ${num(db.partners)} · 可登入的使用者 ${num(db.users)} · 附件 ${num(db.attachments)}（${bytes(db.attachment_bytes)}）`
+                + ` · 已安裝模組 ${num(db.modules)} · 大小 ${bytes(db.size)}` }) : h("small", { id: `${id}-help`, text: usable ? "可以搬。" : "這個資料庫不能搬。" }),
+              isNumber(db.crons_active) ? h("small", { text: `啟用中的排程動作 ${num(db.crons_active)} 個 · 寄信伺服器 ${num(db.mail_servers_active)} 個` }) : null,
+              isNumber(db.partners) ? h("small", { text: modules.length ? `會一起複製的自訂模組：${modules.map(moduleText).join("、")}` : "沒有要另外複製的自訂模組。" }) : null)),
+          lines.length ? haIssueGroups(lines, `資料庫 ${name} 的檢查結果`, { empty: false }) : null);
+      })));
+  }
+
+  // S6 (UI-20): Odoo holds one database at a time; say which ones stay on HA.
+  function haLeftDatabases(wizard, odoo) {
+    const names = [...new Set([...odoo.choices.database.map(row => row.value), ...odoo.databases.map(db => db.name)])];
+    if (names.length < 2 || !wizard.odooDatabase) return null;
+    const left = names.filter(name => name !== wizard.odooDatabase);
+    return `HA 有 ${names.length} 個資料庫。這次搬「${wizard.odooDatabase}」；${quoted(left)}會留在 HA，HA 停用後就看不到了。`
+      + "這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。";
+  }
+
+  // The version line of the card: informs, never gates (CM-01, CM-02, CM-06).
+  function haAppCardV2(ha, wizard, app) {
+    const name = haApps(ha).find(item => item.id === app.app_id)?.name || haAppName(app.app_id);
+    const importable = haImportable(app);
+    const facts = Object.hasOwn(HA_FACTS, app.app_id) ? HA_FACTS[app.app_id] : null;
+    const confirmCount = importable ? haLevelOf(wizard, app, "confirm").length : 0;
+    const auto = importable ? haLevelOf(wizard, app, "auto") : [];
+    const notices = importable ? haLevelOf(wizard, app, "notice") : [];
+    const stops = haStops(app);
+    return h("article", { class: importable ? "app-preflight" : "app-preflight is-blocked", "aria-labelledby": `ha-check-${app.app_id}`,
+      dataset: { haApp: app.app_id, importable: importable ? "yes" : "no" } },
+    h("div", { class: "app-preflight-head" },
+      h("strong", { id: `ha-check-${app.app_id}`, class: "app-select-name", text: name }),
+      h("span", { class: "chips" }, importable ? chip("可以匯入", "ok", "check-circle-outline") : chip("不能匯入", "fail", "close-circle-outline"),
+        confirmCount ? chip(`有 ${confirmCount} 件事要確認`, "warn", "alert-outline") : null)),
+    h("p", { class: "muted", text: haVersionText(app) }),
+    importable ? null : h("p", { class: "muted", text: "這次不會匯入這個應用，這台的它也不會有任何變更；其他應用照常匯入。" }),
+    stops.length ? h("ul", { class: "ha-issues ha-issues-stop", "aria-label": `${name} 不能匯入的原因` }, stops.map(issue => haIssueItem(issue))) : null,
+    haChoiceRadios(wizard, app, "addon", `${name} 要用哪一個 HA 附加元件`, "這份備份裡有同一個附加元件來自不同的商店，請選擇要匯入的那一個。"),
+    haChoiceRadios(wizard, app, "node", `${name} 要匯入哪一個節點`, "這份備份有多個節點的資料，請選擇要匯入的那一個。"),
+    app.app_id === "odoo" ? haOdooDatabasesV2(wizard, app) : null,
+    auto.length ? [h("h5", { class: "ha-subhead", text: "系統會自動做" }), h("ul", { class: "ha-issues", "aria-label": `${name} 系統會自動做的事` }, auto.map(issue => haIssueItem(issue)))] : null,
+    notices.length ? [h("h5", { class: "ha-subhead", text: "匯入後請留意" }), h("ul", { class: "ha-issues", "aria-label": `${name} 匯入後請留意的事` }, notices.map(issue => haIssueItem(issue)))] : null,
+    app.n8n ? haN8nFacts(app.n8n) : null,
+    facts && app.section ? facts(app.section) : null);
+  }
+
+  // The one confirmation (B12): everything with a consequence in one list and one tick.
+  function haConfirmBox(wizard, ids, lines) {
+    const odoo = list(wizard.check).find(app => app.app_id === "odoo" && ids.includes("odoo"));
+    const left = odoo ? haLeftDatabases(wizard, odoo) : null;
+    const signature = haConfirmSignature(lines);
+    const input = h("input", {
+      type: "checkbox", id: "ha-ack", checked: wizard.ackSignature === signature, disabled: wizard.busy, "aria-describedby": "ha-confirm-list",
+      dataset: { focus: "ha-ack" }, on: { change: event => { wizard.ackSignature = event.target.checked ? signature : null; render(); } }
+    });
+    return h("section", { class: "ha-confirm", "aria-labelledby": "ha-confirm-title" },
+      h("h4", { id: "ha-confirm-title", class: "subheading", text: "匯入前請確認" }),
+      h("ul", { id: "ha-confirm-list", class: "ha-issues ha-confirm-list" },
+        h("li", { class: "ha-issue ha-issue-general" }, h("strong", { class: "ha-issue-label", text: "全部" }),
+          h("span", { class: "ha-issue-text", text: `匯入會取代這台這 ${ids.length} 個應用現在的資料。匯入前會自動各做一份備份，失敗會自動退回。` })),
+        left ? h("li", { class: "ha-issue ha-issue-confirm" }, h("strong", { class: "ha-issue-label", text: "Odoo" }), h("span", { class: "ha-issue-text", text: left })) : null,
+        lines.map(({ app, issue }) => haIssueItem(issue, app ? haShort(app) : "全部"))),
+      h("label", { class: "choice confirm-choice", htmlFor: "ha-ack" }, input,
+        h("span", { class: "choice-body" }, h("strong", { text: "我了解上面列的事，開始匯入" }),
+          h("small", { id: "ha-ack-help", text: lines.length ? `上面共 ${lines.length + 1 + (left ? 1 : 0)} 項；勾選一次，這些都算確認過。` : "勾選後才能按「匯入」。" }))));
+  }
+
+  // 結果與確認: what can go, what cannot, and the one confirmation.
+  function haStepConfirm(ha, wizard) {
+    const { apps, missing, can, cannot } = haCheckedApps(wizard);
+    const ids = can.map(app => app.app_id);
+    const lines = haConfirmLines(wizard);
+    const pending = haPendingChoice(wizard, can);
+    const active = activeJob();
+    const ticked = wizard.ackSignature === haConfirmSignature(lines);
+    const ready = can.length > 0 && !pending && ticked && !wizard.busy && !active;
+    const shared = list(wizard.shared).filter(issue => issue.level !== "confirm");
+    const rechecking = apps.some(app => ["addon", "node"].some(kind => haChoiceChanged(wizard, app.app_id, kind)));
+    return [
+      h("h3", { class: "step-title", text: "檢查結果與確認" }),
+      h("p", { class: "muted", text: "以下是剛才檢查的結果，沒有變更任何資料。看過「匯入前請確認」，勾選一次就會開始匯入。" }),
+      wizard.notice ? infoNotice(wizard.notice) : null,
+      h("p", { class: "ha-summary", role: "status", dataset: { summary: "check" }, text: can.length || cannot.length
+        ? `可以匯入 ${can.length} 個，不能匯入 ${cannot.length + missing.length} 個` : "沒有可以匯入的應用" }),
+      cannot.length || missing.length ? h("p", { class: "muted", text: "不能匯入的應用這次會自動排除，這台的它們不會有任何變更；其他應用照常匯入。" }) : null,
+      shared.length ? h("ul", { class: "ha-issues", "aria-label": "整體的檢查結果" }, shared.map(issue => haIssueItem(issue, HA_LEVEL_LABELS[issue.level]))) : null,
+      h("div", { class: "app-preflight-list" }, apps.map(app => haAppCardV2(ha, wizard, app))),
+      missing.length ? infoNotice(`檢查結果沒有包含${quoted(missing.map(haAppName))}，這次不會匯入${missing.length > 1 ? "它們" : "它"}；可以按「重新檢查」再試。`, "warn", "alert-outline") : null,
+      can.length ? infoNotice(haTrustText(ids), "info", "shield-check-outline") : null,
+      can.length ? h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
+        h("input", {
+          type: "checkbox", id: "ha-test-mode", checked: wizard.testMode, disabled: wizard.busy, "aria-describedby": "ha-test-mode-help",
+          dataset: { focus: "ha-test-mode" }, on: { change: event => { wizard.testMode = event.target.checked; render(); } }
+        }),
+        h("span", { class: "choice-body" }, h("strong", { text: haTestLabel(ids) }),
+          h("small", { id: "ha-test-mode-help", text: haTestHelp(ids, can) }))) : null,
+      can.length ? haConfirmBox(wizard, ids, lines) : infoNotice("沒有應用可以匯入。請依上面的原因處理後按「重新檢查」，或回到上一步改選其他應用。", "fail", "close-circle-outline"),
+      pending ? h("p", { class: "hint", role: "status", text: pending }) : null,
+      haNoDeviceKey() ? haKeyAutoNotice() : null,
+      active ? haActiveNotice(active) : null,
+      wizardError(wizard),
+      h("div", { class: "form-footer button-group" },
+        button("上一步", () => haBack(wizard, "apps"), { focus: "ha-options-back", disabled: wizard.busy }),
+        button("重新檢查", () => startHaCheck(wizard), { icon: "refresh", focus: "ha-recheck", primary: rechecking, disabled: wizard.busy || Boolean(active) }),
+        can.length ? button("只轉換，之後再還原", () => startHaImport(wizard, { thenRestore: false }), {
+          focus: "ha-convert-only", disabled: !ready, title: "只轉換成這台的備份，不會取代這台現在的資料；轉換好的備份留在備份列表，之後自己再還原。"
+        }) : null,
+        can.length ? button(wizard.busy ? "正在開始…" : "匯入", () => startHaImport(wizard, { thenRestore: true }), {
+          primary: !rechecking, icon: "backup-restore", disabled: !ready, focus: "ha-import"
+        }) : null)
+    ];
+  }
+
+  // ------------------------------------------------------------------ starting the import and following its chain
+
+  // A start that is answered `timeout`: the job may have started. The same request (same request id) is sent again, so
+  // the engine answers with the job it already has; the status is read in between (UI-22). When every try ran out of time,
+  // the status decides: an active HA job of this HA backup that this page did not know before is the one that was started
+  // (the page never starts while another job runs), and the page follows it; else the customer is told in words.
+  async function haStartCall(wizard, command, request, adopt = null) {
+    let last = null;
+    for (let attempt = 1; attempt <= HA_START_TRIES; attempt += 1) {
+      try {
+        return await call(command, request);
+      } catch (error) {
+        if (error.code !== "timeout" || state.haWizard !== wizard) throw error;
+        last = error;
+        wizard.notice = "回應比較久，作業可能已經開始。正在重新確認它的狀態…";
+        render();
+        if (attempt < HA_START_TRIES) {
+          loadStatus({ quiet: true });
+          await new Promise(resolve => setTimeout(resolve, HA_START_PAUSE_MS));
+        }
+      }
+    }
+    wizard.notice = null;
+    try {
+      const data = await call("status");
+      const job = isObject(data.active_job) && validJob(data.active_job) ? data.active_job : null;
+      if (job && adopt && ACTIVE.has(job.state) && adopt(job)) {
+        state.status = data;
+        return { job_id: job.id, deduplicated: true, group: groupOf(job)?.id ?? null, key_created: false };
+      }
+    } catch { /* the words below say what to do */ }
+    throw new HelperError("這台設備還沒有回應，作業可能已經開始。請再按一次剛才的按鈕：不會重複開始，只會接上同一個作業；"
+      + "也可以到「活動紀錄」看有沒有進行中的作業。", { code: "timeout", details: last?.details });
+  }
+
+  // ha-import-start: the whole import in one request; `thenRestore` false only converts (the backups stay in the list).
+  async function startHaImport(wizard, { thenRestore }) {
+    if (wizard.busy || state.haWizard !== wizard) return;
+    const { can } = haCheckedApps(wizard);
+    const lines = haConfirmLines(wizard);
+    if (!can.length || haPendingChoice(wizard, can) || wizard.ackSignature !== haConfirmSignature(lines)) return;
+    const active = activeJob();
+    if (active) {
+      wizard.error = new HelperError("已有作業正在進行，請等它完成後再匯入。", { code: "busy", details: { job_id: active.id } });
+      render();
+      return;
+    }
+    const apps = can.map(app => app.app_id);
+    const key = haKey(wizard);
+    const acknowledged = haAcknowledged(lines);
+    const choices = haImportChoices(wizard, apps);
+    const request = {
+      ha_backup_id: wizard.haId, apps, test_mode: wizard.testMode, then_restore: thenRestore, confirm: true,
+      request_id: haRequestId(wizard, ["import", wizard.haId, apps, thenRestore, wizard.testMode, acknowledged, choices, Boolean(key)])
+    };
+    if (thenRestore) request.overwrite = true;
+    if (Object.keys(acknowledged).length) request.acknowledged = acknowledged;
+    if (Object.keys(choices).length) request.choices = choices;
+    if (wizard.checkJobId) request.check_job_id = wizard.checkJobId;
+    if (key) request.key = key;
+    Object.assign(wizard, { busy: true, error: null, notice: null, keyError: null });
+    render();
+    try {
+      const data = await haStartCall(wizard, "ha-import-start", request, job => job.params?.source === "ha" && groupOf(job)?.kind === "ha-import"
+        && job.params.ha_backup_id === wizard.haId);
+      requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
+      if (state.haWizard !== wizard) return;
+      // The engine holds the HA key for the whole import now: the page does not need it any more.
+      Object.assign(wizard, { requestId: null, signature: "", step: "import", jobId: data.job_id, finishedJob: null, ui: null, group: null, groupEnded: null,
+        groupJobs: [data.job_id], keyCreated: data.key_created === true, thenRestore, importApps: apps, notice: null, keyText: "" });
+      announce(data.deduplicated ? "這個匯入要求先前已送出，正在顯示同一個作業。" : "已開始匯入。");
+      watchJob(data.job_id);
+      loadStatus({ quiet: true });
+    } catch (error) {
+      if (state.haWizard === wizard) haImportStartFailed(wizard, error);
+    } finally {
+      if (state.haWizard === wizard) {
+        wizard.busy = false;
+        render();
+        if (wizard.step === "key" && wizard.keyError) $("ha-key")?.focus();
+        else $("view-heading")?.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  // A refusal before anything started: a key problem goes back to the key step; a line that was not confirmed (the names
+  // changed since the check) asks for a new check; the rest is shown as it is.
+  function haImportStartFailed(wizard, error) {
+    if (error.code === "confirmation-required") {
+      const named = Object.keys(isObject(error.details?.apps) ? error.details.apps : {}).map(haAppName);
+      wizard.error = new HelperError(`${error.message || "匯入前還有事情要確認。"}${named.length ? `（${named.join("、")}）` : ""}請按「重新檢查」，再確認一次。`,
+        { code: error.code });
+      wizard.ackSignature = null;
+      return;
+    }
+    haStartFailed(wizard, error);
+  }
+
+  // The state of an import as the job records say it (hachain.py; CONTRACT §7 ImportGroup): the apps in order, what became
+  // of each, which app is being worked on and which job follows. Any one job of the import is enough.
+  function haGroupResultOf(item) {
+    if (!isObject(item) || !isString(item.app_id) || !APP_ID_RE.test(item.app_id) || !GROUP_STATUS.includes(item.status)) return null;
+    const id = (value, pattern) => (isString(value) && pattern.test(value) ? value : null);
+    return { app_id: item.app_id, status: item.status, convert_job_id: id(item.convert_job_id, JOB_ID_RE), restore_job_id: id(item.restore_job_id, JOB_ID_RE),
+      backup_id: id(item.backup_id, BACKUP_ID_RE), safety_backup_id: id(item.safety_backup_id, BACKUP_ID_RE),
+      code: str(item.code), message: str(item.message) };
+  }
+
+  function haGroupInfo(job) {
+    const group = groupOf(job);
+    if (!group) return null;
+    const chain = isObject(job.params?.chain) ? job.params.chain : {};
+    const ended = TERMINAL.has(job.state) && isObject(job.result?.group) ? job.result.group : null;
+    const results = list(ended ? ended.results : chain.results).map(haGroupResultOf).filter(Boolean);
+    const apps = list(chain.apps).filter(item => isString(item) && APP_ID_RE.test(item));
+    for (const id of [group.app_id, ...results.map(item => item.app_id)]) if (!apps.includes(id)) apps.push(id);
+    const next = ended && isString(ended.next_job_id) && JOB_ID_RE.test(ended.next_job_id) ? ended.next_job_id : null;
+    return {
+      id: group.id, kind: group.kind, count: Math.max(apps.length, isNumber(group.count) ? group.count : 0), apps, results,
+      current: { app: group.app_id, step: group.step, state: job.state, id: job.id },
+      next, over: TERMINAL.has(job.state) && !next, known: Boolean(ended),
+      thenRestore: chain.then_restore !== false, testMode: chain.test_mode === true,
+      haId: isString(chain.ha_backup_id) && HA_ID_RE.test(chain.ha_backup_id) ? chain.ha_backup_id : isString(job.params?.ha_backup_id) ? job.params.ha_backup_id : null
+    };
+  }
+
+  // One row per app: what became of it, or what it is doing now.
+  const GROUP_LABELS = {
+    imported: ["已匯入", "ok", "check-circle-outline"], converted: ["已轉換成備份", "info", "package-variant-closed"],
+    "rolled-back": ["已退回原狀", "warn", "backup-restore"], failed: ["沒有成功", "fail", "close-circle-outline"],
+    skipped: ["沒有匯入", "neutral", "minus-circle-outline"], "not-started": ["沒有開始", "neutral", "minus-circle-outline"]
+  };
+  function haGroupRowState(info, appId) {
+    const result = info.results.find(item => item.app_id === appId) || null;
+    const working = !info.over && info.current.app === appId;
+    if (result && !(result.status === "converted" && working)) return { result, label: GROUP_LABELS[result.status], doing: null };
+    if (working) {
+      return { result, doing: info.current.step === "convert" ? "正在把 HA 的資料轉成這台的備份" : "正在匯入：先保存匯入前備份，再換上 HA 的資料並檢查",
+        label: [info.current.step === "convert" ? "轉換中" : "匯入中", "info", "progress-clock"] };
+    }
+    if (info.over) return { result: null, label: GROUP_LABELS["not-started"], doing: null };
+    return { result: null, label: ["等待中", "neutral", "progress-clock"], doing: "前面的應用處理完才輪到它。" };
+  }
+
+  // The selected apps that did not pass the check are not in the import; each says why, as the check did.
+  function haExcludedRows(wizard) {
+    return list(wizard.check).filter(app => wizard.selected.has(app.app_id) && !haImportable(app) && !list(wizard.importApps).includes(app.app_id)).map(app => ({
+      appId: app.app_id,
+      text: haStops(app).map(issue => `${issue.message}${issue.action ? ` ${issue.action}` : ""}`).join(" ") || "這個應用沒有通過檢查，沒有匯入。"
+    }));
+  }
+
+  function haGroupRows(info, { actions = true, excluded = [] } = {}) {
+    return h("ol", { class: "ha-group-list", "aria-label": "各應用的匯入結果" }, [...info.apps.map(appId => {
+      const row = haGroupRowState(info, appId);
+      const result = row.result;
+      const safety = result?.safety_backup_id;
+      const converted = result?.backup_id;
+      const message = result?.message || row.doing || "";
+      const reconfirm = result?.status === "skipped" && result.code === "confirmation-required";
+      const manual = result?.status === "failed" && Boolean(safety);
+      return h("li", { class: `ha-group-row ha-group-${result?.status || "pending"}${manual ? " needs-person" : ""}`, dataset: { haApp: appId, status: result?.status || "pending" } },
+        h("div", { class: "ha-group-head" }, h("strong", { class: "ha-group-name", text: haAppName(appId) }),
+          h("span", { class: "chips" }, chip(row.label[0], row.label[1], row.label[2]))),
+        message ? h("p", { class: manual ? "ha-group-message strong" : "ha-group-message", text: message }) : null,
+        safety || converted ? h("p", { class: "secondary" },
+          safety ? ["匯入前備份：", link(safety, ["backups", safety], { class: "mono", dataset: { focus: `group-safety-${appId}` } })] : null,
+          safety && converted ? "　" : null,
+          converted ? ["轉換好的備份：", link(converted, ["backups", converted], { class: "mono", dataset: { focus: `group-backup-${appId}` } })] : null) : null,
+        actions && result ? haGroupActions(info, result, { reconfirm }) : null);
+    }), ...excluded.map(item => h("li", { class: "ha-group-row ha-group-excluded", dataset: { haApp: item.appId, status: "excluded" } },
+      h("div", { class: "ha-group-head" }, h("strong", { class: "ha-group-name", text: haAppName(item.appId) }),
+        h("span", { class: "chips" }, chip("沒有匯入", "neutral", "minus-circle-outline"))),
+      h("p", { class: "ha-group-message", text: item.text }),
+      h("p", { class: "secondary", text: "這台的這個應用沒有任何變更。" })))]);
+  }
+
+  // What the customer can do next about one app: check and confirm it again (its lines changed since the check and nothing was
+  // converted), or restore the backup that was converted (the import stopped before it, its restore did not succeed, or the
+  // restore check has lines the customer did not see: the restore steps show and confirm them).
+  function haGroupActions(info, result, { reconfirm }) {
+    const buttons = [];
+    if (reconfirm && info.haId && !result.backup_id) {
+      buttons.push(button("重新檢查並確認這個應用", () => haReimport(info, result.app_id), { small: true, focus: `group-recheck-${result.app_id}` }));
+    }
+    if (result.backup_id && info.kind === "ha-import" && ["converted", "failed", "rolled-back", "skipped"].includes(result.status)) {
+      const label = result.status === "converted" ? "還原到這台…" : result.status === "skipped" ? "到還原步驟確認並匯入…" : "重新還原這份備份…";
+      buttons.push(button(label, () => haRestoreOf(info, result), { small: true, icon: "backup-restore", focus: `group-restore-${result.app_id}` }));
+    }
+    return buttons.length ? h("div", { class: "button-group" }, buttons) : null;
+  }
+
+  function haRestoreOf(info, result) {
+    const listed = state.backups?.find(item => item.id === result.backup_id);
+    haRestore(result.backup_id, fromHaOf(listed) || haInfo(null, { haId: info.haId, apps: [result.app_id], testMode: info.testMode }));
+  }
+
+  // 「再確認並匯入這個應用」: a new check of that app only, then the one confirmation again.
+  function haReimport(info, appId) {
+    const ha = haFind(info.haId);
+    if (!ha) { go(["backups"]); return; }
+    const wizard = newHaWizard(ha);
+    wizard.selected = new Set([appId]);
+    wizard.keyNeeded = haNeedsKey(ha, [appId]);
+    wizard.notice = `「${haAppName(appId)}」的內容和檢查時不一樣，請重新檢查後再確認一次。`;
+    state.haWizard = wizard;
+    wizard.step = wizard.keyNeeded ? "key" : "apps";
+    go(["ha", ha.id]);
+    render();
+  }
+
+  // The import runs app after app: one job per step (`next_job_id` of a finished job names the next one).
+  function haImportJobFinished(wizard, job) {
+    const info = haGroupInfo(job);
+    if (!info || !info.known) {
+      // A job that ended without the import's own result (killed, refused): say it as the record does.
+      const error = isObject(job.error) ? new HelperError(str(job.error.message) || "匯入沒有完成。", { code: str(job.error.code), details: job.error.details }) : null;
+      wizard.groupEnded = { info, error: error || new HelperError(`匯入沒有完成（${JOB_STATES[job.state] || str(job.state)}）。`, { code: str(job.state) }) };
+      render();
+      return;
+    }
+    wizard.group = info;
+    if (info.next) {
+      Object.assign(wizard, { jobId: info.next, finishedJob: null, ui: null, groupJobs: [...list(wizard.groupJobs), info.next] });
+      announce(`${haAppName(info.current.app)}${info.current.step === "convert" ? "轉換" : "匯入"}完成，接著處理下一個。`);
+      watchJob(info.next);
+      render();
+      return;
+    }
+    wizard.groupEnded = { info, error: null };
+    announce(haGroupSummary(info));
+    render();
+    $("view-heading")?.focus({ preventScroll: true });
+  }
+
+  function haGroupCounts(info) {
+    const count = status => info.results.filter(item => item.status === status).length;
+    return { imported: count("imported"), converted: count("converted"), rolledBack: count("rolled-back"), failed: count("failed"),
+      left: info.apps.length - info.results.filter(item => item.status !== "not-started").length + count("skipped") + count("not-started") };
+  }
+
+  function haGroupSummary(info) {
+    const done = info.results.filter(item => item.status === "imported").length;
+    const converted = info.results.filter(item => item.status === "converted").length;
+    const rest = info.apps.length - done - converted;
+    return converted && !info.thenRestore ? `匯入結束：${converted} 個應用已轉換成備份，還沒有取代這台的資料。`
+      : `匯入結束：${done} 個應用已匯入${rest ? `，${rest} 個沒有匯入（原因見各應用）` : ""}。`;
+  }
+
+  // 匯入: the live list while it runs, the result when it ended.
+  function haStepImport(ha, wizard) {
+    const ended = wizard.groupEnded;
+    const live = wizard.group;
+    const entry = wizard.jobId ? state.jobCache.get(wizard.jobId) : null;
+    const job = entry?.job || null;
+    const info = ended?.info || (job ? haGroupInfo(job) : null) || live;
+    const apps = wizard.importApps || [];
+    const view = info || { id: "", kind: "ha-import", count: apps.length, apps, results: list(live?.results), current: { app: apps[0] || "", step: "convert", state: "queued", id: "" },
+      next: null, over: false, known: false, thenRestore: wizard.thenRestore !== false, testMode: wizard.testMode, haId: wizard.haId };
+    if (ended) return haImportResult(ha, wizard, ended);
+    return [
+      h("h3", { class: "step-title", text: wizard.thenRestore === false ? "轉換成這台的備份" : "匯入到這台" }),
+      h("p", { class: "muted", text: wizard.thenRestore === false
+        ? "一個應用接著一個應用轉換成這台的備份；轉換不會變更這台的應用，備份會留在備份列表。"
+        : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查。每個應用只停自己的時間；哪個失敗，只退回它自己。" }),
+      wizard.notice ? infoNotice(wizard.notice) : null,
+      wizard.keyCreated ? haKeyCreatedNotice() : null,
+      haGroupRows(view, { actions: false, excluded: haExcludedRows(wizard) }),
+      wizard.jobId ? haJobBlock(wizard) : null,
+      entry?.error && !job ? stableNotice(`ha-job-${wizard.jobId}`, entry.error, { live: false }) : null,
+      wizardError(wizard),
+      h("div", { class: "form-footer button-group" },
+        button("做完這個應用就停止", () => stopHaAfterThis(wizard), { focus: "ha-stop-after", icon: "timer-sand" }),
+        button("取消匯入", () => cancelHaJob(wizard), { focus: "ha-cancel-import", icon: "stop-circle-outline", danger: true }))
+    ];
+  }
+
+  // D11: the key this import created. The banner at the top stays until the emergency key is saved.
+  const haKeyCreatedNotice = () => infoNotice("這台原本沒有加密金鑰，這次匯入已經自動建立一把。請下載並保存緊急金鑰：換機或重灌後，沒有它就解不開加密的備份。",
+    "warn", "key-outline", link("保存緊急金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys-saved" } }));
+
+  async function stopHaAfterThis(wizard) {
+    if (!wizard.jobId) return;
+    try {
+      await call("job-cancel", { job_id: wizard.jobId, after_this: true });
+      announce("已要求做完這個應用就停止；後面的應用不會開始。");
+      wizard.notice = "已要求做完這個應用就停止；後面的應用不會開始。";
+    } catch (error) {
+      wizard.error = error;
+    }
+    render();
+  }
+
+  // The job view of any job of an import (hachain.py): every app with what became of it or what it is doing, and the way on to
+  // the job that follows; found again after a reload from the job records alone (`params.chain`, `result.group`).
+  function haGroupJobSection(job) {
+    const info = haGroupInfo(job);
+    if (!info) return [];
+    const title = info.kind === "ha-restore" ? "這次還原（各應用）" : "這次匯入（各應用）";
+    const next = info.next ? state.jobCache.get(info.next)?.job : null;
+    return [h("section", { class: "card ha-job-group", "aria-labelledby": "job-group-heading", dataset: { group: info.id } },
+      h("div", { class: "card-head" }, h("h3", { id: "job-group-heading", text: title })),
+      h("div", { class: "card-body" },
+        h("p", { class: "muted", text: info.kind === "ha-restore"
+          ? "這份備份裡的應用一個接著一個還原：每個應用有自己的還原前備份，失敗只退回它自己。"
+          : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查；失敗只退回它自己，其他應用照常。" }),
+        haGroupRows(info, { actions: info.over }),
+        info.next ? h("p", null, link(next ? `接著：${jobLabel(next)}` : "查看下一個作業", ["jobs", info.next], { class: "button small", dataset: { focus: "job-group-next" } })) : null))];
+  }
+
+  // The end of the import: one line per app and what to do afterwards.
+  function haImportResult(ha, wizard, ended) {
+    const { info, error } = ended;
+    const converted = wizard.thenRestore === false;
+    const done = info ? info.results.filter(item => item.status === (converted ? "converted" : "imported")).map(item => item.app_id) : [];
+    const problems = info ? info.results.filter(item => ["failed", "rolled-back"].includes(item.status)).length : 0;
+    const tone = error ? "fail" : problems ? "warn" : done.length ? "ok" : "warn";
+    const title = error ? "匯入沒有完成"
+      : done.length && done.length === info.apps.length ? (converted ? "全部應用都已轉換成備份" : "全部應用都已匯入")
+        : done.length ? `${done.length} 個應用${converted ? "已轉換" : "已匯入"}，其他沒有` : "沒有應用被匯入";
+    return [
+      h("h3", { class: "step-title", text: "匯入結果" }),
+      h("div", { class: `ha-result result-${tone}`, role: "status", dataset: { result: "group" } },
+        h("p", { class: "ha-summary", text: title }),
+        error ? errorNotice(error, { live: false }) : null,
+        info ? h("p", { class: "muted", text: haGroupSummary(info) }) : null),
+      wizard.keyCreated || state.status?.key?.kit_confirmed === false ? haKeyCreatedNotice() : null,
+      info ? haGroupRows(info, { excluded: haExcludedRows(wizard) }) : null,
+      info && done.length && !converted ? haAfterGroup(wizard, info, done) : null,
+      h("div", { class: "form-footer button-group" },
+        button("回到這份 HA 備份", () => closeHaWizard({ rerender: true }), { focus: "result-ha" }),
+        link("查看備份列表", ["backups"], { class: "button primary", dataset: { focus: "result-backups" } }))
+    ];
+  }
+
+  // What to do afterwards, from what the conversions recorded (the converted backups are listed with `from_ha`).
+  function haAfterGroup(wizard, info, ids) {
+    const infos = info.results.filter(item => ids.includes(item.app_id)).map(item => fromHaOf(state.backups?.find(b => b.id === item.backup_id))).filter(Boolean);
+    const n8n = list(wizard.check).find(app => app.app_id === "n8n");
+    const base = infos[0] || haInfo(null, { haId: wizard.haId, apps: ids, testMode: wizard.testMode, workflows: haWorkflows(n8n?.n8n?.workflows_to_fix),
+      odooDatabase: ids.includes("odoo") ? wizard.odooDatabase : null });
+    const merged = { ...base, apps: ids, testMode: info.testMode || wizard.testMode, notes: [],
+      remindersByApp: infos.some(item => item.remindersByApp) ? Object.assign({}, ...infos.map(item => item.remindersByApp || {})) : null,
+      reminders: [...new Set(infos.flatMap(item => item.reminders))], addons: infos.flatMap(item => item.addons),
+      workflows: base.workflows.length ? base.workflows : haWorkflows(n8n?.n8n?.workflows_to_fix) };
+    return h("div", { class: "ha-after" }, ...haAfterImport(merged, ids));
   }
 
   // ------------------------------------------------------------------ job progress & result
@@ -4424,6 +5211,7 @@
     nodes.state = h("span", { class: "job-state" });
     nodes.meta = h("p", { class: "muted job-meta" });
     nodes.error = h("div", { class: "job-error" });
+    nodes.group = h("div", { class: "job-group" });
     nodes.phases = h("ol", { class: "phases", "aria-label": "作業階段" });
     nodes.progress = h("progress", { id: "job-progress", max: 100, value: 0, "aria-labelledby": "job-progress-label" });
     nodes.percent = h("span", { class: "progress-percent" });
@@ -4438,7 +5226,7 @@
       backLink("返回活動紀錄", ["activity"]), nodes.stepper,
       h("section", { class: "card job-head" }, tile("progress-clock"),
         h("div", { class: "job-head-main" }, h("div", { class: "title-row" }, nodes.title, nodes.state), nodes.meta)),
-      nodes.error,
+      nodes.error, nodes.group,
       h("section", { class: "card", "aria-labelledby": "job-progress-heading" },
         h("div", { class: "card-head" }, h("h3", { id: "job-progress-heading", text: "進度" })),
         h("div", { class: "card-body" }, nodes.phases,
@@ -4474,7 +5262,8 @@
     fill(nodes.state, runStateChip(job));
     text(nodes.meta, [`作業 ID ${job.id}`, `建立於 ${date(job.created)}`,
       job.finished ? `結束於 ${date(job.finished)}` : job.started ? `開始於 ${date(job.started)}` : null].filter(Boolean).join(" · "));
-    fill(nodes.stepper, ...(job.type === "restore" ? [jobWizardStepper(job)] : []));
+    fill(nodes.stepper, ...(job.type === "restore" && !groupOf(job) ? [jobWizardStepper(job)] : []));
+    fill(nodes.group, ...haGroupJobSection(job));
     fill(nodes.phases, ...job.phases.map(phaseItem));
     const percent = clamp(Math.round(Number(job.progress?.percent) || 0), 0, 100);
     nodes.progress.value = percent;
@@ -4621,6 +5410,11 @@
 
     if (ha === "check" && job.state === "succeeded" && result) {
       body.push(...haCheckResult(job, result));
+    } else if (ha === "convert" && job.state === "succeeded" && result && groupOf(job)) {
+      // Part of an import: the app is restored next, by the same import (see the apps above).
+      const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
+      body.push(h("p", { text: "這個應用已轉換成這台的備份並驗證過，這台的應用還沒有任何變更。" }),
+        metadata([["備份", backupId ? link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"]]));
     } else if (ha === "convert" && job.state === "succeeded" && result) {
       const converted = haConverted(job, result);
       body.push(...converted.body);
@@ -7024,7 +7818,7 @@
       h("th", { scope: "row", "data-label": "時間" }, link(date(job.created), ["jobs", job.id], {
         class: "row-title", dataset: { focus: `job-${job.id}` }, "aria-label": `查看 ${date(job.created)} 的${jobLabel(job)}`
       }), h("span", { class: "secondary mono", text: job.id })),
-      h("td", { "data-label": "作業", text: schedule ? "排程備份" : HA_JOB_TITLES[ha] || `${JOB_TYPES[job.type]}` }),
+      h("td", { "data-label": "作業", text: schedule ? "排程備份" : groupOf(job) ? jobLabel(job) : HA_JOB_TITLES[ha] || `${JOB_TYPES[job.type]}` }),
       h("td", { "data-label": "狀態" }, runStateChip(job)),
       h("td", { "data-label": "內容", text: summary || "—" }),
       h("td", { "data-label": "結果", text: outcome }));
