@@ -6,6 +6,12 @@ flows use to report job phases and honour cancellation.
 """
 
 
+# In the job record's list of stopped units (`stopped_writers`) a service of another app that a restore of a converted HA
+# backup paused (D10) is written with this prefix: the recovery of a dead job starts exactly those, and any other name that
+# is not one of the app's own units stays "not started" (nothing unrelated is ever started from a record).
+PAUSED_PREFIX = 'paused:'
+
+
 class Adapter:
     name = 'base'
     version = 1

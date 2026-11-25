@@ -35,8 +35,9 @@ import types
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import util
+from . import haissues, util
 from . import version as engine_version
+from .adapters.base import PAUSED_PREFIX
 from .errors import BackupError
 from .storage import valid_backup_id
 
@@ -606,7 +607,7 @@ def release_handover(ctx, plans, handover):
         except BackupError as error:
             ctx.log(f'警告：{error.message}')
             failed = units
-        ctx.note_writers(plan.app.id, failed)
+        ctx.note_writers(plan.app.id, [unit if unit in plan.app.units else PAUSED_PREFIX + unit for unit in failed])
         failed_all.extend(failed)
         if not failed:
             ctx.log(f'已恢復「{plan.app.name}」被還原前備份暫停的服務')
@@ -625,9 +626,15 @@ def restart_writers(deps, stopped, *, log=None):
         try:
             adapter = deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None)
             # Writers a backup stopped, or every unit an in-place restore stopped before it masked them (still
-            # unchanged then): only units of the app's own catalog entry.
+            # unchanged then): the units of the app's own catalog entry, and the other services the restore of a
+            # converted HA backup paused (D10; the adapter starts only valid service names, and says which did not start).
+            start_paused = getattr(adapter, 'start_paused', None)
             failed.extend(adapter.start_units([u for u in units if u in app.units]))
-            failed.extend(u for u in units if u not in app.units)
+            for unit in (u for u in units if u not in app.units):
+                if start_paused is None or not unit.startswith(PAUSED_PREFIX):
+                    failed.append(unit)  # not one of the app's units and not marked as paused: never started from a record
+                elif start_paused([unit[len(PAUSED_PREFIX):]]):
+                    failed.append(unit)
         except BackupError:
             failed.extend(units)
     return failed
@@ -1258,6 +1265,7 @@ def run_restore(ctx, params):
 
         ctx.phase('preflight')
         plans = _preflight(ctx, apps, manifest, extract_dir)
+        _require_confirmed(ctx, plans, params.get('acknowledged'))
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and encrypt_safety and device_key is None:
@@ -1371,6 +1379,7 @@ def run_restore(ctx, params):
             _rollback(ctx, touched, result, staging, error, pending,
                       untouched=[plan for plan in plans if plan not in touched], handover=handover)
         result['changed'] = True
+        resume_paused(ctx, plans, result)  # D10: the services paused for the restore run again, the data is in place
         # The job succeeded: the host-directory copies its restore moved aside can go now, and only now. Recorded
         # first, so a job that dies while deleting them is reported as a finished restore (review L4).
         ctx.reporter.set_partial(finishing=True)
@@ -1414,6 +1423,61 @@ def run_restore(ctx, params):
         _cleanup_staging(ctx)
 
 
+def _require_confirmed(ctx, plans, acknowledged):
+    """The lines of the restore check (`adapter.restore_issues`, haissues.Issue) that the restore of a converted HA backup
+    needs confirmed (D10: the services it pauses, the account whose id range it widens, ...). Every `confirm` line must be
+    among the keys the request acknowledged, with exactly its names (`haissues.missing`): otherwise nothing is touched and
+    the restore of this app stops with `confirmation-required` (the chain goes on with the others and offers "confirm
+    again"). Lines of an ordinary restore do not exist (H6)."""
+    if not ctx.ha_import:
+        return
+    missing = {}
+    for plan in plans:
+        issues = list(getattr(plan.adapter, 'restore_issues', None) or [])
+        for issue in issues:
+            if issue.level == 'auto':
+                ctx.log(f'自動處理：{issue.message}')
+        left = haissues.missing(plan.app.id, issues, (acknowledged or {}).get(plan.app.id))
+        if left:
+            missing[plan.app.id] = left
+    if missing:
+        names = '、'.join(haissues.clean(plan.app.name, 60) for plan in plans if plan.app.id in missing)
+        raise haissues.confirmation_required(missing, f'還原 {names} 前還有事情要確認。')
+
+
+def resume_paused(ctx, plans, result=None):
+    """Start again the other services the restore of a converted HA backup paused (D10: X-AD-14, X-AD-50) -- done, failed or
+    refused. What does not start stays listed in the job's record (`stopped_writers`), so the recovery tries again, and
+    the result says which (`warnings`). A machine that is shutting down starts them with the user manager at boot."""
+    if _shutting_down(ctx):
+        return
+    for plan in plans:
+        resume = getattr(plan.adapter, 'resume_paused', None)
+        if resume is None or not getattr(plan.adapter, 'paused', None):
+            continue
+        try:
+            started, failed = resume()
+        except BaseException as exc:  # noqa: BLE001 - a signal: the record keeps them for the recovery
+            started, failed = [], list(plan.adapter.paused)
+            if isinstance(exc, Exception):
+                ctx.log(f'警告：重新啟動被暫停的服務時發生未預期的錯誤（{type(exc).__name__}）')
+            else:
+                raise
+        finally:
+            _note_paused(ctx, plan)
+        if started:
+            ctx.log(f'已重新啟動匯入時暫停的服務：{"、".join(started)}')
+        if failed and result is not None:
+            _add_warning(result, f'匯入時暫停的服務沒有重新啟動：{"、".join(failed)}；請到服務頁啟動它們。')
+
+
+def _note_paused(ctx, plan):
+    """The job's record lists the app's stopped writers and the services paused for it: write what is stopped now."""
+    paused = [PAUSED_PREFIX + unit for unit in getattr(plan.adapter, 'paused', None) or []]
+    own = [unit for unit in ctx._stopped_writers.get(plan.app.id, []) if not unit.startswith(PAUSED_PREFIX)]
+    ctx.note_writers(plan.app.id, own + paused)
+
+
 def _undo_preparation(ctx, plans, handover):
     """A failure (or a signal) before the restore's first destructive step: remove the directory copies stage_dirs()
     wrote ahead and start the writers the safety backup left stopped. Nothing that existed was changed. A copy that
@@ -1423,6 +1487,7 @@ def _undo_preparation(ctx, plans, handover):
             for problem in _discard_dirs(ctx, plan.adapter):
                 ctx.log(f'注意：{problem}')
     release_handover(ctx, plans, handover)
+    resume_paused(ctx, plans)
 
 
 def _record_failed_checks(result, touched):
@@ -2091,6 +2156,7 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
     if failed:
         problems.append(f'無法重新啟動服務 {", ".join(failed)}')
     inplace = [plan for plan in touched if plan.mode == 'inplace' and plan.adapter.destructive_started]
+    rolled = []  # the adapters of the rollbacks (they hold what they paused themselves)
     damaged = False  # the copy failed its check: no rollback from it, and no packaging either
     if inplace:
         source = None
@@ -2124,6 +2190,7 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                 if app_manifest is None:
                     raise BackupError('job-failed', '還原前資料不含此應用')
                 adapter = ctx.adapter(plan.app, phases=False)
+                rolled.append(Plan(plan.app, adapter, None, 'inplace'))  # it may pause services too (D10)
                 # The rollback owns the app's stopped units from here (they are stopped and masked): the safety backup's
                 # hand-over entry must not make a later recovery start them on whatever the rollback leaves.
                 (handover or {}).pop(plan.app.id, None)
@@ -2195,6 +2262,7 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                     _keep_pending(ctx, pending, result,
                                   _failure_text(exc) if isinstance(exc, Exception) else '作業被要求停止',
                                   finished=False, waiting=_short_of_space(exc))
+    resume_paused(ctx, list(touched) + list(untouched) + rolled, result)  # D10: also when the rollback was incomplete
     safety_id = result.get('safety_backup_id')
     if problems:
         result['rolled_back'] = False

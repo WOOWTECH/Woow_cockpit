@@ -1040,8 +1040,11 @@ def confirm_restore(svc, req, header, key_text):
         with contextlib.suppress(BackupError):
             adapter = svc.adapter(app)
             adapter.ha_import = ha_import
-            if getattr(type(adapter), 'restore_issues', None) is not None:
-                adapters[app.id] = adapter
+            if getattr(type(adapter), 'restore_issues', None) is None:
+                continue
+            if getattr(type(adapter), 'issues_only_for_ha', False) and not ha_import:
+                continue  # an ordinary restore has no lines to confirm and keeps its checks (H6): no extra preflight either
+            adapters[app.id] = adapter
     if not adapters:
         return
     path = svc.storage.archive_path(req['backup_id'])

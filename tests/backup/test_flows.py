@@ -401,6 +401,10 @@ class World:
         self.unreadable = {}      # app id -> runs ('restore', 'rollback') whose verify_snapshot() cannot read the answer (X-AD-39)
         self.verify_reads = []    # app ids verify_snapshot() was asked for
         self.no_snapshot = set()  # app ids whose backups carry no http-json snapshot (a converted HA backup has none)
+        self.restore_issues = {}  # app id -> the haissues.Issue lines its preflight() leaves in adapter.restore_issues
+        self.pauses = {}          # app id -> other services its pre-restore copy / restore pauses (D10)
+        self.resume_fail = set()  # services resume_paused() cannot start again
+        self.paused_started = []  # units start_paused() was asked for (the recovery of a dead job)
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
@@ -430,6 +434,9 @@ class FakeAdapter:
         self.staged = False
         self.timing = {}
         self.digest_results = []
+        self.ha_import = False
+        self.restore_issues = []
+        self.paused = []
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -475,8 +482,11 @@ class FakeAdapter:
         source = Path(staging_dir) / 'volumes' / 'data.tar'
         source.write_bytes(data)
         if keep_stopped:  # like the real adapter: the restore that follows takes the stopped writers over
-            self.kept_stopped = list(self.app.writer_units)
+            self.paused = list(self.world.pauses.get(self.app.id, [])) if self.ha_import else []
+            self.kept_stopped = list(self.app.writer_units) + self.paused
             self.world.events.append(('kept-stopped', self.app.id))
+            if self.paused:
+                self.world.events.append(('pause', self.app.id, tuple(self.paused)))
         else:
             self.phase('start')
             self.writers_hook([])
@@ -497,6 +507,7 @@ class FakeAdapter:
 
     def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
         self.world.preflight_dirs.append(extracted_dir)
+        self.restore_issues = list(self.world.restore_issues.get(self.app.id, []))
         if self.app.id in self.world.preflight_fail:
             return [{'id': f'{self.app.id}/image', 'status': 'fail', 'message': '缺少映像 localhost/x:1。'}]
         return [{'id': f'{self.app.id}/items', 'status': 'ok', 'message': '項目齊全。'},
@@ -518,6 +529,9 @@ class FakeAdapter:
         if mode == 'inplace' and not rollback:
             self.writers_hook(list(self.app.units))
             self.writers_hook([])  # stopped and masked: the restore owns the stopped state (like the real adapter)
+            if self.ha_import and not self.paused and self.world.pauses.get(self.app.id):  # no pre-restore copy: paused here
+                self.paused = list(self.world.pauses[self.app.id])
+                self.world.events.append(('pause', self.app.id, tuple(self.paused)))
         self.phase('restore')
         self.digest_results = list(self.world.digest_results.get(self.app.id, [])) if not rollback else []
         if not rollback and any(item.get('match') is False for item in self.digest_results):
@@ -544,6 +558,18 @@ class FakeAdapter:
         self.world.events.append(('take_over', self.app.id, tuple(units)))
         self.taken_over = (list(units), first_stop)
         self.timing['first_stop'] = first_stop
+        self.paused = [unit for unit in units if unit not in self.app.units]
+
+    def resume_paused(self):
+        units = list(self.paused)
+        failed = [unit for unit in units if unit in self.world.resume_fail]
+        self.world.events.append(('resume', self.app.id, tuple(units)))
+        self.paused = failed
+        return [unit for unit in units if unit not in failed], failed
+
+    def start_paused(self, units):
+        self.world.paused_started.extend(units)
+        return [unit for unit in units if unit in self.world.resume_fail]
 
     def stage_dirs(self, app_manifest, extracted_dir, *, mode):
         self.world.events.append(('stage_dirs', self.app.id, mode))
@@ -2644,6 +2670,114 @@ class UnreadableCheckValueTests(ConvertedRestoreCase):
         with self.assertRaises(BackupError) as caught:
             self.restore()
         self.assertIn('需人工處理', caught.exception.message)
+
+
+class ConfirmedPausesTests(ConvertedRestoreCase):
+    """D10 (X-AD-14, X-AD-50): the services a restore of a converted HA backup pauses are one line of the confirmation
+    (`restore.pauses`): not confirmed -> only this app stops, nothing is touched; confirmed with exactly these names -> it
+    goes on; one more name -> confirm again. The paused services run again afterwards, whatever the outcome."""
+
+    UNIT = 'woowbk-files.service'
+
+    def issue(self, *names):
+        from woowbackup.haissues import Issue
+        return Issue('restore.pauses', 'confirm', '匯入時會先暫停這些服務，完成後自動啟動。', names)
+
+    def key(self, *names, app='woowbk-demo'):
+        return self.issue(*names).key(app)
+
+    def restore_with(self, acknowledged=None, apps=('woowbk-demo',)):
+        params = {'backup_id': self.backup_id, 'apps': list(apps)}
+        if acknowledged is not None:
+            params['acknowledged'] = acknowledged
+        return flows.run_restore(self.ctx(), params)
+
+    def setUp(self):
+        super().setUp()
+        self.world.restore_issues['woowbk-demo'] = [self.issue('woowbk-files')]
+        self.world.pauses['woowbk-demo'] = [self.UNIT]
+
+    def test_an_unconfirmed_line_stops_this_app_before_anything_is_touched(self):
+        self.converted()
+        with self.assertRaises(BackupError) as caught:
+            self.restore_with()
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (row,) = caught.exception.details['apps']['woowbk-demo']
+        self.assertEqual((row['id'], row['level'], row['items'], row['key']),
+                         ('restore.pauses', 'confirm', ['woowbk-files'], self.key('woowbk-files')))
+        self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'restore', 'pause')], [])
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertEqual(self.safety_ids(), [])
+        self.assert_staging_clean()
+
+    def test_the_line_confirmed_with_exactly_its_names_goes_on_and_the_services_run_again(self):
+        self.converted()
+        result = self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+        self.assertFalse(result['rolled_back'])
+        events = [e for e in self.world.events if e[0] in ('pause', 'restore', 'resume')]
+        self.assertEqual(events, [('pause', 'woowbk-demo', (self.UNIT,)), ('restore', 'woowbk-demo', 'inplace', 'restore'),
+                                  ('resume', 'woowbk-demo', (self.UNIT,))], 'paused, restored, then started again')
+        self.assertEqual(self.reporter.partial.get('stopped_writers', {}), {})
+        self.assertTrue(any('已重新啟動匯入時暫停的服務' in line and self.UNIT in line for line in self.reporter.logs))
+
+    def test_one_more_name_needs_the_confirmation_again(self):
+        self.converted()
+        acknowledged = {'woowbk-demo': [self.key('woowbk-files')]}
+        self.world.restore_issues['woowbk-demo'] = [self.issue('woowbk-files', 'woowbk-sync')]
+        with self.assertRaises(BackupError) as caught:
+            self.restore_with(acknowledged)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.details['apps']['woowbk-demo'][0]['items'], ['woowbk-files', 'woowbk-sync'])
+        self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'restore')], [])
+
+    def test_a_key_of_another_app_or_another_line_confirms_nothing(self):
+        self.converted()
+        for acknowledged in ({'woowbk-two': [self.key('woowbk-files')]}, {'woowbk-demo': []},
+                             {'woowbk-demo': [self.key('woowbk-files', app='woowbk-two')]},
+                             {'_shared': [self.key('woowbk-files', app='_shared')]}):
+            with self.subTest(acknowledged=acknowledged), self.assertRaises(BackupError) as caught:
+                self.restore_with(acknowledged)
+            self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_an_ordinary_restore_has_no_lines_to_confirm(self):
+        result = self.restore_with()  # the backup is not a converted one (H6)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+        self.assertFalse(any(e[0] in ('pause', 'resume') for e in self.world.events))
+        self.assertFalse(result['rolled_back'])
+
+    def test_a_failure_before_the_first_step_starts_the_paused_services_again(self):
+        self.converted()
+        self.world.fail_restore_before.add('woowbk-demo')
+        with self.assertRaises(BackupError):
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        self.assertIn(('resume', 'woowbk-demo', (self.UNIT,)), self.world.events)
+
+    def test_a_rollback_starts_them_again_after_it_finished(self):
+        self.converted()
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        events = [e for e in self.world.events if e[0] in ('restore', 'resume')]
+        self.assertEqual(events[-1], ('resume', 'woowbk-demo', (self.UNIT,)))
+        self.assertEqual(events[-2][3], 'rollback', 'only after the rollback restored the app')
+
+    def test_a_service_that_does_not_start_again_is_said_and_stays_listed_for_the_recovery(self):
+        self.converted()
+        self.world.resume_fail.add(self.UNIT)
+        result = self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        self.assertTrue(any(self.UNIT in note and '沒有重新啟動' in note for note in result['warnings']), result['warnings'])
+        self.assertEqual(self.reporter.partial['stopped_writers'], {'woowbk-demo': ['paused:' + self.UNIT]})
+
+    def test_the_recovery_of_a_dead_job_starts_only_the_services_the_record_marks_as_paused(self):
+        mark = 'paused:'
+        failed = flows.restart_writers(self.deps, {'woowbk-demo': ['woowbk-demo-app.service', mark + self.UNIT,
+                                                                   'unrelated.service']})
+        self.assertEqual(self.world.paused_started, [self.UNIT])
+        self.assertEqual(failed, ['unrelated.service'], 'a name the record does not mark is never started')
+        self.world.resume_fail.add('x.service')
+        self.assertEqual(flows.restart_writers(self.deps, {'woowbk-demo': [mark + self.UNIT, mark + 'x.service']}),
+                         [mark + 'x.service'])
 
 
 class CompareTests(unittest.TestCase):
