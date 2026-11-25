@@ -62,6 +62,7 @@ class FakeOwner:
         self.calls = []
         self.psql = {}
         self.container_files = hafakes.ContainerFiles()   # what Cluster.write_file's writes received
+        self.limits = []                                  # (argv, timeout, max_output) of every call
 
     def _psql(self, container):
         if container not in self.psql:
@@ -70,12 +71,20 @@ class FakeOwner:
 
     def podman(self, *args, input=None, stdout=None, timeout=None, max_output=None, check=True, abort=None):
         self.calls.append(args)
+        self.limits.append((args, timeout, max_output))
         data = input.read() if hasattr(input, 'read') else input
         result = self.dispatch(args, data, stdout)
         if check and result.returncode != 0:
             from woowbackup.podman import CommandError
-            raise CommandError(f'podman {args[0]} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode)
+            raise CommandError(f'podman {args[0]} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode,
+                               stderr=result.stderr)
         return result
+
+    def systemctl(self, *args, timeout=None, max_output=None, abort=None, check=True):
+        self.calls.append(('systemctl', *args))
+        if args[0] == 'start':
+            self.world.live_db_stopped = False
+        return Result(0, b'', b'')
 
     def dispatch(self, args, data, stdout):
         verb = args[0]
@@ -95,6 +104,8 @@ class FakeOwner:
                 i += 2 if args[i] in ('--user', '--workdir', '--env') else 1
             container, command = args[i], list(args[i + 1:])
             self.world.exec_env.append((container, command, env))
+            if container == 'odoo18-db' and self.world.live_db_stopped:
+                return Result(125, b'', b'Error: no container with name or ID "odoo18-db" found: no such container')
             if command[0] == 'psql':
                 # the double reads the database from `-d`; the real command carries it in PGDATABASE (OD-31)
                 return self._psql(container)(command + (['-d', env['PGDATABASE']] if 'PGDATABASE' in env else []), data)
@@ -115,7 +126,8 @@ class FakeOwner:
             return Result(125, b'', b'Error: unable to pull: connection refused')
         if verb == 'container' and args[1] == 'inspect':
             fmt = args[3]
-            return Result(0, b'0\n' if 'ExitCode' in fmt else b'true\n', b'')
+            stopped = args[-1] == 'odoo18-db' and self.world.live_db_stopped
+            return Result(0, b'0\n' if 'ExitCode' in fmt else b'false\n' if stopped else b'true\n', b'')
         if verb == 'volume' and args[1] == 'import':
             self.world.imported[args[2]] = data
             return Result(0, b'', b'')
@@ -152,7 +164,7 @@ class FakeAdapter:
 
     def image_inspect(self, image):
         if image == self.world.web_image:
-            return {'id': WEB_ID, 'env': ['ODOO_RELEASE=18.0.20260926']}
+            return {'id': WEB_ID, 'env': [f'ODOO_RELEASE={self.world.web_release}'] if self.world.web_release else []}
         return {'id': 'sha256:' + 'c' * 64, 'env': ['PG_MAJOR=17' if 'paas-postgres' in image else 'PG_MAJOR=16']}
 
     def read_quadlets(self):
@@ -191,6 +203,7 @@ class World(HaWorld):
         self.exec_env, self.pulls, self.pull_works = [], [], True
         self.conf = {'db_name': 'odoo', 'db_user': 'odoo', 'db_password': 'conf-secret-Pw-0123456789'}
         self.live_table = True
+        self.live_base_url = 'https://cockpit.example'
         self.live_marker = MARKER
         self.live_role = {'password': VERIFIER, 'super': False, 'login': True, 'createdb': False, 'createrole': False,
                           'replication': False, 'bypassrls': False, 'connlimit': -1}
@@ -199,11 +212,26 @@ class World(HaWorld):
         self.ha_extensions = [['plpgsql', '1.0'], ['pg_trgm', '1.6']]
         self.ha_databases = [['woowtest', 9000000, 'C', 'C']]
         self.scan_broken = []
+        self.live_db_stopped = False
+        self.superuser_kinds = []
+        self.not_odoo = set()          # HA databases that are no Odoo databases
+        self.unreadable = {}           # HA database -> what its DETAIL_SQL read does: 'raise' | 'junk' | 'modules'
+        self.verify_base_url = 'https://cockpit.example'
+        self.verify_domains = None     # None: what the new cluster really holds (cleared); else a list
+        self.refuse_setting = None     # a setting the new cluster refuses until it is reset
+        self.web_release = '18.0.20260926'
         self.n8n_tables = {}
         self.unpublished = False
 
     def factory(self, app, **_kwargs):
         return FakeAdapter(app, self)
+
+    def expected_marker(self, container):
+        """The upgrade marker the settings SQL of the new cluster wrote (what VERIFY_SQL then reads back)."""
+        for _db, statement, _tx in self.owner.psql[container].executed:
+            if "'woow_paas_platform.upgrade_done'" in statement and statement.startswith('INSERT'):
+                return statement.split("'woow_paas_platform.upgrade_done', '", 1)[1].split("', 1,", 1)[0]
+        return None
 
     # ---------------------------------------------------------- containers
     def run(self, name, image, args, argv, data):
@@ -262,8 +290,8 @@ class World(HaWorld):
             if sql == ha_odoo.LIVE_TABLE_SQL:
                 return self.live_table
             if sql == ha_odoo.LIVE_SQL:
-                return {'base_url': 'https://cockpit.example', 'freeze': 'True', 'marker': self.live_marker}
-            if sql == ha_odoo.LIVE_ROLE_SQL:
+                return {'base_url': self.live_base_url, 'freeze': 'True', 'marker': self.live_marker}
+            if 'FROM pg_authid' in sql:
                 return self.live_role
             if sql == ha_odoo.AVAILABLE_EXTENSIONS_SQL:
                 return self.live_extensions
@@ -273,13 +301,19 @@ class World(HaWorld):
             if sql == ha_odoo.DATABASES_SQL:
                 return self.ha_databases
             if sql == ha_odoo.IS_ODOO_SQL:
-                return [True] * 7
+                return [False] * 7 if database in self.not_odoo else [True] * 7
             if sql == ha_odoo.DETAIL_SQL:
-                return {'modules': self.ha_modules, 'partners': 5, 'users': 2, 'attachments': 1,
+                kind = self.unreadable.get(database)
+                if kind == 'raise':
+                    raise BackupError('job-failed', 'psql 執行失敗')
+                if kind == 'junk':
+                    return ['not a document']
+                modules = [['bad-name', '1', 'installed']] if kind == 'modules' else self.ha_modules
+                return {'modules': modules, 'partners': 5, 'users': 2, 'attachments': 1,
                         'attachment_bytes': 10, 'crons_active': 1, 'mail_servers_active': 0, 'size': 9000000,
                         'extensions': self.ha_extensions, 'base_url': 'https://ha.local'}
             if sql == ha_odoo.SUPERUSER_SQL:
-                return []
+                return self.superuser_kinds
             if sql == ha_odoo.HAS_WEBSITE_SQL:
                 return True
             if sql == ha_odoo.WEBSITE_DOMAINS_SQL:
@@ -288,17 +322,22 @@ class World(HaWorld):
                 return 'uuid-ha'
         if role == 'odoo-db':
             if sql == ha_odoo.VERIFY_SQL:
-                return {'modules': self.ha_modules, 'partners': 5, 'attachments': 1, 'marker': MARKER, 'attempt': 0,
-                        'base_url': 'https://cockpit.example', 'uuid': 'uuid-new'}
+                return {'modules': self.ha_modules, 'partners': 5, 'attachments': 1, 'marker': self.expected_marker(container),
+                        'attempt': 0, 'base_url': self.verify_base_url, 'uuid': 'uuid-new'}
             if sql == ha_odoo.HAS_WEBSITE_SQL:
                 return True
             if sql == ha_odoo.WEBSITE_DOMAINS_SQL:
+                if self.verify_domains is not None:
+                    return self.verify_domains
                 cleared = any('UPDATE website SET domain = NULL' in s for _db, s, _t in self.owner.psql[container].executed)
                 return [] if cleared else ['https://shop.ha.example']
             if sql == ha_odoo.SETTINGS_SQL:
                 return []
             if sql == ha_odoo.FILE_SETTINGS_SQL:
-                return [[name, value, ''] for name, value in self.owner.psql[container].auto_conf.items()]
+                psql = self.owner.psql[container]
+                reset = any(s.startswith('ALTER SYSTEM RESET') for _db, s, _t in psql.executed)
+                return [[name, value, 'invalid value' if name == self.refuse_setting and not reset else '']
+                        for name, value in psql.auto_conf.items()]
         if role == 'n8n-pg':
             if 'pg_tables' in sql:
                 return list(self.n8n_tables)
@@ -405,64 +444,115 @@ class OdooConversionTests(ConversionCase):
         self.assertEqual(self.reporter.partial.get('temp_owners'), [])
         self.assertFalse((Path(self.paths.staging) / self.job_id).exists())
 
-    def test_a_dump_that_needs_a_superuser_is_refused_and_nothing_is_kept(self):
-        self.world.toc_extra = b'3500; 3466 16500 EVENT TRIGGER - grab postgres\n'
+    def test_objects_only_a_superuser_can_create_are_left_out_after_the_customer_confirmed_them(self):
+        """OD-41, OD-58: the check names the kinds, the conversion needs exactly those confirmed, then restores the rest;
+        unconfirmed it stops only Odoo and keeps nothing."""
+        self.world.superuser_kinds = ['EVENT TRIGGER']
+        self.world.toc_extra = b'3500; 3466 16500 EVENT TRIGGER - grab postgres'
+        ha_id = self.upload_odoo()
         with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_odoo(), ['odoo'])
-        self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertIn('EVENT TRIGGER', caught.exception.message)
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual([i.id for i in caught.exception.issues], ['odoo.superuser-objects'])
         self.assertEqual(self.storage.list_backups(), [])
         self.assertEqual(haimport.load_registry(self.paths), {})
         removed = {call[-1] for call in self.world.owner.calls if call[:2] == ('volume', 'rm')}
         created = {call[-1] for call in self.world.owner.calls if call[:2] == ('volume', 'create')}
         self.assertEqual(created - removed, set(), 'every throwaway volume removed')
+        key = caught.exception.issues[0].key('odoo')
+        result = self.convert(ha_id, ['odoo'], acknowledged={'odoo': [key]})
+        self.assertEqual(result['apps'], ['odoo'])
+        written = next(data for (_c, path), data in self.world.owner.container_files.files.items()
+                       if path == '/tmp/woowbk-odoo.toc').decode()
+        self.assertIn(';3500; 3466 16500 EVENT TRIGGER - grab postgres', written.splitlines())
+        self.assertIn('3456; 1259 16400 TABLE public res_partner odoo', written.splitlines())
 
-    def test_a_live_marker_of_another_image_is_refused_before_any_work(self):
-        original = self.world.answer
+    def test_a_dump_that_lists_what_the_check_did_not_see_is_still_restored_without_it(self):
+        """OD-58, the second look: the list holds a kind the SQL of the check did not report; it is left out and said."""
+        self.world.toc_extra = b'3500; 3466 16500 EVENT TRIGGER - grab postgres'
+        result = self.convert(self.upload_odoo(), ['odoo'])
+        (line,) = [i for i in result['results'][0]['issues'] if i['id'] == 'odoo.superuser-skipped']
+        self.assertEqual((line['level'], line['items']), ('notice', ['EVENT TRIGGER']))
 
-        def answer(container, sql, database):
-            if sql == ha_odoo.LIVE_SQL:
-                return {'base_url': None, 'freeze': None, 'marker': MARKER.replace('b' * 64, 'd' * 64)}
-            return original(container, sql, database)
+    def test_a_live_marker_of_another_image_is_written_new_by_the_engine(self):
+        """OD-18: no refusal; the marker of the live image is written into the converted database, and said."""
+        self.world.live_marker = MARKER.replace('b' * 64, 'd' * 64)
+        result = self.convert(self.upload_odoo(), ['odoo'])
+        db = next(c for c in self.world.owner.psql if c.endswith('-odoo-db'))
+        marker = next(s for _d, s, _t in self.world.owner.psql[db].executed
+                      if s.startswith('INSERT') and "'woow_paas_platform.upgrade_done'" in s)
+        self.assertIn(WEB_ID, marker)
+        self.assertIn('18.0.20260926', marker)
+        self.assertNotIn('d' * 64, marker)
+        self.assertIn('odoo.marker-written', [i['id'] for i in result['results'][0]['issues']])
 
-        self.world.answer = answer
+    def test_without_a_release_date_in_the_image_no_marker_can_be_written_and_nothing_is_touched(self):
+        self.world.live_marker = None
+        self.world.web_release = None
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_odoo(), ['odoo'])
-        self.assertIn('升級標記', caught.exception.message)
-        self.assertEqual(self.world.runs, [])
+        self.assertEqual([i.id for i in caught.exception.issues], ['odoo.marker-unwritable'])
+        self.assertEqual([run[0] for run in self.world.runs], ['conf'], 'only this device was read: before any HA work')
+        self.assertEqual(self.storage.list_backups(), [])
 
 
-class OdooCheckTests(ConversionCase):
-    def check(self, ha_id):
+class OdooCase(ConversionCase):
+    """A conversion world with helpers for one Odoo add-on backup."""
+
+    def upload_odoo(self, extra=()):
+        return self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', odoo_member(extra))], hx.ha_doc(addons=(hx.ODOO,))))
+
+    def check(self, ha_id=None, **params):
         from woowbackup import flows
-        return flows.run_verify(self.ctx(), {'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo'],
-                                             'key_provided': False})['ha_check']['apps'][0]
+        base = {'source': 'ha', 'ha_backup_id': ha_id or self.upload_odoo(), 'apps': ['odoo'], 'key_provided': False}
+        return flows.run_verify(self.ctx(), {**base, **params})['ha_check']['apps'][0]
 
-    def upload_odoo(self):
-        return self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', odoo_member())], hx.ha_doc(addons=(hx.ODOO,))))
+    @staticmethod
+    def issues(row, database=None, *, only=None):
+        return [i for i in row['issues'] if (database is None or i.get('database') == database)
+                and (only is None or i['level'] == only)]
 
+    @staticmethod
+    def ids(row, database=None):
+        return {i['id']: i['level'] for i in OdooCase.issues(row, database)}
+
+    @staticmethod
+    def keys(row):
+        return [i['key'] for i in row['issues'] if i['level'] == 'confirm']
+
+    def executed(self):
+        db = next(c for c in self.world.owner.psql if c.endswith('-odoo-db'))
+        return [s for _d, s, _t in self.world.owner.psql[db].executed]
+
+
+class OdooCheckTests(OdooCase):
     def test_the_check_reads_what_the_conversion_will_need(self):
         result = self.check(self.upload_odoo())
         self.assertTrue(result['ok'], result['blockers'])
         database = result['odoo']['databases'][0]
-        self.assertIn('網站原本使用的網域 https://shop.ha.example 會改成這台的網址。', database['warnings'])
+        self.assertIn('網站原本使用的網域會改成這台的網址。', database['warnings'])
+        (line,) = [i for i in result['issues'] if i['id'] == 'odoo.website-domains']
+        self.assertEqual((line['database'], line['items']), ('woowtest', ['https://shop.ha.example']))
         self.assertEqual(database['custom_modules'], [{'name': 'woow_import_probe', 'version': '18.0.1.0.0',
                                                        'from': 'data/addons'}])
+        self.assertEqual(result['choices']['database'], [{'value': 'woowtest', 'label': 'woowtest', 'ok': True,
+                                                          'default': True}])
         self.assertEqual(self.reporter.partial.get('temp_owners'), [])
 
-    def test_the_check_refuses_what_the_conversion_would_refuse(self):
-        """Review C-05: the live upgrade marker and the odoo role are checked here too."""
+    def test_a_live_database_that_cannot_be_read_stops_the_app_before_ha_is_read(self):
+        """Review C-05: this device's side is read first; what cannot be read stops only this app, with the reason."""
         original = self.world.answer
 
         def answer(container, sql, database):
-            if sql == ha_odoo.LIVE_ROLE_SQL:
-                return {'password': VERIFIER, 'super': True}
+            if sql == ha_odoo.LIVE_SQL:
+                raise BackupError('job-failed', 'psql 執行失敗')
             return original(container, sql, database)
 
         self.world.answer = answer
         result = self.check(self.upload_odoo())
-        self.assertFalse(result['ok'])
-        self.assertIn('超級使用者', result['blockers'][0])
+        self.assertFalse(result['importable'])
+        self.assertEqual(result['issues'][0]['id'], 'failure.job-failed')
+        self.assertIn('請確認它正在執行', result['issues'][0]['message'])
         self.assertEqual(self.runs('hapg'), [], 'refused before HA data is read')
 
 
@@ -496,17 +586,31 @@ class VerifyConvertedTests(unittest.TestCase):
                                                                              'installed']]), '狀態是 to upgrade'),
             'version': (self.doc(modules=[['base', '18.0.1.4', 'installed'], ['woow_import_probe', '18.0.1.0.0',
                                                                               'installed']]), '版本 18.0.1.4'),
-            'set': (self.doc(modules=[['base', '18.0.1.3', 'installed']]), '已安裝模組和 HA 的不同'),
+            'set': (self.doc(modules=[['base', '18.0.1.3', 'installed']]), '轉換後的模組和 HA 的不同'),
             'counts': (self.doc(partners=4), '聯絡人或附件數量'),
             'marker': (self.doc(attempt=1), '升級標記'),
-            'address': (self.doc(base_url='https://ha.local'), '網址'),
-            'website': (self.doc(website_domains=['https://shop.ha.example']), '網站的網域'),
         }
         for name, (doc, words) in cases.items():
             with self.subTest(name):
                 self.assertTrue(any(words in p for p in self.problems(doc)), self.problems(doc))
         self.assertTrue(any('識別碼' in p for p in self.problems(self.doc(uuid='old'), test_mode=True)))
         self.assertEqual(self.problems(self.doc(uuid='old')), [], 'a real import keeps the uuid')
+
+    def test_what_is_only_a_reminder_does_not_fail_the_conversion(self):
+        """OD-61, OD-66, OD-67: the same state as HA, another address, website domains that are still HA's."""
+        for name, change in (('address', {'base_url': 'https://ha.local'}),
+                             ('website', {'website_domains': ['https://shop.ha.example']})):
+            with self.subTest(name):
+                self.assertEqual(self.problems(self.doc(**change)), [])
+        notes = ha_odoo.converted_notes(self.doc(base_url='https://ha.local', website_domains=['https://shop.ha.example']),
+                                        self.details, self.live)
+        self.assertEqual([n[0] for n in notes], ['odoo.url-differs', 'odoo.website-domain-kept'])
+        waiting = self.doc(modules=[['base', '18.0.1.3', 'to upgrade'], ['woow_import_probe', '18.0.1.0.0', 'installed']])
+        self.details['modules'] = [('base', '18.0.1.3', 'to upgrade'), ('woow_import_probe', '18.0.1.0.0', 'installed')]
+        self.assertEqual(self.problems(waiting), [], 'the state HA had')
+        self.assertEqual(ha_odoo.converted_notes(waiting, self.details, self.live)[0][0], 'odoo.modules-pending')
+        changed = self.doc(modules=[['base', '18.0.1.3', 'to remove'], ['woow_import_probe', '18.0.1.0.0', 'installed']])
+        self.assertTrue(any('和 HA 的 to upgrade 不同' in p for p in self.problems(changed)))
 
 
 class N8nConversionTests(ConversionCase):
