@@ -164,6 +164,8 @@ class World(fk.World):
         self.pull_fails = None             # (exit code, stderr) of `podman pull`
         self.pulled = False
         self.kept = None                   # keep_safety as the adapter's import_manifest got it
+        self.proxy_name = 'litellm'        # the proxy's container name (L-04: whatever its Quadlet file says)
+        self.snapshot_exits = []           # exit codes of the next snapshot scripts (21: psql gone, 22: other migrations)
         self.migrations_present = True     # this device's database has its Prisma table (the proxy ran once)
         self.settings = None               # the answer of STORED_SETTINGS_SQL by role ({'hapg': {...}, 'll-db': {...}} or one for all)
         self.restore_scripts = []          # (table, script text) of every restricted-role load
@@ -179,10 +181,12 @@ class World(fk.World):
         return super().run(role, image, command, options, data)
 
     def podman(self, args, data, stdout):
-        if args[:2] == ['exec', 'litellm'] and 'python' in args:
+        if args[:2] == ['exec', self.proxy_name] and 'python' in args:
             return Result(0 if self.app_version else 1, (self.app_version or '').encode(), b'')
         if args[:5] == ['exec', '-i', 'litellm-postgres', 'sh', '-s']:
             self.snapshots.append((args[5:], data))
+            if self.snapshot_exits:
+                return Result(self.snapshot_exits.pop(0), None, b'')
             columns = self.snapshot_columns if self.snapshot_columns is not None else self.live_columns
             stdout.write(json.dumps(columns).encode() + b'\nPGDMP-trusted-schema')
             if self.after_capture:
@@ -358,11 +362,12 @@ class LiteLLMCase(fk.ConversionCase):
 
     def refused(self, words, code='incompatible', **upload):
         """A conversion that must stop with `words` and make no backup; the BackupError."""
+        before = self.storage.list_backups()
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_litellm(**upload), ['litellm'])
         self.assertEqual(caught.exception.code, code, caught.exception.message)
         self.assertIn(words, caught.exception.message)
-        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(self.storage.list_backups(), before, 'no backup was made')
         return caught.exception
 
     def blockers(self, **upload):
@@ -2008,6 +2013,217 @@ class KeyUserTests(unittest.TestCase):
         self.assertEqual(ha_litellm.pi_agent_sources(quadlets, '/home/appowner/'),
                          [('volume', 'pi-named'), ('volume', 'systemd-omnigent-pi'), ('path', 'agents/pi'),
                           ('volume', 'pi-agent-data'), ('path', 'pi')])
+
+
+class RowTests(LiteLLMCase):
+    """The rows of the HAOS parity lane LITELLM (DESIGN F-a): each line to confirm is tried three ways (not confirmed: only this
+    app stops; confirmed: it goes on; one more name: confirm again), each automatic handling works and stops only this app
+    when it cannot, each removed block has its new behaviour here."""
+
+    def line(self, issue_id, **upload):
+        return next((i for i in self.issues(**upload) if i['id'] == issue_id), None)
+
+    def confirm_cycle(self, issue_id, more):
+        """`issue_id` is a line to confirm: not confirmed -> confirmation-required before any row is read; confirmed ->
+        the conversion goes on; the world changed by `more()` (one more name than the customer saw) -> confirm again."""
+        line = self.line(issue_id)
+        self.assertEqual(line['level'], 'confirm')
+        self.assertTrue(line['key'].startswith(f'{issue_id}:'))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.details['apps']['litellm'][0]['id'], issue_id)
+        self.assertFalse(self.world.copies_out or self.world.snapshots, 'nothing of HA was read, nothing captured')
+        self.assertEqual(self.storage.list_backups(), [])
+        more()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})
+        self.assertEqual(caught.exception.code, 'confirmation-required', 'one more name is another line')
+        self.assertEqual(self.storage.list_backups(), [])
+        return line
+
+    def confirmed(self, issue_id, **upload):
+        line = self.line(issue_id, **upload)
+        result = self.convert(self.upload_litellm(**upload), ['litellm'], acknowledged={'litellm': [line['key']]})
+        self.assertTrue(result['backup_id'])
+        return result
+
+    # ---------------------------------------------------------------- L-21, L-23, L-24: what HA's database has beyond LiteLLM
+    def test_l21_other_schemas_of_ha_are_named_and_not_moved(self):
+        self.world.objects = dict(self.world.objects, schemas=['evil', 'woow', 'woow_platform'])
+        line = self.confirm_cycle('litellm.schemas-skipped', lambda: setattr(
+            self.world, 'objects', dict(self.world.objects, schemas=['evil', 'evil2', 'woow', 'woow_platform'])))
+        self.assertEqual(line['items'], ['evil'])
+        self.world.objects = dict(self.world.objects, schemas=['evil', 'woow', 'woow_platform'])
+        self.confirmed('litellm.schemas-skipped')
+        self.assertFalse(any('evil' in sql for _r, _u, sql in self.world.copies_out), 'only this device\'s tables are read')
+
+    def test_l23_objects_only_a_superuser_makes_are_named_and_not_moved(self):
+        self.world.superuser = ['EVENT TRIGGER']
+        line = self.confirm_cycle('litellm.superuser-objects', lambda: setattr(self.world, 'superuser', ['EVENT TRIGGER', 'CAST']))
+        self.assertEqual(line['items'], ['EVENT TRIGGER'])
+        self.world.superuser = ['EVENT TRIGGER']
+        self.confirmed('litellm.superuser-objects')
+        statements = ' '.join(self.world.executed('ll-db'))
+        self.assertNotIn('EVENT TRIGGER', statements, "nothing of HA's is created in the new cluster")
+
+    def test_l24_large_objects_are_a_reminder_and_do_not_stop(self):
+        self.world.objects = dict(self.world.objects, large_objects=3)
+        result = self.convert(self.upload_litellm(), ['litellm'])
+        line = next(i for i in result['results'][0]['issues'] if i['id'] == 'litellm.large-objects')
+        self.assertEqual(line['level'], 'notice')
+        self.assertIn('3 個大型物件', line['message'])
+
+    def test_l22_what_else_is_in_has_woow_schema_is_no_reason(self):
+        self.assertNotIn('ha_only', ha_litellm.OBJECTS_SQL)
+        self.assertFalse(hasattr(ha_litellm, 'HA_ONLY'))
+        self.world.objects = dict(self.world.objects, ha_only=['meta', 'a_new_table'])
+        self.assertEqual(self.lines(), [('litellm.databases-left', 'notice'), ('litellm.key-users', 'notice')])
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+
+    def test_l15_a_database_that_is_not_there_stops_only_this_app_with_what_to_do(self):
+        original = self.world.answer
+
+        def none_here(role, sql, database):
+            return [['postgres', 100, 'C', 'C.UTF-8']] if sql == ha_odoo.DATABASES_SQL else original(role, sql, database)
+
+        self.world.answer = none_here
+        stop = next(i for i in self.issues() if i['level'] == 'stop')
+        self.assertEqual((stop['id'], stop['message']), ('litellm.no-database', 'HA 的 LiteLLM 沒有 litellm 資料庫。'))
+        self.assertIn('這台的 LiteLLM 不會有任何變更', stop['action'])
+        error = self.refused('HA 的 LiteLLM 沒有 litellm 資料庫。')
+        self.assertEqual(error.issues[0].id, 'litellm.no-database')
+
+    # ---------------------------------------------------------------- L-04: the proxy is what mounts the salt secret
+    def test_l04_the_proxy_is_found_by_what_it_mounts_not_by_its_name(self):
+        quadlets = dict(QUADLETS)
+        quadlets['gateway.container'] = quadlets.pop('litellm.container').replace(b'ContainerName=litellm\n',
+                                                                                  b'ContainerName=llm-gateway\n')
+        self.world.quadlets['litellm'] = quadlets
+        self.world.proxy_name = 'llm-gateway'
+        found = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertTrue(found['importable'], found['issues'])
+        self.assertEqual(found['target_version'], '1.104.0', 'read in the renamed container')
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+        for name, text in (('a database file that does not name its container', QUADLETS['litellm-postgres.container'].replace(
+                b'ContainerName=litellm-postgres\n', b'')),):
+            with self.subTest(name):
+                self.world.quadlets['litellm'] = dict(QUADLETS, **{'litellm-postgres.container': text})
+                self.world.proxy_name = 'litellm'
+                self.assertEqual(self.blockers(), [], 'the catalog names a container no file calls so: the file that mounts '
+                                 'its data volume is the one')
+
+    # ---------------------------------------------------------------- L-36, L-37, L-39, L-54, L-55: a capture is taken again
+    def test_l54_l55_a_snapshot_script_that_ended_early_is_run_again(self):
+        for exits in ([21], [22], [21, 22]):
+            del self.world.snapshots[:]
+            self.world.snapshot_exits = list(exits)
+            with self.subTest(exits=exits):
+                self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+                self.assertEqual(len(self.world.snapshots), len(exits) + 1)
+        del self.world.snapshots[:]
+        self.world.snapshot_exits = [21, 22, 21]
+        error = self.refused('結束碼 21', 'job-failed')     # a third failure is no longer tried again
+        self.assertEqual(len(self.world.snapshots), 3)
+        self.assertEqual(error.details['returncode'], 21)
+        self.world.snapshot_exits = [23]       # a snapshot name that is not one is not a busy device: not tried again
+        del self.world.snapshots[:]
+        self.refused('結束碼 23', 'job-failed')
+        self.assertEqual(len(self.world.snapshots), 1)
+
+    def test_l36_l37_a_garbled_first_line_and_moved_migrations_are_taken_again(self):
+        podman, first = self.world.podman, []
+
+        def garbled_once(args, data, stdout):
+            if args[:5] == ['exec', '-i', 'litellm-postgres', 'sh', '-s'] and not first:
+                first.append(1)
+                stdout.write(b'psql: not json\nPGDMP')
+                return Result(0, None, b'')
+            return podman(args, data, stdout)
+
+        self.world.podman = garbled_once
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+        self.assertIn('第 1 次', self.logs())
+        self.world.podman = podman
+        calls = {'n': 0}
+        original = self.world.answer
+
+        def moving(role, sql, database):
+            if role == 'litellm-postgres' and sql == ha_litellm.MIGRATIONS_SQL:
+                calls['n'] += 1
+                return MIGRATIONS if calls['n'] != 2 else MIGRATIONS + ['20261201000000_new']   # one read while it was moving
+            return original(role, sql, database)
+
+        self.world.answer = moving
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+
+    # ---------------------------------------------------------------- L-40: extensions
+    def test_l40_an_extension_version_that_differs_is_named_a_different_extension_stops(self):
+        live = dict(signature(), extensions=[['plpgsql', '1.0', 'pg_catalog'], ['pg_trgm', '1.6', 'public']])
+        self.world.live_signature = live
+        self.world.restored_signature = dict(live, extensions=[['plpgsql', '1.0', 'pg_catalog'], ['pg_trgm', '1.7', 'public']])
+        result = self.convert(self.upload_litellm(), ['litellm'])
+        line = next(i for i in result['results'][0]['issues'] if i['id'] == 'litellm.extension-versions')
+        self.assertEqual((line['level'], line['items']), ('auto', ['pg_trgm']))
+        wanted = 'CREATE EXTENSION IF NOT EXISTS "pg_trgm" WITH SCHEMA "public" VERSION \'1.6\''
+        self.assertIn(wanted, self.world.executed('ll-db'), 'made at this device\'s version first, when the image still has it')
+        self.assertNotIn('plpgsql', ' '.join(s for s in self.world.executed('ll-db') if s.startswith('CREATE EXTENSION')))
+        self.world.restored_signature = dict(live, extensions=[['plpgsql', '1.0', 'pg_catalog'], ['pg_trgm', '1.6', 'extra']])
+        self.refused('extensions', 'job-failed')      # another schema of it, or a missing index, is no version
+        self.world.restored_signature = dict(live, indexes=[['public', 'x', 'y', 'CREATE INDEX y']])
+        self.refused('indexes', 'job-failed')
+
+    # ---------------------------------------------------------------- L-57: the version file is read by its first bytes
+    def test_l57_a_long_version_file_is_no_limit_and_the_whole_file_still_goes(self):
+        for data, version, importable in ((b'18\n' + b' ' * 200, '18', True), (b'18\n' + b'x' * 200, None, False)):
+            with self.subTest(version=version):
+                found = self.check(self.upload_litellm(pg_version=data), ['litellm'])[0]
+                self.assertEqual(found['importable'], importable, found['issues'])
+                if not importable:
+                    self.assertIn(('litellm.pg-major', 'stop'), [(i['id'], i['level']) for i in found['issues']])
+                    self.assertNotIn('litellm.limit', ' '.join(i['id'] for i in found['issues']))
+        staged = self.world.imported['hapg']
+        with tarfile.open(fileobj=io.BytesIO(staged)) as tar:
+            self.assertEqual(tar.extractfile('PG_VERSION').read(), b'18\n' + b'x' * 200, 'all of it, not the 64 bytes read')
+
+    # ---------------------------------------------------------------- pg-stdin F2: a table's rows travel in a script with an end mark
+    def test_f2_a_cut_tail_never_gets_its_mark_and_stops(self):
+        scripts = []
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+        tail = len(re.search(r'\\\.\nCOMMIT;\n\\echo \S+\n\Z', self.world.restore_scripts[0]).group(0))
+        for cut in (1, 12, tail - 1, tail, tail + 5, tail + 20):    # the mark's end, its line, the commit, a field of the last row
+            self.world.cut_tail = cut
+            with self.subTest(cut=cut):
+                self.refused(ha_odoo.INCOMPLETE_SQL, 'job-failed')
+        self.world.cut_tail = 0
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'])['backup_id'])
+        for script in self.world.restore_scripts[-len(TABLES):]:
+            scripts.append(script)
+        self.assertTrue(all(s.startswith('BEGIN;\nCOPY ') and '\n\\.\nCOMMIT;\n\\echo ' in s for s in scripts))
+
+    def test_f2_the_script_is_built_around_the_rows_not_into_them(self):
+        head, tail = ha_litellm.copy_script('public', 'LiteLLM_UserTable', ['user_id'], 'MARK')
+        self.assertEqual(head, 'BEGIN;\nCOPY "public"."LiteLLM_UserTable" ("user_id") FROM STDIN;\n')
+        self.assertEqual(tail, '\\.\nCOMMIT;\n\\echo MARK\n')
+        # the rows are the COPY text of HA as it came; they are between the two and nothing of them is in a statement
+        self.convert(self.upload_litellm(), ['litellm'])
+        for (schema, table), script in zip(TABLES, self.world.restore_scripts):
+            self.assertEqual(script.count(f'rows of "{schema}"."{table}"\n'), 1)
+            self.assertLess(script.index('FROM STDIN;'), script.index('rows of'))
+            self.assertLess(script.index('rows of'), script.index('\\.\n'))
+
+    # ---------------------------------------------------------------- what the reader left out is one line to confirm
+    def test_the_entries_the_reader_leaves_out_are_one_line_to_confirm(self):
+        fifo = {'name': 'data/postgres/pg_stat_tmp/pipe', 'type': 'fifo'}
+        line = self.line('files.skipped', extra=[fifo])
+        self.assertEqual(line['level'], 'confirm')
+        self.assertIn('特殊檔案', line['message'])
+        self.assertEqual(self.check(self.upload_litellm(extra=[fifo]), ['litellm'])[0]['importable'], True)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(extra=[fifo]), ['litellm'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertTrue(self.convert(self.upload_litellm(extra=[fifo]), ['litellm'],
+                                     acknowledged={'litellm': [line['key']]})['backup_id'])
 
 
 class CandidateStillGuarded(unittest.TestCase):
