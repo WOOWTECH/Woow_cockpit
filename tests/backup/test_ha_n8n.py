@@ -1306,6 +1306,7 @@ class ConvertFlowTests(N8nCase):
         key = json.loads(self.data_tar()['config'][1])['encryptionKey']
         self.addCleanup(jobs.unmask_secret, key)
         self.assertRegex(key, r'^[A-Za-z0-9_-]{32}$')
+        self.assertGreater(len(set(key)), 12, 'a random key, not a constant')
         self.assertNotEqual(key, KEY)
         self.assertIn('[已遮蔽]', jobs.redact(f'key {key}'), 'masked like HA\'s key')
         source = next(data for name, data in self.world.imported.items() if name.endswith('n8nsrc'))
