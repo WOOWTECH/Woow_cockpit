@@ -2660,12 +2660,19 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    already have an id this device's data directory needs. HA's PostgreSQL being NEWER than this device's is not asked (NC-32): the restore
    tries and a refused restore says so (see 4). Every session in HA's cluster carries PGOPTIONS `-c search_path=pg_catalog`. HA's catalogs
    are read first (`SHAPE_SQL`, extension members not counted). What it finds beyond Nextcloud's tables, sequences and indexes is split
-   (`shape_objects`): functions (procedures and aggregates included) and triggers (what Memories makes: `memories_fcu_fun`, `memories_fcu_trg`) are LEFT OUT, one line to confirm
+   (`shape_objects`): functions (procedures and aggregates included) and triggers are LEFT OUT, one line to confirm
    `nextcloud.db-objects-skipped` names them (`函式 <schema>.<name>`, `觸發程序 <table>.<name>`, from `OBJECTS_SQL`, names only) and the
    tables of HA are read as before; any other kind (operator, type, rule, policy, event trigger, view or other relation kind, CHECK constraint,
    generated column, inheritance, other custom objects, tablespace, a default that is neither a constant nor `nextval()`) stops Nextcloud
-   (`nextcloud.db-objects`) and HA's tables are not read at all. NOT built: the allow-list of known apps whose objects are copied verbatim
-   (the vendor definitions are needed). An extension HA's database uses that this device's database image offers (`pg_available_extensions`
+   (`nextcloud.db-objects`) and HA's tables are not read at all. What a KNOWN app makes (`KNOWN_OBJECTS`: Memories, `public.memories_fcu_fun` and
+   `oc_filecache.memories_fcu_trg`; vendor source pulsejet/memories lib/Db/FilecacheTriggers.php, lib/Migration/Repair.php, lib/Db/TimelineQueryDays.php,
+   read 2026-11-25) is the only thing that is no line to confirm: when the names are exactly these (the list is whole: `known_objects` compares it with the
+   count of the shape) the line is the notice `nextcloud.db-objects-known`, because without them Memories runs in its compatibility mode
+   (`memories.db.triggers.fcu` is false by default and HA's value is not carried) and its own repair step (`occ maintenance:repair` runs the
+   post-migration steps of the enabled apps) makes them again. The conversion returns `left_out_apps` and `left_out_others`; the reminders after the
+   import give `podman exec -u www-data <app container> php occ maintenance:repair` for the first and tell the customer to update or reinstall an app
+   that is not normal for the second. NOT built, on purpose: carrying the known objects over as HA had them (DESIGN NC-38 "照搬"): code out of a
+   backup is never restored, a known name or not (rows NC-38 and NC-45 stay `part`). An extension HA's database uses that this device's database image offers (`pg_available_extensions`
    of the live database) is enabled before the data goes in (`nextcloud.extension-enabled` auto), one it does not offer stops
    (`nextcloud.extension-missing`); other schemas than `public` are one line to confirm (`nextcloud.schemas-skipped`, the dump is then
    `pg_dump -n public`). Counts, per-user file lists, Warnings: as before.

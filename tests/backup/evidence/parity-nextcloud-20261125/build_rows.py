@@ -92,22 +92,27 @@ ROWS = {
     'NC-30': ('done', {'nextcloud.no-database': 'stop'},
               [CT + 'test_a_backup_without_the_database_stops_only_nextcloud'], ''),
     'NC-32': ('done', {}, [CT + 'test_a_newer_postgresql_of_ha_is_tried_and_a_refused_restore_says_why'], ''),
-    'NC-38': ('part', {'nextcloud.db-objects-skipped': 'confirm', 'nextcloud.db-objects': 'stop'},
-              STEPS['nextcloud.db-objects-skipped'] + [CT + 'test_what_cannot_be_left_out_is_refused_unread'],
-              'Functions and triggers of other apps (what Memories makes) are left out and listed, the data moves; any other foreign '
-              'object still stops. NOT built: the allow-list of known apps whose objects are copied verbatim (needs their real '
-              'definitions from a real Nextcloud with the app).'),
+    'NC-38': ('part', {'nextcloud.db-objects-skipped': 'confirm', 'nextcloud.db-objects-known': 'notice', 'nextcloud.db-objects': 'stop'},
+              STEPS['nextcloud.db-objects-skipped'] + [CT + 'test_what_cannot_be_left_out_is_refused_unread',
+                                                       CT + 'test_what_memories_makes_again_by_itself_is_left_out_without_a_question',
+                                                       CT + 'test_what_memories_makes_and_another_program_is_a_line_to_confirm',
+                                                       CT + 'test_a_list_of_names_that_is_cut_or_a_name_that_only_looks_known_is_a_line_to_confirm',
+                                                       CT + 'test_the_names_of_the_known_apps_are_found_only_in_the_whole_list'],
+              'Functions and triggers of other apps are left out and listed (confirm; data moves). What Memories makes alone '
+              '(memories_fcu_*) is a notice + a reminder with occ maintenance:repair (compatibility mode meanwhile; vendor source). '
+              'Other foreign objects stop. NOT built, on purpose: carrying known objects over as HA had them (code out of a backup is never restored).'),
     'NC-39': ('done', {'nextcloud.extension-enabled': 'auto', 'nextcloud.extension-missing': 'stop'},
               [CT + 'test_an_extension_this_devices_image_has_is_enabled_first',
                CT + 'test_an_extension_this_devices_image_does_not_have_stops_only_nextcloud'], ''),
     'NC-40': ('done', {'nextcloud.schemas-skipped': 'confirm'}, STEPS['nextcloud.schemas-skipped'], ''),
-    'NC-45': ('part', {'nextcloud.db-objects-skipped': 'confirm'},
+    'NC-45': ('part', {'nextcloud.db-objects-skipped': 'confirm', 'nextcloud.db-objects-known': 'notice'},
               [CT + 'test_the_dump_may_not_hold_more_than_was_confirmed',
                CT + 'test_procedures_and_aggregates_are_programs_too',
                CT + 'test_a_program_that_stays_in_the_new_cluster_stops_the_conversion',
+               CT + 'test_what_memories_makes_again_by_itself_is_left_out_without_a_question',
                CV + 'test_a_dump_with_kinds_nextcloud_never_creates_is_refused_before_the_restore'],
-              'Second gate: leaves out exactly the confirmed kinds (functions, triggers) and stops on any other; same limit as NC-38 '
-              '(no allow-list of known apps).'),
+              'Second gate: leaves out exactly the kinds the check showed (functions, triggers) and stops on any other; the same '
+              'limit as NC-38 (known apps are left out and told, not carried over).'),
     'NC-49': ('done', {'nextcloud.settings-not-carried': 'notice'},
               [LT + 'test_settings_of_this_devices_postgresql_that_are_refused_are_left_at_their_defaults',
                LT + 'test_settings_that_cannot_be_read_from_this_device_are_a_reminder'], ''),
