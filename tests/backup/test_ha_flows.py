@@ -629,6 +629,7 @@ class OdooTargetTests(OdooCase):
         everything = repr(self.world.owner.calls) + repr(self.world.execs) + repr(self.world.runs) + json.dumps(done, default=str)
         self.assertNotIn(self.CANARY, everything)
         self.assertNotIn(self.CANARY, repr([self.reporter.__dict__]))
+        self.assertIn('新的叢集用和這台資料庫容器相同的環境檔：~/.config/odoo18/db.env', self.reporter.logs, 'the file is named in the job log, never its content')
 
     def test_an_environment_file_the_engine_cannot_read_safely_stops_only_this_app_before_anything_is_read_from_ha(self):
         """OD-57: a quoted user name could be read differently by podman; the app stops with the file and the key."""

@@ -2420,6 +2420,9 @@ def convert(work, app, database, test_mode, out_dir):
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
     network = tmp.network('odoo-net') if test_mode else None
     tmp.volume('odoo-db')
+    if live.db_env_files:   # (names of files only, never what they hold)
+        home = runner.home.rstrip('/')
+        work.log('新的叢集用和這台資料庫容器相同的環境檔：' + '、'.join('~/' + path[len(home) + 1:] for path in live.db_env_files))
     tmp.run('odoo-db', live.db_image, [], detach=True, network=network,
             volumes=[(tmp.name('odoo-db'), live.db_target, None)], env=live.db_env, secrets=live.db_secrets,
             env_files=live.db_env_files)
