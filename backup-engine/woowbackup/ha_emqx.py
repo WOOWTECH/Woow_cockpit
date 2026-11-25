@@ -123,7 +123,6 @@ REQUIRED_TABLES = ('emqx_authn_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_admin',
 # This device's broker: the image's etc dir (vendor rel/emqx_vars:16 + rebar.config.erl:407: "$BASE_RUNNER_ROOT_DIR/etc"
 # in the tgz/docker build, exported by bin/emqx:269-273), proven in the running broker before its template is resolved.
 ETC_DIR = '/opt/emqx/etc'
-ACL_TEMPLATE = '${EMQX_ETC_DIR}/acl.conf'
 ETC_EXPR = 'io:format("WOOWETC:~s:END", [os:getenv("EMQX_ETC_DIR", "")]).'
 # The broker's working directory: bin/emqx does `cd "$BASE_RUNNER_ROOT_DIR"` before it starts anything ("so relative paths like
 # etc/ and data/ still work", vendor bin/emqx:1099-1101), so a relative path in a setting (`data/authz/acl.conf`, which the
@@ -133,11 +132,10 @@ DATA_PREFIX = DATA_TARGET + '/'
 # Places that exist only while a broker runs, or that podman gives a read-only container as a private tmpfs.
 RUNTIME_DIRS = ('/proc', '/sys', '/dev', '/run', '/tmp', '/var/tmp')
 WRITABLE_DIRS = ('/tmp', '/var/tmp', '/run', '/dev/shm')
-# Where the candidate may be given a scratch directory for what EMQX writes (logs, crash dumps), strictly below one of these
-# (never a place that holds the image's own files: bin, lib, erts, releases, etc, plugins).
+# Where the candidate may be given a scratch directory for what EMQX writes (logs, crash dumps), strictly below one of these;
+# never anything of /opt/emqx itself besides its log and data volumes (bin, lib, erts-*, releases, etc, plugins ... are the
+# image's own files and a mount would hide them).
 SCRATCH_ROOTS = ('/var', '/mnt', '/srv', '/home', '/root', '/data', '/log', '/logs', '/opt')
-IMAGE_TREES = ('/opt/emqx/bin', '/opt/emqx/lib', '/opt/emqx/erts', '/opt/emqx/releases', '/opt/emqx/etc', '/opt/emqx/plugins',
-               '/opt/emqx/data')
 SOURCE_NAMES = {'file': 'ACL 檔案', 'built_in_database': '內建資料庫', 'http': 'HTTP', 'redis': 'Redis', 'mysql': 'MySQL',
                 'postgresql': 'PostgreSQL', 'mongodb': 'MongoDB', 'ldap': 'LDAP', 'client_info': '用戶端資訊'}
 # The EMQX_* settings that decide who may connect and what a client may do: this device's own win over HA's after the next
@@ -1125,7 +1123,7 @@ def scratch_plan(outputs, log_dir, mounts=()):
     mounted there as scratch space: logs are not carried (what the converted backup holds of the log volume is only its top
     folder). Returns (folders to give it, mount targets of this device's that give way to such a folder -- the device's real
     folder is never mounted into the candidate for writing --, folders it cannot be given). A folder below a mount of this
-    device's, above the image's own files or in a place that is not one of SCRATCH_ROOTS cannot be given."""
+    device's, anywhere in /opt/emqx (the image's own files) or in a place that is not one of SCRATCH_ROOTS cannot be given."""
     folders = {path.rsplit('/', 1)[0] or '/' for path in outputs}
     if log_dir is not None:
         folders.add(log_dir)
@@ -1139,8 +1137,8 @@ def scratch_plan(outputs, log_dir, mounts=()):
             give_way.append(folder)
         elif _under(folder, mount_at):
             bad.append(folder)
-        elif (not any(folder.startswith(root + '/') for root in SCRATCH_ROOTS) or _under(folder, IMAGE_TREES)
-              or folder == BASE_DIR or folder.count('/') < 2 or tempctr.TARGET_RE.fullmatch(folder) is None):
+        elif (not any(folder.startswith(root + '/') for root in SCRATCH_ROOTS) or _under(folder, (BASE_DIR,))
+              or folder.count('/') < 2 or tempctr.TARGET_RE.fullmatch(folder) is None):
             bad.append(folder)
         else:
             extra.append(folder)

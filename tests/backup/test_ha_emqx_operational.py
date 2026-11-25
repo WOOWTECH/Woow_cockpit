@@ -409,8 +409,8 @@ class ScratchPlanTests(unittest.TestCase):
         self.assertEqual(self.plan(set(), None), ([], [], []))
 
     def test_a_log_folder_elsewhere_gets_scratch_space(self):
-        self.assertEqual(self.plan({'/var/log/emqx/emqx.log', '/srv/dumps/erl_crash.dump'}, '/opt/emqx/log'),
-                         (['/srv/dumps', '/var/log/emqx'], [], []))
+        self.assertEqual(self.plan({'/var/log/emqx/emqx.log', '/srv/dumps/erl_crash.dump', '/opt/other/logs/x.log'},
+                                   '/opt/emqx/log'), (['/opt/other/logs', '/srv/dumps', '/var/log/emqx'], [], []))
         self.assertEqual(self.plan(set(), '/srv/emqx-logs'), (['/srv/emqx-logs'], [], []), 'EMQX_LOG_DIR itself')
 
     def test_this_devices_own_mount_of_a_log_folder_gives_way_and_is_never_mounted_for_writing(self):
@@ -422,6 +422,7 @@ class ScratchPlanTests(unittest.TestCase):
 
     def test_a_place_that_holds_the_images_own_files_cannot_be_given(self):
         for path in ('/opt/emqx/etc/e.log', '/opt/emqx/bin/e.log', '/opt/emqx/lib/x/e.log', '/opt/emqx/e.log', '/e.log',
+                     '/opt/emqx/log2/e.log', '/opt/emqx/erts-14.2/bin/e.log', '/opt/emqx/plugins/e.log',
                      '/etc/emqx/e.log', '/usr/local/e.log', '/var/e.log', '/var/log/em qx/e.log', '/proc/e.log'):
             with self.subTest(path=path):
                 extra, give_way, bad = self.plan({path}, '/opt/emqx/log')
