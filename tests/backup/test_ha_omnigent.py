@@ -687,8 +687,7 @@ class ConvertTests(OmnigentCase):
                 with self.assertRaises(BackupError) as caught:
                     self.convert(self.upload_omnigent(), ['omnigent'])
                 self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_omnigent.INCOMPLETE_LIST))
-                self.assertEqual(caught.exception.details, {'listed': 11, 'declared': declared, 'app': 'omnigent'}
-                                 if 'app' in caught.exception.details else {'listed': 11, 'declared': declared})
+                self.assertEqual(caught.exception.details, {'listed': 11, 'declared': declared})
                 self.assert_nothing_loaded()
         for declared in (11, 12, 13, 14):          # the header counts the settings a plain listing may leave out: 0 to 3
             with self.subTest(declared=declared):

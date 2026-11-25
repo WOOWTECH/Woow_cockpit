@@ -53,6 +53,21 @@ class TrustedDataTests(unittest.TestCase):
                                  '1; 0 0 TABLE DATA public users owner\n2; 0 0 SEQUENCE SET public users_id_seq owner\n')
                 self.assertEqual((left.count, left.first), (1, [extra.split('; 0 0 ', 1)[1].strip()]))
 
+    def test_the_listing_of_the_dump_is_counted_against_its_own_header(self):
+        """pg-stdin follow-up F4 (the header of `pg_restore -l` says how many entries the archive has)."""
+        lines = ''.join(f'{n}; 0 0 TABLE DATA public t{n} owner\n' for n in range(1, 11))
+        head = lambda n: f';\n; Archive created at 2026-11-25\n;     TOC Entries: {n}\n;\n'   # noqa: E731
+        self.assertEqual(omni.toc_entries(head(10) + lines), (10, 10))
+        for declared in (10, 11, 12, 13):          # up to the three settings a plain listing may leave out
+            self.assertEqual(omni.check_listing(head(declared) + lines), 10)
+        for declared in (9, 14, 100):
+            with self.subTest(declared=declared), self.assertRaises(BackupError) as caught:
+                omni.check_listing(head(declared) + lines)
+            self.assertEqual((caught.exception.code, caught.exception.message, caught.exception.details),
+                             ('job-failed', omni.INCOMPLETE_LIST, {'listed': 10, 'declared': declared}))
+        self.assertEqual(omni.check_listing(lines), 10, 'no header (a double): nothing to compare')
+        self.assertEqual(omni.toc_entries(';     TOC Entries: 5x\n' + lines)[1], None)
+
     def test_the_old_public_guards_are_replaced_by_the_product_checks(self):
         self.assertFalse(hasattr(omni, 'SECURITY_BLOCKER'))
         self.assertFalse(hasattr(omni, 'restore_dump'))
