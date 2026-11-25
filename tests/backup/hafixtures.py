@@ -145,6 +145,62 @@ def header_offsets(data):
     return found
 
 
+# ---------------------------------------------------------------- raw tar blocks (dialects tarfile does not write)
+
+USTAR, GNU, V7 = b'ustar\x0000', b'ustar  \x00', bytes(8)
+
+
+def raw_header(name, *, typeflag=b'0', size=0, linkname=b'', magic=USTAR, mode=0o644, uid=0, gid=0, mtime=0,
+               prefix=b''):
+    """One 512-byte tar header with a valid checksum; `name`, `linkname` and `prefix` are bytes or text."""
+    def raw(value):
+        return value if isinstance(value, bytes) else value.encode('utf-8', 'surrogateescape')
+
+    def octal(value, width):
+        return b'%0*o\0' % (width - 1, value)
+    body = (raw(name).ljust(100, b'\0') + octal(mode, 8) + octal(uid, 8) + octal(gid, 8) + octal(size, 12)
+            + octal(mtime, 12) + b' ' * 8 + typeflag + raw(linkname).ljust(100, b'\0') + magic
+            + bytes(80) + raw(prefix).ljust(155, b'\0'))
+    return fix_checksum(body.ljust(512, b'\0'))
+
+
+def padded(data):
+    return data + bytes(-len(data) % 512)
+
+
+def raw_member(name, data=b'', *, size=None, **header):
+    """Header and padded data of one member (`size`: what the header says, default the data's)."""
+    return raw_header(name, size=len(data) if size is None else size, **header) + padded(data)
+
+
+def pax_records(records):
+    """The data of a PAX extended header: {key: value} (bytes or text)."""
+    parts = []
+    for key, value in records.items():
+        body = b' ' + (key if isinstance(key, bytes) else key.encode()) + b'=' \
+               + (value if isinstance(value, bytes) else value.encode('utf-8', 'surrogateescape')) + b'\n'
+        length = len(body) + 1
+        while len(str(length)) + len(body) != length:
+            length = len(str(length)) + len(body)
+        parts.append(str(length).encode() + body)
+    return b''.join(parts)
+
+
+def pax_member(records, *, typeflag=b'x', name='PaxHeader'):
+    return raw_member(name, pax_records(records) if isinstance(records, dict) else records, typeflag=typeflag)
+
+
+END = bytes(1024)
+
+
+def two_addons(odoo=None, n8n=None, *, doc=None, extra=(), **kwargs):
+    """An HA backup of two add-ons; `odoo`/`n8n`: their member's bytes (default: good ones)."""
+    odoo = addon_member() if odoo is None else odoo
+    n8n = addon_member('woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64') if n8n is None else n8n
+    return outer_bytes([(f'{ODOO}.tar.gz', odoo), (f'{N8N}.tar.gz', n8n), *extra],
+                       ha_doc([ODOO, N8N]) if doc is None else doc, **kwargs)
+
+
 def fix_checksum(block):
     block = bytearray(block)
     block[148:156] = b' ' * 8

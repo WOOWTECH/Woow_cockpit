@@ -4,8 +4,10 @@ engine-core (format).
 Layout (root 0700): `<id>.tar` -- the uploaded file exactly as it was (root 0600) -- and `<id>.json`, the sidecar (root
 0600, exactly SIDECAR_KEYS, checked strictly on every read; unknown keys make a sidecar unreadable). The id is `ha-` +
 the first 20 hex digits of the file's sha256, so the same file uploaded twice is the same record. The sidecar is the
-validated summary of habackup.describe (display data from backup.json plus each add-on member's encryption as its
-first bytes say) and the upload facts (size, sha256, uploaded_at, filename).
+validated summary of habackup.describe (cleaned display data from backup.json -- `date` null when it cannot be read --
+plus each add-on member's encryption as its first bytes say) and the upload facts (size, sha256, uploaded_at,
+filename). An add-on that cannot be read has the optional key `problem` (a short code, habackup.PROBLEMS); sidecars
+written before that key existed have none.
 
 HA backups are not Cockpit backups: they never enter `archives/` or the index, so retention, `adopt_orphans`, the
 schedule and `delete` never see them, and an older engine simply does not list them. A record stays until
@@ -26,22 +28,22 @@ import stat
 import time
 from pathlib import Path
 
-from . import haapps, util
+from . import haapps, habackup, util
 from .errors import BackupError
 
 DIRNAME = 'ha-backups'
 ID_RE = re.compile(r'ha-[0-9a-f]{20}\Z')
 FILE_RE = re.compile(r'(ha-[0-9a-f]{20})\.(tar|json)\Z')
 SHA256_RE = re.compile(r'[0-9a-f]{64}\Z')
-SLUG_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z')
 ADDON_SLUG_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\Z')
-VERSION_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9.+_~-]{0,63}\Z')
 FOLDER_RE = re.compile(r'[a-z0-9_]{1,40}(?:/[a-z0-9_]{1,40})?\Z')
+PROBLEM_RE = re.compile(r'[a-z][a-z0-9-]{1,39}\Z')
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f]')
 SIDECAR_KEYS = ('id', 'ha_slug', 'name', 'date', 'type', 'supervisor_version', 'protected', 'compressed', 'addons',
                 'folders', 'size', 'sha256', 'uploaded_at', 'filename')
 ADDON_KEYS = ('slug', 'name', 'version', 'encrypted')
-MAX_SIDECAR = 256 * 1024
+ADDON_OPTIONAL = ('problem',)
+MAX_SIDECAR = 4 * 1024 * 1024   # holds habackup.MAX_ADDONS add-ons with the longest texts
 STALE_SIDECAR_AGE = 3600
 
 # WOOWTECH add-ons Cockpit can import (owner decision Q1): the add-on slug after the first `_` (any repository prefix)
@@ -101,14 +103,19 @@ def safe_filename(filename, date):
 
 def record_from(summary, sha256, size, filename, uploaded_at):
     """The sidecar of an uploaded HA backup from habackup's Layout.summary() and the upload facts."""
+    addons = []
+    for addon in summary['addons']:
+        item = {'slug': addon['slug'], 'name': addon['name'], 'version': addon['version'],
+                'encrypted': addon['encryption'] != 'none'}
+        if addon.get('problem'):
+            item['problem'] = addon['problem']
+        addons.append(item)
     return {
         'id': 'ha-' + sha256[:20], 'ha_slug': summary['ha_slug'], 'name': summary['name'], 'date': summary['date'],
         'type': summary['type'], 'supervisor_version': summary['supervisor_version'],
-        'protected': summary['protected'], 'compressed': summary['compressed'],
-        'addons': [{'slug': a['slug'], 'name': a['name'], 'version': a['version'],
-                    'encrypted': a['encryption'] != 'none'} for a in summary['addons']],
+        'protected': summary['protected'], 'compressed': summary['compressed'], 'addons': addons,
         'folders': list(summary['folders']), 'size': size, 'sha256': sha256, 'uploaded_at': uploaded_at,
-        'filename': safe_filename(filename, summary['date']),
+        'filename': safe_filename(filename, summary['date'] or uploaded_at),
     }
 
 
@@ -121,28 +128,29 @@ def valid_record(rec, ha_id=None):
     if not isinstance(rec['sha256'], str) or not SHA256_RE.fullmatch(rec['sha256']) \
             or rec['id'] != 'ha-' + rec['sha256'][:20]:
         return False
-    if not isinstance(rec['ha_slug'], str) or not SLUG_RE.fullmatch(rec['ha_slug']):
+    if not _text(rec['ha_slug'], 64) or not _text(rec['name'], 200) or not _text(rec['supervisor_version'], 64):
         return False
-    if not _text(rec['name'], 200) or not util.is_iso_utc(rec['date']) or rec['type'] not in ('full', 'partial'):
-        return False
-    if not isinstance(rec['supervisor_version'], str) or not VERSION_RE.fullmatch(rec['supervisor_version']):
+    if not (rec['date'] is None or util.is_iso_utc(rec['date'])) or rec['type'] not in ('full', 'partial'):
         return False
     if not isinstance(rec['protected'], bool) or not isinstance(rec['compressed'], bool):
         return False
     addons = rec['addons']
-    if not isinstance(addons, list) or len(addons) > 100:
+    if not isinstance(addons, list) or len(addons) > habackup.MAX_ADDONS:
         return False
     slugs = set()
     for addon in addons:
-        if (not isinstance(addon, dict) or set(addon) != set(ADDON_KEYS) or not isinstance(addon['slug'], str)
-                or not ADDON_SLUG_RE.fullmatch(addon['slug']) or addon['slug'] in slugs
-                or not _text(addon['name'], 200) or not isinstance(addon['version'], str)
-                or not VERSION_RE.fullmatch(addon['version']) or not isinstance(addon['encrypted'], bool)):
+        if (not isinstance(addon, dict) or set(addon) - set(ADDON_OPTIONAL) != set(ADDON_KEYS)
+                or not isinstance(addon['slug'], str) or not ADDON_SLUG_RE.fullmatch(addon['slug'])
+                or addon['slug'] in slugs or not _text(addon['name'], 200) or not _text(addon['version'], 64)
+                or not isinstance(addon['encrypted'], bool)):
+            return False
+        if 'problem' in addon and not (isinstance(addon['problem'], str) and PROBLEM_RE.fullmatch(addon['problem'])):
             return False
         slugs.add(addon['slug'])
     folders = rec['folders']
-    if (not isinstance(folders, list) or len(folders) > 32 or len(set(map(str, folders))) != len(folders)
-            or not all(isinstance(f, str) and FOLDER_RE.fullmatch(f) for f in folders)):
+    if (not isinstance(folders, list) or len(folders) > habackup.MAX_FOLDERS
+            or not all(isinstance(f, str) and FOLDER_RE.fullmatch(f) for f in folders)
+            or len(set(folders)) != len(folders)):
         return False
     if not _is_int(rec['size']) or rec['size'] < 0 or not util.is_iso_utc(rec['uploaded_at']):
         return False
@@ -152,13 +160,16 @@ def valid_record(rec, ha_id=None):
 def view(rec, catalog=None):
     """HaBackupMeta (CONTRACT section 7): the sidecar plus `importable_apps` [{slug, app_id, app_name, installed}] (a
     WOOWTECH add-on this engine can import; `installed`: this device's catalog has that app) and `other_addons`
-    [{slug, name, version}] (「這台沒有對應的應用」)."""
+    [{slug, name, version}] (「這台沒有對應的應用」). An item of an add-on that cannot be read also has `problem` (the code)
+    and `problem_text` (zh-TW: what it means and what to do)."""
     result = dict(rec)
     importable, other = [], []
     for addon in rec['addons']:
+        problem = addon.get('problem')
+        extra = {'problem': problem, 'problem_text': habackup.problem_text(problem)} if problem else {}
         target = importable_app(addon['slug'])
         if target is None:
-            other.append({'slug': addon['slug'], 'name': addon['name'], 'version': addon['version']})
+            other.append({'slug': addon['slug'], 'name': addon['name'], 'version': addon['version'], **extra})
             continue
         app_id, default_name = target
         app = None
@@ -166,7 +177,8 @@ def view(rec, catalog=None):
             with contextlib.suppress(Exception):  # an unreadable catalog never breaks a listing
                 app = catalog.get(app_id)
         importable.append({'slug': addon['slug'], 'app_id': app_id,
-                           'app_name': getattr(app, 'name', None) or default_name, 'installed': app is not None})
+                           'app_name': getattr(app, 'name', None) or default_name, 'installed': app is not None,
+                           **extra})
     result['importable_apps'] = importable
     result['other_addons'] = other
     return result
@@ -242,7 +254,8 @@ class HaStore:
         return rec if st is not None and st.st_size == rec['size'] else None
 
     def list(self):
-        """Records with a valid sidecar and their file, newest HA backup first (date, upload time, id)."""
+        """Records with a valid sidecar and their file, newest HA backup first (its date, the upload time when that is
+        not known; upload time, id)."""
         if not self._root_ok():
             return []
         records = []
@@ -253,7 +266,7 @@ class HaStore:
             rec = self._listed(match.group(1))
             if rec is not None:
                 records.append(rec)
-        records.sort(key=lambda r: (r['date'], r['uploaded_at'], r['id']), reverse=True)
+        records.sort(key=lambda r: (r['date'] or r['uploaded_at'], r['uploaded_at'], r['id']), reverse=True)
         return records
 
     def get(self, ha_id):
