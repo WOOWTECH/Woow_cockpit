@@ -1874,15 +1874,36 @@ def live_image_id(work, app, live):
     return info['id']
 
 
+RELEASE_RE = re.compile(r'[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}\Z')   # a Debian package version, or ODOO_VERSION.ODOO_RELEASE
+
+
 def image_release(work, app, live):
-    """The release of this device's Odoo image (`ODOO_RELEASE`, e.g. 18.0.20260926: the `core_date` of the upgrade
-    marker), None when the image does not say."""
+    """The release of this device's Odoo core, which is the `core_date` of the upgrade marker (the lab evidence of the real
+    tenant shows `18.0.20260926`): the version of the image's `odoo` package (`dpkg-query`, run in a throwaway container
+    without a network and with a read-only root), else `ODOO_VERSION.ODOO_RELEASE` of the image (the official image installs
+    that very package); None when neither says."""
+    tmp = work.temp(app)
+    value = ''
+    try:
+        result = tmp.run('release', live.web_image, ['-W', '-f', '${Version}', 'odoo'], entrypoint='dpkg-query',
+                         read_only_root=True, timeout=120, max_output=4096, check=False)
+        if result.returncode == 0:
+            value = (result.stdout or b'').decode('ascii', 'replace').strip()
+    except BackupError as error:
+        if haissues.is_job_wide(error):
+            raise
+    if RELEASE_RE.fullmatch(value):
+        return value
     info = work.adapter(app).image_inspect(live.web_image) or {}
-    for item in info.get('env') or []:
-        if isinstance(item, str) and item.startswith('ODOO_RELEASE='):
-            value = item.split('=', 1)[1]
-            return value if re.fullmatch(r'[0-9A-Za-z._-]{1,64}', value) else None
-    return None
+    env = dict(item.split('=', 1) for item in info.get('env') or [] if isinstance(item, str) and '=' in item)
+    version, release = env.get('ODOO_VERSION', ''), env.get('ODOO_RELEASE', '')
+    if release.startswith(f'{version}.') if version else False:
+        composite = release
+    elif version and re.fullmatch(r'[0-9]{8}', release):
+        composite = f'{version}.{release}'
+    else:
+        return None
+    return composite if RELEASE_RE.fullmatch(composite) else None
 
 
 def _read(work, app, tmp, live, image16, *, size=None, can_copy=True):

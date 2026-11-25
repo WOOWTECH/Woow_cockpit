@@ -165,7 +165,7 @@ class FakeAdapter:
 
     def image_inspect(self, image):
         if image == self.world.web_image:
-            return {'id': WEB_ID, 'env': [f'ODOO_RELEASE={self.world.web_release}'] if self.world.web_release else []}
+            return {'id': WEB_ID, 'env': list(self.world.web_env)}
         return {'id': 'sha256:' + 'c' * 64, 'env': ['PG_MAJOR=17' if 'paas-postgres' in image else 'PG_MAJOR=16']}
 
     def read_quadlets(self):
@@ -225,7 +225,8 @@ class World(HaWorld):
         self.verify_base_url = 'https://cockpit.example'
         self.verify_domains = None     # None: what the new cluster really holds (cleared); else a list
         self.refuse_setting = None     # a setting the new cluster refuses until it is reset
-        self.web_release = '18.0.20260926'
+        self.web_env = ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926']   # what the official Odoo image sets
+        self.dpkg_version = '18.0.20260926'                            # `dpkg-query -W -f '${Version}' odoo` in the image
         self.n8n_tables = {}
         self.unpublished = False
 
@@ -248,6 +249,10 @@ class World(HaWorld):
             return Result(0, {'postgres': b'70\n70\n', 'odoo': b'100\n101\n', 'node': b'1000\n1000\n'}[user], b'')
         if role == 'conf':
             return Result(0, json.dumps(self.conf).encode(), b'')
+        if role == 'release':
+            if self.dpkg_version is None:
+                return Result(1, b'', b'dpkg-query: no packages found matching odoo')
+            return Result(0, self.dpkg_version.encode(), b'')
         if role == 'scan':
             modules = [['base', '18.0.1.3', True, '/usr/lib/python3/dist-packages/odoo/addons'],
                        ['live_mod', '18.0.1.0.0', True, '/mnt/extra-addons']]
@@ -502,12 +507,16 @@ class OdooConversionTests(ConversionCase):
 
     def test_without_a_release_date_in_the_image_no_marker_can_be_written_and_nothing_is_touched(self):
         self.world.live_marker = None
-        self.world.web_release = None
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_odoo(), ['odoo'])
-        self.assertEqual([i.id for i in caught.exception.issues], ['odoo.marker-unwritable'])
-        self.assertEqual([run[0] for run in self.world.runs], ['conf'], 'only this device was read: before any HA work')
-        self.assertEqual(self.storage.list_backups(), [])
+        self.world.dpkg_version = None
+        for env in ([], ['ODOO_RELEASE=20260926'], ['ODOO_VERSION=18.0'], ['ODOO_VERSION=18.0', 'ODOO_RELEASE=latest']):
+            self.world.web_env = env
+            self.world.runs.clear()
+            with self.subTest(env=env), self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_odoo(), ['odoo'])
+            self.assertEqual([i.id for i in caught.exception.issues], ['odoo.marker-unwritable'])
+            self.assertEqual([run[0] for run in self.world.runs], ['conf', 'release'],
+                             'only this device was read: before any HA work')
+            self.assertEqual(self.storage.list_backups(), [])
 
 
 class OdooCase(ConversionCase):
@@ -677,6 +686,21 @@ class OdooTargetTests(OdooCase):
         (create,) = [s for s in self.executed() if s.startswith('CREATE ROLE odoo')]
         self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION '
                                           'NOBYPASSRLS'), create)
+
+    def test_the_release_of_the_marker_is_the_version_of_the_odoo_package_else_the_variables_of_the_image(self):
+        """OD-18: `18.0.20260926` is what the tenant's own marker holds (lab evidence); the official image has no
+        dpkg database in some builds: ODOO_VERSION.ODOO_RELEASE is the same string."""
+        self.world.live_marker = None
+        for dpkg, env, expected in (('18.0.20260926', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
+                                    (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=18.0.20260926'], '18.0.20260926'),
+                                    ('not a version!', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926')):
+            with self.subTest(dpkg=dpkg, env=env):
+                self.world.dpkg_version, self.world.web_env = dpkg, env
+                self.world.owner.psql.clear()
+                self.convert(self.upload_odoo(), ['odoo'])
+                marker = next(s for s in self.executed() if s.startswith('INSERT') and "'woow_paas_platform.upgrade_done'" in s)
+                self.assertIn(f'"core_date":"{expected}"', marker)
 
     def test_settings_that_cannot_be_read_get_the_defaults_and_a_reminder(self):
         """OD-16, OD-17, OD-18: no settings table: the default address, a marker written by the engine."""
