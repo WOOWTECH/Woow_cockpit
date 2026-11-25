@@ -3523,10 +3523,12 @@
 
   // What stays behind, from what the conversion recorded (HAOS parity): Odoo databases that stay on HA, the copy kept before.
   function haStayedLines(info, apps) {
+    // One copy per converted backup: the end of an import with several apps names every one of them (`keptIds`).
+    const keptIds = list(info.keptIds).length ? info.keptIds : info.kept ? [info.kept] : [];
     return [
       apps.includes("odoo") && info.leftDatabases.length
-        ? `HA 的 Odoo 還有 ${quoted(info.leftDatabases)} 沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。` : null,
-      info.kept ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${info.kept}），不會自動刪除；可以下載它，確定用不到時再自己刪除（刪除後裡面的其他資料就沒有了）。` : null
+        ? `HA 的 Odoo 還有${quoted(info.leftDatabases)}沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。` : null,
+      keptIds.length ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${keptIds.join("、")}），不會自動刪除；可以下載它，確定用不到時再自己刪除（刪除後裡面的其他資料就沒有了）。` : null
     ].filter(Boolean);
   }
 
@@ -5284,6 +5286,7 @@
     const base = infos[0] || haInfo(null, { haId: wizard.haId, apps: ids, testMode: wizard.testMode, workflows: haWorkflows(n8n?.n8n?.workflows_to_fix),
       odooDatabase: ids.includes("odoo") ? wizard.odooDatabase : null });
     const merged = { ...base, apps: ids, testMode: info.testMode || wizard.testMode, notes: [],
+      leftDatabases: [...new Set(infos.flatMap(item => item.leftDatabases))], keptIds: [...new Set(infos.map(item => item.kept).filter(Boolean))],
       remindersByApp: infos.some(item => item.remindersByApp) ? Object.assign({}, ...infos.map(item => item.remindersByApp || {})) : null,
       reminders: [...new Set(infos.flatMap(item => item.reminders))], addons: infos.flatMap(item => item.addons),
       workflows: base.workflows.length ? base.workflows : haWorkflows(n8n?.n8n?.workflows_to_fix) };

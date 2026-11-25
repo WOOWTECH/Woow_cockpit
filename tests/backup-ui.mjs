@@ -823,6 +823,7 @@ function installCockpitFixture() {
       params, result: null, error: null, cancellable: true };
     const running = structuredClone(job);
     Object.assign(running, { state: 'running', phase: PHASE_LABELS[kind][2][0], started: created, progress: { percent: 40, message: PHASE_LABELS[kind][2][1] },
+      cancellable: chain.uncancellable !== true,
       phases: phases.map((item, position) => ({ ...item, state: position < 2 ? 'done' : position === 2 ? 'active' : 'pending' })) });
     const done = { state: 'succeeded', phase: PHASE_LABELS[kind].at(-1)[0], phases: phases.map(item => ({ ...item, state: 'done' })),
       progress: { percent: 100, message: '已完成' }, finished: created, cancellable: false };
@@ -877,6 +878,19 @@ function installCockpitFixture() {
         Object.assign(record.job, { state: 'failed', error: { code: 'job-failed', message: '還原失敗，自動退回也沒有成功。' } });
       }
       if (!cancelled) follow = nextApp();
+      // What the restore job tells (RestoreResult): its warnings and, for a database service with other databases, the copy kept before.
+      const told = { apps: [app] };
+      if ((chain.restoreWarnings || {})[app]) told.warnings = [...chain.restoreWarnings[app]];
+      const spec = (chain.kept || {})[app];
+      if (spec && entry.status === 'imported') {
+        const copy = structuredClone(spec.backup);
+        if (!data.backups.some(item => item.id === copy.id)) data.backups.unshift(copy);
+        data.downloads[copy.id] = { path: `/var/lib/woowtech-backup/archives/${copy.id}.tar`, filename: copy.filename, size: copy.size };
+        const converted = backup(chain.backups[app].id);
+        if (converted?.from_ha) converted.from_ha.kept = copy.id;
+        told.kept = { [app]: { backup_id: copy.id, ...structuredClone(spec.detail) } };
+      }
+      record.job.result = told;
     }
     results.push(entry);
     if (boundary && chain.stopAfter) follow = null;
@@ -928,7 +942,8 @@ function installCockpitFixture() {
     if (running) throw new Refusal('busy', '已有備份或還原作業正在進行，請等它完成後再試。', { job_id: running.job.id });
     const chain = { apps: [...request.apps], haId: meta.id, group: `g1a2b3c4d5e6f${String(jobSeq + 1).padStart(4, '0')}`,
       testMode: request.test_mode, thenRestore: request.then_restore, acknowledged: request.acknowledged || {}, choices: request.choices || {},
-      database: ((request.choices || {}).odoo || {}).database ?? null, outcomes: ha.chain.outcomes || {}, backups: ha.chain.backups, safety: ha.chain.safety || {} };
+      database: ((request.choices || {}).odoo || {}).database ?? null, outcomes: ha.chain.outcomes || {}, backups: ha.chain.backups, safety: ha.chain.safety || {},
+      uncancellable: ha.chain.uncancellable === true, kept: ha.chain.kept || {}, restoreWarnings: ha.chain.restoreWarnings || {} };
     const first = chainJob(chain, 0, 'convert', ha.chain.skipped ? structuredClone(ha.chain.skipped) : []);
     requests[request.request_id] = first.id;
     return { job_id: first.id, deduplicated: false, group: chain.group, key_created: created };
@@ -1024,7 +1039,7 @@ function installCockpitFixture() {
           result = structuredClone(result);
           for (const part of [result.backup.apps, result.manifest.apps, result.preflight.apps]) part.splice(0, part.length, ...part.filter(app => ids.includes(app.id)));
         }
-        if (meta.encrypted === false && request.key !== undefined) throw new Refusal('invalid-request', '這份備份沒有加密，不需要金鑰。', { field: 'key' });
+        // X-PF-05 (HAOS parity): a key for a backup that is not encrypted is ignored, not refused.
         if (meta.encrypted !== false && !keyKnown(meta.key_id)) {
           if (request.key === undefined) throw new Refusal('key-required', '此備份使用的金鑰不在本設備，請輸入緊急金鑰。', { key_id: meta.key_id });
           if (data.secrets[request.key] !== meta.key_id) throw new Refusal('wrong-key', '金鑰不正確，無法解密這份備份。');
@@ -1134,6 +1149,7 @@ function installCockpitFixture() {
       case 'delete': {
         if (!backup(request.backup_id)) throw new Refusal('not-found', '找不到指定的備份。');
         data.backups = data.backups.filter(item => item.id !== request.backup_id);
+        for (const item of data.backups) if (item.from_ha?.kept === request.backup_id) item.from_ha.kept = null;
         return {};
       }
       case 'upload-begin':
@@ -2305,15 +2321,24 @@ function v2Backup(app) {
     from_ha: haImportView([app], { source: V2_SOURCE, database: 'prod' }) });
 }
 const haAppNameOf = app => ({ odoo: 'Odoo 18', n8n: 'n8n 工作流程', emqx: B1.emqx.app, hermes: B1.hermes.app })[app];
+// The full copy of a database service that an import keeps (RESTORE lane, kept.py): a `safety` backup whose note starts 保留的複本：, `kept: true`.
+const B_V2_KEPT = { n8n: '20261125T031700Z-6e97e001', odoo: '20261125T030500Z-6e97e002' };
+const v2Kept = (app = 'n8n') => backupMeta(B_V2_KEPT[app], { type: 'safety', kept: true, size: 310 * MiB, verified: { at: '2026-11-25T03:17:30Z', ok: true },
+  note: `保留的複本：${haAppNameOf(app)} 的資料庫服務（匯入 HA 備份「${HA_V2_NAME}」前）`, apps: [{ id: app, name: haAppNameOf(app) }] });
+// What RestoreResult.kept says of it: the databases in it, what was put back and what was not.
+const V2_KEPT_DETAIL = { databases: ['analytics', 'crm_old'], more: 3, put_back: ['analytics'],
+  not_put_back: [{ name: 'crm_old', reason: '資料庫擁有者的角色在新的資料庫服務裡已經存在，沒有放回。' }], notes: ['放不回去的資料庫仍在這份複本裡。'] };
+const V2_PAUSE_WARNING = '匯入時暫停的服務沒有重新啟動：filebrowser。請到「應用軟體」把它啟動起來。';
 // A device with the four apps, holding one HA backup; the check job answers `check`, the chain does what `outcomes` says.
-function v2Fixture({ check = v2Check(), outcomes = {}, key = true, extra = {}, meta = v2Meta(), skipped = [] } = {}) {
+function v2Fixture({ check = v2Check(), outcomes = {}, key = true, extra = {}, meta = v2Meta(), skipped = [], chain = {}, left = null } = {}) {
   const data = haFixture({ extra });
   data.status.apps.push(app('emqx', B1.emqx.app), app('hermes', B1.hermes.app));
   if (!key) data.status.key = null;
   data.ha.backups = [meta];
   data.ha.key = HA_KEY;
   const apps = ['odoo', 'n8n', 'emqx', 'hermes'];
-  data.ha.chain = { outcomes, backups: Object.fromEntries(apps.map(id => [id, v2Backup(id)])), safety: B_V2_SAFETY, skipped };
+  data.ha.chain = { outcomes, backups: Object.fromEntries(apps.map(id => [id, v2Backup(id)])), safety: B_V2_SAFETY, skipped, ...chain };
+  if (left) data.ha.chain.backups.odoo.from_ha.left_databases = [...left];
   data.scripts['ha-check'] = haScripts({ check })['ha-check'];
   return data;
 }
@@ -5483,9 +5508,12 @@ try {
     haNoDeviceKey, async page => {
       await ready(page);
       await openHa(page, HA_PLAIN);
-      // From the start: this device makes the key when the import starts (UI-17), with the way to 加密金鑰.
-      const early = page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰。匯入開始時會自動建立一把' });
+      // From the start, with the way to 加密金鑰. Before the check the page cannot know that this engine makes the key itself (UI-17):
+      // it promises nothing and says where the answer will be.
+      const early = page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰，轉換好的備份要用它加密。' });
       await early.waitFor();
+      assert.doesNotMatch(await early.textContent(), /匯入開始時會自動/, 'no promise of what an older engine does not do');
+      assert.match(await early.textContent(), /檢查完成後，這一頁會說明匯入時會自動建立一把，還是要先到「加密金鑰」設定。/);
       assert.equal(await early.locator('[data-focus="ha-keys"]').getAttribute('href'), '#/keys');
       // The check needs no device key. This engine's check has no schema 2 (it does not make the key itself): the two steps
       // keep the old rule, the conversion waits for the key.
@@ -5496,6 +5524,8 @@ try {
       assert.equal(await notice.locator('[data-focus="ha-keys"]').getAttribute('href'), '#/keys');
       assert.equal(await page.locator('#ha-db-0').isChecked(), true);
       assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), true, 'no conversion without the device key');
+      assert.doesNotMatch(await page.locator('.wizard-card').textContent(), /匯入開始時會自動建立/, 'the page that keeps 轉換 off does not promise the key either');
+      assert.equal(await page.locator('.wizard-card .notice-info').filter({ hasText: '轉換好的備份要用它加密。' }).count(), 0, 'the first-step hint is gone');
       // Set up meanwhile: the page hears of the key on its next status.
       await page.evaluate(key => { window.__fixture.status.key = key; }, { key_id: KEY_ID, created: '2026-11-01T08:00:00Z', kit_confirmed: true });
       await page.locator('#refresh').click();
@@ -6755,7 +6785,7 @@ try {
       await route.fulfill({ response, body });
     }) });
 
-  await check('HAOS 一次確認: a key with a Tab is tried as it is and a refusal says why it may have failed; only an empty key stops the page (UI-12)',
+  await check('HAOS 一次確認: a key with a Tab is tried as it is and a refusal says why it may have failed; only a key that can never be one (empty, too long, with a NUL) stops the page (UI-12)',
     v2Fixture({ meta: v2Meta({ protected: true, addons: v2Meta().addons.map(addon => ({ ...addon, encrypted: true })) }) }), async page => {
       await ready(page);
       await openHa(page, HA_V2);
@@ -6765,6 +6795,20 @@ try {
       await page.locator('[data-focus="ha-key-next"]').click();
       await page.getByText('請輸入 HA 備份金鑰。').waitFor();
       assert.equal((await calls(page, 'ha-check-start')).length, 0, 'an empty key is never sent');
+      // The other two things that can never be a key, and a blank one: each says why, nothing is sent. (The field's own length limit
+      // does not apply to a value set by a script, so the page's own rule is what is looked at.)
+      const typeKey = text => page.locator('#ha-key').evaluate((input, value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }, text);
+      await typeKey('      ');
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.getByText('請輸入 HA 備份金鑰。').waitFor();
+      await typeKey('A'.repeat(4097));
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.getByText('內容太長，不像是 HA 備份金鑰。').waitFor();
+      assert.equal(await page.getByText('請輸入 HA 備份金鑰。').count(), 0, 'one message at a time');
+      await typeKey('ABCD-EFGH\u0000IJKL');
+      await page.locator('[data-focus="ha-key-next"]').click();
+      await page.getByText('金鑰不能包含空字元（NUL）。').waitFor();
+      assert.equal((await calls(page, 'ha-check-start')).length, 0, 'a key that can never be one is never sent');
       await page.locator('#ha-key').fill('ABCD\tEFGH');
       await page.locator('#ha-key-odd').waitFor();   // a reminder while typing, not a stop
       await page.locator('[data-focus="ha-key-next"]').click();
@@ -6785,11 +6829,17 @@ try {
     v2Fixture({ key: false }), async page => {
       await ready(page);
       await openHa(page, HA_V2);
-      await page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰。匯入開始時會自動建立一把' }).waitFor();
+      // Before the check the page cannot know this engine: it promises nothing and says where the answer will be.
+      const early = page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰，轉換好的備份要用它加密。' });
+      await early.waitFor();
+      assert.doesNotMatch(await early.textContent(), /匯入開始時會自動/);
       assert.equal(await page.locator('.wizard-card .notice-warn').filter({ hasText: '尚未建立加密金鑰' }).count(), 0);
       for (const id of ['odoo', 'emqx', 'hermes']) await page.locator(`#ha-app-${id}`).uncheck();
       await page.locator('[data-focus="ha-apps-next"]').click();
       await page.locator('[data-summary="check"]').waitFor({ timeout: 30000 });
+      // The check said schema 2: this engine makes the key when the import starts, and now the page says so.
+      await page.locator('.wizard-card .notice-info').filter({ hasText: '這台還沒有加密金鑰。匯入開始時會自動建立一把' }).waitFor();
+      assert.equal(await page.locator('.wizard-card .notice-info').filter({ hasText: '轉換好的備份要用它加密。' }).count(), 0, 'the first-step hint is gone');
       await page.locator('#ha-ack').check();
       assert.equal(await v2Import(page).isDisabled(), false, 'no device key is no reason to stop');
       assert.match(await page.locator('#key-banner').textContent(), /需要設定加密金鑰/);
@@ -7032,6 +7082,209 @@ try {
       assert.equal(starts.length, 2);
       assert.deepEqual(starts[1].apps, ['odoo']);
       assert.deepEqual(starts[1].acknowledged, { odoo: [keyOf('odoo', 'restore.pauses', ['檔案管理 filebrowser'])] });
+    });
+
+
+  // ------------------------------------------------------------------ iteration 2 (2026-11-25 evening): the kept copies (S4), H-c and what the first verifier found untested
+
+  const HC_SENTENCE = '檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子。';
+  const KEPT_ID = B_V2_KEPT.n8n;
+  const v2KeptFixture = (extra = {}) => v2Fixture({ chain: { kept: { n8n: { backup: v2Kept('n8n'), detail: V2_KEPT_DETAIL } }, restoreWarnings: { n8n: [V2_PAUSE_WARNING] } },
+    left: ['test', 'demo-old'], ...extra });
+  const v2KeptImport = async page => {
+    await v2Check1(page, { keep: ['odoo', 'n8n'] });
+    await page.locator('#ha-db-0').check();
+    await page.locator('#ha-ack').check();
+    await v2Import(page).click();
+    await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+    await page.locator(`[data-section="kept"] [data-kept="${KEPT_ID}"][data-state="present"]`).waitFor();
+  };
+
+  await check('HAOS 一次確認: the first step and the check page say that the check may start stopped services and puts them back (H-c)',
+    (() => { const data = v2Fixture(); data.scripts['ha-check'] = [haStep('ha-check', 'decrypt', 30, { cancellable: true })]; return data; })(), async page => {
+      await ready(page);
+      await openHa(page, HA_V2);
+      assert.equal(await page.locator('.wizard-card .ha-check-starts').textContent(), HC_SENTENCE);
+      // The side card no longer says that nothing of this device is ever started: it says what stays true.
+      assert.doesNotMatch(await page.locator('.side-card').textContent(), /不會停止或變更這台的應用/);
+      assert.match(await page.locator('.side-card').textContent(), /檢查和轉換都不會停止這台正在運作的應用，也不會變更它們的資料/);
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('.ha-job').waitFor();
+      assert.equal(await activeStep(page), '檢查');
+      assert.equal(await page.locator('.wizard-card .ha-check-starts').count(), 1);
+      assert.equal(await page.locator('.wizard-card .ha-check-starts').textContent(), HC_SENTENCE, 'the page that runs the check says it again');
+    });
+
+  await check('HAOS 一次確認: in the two-step flow of an older engine an app the check has no result for is named and left out, and the other one still goes (UI-15)',
+    (() => {
+      const data = haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false })] } });
+      const only = haCheck();
+      only.ha_check.apps = only.ha_check.apps.filter(item => item.app_id === 'odoo');
+      data.scripts['ha-check'] = haScripts({ check: only })['ha-check'];
+      return data;
+    })(), async page => {
+      await ready(page);
+      await openHa(page, HA_PLAIN);
+      await page.locator('#ha-app-n8n').check();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="odoo"]').waitFor({ timeout: 30000 });
+      assert.equal(await activeStep(page), '結果與選項', 'no schema 2: the two steps stay');
+      await page.getByText('檢查結果沒有包含「n8n 工作流程」，這次不會匯入它；可以按「重新檢查」再試。').waitFor();
+      assert.equal(await page.locator('[data-ha-app="n8n"]').count(), 0, 'an app without a result has no card');
+      await page.locator('#ha-db-0').check();
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), false, 'an app without a result never holds back the one that passed');
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.waitForFunction(() => window.testcalls.some(call => call.argv[1] === 'ha-convert-start'));
+      const [convert] = (await calls(page, 'ha-convert-start')).map(requestOf);
+      assert.deepEqual(convert.apps, ['odoo'], 'only the app that has a result is converted');
+      assert.equal(requestOf((await calls(page, 'ha-check-start'))[0]).choices, undefined, 'an older engine is never sent the new fields');
+      assert.equal((await calls(page, 'ha-import-start')).length, 0, 'and not the new command');
+    });
+
+  await check('HAOS 一次確認: when the backup holds several EMQX nodes the page asks which one, checks again with the pick and imports that node (B10 choices)',
+    v2Fixture({ check: v2Check({ apps: ['emqx'], emqx: { issues: [], importable: true, ok: true, choices: { node: [
+      { value: 'emqx@ha.local', label: 'emqx@ha.local（最後寫入 2026-11-20）', default: true }, { value: 'emqx@ha-old.local', label: 'emqx@ha-old.local（最後寫入 2026-11-02）' }] } } }) }),
+    async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['emqx'] });
+      const radios = page.locator('input[name="ha-node-emqx"]');
+      assert.deepEqual(await radios.evaluateAll(items => items.map(item => [item.value, item.checked])), [['emqx@ha.local', true], ['emqx@ha-old.local', false]],
+        'the default is shown as chosen');
+      assert.match(await page.locator('.ha-choices[data-choice="node"]').textContent(), /emqx@ha.local（最後寫入 2026-11-20）[\s\S]*預設[\s\S]*emqx@ha-old.local（最後寫入 2026-11-02）/);
+      await page.locator('#ha-ack').check();
+      assert.equal(await v2Import(page).isDisabled(), false, 'the default node needs no new check');
+      // Another node: the check has to run again with it before anything starts.
+      await radios.nth(1).check();
+      assert.equal(await v2Import(page).isDisabled(), true);
+      await page.getByText('你改了選項，請先按「重新檢查」，用新的選擇再檢查一次。').waitFor();
+      await page.getByText('選好後，請按下方的「重新檢查」。').waitFor();
+      await page.locator('[data-focus="ha-recheck"]').click();
+      await page.locator('#ha-ack:not(:checked)').waitFor({ timeout: 30000 });
+      const checks = (await calls(page, 'ha-check-start')).map(requestOf);
+      assert.equal(checks.length, 2);
+      assert.equal(checks[0].choices, undefined, 'the first check asked nothing');
+      assert.deepEqual(checks[1].choices, { emqx: { node: 'emqx@ha-old.local' } }, 'the second check is told the pick');
+      assert.equal(await radios.nth(1).isChecked(), true, 'the pick stays');
+      assert.equal(await page.getByText('你改了選項').count(), 0, 'the new check saw the pick');
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const [start] = (await calls(page, 'ha-import-start')).map(requestOf);
+      assert.deepEqual(start.choices, { emqx: { node: 'emqx@ha-old.local' } });
+      assert.deepEqual(start.apps, ['emqx']);
+    });
+
+  await check('HAOS 一次確認: cancelling an import that is in a stage that cannot be interrupted says so and points to 做完這個應用就停止, which stops the import after this app',
+    v2Fixture({ chain: { uncancellable: true } }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['odoo', 'n8n'] });
+      await page.locator('#ha-db-0').check();
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-focus="ha-cancel-import"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('#confirm-error').getByText('作業已進入不可中斷的階段，將繼續執行到完成或自動回復。 可以改按「做完這個應用就停止」。').waitFor();
+      assert.equal(await page.locator('#confirm-dialog').evaluate(dialog => dialog.open), true, 'the refusal stays in the dialog');
+      const [cancel] = (await calls(page, 'job-cancel')).map(requestOf);
+      assert.equal(cancel.after_this, undefined, 'the whole import was asked to stop and refused');
+      await page.locator('#confirm-cancel').click();
+      await page.locator('[data-focus="ha-stop-after"]').click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const cancels = (await calls(page, 'job-cancel')).map(requestOf);
+      assert.equal(cancels[1].after_this, true);
+      assert.equal(await page.locator('.ha-group-row[data-ha-app="odoo"]').getAttribute('data-status'), 'imported', 'the app being worked on finished');
+      assert.equal(await page.locator('.ha-group-row[data-ha-app="n8n"]').getAttribute('data-status'), 'not-started');
+    });
+
+  await check('HAOS 一次確認: a kept copy is listed after the import with what is in it, what was put back and what was not; it can be downloaded and is deleted only after a confirmation (S4)',
+    v2KeptFixture(), async page => {
+      await ready(page);
+      await v2KeptImport(page);
+      const copy = page.locator(`[data-kept="${KEPT_ID}"]`);
+      const section = page.locator('[data-section="kept"]');
+      assert.match(await section.textContent(), /匯入前，這台的資料庫服務裡有這次沒有搬走的其他資料，所以系統先把整個資料庫服務存成完整複本。複本不會自動刪除；確定用不到時可以下載保存，再刪除它。刪除後，複本裡的資料就沒有了。/);
+      assert.match(await copy.locator('.ha-group-name').textContent(), /^保留的複本 · /);
+      const text = await copy.textContent();
+      assert.match(text, /屬於：n8n 工作流程/);
+      assert.match(text, new RegExp(`備份 ID：${KEPT_ID}`));
+      assert.match(text, /複本裡的資料庫：「analytics」、「crm_old」，另有 3 個沒有列出。/);
+      assert.match(text, /匯入後已經放回這台的資料庫：「analytics」。/);
+      assert.match(text, /下列資料庫沒有放回這台，資料仍在這份複本裡：[\s\S]*crm_old：資料庫擁有者的角色在新的資料庫服務裡已經存在，沒有放回。/);
+      assert.match(text, /放不回去的資料庫仍在這份複本裡。/);
+      assert.match(text, /已加密[\s\S]*金鑰可用/);
+      assert.equal(await copy.locator(`a[href="#/backups/${KEPT_ID}"]`).count(), 1, 'the copy is linked');
+      // What the restore said about the app is under its row, and only there.
+      assert.match(await page.locator('.ha-group-row[data-ha-app="n8n"] .ha-group-notes').textContent(), /匯入時暫停的服務沒有重新啟動：filebrowser。請到「應用軟體」把它啟動起來。/);
+      assert.equal(await page.locator('.ha-group-row[data-ha-app="odoo"] .ha-group-notes').count(), 0);
+      // What stayed behind is in the to-dos too: the Odoo databases that stay on HA and the number of the copy.
+      const after = await page.locator('.ha-reminders').textContent();
+      assert.match(after, /HA 的 Odoo 還有「test」、「demo-old」沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。/);
+      assert.match(after, new RegExp(`匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${KEPT_ID}），不會自動刪除；可以下載它，確定用不到時再自己刪除（刪除後裡面的其他資料就沒有了）。`));
+      await allWidths(page, 'HAOS kept copies');
+      // Download: the stored file as it is, like in the backup list.
+      const before = downloadRequests.length;
+      const [download] = await Promise.all([page.waitForEvent('download'), copy.locator(`[data-focus="download-${KEPT_ID}"]`).click()]);
+      assert.deepEqual((await calls(page, 'download-info')).map(requestOf), [{ backup_id: KEPT_ID }]);
+      assert.equal(download.suggestedFilename(), 'woowtech-backup-dev-a-20261125-031700.tar');
+      assert.equal(downloadRequests[before].open.path, `/var/lib/woowtech-backup/archives/${KEPT_ID}.tar`);
+      // Delete: the dialog says what is lost for good; no is no.
+      await copy.locator(`[data-focus="kept-delete-${KEPT_ID}"]`).click();
+      assert.equal(await page.locator('#confirm-title').textContent(), '刪除保留的複本？');
+      assert.match(await page.locator('#confirm-body').textContent(), /這是匯入前保留的完整複本：裡面有那時這台資料庫服務的全部資料，包含這次匯入沒有搬走的其他資料庫。刪除後，這些資料就沒有了，也無法再用它回復到匯入之前；要保留，請先按「下載」。/);
+      assert.doesNotMatch(await page.locator('#confirm-body').textContent(), /這是還原前自動備份。/, 'the words of the kept copy replace the general ones');
+      assert.equal(await page.locator('#confirm-ok').textContent(), '刪除複本');
+      await page.locator('#confirm-cancel').click();
+      assert.equal((await calls(page, 'delete')).length, 0, 'nothing is deleted without the confirmation');
+      assert.equal(await copy.getAttribute('data-state'), 'present');
+      await copy.locator(`[data-focus="kept-delete-${KEPT_ID}"]`).click();
+      await page.locator('#confirm-ok').click();
+      await page.locator(`[data-kept="${KEPT_ID}"][data-state="deleted"]`).waitFor();
+      assert.deepEqual((await calls(page, 'delete')).map(requestOf), [{ backup_id: KEPT_ID }]);
+      assert.match(await copy.textContent(), /這份複本已經刪除。/);
+      assert.equal(await copy.locator('button').count(), 0, 'nothing left to press on a deleted copy');
+      await page.waitForFunction(() => !document.querySelector('.ha-reminders')?.textContent.includes('完整複本（'));
+    });
+
+  await check('HAOS 一次確認 in the dark theme: the kept copies and their delete dialog keep WCAG AA contrast and fit every width',
+    v2KeptFixture(), async page => {
+      await ready(page);
+      assert.equal(await page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark')), true);
+      await v2KeptImport(page);
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the kept copies');
+      await allWidths(page, 'HAOS dark kept copies');
+      await page.locator(`[data-focus="kept-delete-${KEPT_ID}"]`).click();
+      await page.locator('#confirm-dialog[open]').waitFor();
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the delete dialog');
+      await page.locator('#confirm-cancel').click();
+    }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
+
+  await check('HAOS 一次確認: a kept copy is marked in the backup list and its delete dialog says what is lost; the restore wizard of the converted backup names the databases that stay on HA and the copy',
+    (() => {
+      const data = haFixture();
+      const copy = v2Kept('n8n');
+      data.backups.unshift(convertedMeta({ from_ha: { ...haImportView(['odoo', 'n8n']), left_databases: ['test'], kept: copy.id } }), copy);
+      data.downloads[copy.id] = { path: `/var/lib/woowtech-backup/archives/${copy.id}.tar`, filename: copy.filename, size: copy.size };
+      return data;
+    })(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      const row = page.locator(`tr[data-backup="${KEPT_ID}"]`);
+      await row.waitFor();
+      assert.deepEqual(await row.locator('td[data-label="類型"] .chip').allTextContents(), ['還原前備份', '保留的複本']);
+      assert.deepEqual(await row.locator('td[data-label="加密與驗證"] .chip').allTextContents(), ['已加密', '金鑰可用']);
+      assert.equal(await page.locator(`tr[data-backup="${B_HA}"]`).getByText('保留的複本').count(), 0, 'only the copy is marked');
+      await row.locator(`[data-focus="delete-${KEPT_ID}"]`).click();
+      assert.equal(await page.locator('#confirm-title').textContent(), '刪除保留的複本？');
+      assert.match(await page.locator('#confirm-body').textContent(), /刪除後，這些資料就沒有了/);
+      await page.locator('#confirm-cancel').click();
+      assert.equal((await calls(page, 'delete')).length, 0);
+      // A converted backup's restore: what stayed behind is in the notice before anything is replaced.
+      await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_HA);
+      await page.locator('.ha-banner').waitFor();
+      const banner = await page.locator('.ha-banner').textContent();
+      assert.match(banner, /HA 的 Odoo 還有「test」沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。/);
+      assert.match(banner, new RegExp(`完整複本（${KEPT_ID}）`));
     });
 
 
