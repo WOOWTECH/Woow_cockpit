@@ -886,6 +886,19 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'job-failed')
             self.assertIn('模組清單', caught.exception.message)
 
+    def test_an_answer_over_the_room_is_still_refused(self):
+        """OD-73: a bigger room is not no room: a listing over the ceiling (or over the floor without a size) stops this app."""
+        rows = [[f'm{i}', '18.0.1.0', True, CORE] for i in range(2000)]
+        small = {'modules': rows, 'padding': 'x' * (ha_odoo.SCAN_OUTPUT + 1)}
+        with self.assertRaises(BackupError) as caught:
+            self.inventory(small)
+        self.assertEqual(caught.exception.code, 'job-failed')
+        found, _runs = self.inventory(small, size=500 * 1024 ** 3)       # a big backup gets room for it
+        self.assertEqual(len(found['modules']), 2000)
+        huge = {'modules': rows, 'padding': 'x' * (ha_odoo.SQL_OUTPUT_CEILING + 1)}
+        with self.assertRaises(BackupError):
+            self.inventory(huge, size=500 * 1024 ** 3)
+
     def test_the_wait_and_the_room_for_the_list_grow_with_the_data(self):
         _found, (plain,) = self.inventory({'modules': self.ROWS})
         _found, (big,) = self.inventory({'modules': self.ROWS}, size=500 * 1024 ** 3)

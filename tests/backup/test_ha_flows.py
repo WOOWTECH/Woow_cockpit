@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_n8n, ha_odoo, haimport, jobs, nested
+from woowbackup import ha_n8n, ha_odoo, haimport, haissues, jobs, nested
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -319,6 +319,8 @@ class World(HaWorld):
                     raise BackupError('job-failed', 'psql 執行失敗')
                 if kind == 'junk':
                     return ['not a document']
+                if kind == 'jobwide':
+                    raise haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。'))
                 modules = [['bad-name', '1', 'installed']] if kind == 'modules' else self.ha_modules
                 return {'modules': modules, 'partners': 5, 'users': 2, 'attachments': 1,
                         'attachment_bytes': 10, 'crons_active': 1, 'mail_servers_active': 0, 'size': 9000000,
@@ -763,6 +765,15 @@ class OdooDatabaseTests(OdooCase):
         self.assertEqual((databases['woowtest']['ok'], databases['notodoo']['ok']), (True, False))
         self.assertEqual(databases['notodoo']['blockers'], [ha_odoo.MSG_NOT_ODOO])
         self.assertEqual(self.world.runs and sum(1 for run in self.world.runs if run[0] == 'hapg'), 1, 'one server for all')
+
+    def test_what_ends_the_whole_job_is_not_taken_for_the_fault_of_a_database(self):
+        """OD-33, OD-34: only an ordinary failure of reading one database is its own stop; a full disk or a cancelled
+        job (marked job-wide) goes on up through the app and the job."""
+        self.world.unreadable = {'woowtest': 'jobwide'}
+        with self.assertRaises(BackupError) as caught:
+            self.check()
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertEqual(self.reporter.partial.get('temp_owners'), [])
 
     def test_there_is_no_database_or_none_that_can_move(self):
         """OD-47, OD-48: only the app stops."""
