@@ -521,6 +521,20 @@ class NoticeLinesTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps([i.view('emqx') for i in found.values()]))
 
 
+class ImportTextsTests(unittest.TestCase):
+    """D0 (4), DESIGN H-c: HA's add-on options (env_vars) are never read, so the customer is told once, after the import, that
+    they did not move -- whatever else the conversion found, and without a value of any kind."""
+
+    def test_the_add_on_options_that_did_not_move_are_one_reminder_in_every_result(self):
+        for data in ({}, {'anonymous': True}, {'hash_change': {'ha': 'bcrypt', 'mine': 'sha256', 'names': 'woow'}},
+                     {'ha_hosts': ['homeassistant'], 'plugins': ['p1'], 'api_keys': 2}):
+            _notes, reminders = ha_emqx.import_texts(data)
+            self.assertEqual(reminders.count(ha_emqx.OPTIONS_NOT_MOVED), 1, data)
+        self.assertIn('env_vars', ha_emqx.OPTIONS_NOT_MOVED)
+        self.assertIn('沒有搬過來', ha_emqx.OPTIONS_NOT_MOVED)
+        self.assertIn('請在匯入後', ha_emqx.OPTIONS_NOT_MOVED)   # what to do, not only what happened
+
+
 class MarkerTests(base.EmqxCase):
     """H-2: the data volume says its access settings are HA's, so the package's smoke test can tell (and upgrade.sh does not
     roll every upgrade back)."""

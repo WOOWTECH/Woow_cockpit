@@ -2822,13 +2822,21 @@ def convert(work, app, test_mode, out_dir):
 
 # ====================================================================== texts
 
+# D0 (4), DESIGN H-c: HA's add-on options (the `env_vars` page of the EMQX add-on: the customer's own EMQX_* settings) are not in
+# what the reader hands out (habackup: addon.json and data/options.json are never read), so HA's throwaway broker starts
+# without them and nothing of them is moved. The customer is told, once, after the import; there is no way to say whether
+# the add-on had any.
+OPTIONS_NOT_MOVED = ('HA 的 EMQX 附加元件頁的選項（例如自己設的 EMQX_ 環境變數 env_vars）沒有搬過來：備份工具不讀附加元件的選項檔，'
+                     '也無法得知您有沒有設過。如果您在 HA 設過，請在匯入後到這台 EMQX 的環境設定檔補上。')
+
 def import_texts(data):
     notes = ['EMQX 的 MQTT 帳號、ACL 規則、Dashboard 帳號、API 金鑰、封鎖名單、PSK、保留訊息，以及帳號驗證、授權來源（含 ACL 檔案）、'
              '「沒有符合規則的主題時」的處理、規則和連接器設定，都換成 HA 的（和 HAOS 還原一樣）；這台的節點名稱、連接埠、位址和其他'
              '設定保持不變。',
              '還原後會再核對 MQTT 帳號、ACL 規則和金鑰都和轉換時相同，不同就自動回復。']
     reminders = ['請把 MQTT 裝置與服務（例如 Home Assistant 的 MQTT 整合、Zigbee2MQTT）改連到這台的 EMQX。',
-                 '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。']
+                 '匯入後請用 HA 那邊的 EMQX Dashboard 帳號和密碼登入。',
+                 OPTIONS_NOT_MOVED]
     if data.get('anonymous'):
         reminders.append('HA 的 EMQX 沒有啟用帳號驗證，匯入後這台也一樣：連得到這台 MQTT 的人不用帳號就能連線。')
     change = data.get('hash_change')
