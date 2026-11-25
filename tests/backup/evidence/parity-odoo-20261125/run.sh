@@ -17,7 +17,7 @@ cd "$W" || exit 2
 head=$(git rev-parse --short HEAD)
 dirty=$(git status --porcelain --untracked-files=no | wc -l)
 echo "tag $TAG head $head dirty $dirty start $(date +%T)" > "$SUM"
-heavy() { HEAVY_FREE=$LOCK "$HEAVY" flock -w 3600 "$LOCK" "$@"; }
+heavy() { HEAVY_WAIT=${HEAVY_WAIT:-43200} HEAVY_FREE=$LOCK "$HEAVY" flock -w 3600 "$LOCK" "$@"; }
 for name in "$@"; do
   t0=$SECONDS
   case $name in
@@ -31,7 +31,7 @@ for name in "$@"; do
         > "$R/$TAG-ha118.out" 2> "$R/$TAG-ha118.err"
       rc=$?; line=$(head -1 "$R/$TAG-ha118.out" | cut -c1-300) ;;
     mut)
-      heavy env PYTHONDONTWRITEBYTECODE=1 timeout 10800 python3 -I "$S/mutations.py" --repo "$W" --jobs 2 \
+      heavy env PYTHONDONTWRITEBYTECODE=1 timeout 21600 python3 -I "$S/mutations.py" --repo "$W" --jobs 2 \
         --json "$R/$TAG-mut.json" > "$R/$TAG-mut.out" 2> "$R/$TAG-mut.err"
       rc=$?; line=$(tail -1 "$R/$TAG-mut.out" | cut -c1-300) ;;
     *) rc=2; line="unknown group" ;;

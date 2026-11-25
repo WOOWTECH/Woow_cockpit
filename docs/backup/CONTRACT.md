@@ -2175,7 +2175,9 @@ secret and mounts); an entry of another shape is `incompatible`.
      listed in the `files.skipped` line. A custom modules folder that is mounted but not in the app settings is not filled
      (`odoo.addons-folder-undeclared`; a module only the backup has then counts as missing). A web volume that is not mounted at
      `/var/lib/odoo`, a data volume the settings do not declare, or `postgres` items in the settings stop Odoo (`odoo.layout-unsupported`;
-     wave 2: LAYOUT).
+     wave 2: LAYOUT). So does a database superuser password that the live Quadlet gives only by `EnvironmentFile=` or a plain
+     `Environment=POSTGRES_PASSWORD=` (not the package standard, a podman secret / `POSTGRES_PASSWORD_FILE`): said at the check with the standard way, never
+     read (OD-57; podman `--env-file` could carry an EnvironmentFile, as EMQX does, but its user and PGDATA would have to be read as well: not built).
    A throwaway PostgreSQL 16 serves HA's cluster as before (every wait grows with the data: `podman.scaled_timeout`). Per connectable,
    non-template database other than `postgres` HA's server is asked as before; **the name of the database goes to psql and pg_dump through
    `PGDATABASE`, never as the argument of `-d`** (a name with `=` or a URI start would be read as a connection string); a plain name of
@@ -2213,9 +2215,10 @@ secret and mounts); an entry of another shape is `incompatible`.
    image; the role and database of the configuration (`createdb -O <role> --template=template0 --encoding=UTF8 --lc-collate=C <db_name>`);
    `pg_trgm` and `vector` only when this device's image offers them or HA uses them (`CREATE EXTENSION IF NOT EXISTS "<name>"` for the
    others HA uses, after the check above), `ALTER EXTENSION vector UPDATE` only when vector was created; `pg_restore -l` of the dump,
-   **cross-checked against its own header** (`TOC Entries:` = the lines plus the three archive settings ENCODING, STDSTRINGS and SEARCHPATH
-   that a plain listing keeps back; any other number, or no header, stops with `INCOMPLETE_LIST` before anything is written or restored: pg-stdin
-   follow-up F4); the list without the EXTENSION entries and **without the objects only a superuser can create** (their lines, and their COMMENT and
+   **cross-checked against its own header** (`TOC Entries:` is the lines plus what a plain listing keeps back: the three archive settings
+   ENCODING, STDSTRINGS and SEARCHPATH and a few more (a real PostgreSQL 16.15 listing: 1131 lines under 1136); a header that is
+   longer than the lines by less than the settings not shown, or by more than that plus 9, or no header, stops with `INCOMPLETE_LIST` before anything is
+   written or restored, and the job log says the two numbers: pg-stdin follow-up F4); the list without the EXTENSION entries and **without the objects only a superuser can create** (their lines, and their COMMENT and
    SECURITY LABEL lines, are commented out with `;`; they are named in `odoo.superuser-skipped`; a restore that still fails is
    `odoo.restore-failed` and stops Odoo); the list written by `Cluster.write_file` whose retry note now reaches the job log (pg-stdin follow-up
    F3); `pg_restore -U <role> --no-owner --no-acl --exit-on-error --single-transaction -L <list> -d <db_name>` as the role itself. Then
