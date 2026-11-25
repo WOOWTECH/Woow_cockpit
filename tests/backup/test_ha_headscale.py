@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, ha_headscale, hacommon, hasqlite, hatarget, jobs
+from woowbackup import habackup, haimport, ha_headscale, hacommon, hasqlite, hatarget, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -443,6 +443,14 @@ class DatabaseTests(HeadscaleCase):
         line = self.issues(other, 'stop')['headscale.db-extra-objects']
         self.assertEqual(line['items'], ['foreign_table'])
         self.assertTrue(line['action'])
+
+    def test_a_backup_that_does_not_fit_stops_only_headscale(self):   # HS-02: no size cap, the free space is still the limit
+        ha_id = self.upload_headscale()
+        with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024), self.assertRaises(BackupError) as caught:
+            self.checked(ha_id)
+        self.assertEqual(caught.exception.code, 'insufficient-space')   # the job stops with what it has: no app is imported
+        self.assertFalse(caught.exception.result['ha_check']['apps'][0]['importable'])
+        self.assertTrue(self.checked(ha_id)['importable'], 'with the space back it is importable')
 
     def test_a_database_larger_than_the_old_limit_is_no_refusal(self):   # HS-02
         class Big:

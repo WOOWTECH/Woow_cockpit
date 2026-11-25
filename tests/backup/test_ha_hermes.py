@@ -211,6 +211,14 @@ class CheckTests(HermesCase):
         self.convert(ha_id, ['hermes'])
         self.assertEqual(self.volume('hermes-data')['arm.so'][1], ARM_ELF, 'moved as it is')
 
+    def test_a_backup_that_does_not_fit_stops_only_hermes(self):   # H-18..H-21: no size cap, the free space is still the limit
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024), self.assertRaises(BackupError) as caught:
+            self.checked(ha_id)
+        self.assertEqual(caught.exception.code, 'insufficient-space')   # the job stops with what it has: no app is imported
+        self.assertFalse(caught.exception.result['ha_check']['apps'][0]['importable'])
+        self.assertTrue(self.checked(ha_id)['importable'], 'with the space back it is importable')
+
     def test_a_missing_version_record_is_a_notice(self):
         result = self.checked(self.upload_hermes(image_version=None, evil=False))
         self.assertTrue(result['ok'])
