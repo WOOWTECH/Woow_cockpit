@@ -592,6 +592,14 @@ class Live:
         self.db_env = tempctr.quadlet_environment(db_text, DB_ENV_KEYS)
         self.db_secrets = tempctr.quadlet_secrets(db_text)
         self.db_container = quadlet_container_name(quadlets, self.db_file)
+        if 'POSTGRES_PASSWORD_FILE' not in self.db_env and _password_elsewhere(db_text):
+            # OD-57 (the part that cannot be made): the new cluster is started from the live container's own settings; a
+            # superuser password that lives in an environment file or a plain variable cannot be handed to it without
+            # putting a secret on a command line, so this is said at once instead of as a cluster that does not start.
+            raise haissues.stopped(Issue('odoo.layout-unsupported', 'stop',
+                                         f'{self.db_file} 的資料庫超級使用者密碼放在環境檔或環境變數裡，這個匯入無法安全地用它建立新的資料庫叢集。',
+                                         action='請把密碼改用 podman secret 提供（POSTGRES_PASSWORD_FILE，WOOWTECH 套件的標準做法），再重新檢查。'),
+                                   'incompatible')
         db_skipped = []
         db_mounts = quadlet_mounts(quadlets, self.db_file, home, skipped=db_skipped)
         self.skipped_mounts += db_skipped
@@ -647,6 +655,21 @@ class Live:
 
 def _text_of(data):
     return data.decode('utf-8', 'replace') if isinstance(data, bytes) else str(data)
+
+
+def _password_elsewhere(text):
+    """True when a database container file keeps the superuser's password in `EnvironmentFile=` or a plain
+    `Environment=POSTGRES_PASSWORD=...` (never the value is looked at)."""
+    import shlex
+    if tempctr._container_values(text, 'EnvironmentFile'):
+        return True
+    for value in tempctr._container_values(text, 'Environment'):
+        try:
+            if any(item.startswith('POSTGRES_PASSWORD=') for item in shlex.split(value)):
+                return True
+        except ValueError:
+            return False
+    return False
 
 
 def _is_db(data):
@@ -774,8 +797,8 @@ class Cluster:
         reads as a connection string when it holds an `=` or starts like a URI (OD-31)."""
         where, env = database_arguments(database, by_env)
         out = self.tmp.exec(self.role, ['psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U',
-                                        self.superuser, *where, '-c', sql], user='postgres', env=env, timeout=timeout,
-                            max_output=max_output).stdout or b''
+                                        self.superuser, *where, '-c', sql], user='postgres', timeout=timeout,
+                            max_output=max_output, **({'env': env} if env else {})).stdout or b''
         try:
             return util.loads_strict(out.strip() or b'null', max_bytes=max_output)
         except ValueError:
@@ -806,9 +829,9 @@ class Cluster:
         mark = SQL_END_MARK + secrets.token_hex(8)
         where, env = database_arguments(database, by_env)
         out = self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', self.superuser, *where,
-                                        '-f', '-'], user='postgres', env=env,
+                                        '-f', '-'], user='postgres',
                             input=(text + f'\\echo {mark}\n').encode('utf-8'), timeout=timeout,
-                            max_output=1024 * 1024).stdout or b''
+                            max_output=1024 * 1024, **({'env': env} if env else {})).stdout or b''
         if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
             raise BackupError('job-failed', INCOMPLETE_SQL)
 
@@ -1870,7 +1893,7 @@ def check(work, app):
     (started when it is stopped), the upgrade marker, the account. Everything found goes to the app's issues
     (`work.sink`); each HA database has its own, so one that cannot move never keeps the others from it (OD-32..OD-35).
     `choices.database`: what can be picked; `odoo.databases[]` keeps the sentences for the older pages."""
-    sink = work.sink(app)
+    sink = _sink(work, app)   # a harness without sinks collects nowhere: the result's `odoo.databases` still says it all
     tmp = work.temp(app)
     target_items = Target(work, app, sink)
     live = target_items.live

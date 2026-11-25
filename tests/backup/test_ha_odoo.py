@@ -571,6 +571,22 @@ class MountTests(unittest.TestCase):
             self.assertEqual([(i.id, i.level) for i in caught.exception.issues], [('odoo.layout-unsupported', 'stop')])
             self.assertTrue(caught.exception.issues[0].action)
 
+    def test_a_superuser_password_in_an_environment_file_is_said_at_once_not_as_a_cluster_that_does_not_start(self):
+        """OD-57, the part that cannot be made safely: only this app, with what to do; the standard layout is untouched."""
+        for text in (b'EnvironmentFile=%h/.config/odoo18/db.env\n', b'Environment=POSTGRES_PASSWORD=not-for-a-log\n',
+                     b'Environment=A=1 POSTGRES_PASSWORD=x\n'):
+            quadlets = dict(QUADLETS)
+            quadlets['odoo-db.container'] = QUADLETS['odoo-db.container'].replace(
+                b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', text)
+            with self.subTest(text=text[:20]), self.assertRaises(BackupError) as caught:
+                ha_odoo.Live(quadlets, '/home/appowner')
+            self.assertEqual([(i.id, i.level) for i in caught.exception.issues], [('odoo.layout-unsupported', 'stop')])
+            self.assertIn('POSTGRES_PASSWORD_FILE', caught.exception.issues[0].action)
+            self.assertNotIn('not-for-a-log', repr(caught.exception.issues[0].view('odoo')))
+        quadlets = dict(QUADLETS)
+        quadlets['odoo-db.container'] += b'EnvironmentFile=%h/.config/odoo18/other.env\n'   # next to the standard secret: fine
+        self.assertEqual(ha_odoo.Live(quadlets, '/home/appowner').db_user, 'postgres')
+
     def test_the_superuser_name_may_hold_any_character_but_a_control_one(self):
         """OD-05: it is one argument, never a shell word or SQL."""
         for name in ('my admin$1', "o'brien", '資料庫管理員', 'a=b', '-x', 'x' * 63):
