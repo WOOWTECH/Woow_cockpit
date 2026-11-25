@@ -5,31 +5,41 @@ The add-on maps its `addon_config` folder at /opt/data, Hermes's HERMES_HOME: ev
 plain files there (`config/**` in the backup member; HA already leaves out `logs`, `lazy-packages`, `.cache`, `.npm`).
 `data/**` holds only HA's options, HA's generated dashboard/API/webhook/session secrets and the hashes of applied
 provider keys: never read (habackup.NEVER_READ). The target is the Podman package: the volume `hermes-data` at
-/opt/data owned by the Quadlet's HERMES_UID/HERMES_GID, an unused PostgreSQL 15 (`main`) and Redis.
+/opt/data owned by the Quadlet's HERMES_UID/HERMES_GID (or, when those do not say a number, by the owner of the live
+folder), an unused PostgreSQL 15 (`main`) and Redis.
 
-Versions: the add-on version maps to a Hermes release (VERSIONS) that must equal the tag of the live image's base
-(label `io.woowtech.hermes.base`); `config/.woow-image-version` must name the add-on version; HA's `state.db`
-`schema_version` and `config.yaml` `_config_version` must not be newer than this release's.
+HAOS parity (2026-11-25, DESIGN B, E1): what HA's data holds never keeps the import from happening. The add-on version
+and this device's Hermes version only inform (`VERSIONS.issues`); what decides is the data: `state.db`'s `schema_version`
+and `config.yaml`'s `_config_version` (a newer settings file is moved and noted: this release ignores what it does not
+know). No size limit refuses an app: `.woow-image-version` is only read at its start, a `.env` up to MAX_ENV is filtered
+(a larger one is left out and listed), `config.yaml`, `cron/jobs.json` and `SKILL.md` are copied as they are and only read
+for what they say up to SCAN_MAX. An entry that is a link or a folder where a file must be is left out and listed (one
+line of the one confirmation); a secondary database that is damaged or stands where a link is is left out with its WAL and
+listed, a damaged `state.db` stops only Hermes; an index structure the sandbox does not know does not stop anything (the
+database moves unchanged, unchecked). A hard link to a file that does not move is copied as a file (CM-11).
 
 The tree moves as it is -- data, the data's own keys (vault, OAuth tokens, per-route webhook secrets, plugin logins)
 and HA's `config.yaml` -- with every owner set to this device's hermes uid/gid and no setuid/setgid bit; symlinks stay
 link entries (relative ones that stay in the tree, absolute ones only into /opt/data, /opt/hermes or /usr: a venv's
-interpreter), hard links stay hard links to an earlier file of the same tree (uv's ~14,000 links; a link to a file
-that does not move stops the import instead of cutting the subtree), nothing is ever followed. Left out: the
-gateway's runtime files, `.woow-image-version` (the first start then resets the caches), `.woow-dotenv` (Podman's
-record of applied keys: without it the first start applies this device's hermes.env, whose keys win over HA's), every
-`-shm` wal-index, the browser login profiles (a credential store, never archived upstream either). HA's `.env` keeps
-HA's provider keys but loses the lines this device's secrets and URLs own (API_SERVER_KEY, WEBHOOK_SECRET,
-HERMES_DASHBOARD_BASIC_AUTH_*, HERMES_DASHBOARD_PUBLIC_URL, HERMES_BASE_URL, HERMES_PASEO_*). The SQLite files move
-unchanged with their WAL; the sandboxed child (hasqlite) checks each known database (`quick_check`) and reads
-`state.db`'s counts and schema version; known Hermes FTS5 layouts are allowed, their index structure is checked
-by quick_check in the sandbox, but an index is not compared with its messages. `hermes-redis-data` is only its top folder (owned like the live one) and the
-database `main` is a dump of the live, unused database (this device's own, unchanged). HA's /media is never moved.
+interpreter), hard links stay hard links to an earlier file of the same tree (uv's ~14,000 links), nothing is ever
+followed. Left out: the gateway's runtime files, `.woow-image-version` (the first start then resets the caches),
+`.woow-dotenv` (Podman's record of applied keys: without it the first start applies this device's hermes.env, whose keys
+win over HA's), every `-shm` wal-index, the browser login profiles (a credential store, never archived upstream either).
+HA's `.env` keeps HA's provider keys but loses the lines this device's secrets and URLs own (API_SERVER_KEY,
+WEBHOOK_SECRET, HERMES_DASHBOARD_BASIC_AUTH_*, HERMES_DASHBOARD_PUBLIC_URL, HERMES_BASE_URL, HERMES_PASEO_*). The SQLite
+files move unchanged with their WAL, after the sandboxed child (hasqlite) checked each known database (`quick_check`)
+and read `state.db`'s counts and schema version; they are written into the tree only then (so one that stays out leaves
+nothing behind); known Hermes FTS5 layouts are allowed, their index structure is checked by quick_check in the sandbox,
+but an index is not compared with its messages. `hermes-redis-data` is only its top folder (owned like the live one),
+every other volume or folder of this device's entry (a cold database, a workspace) is carried as it is, and the database
+`main` is a dump of the live, unused database (this device's own, unchanged). HA's /media is never moved.
 """
+import os
 import re
 
-from . import habackup, hacommon, hasqlite, ha_n8n, ha_odoo, tempctr
+from . import habackup, hacommon, haissues, hasqlite, hatarget, ha_n8n, ha_odoo, tempctr
 from .errors import BackupError
+from .haissues import Issue
 
 SLUG = 'woow-hermes'
 APP_ID = 'hermes'
@@ -48,15 +58,41 @@ ABSOLUTE_LINKS = ('/opt/data', '/opt/hermes', '/usr')
 KNOWN_DBS = ('state.db', 'kanban.db', 'response_store.db', 'runs_idempotency.db', 'shared-state.db', 'projects.db',
              'cron/executions.db', 'cron/notepad.db')
 SIDECARS = ('-wal', '-journal')
+SPECIAL_FILES = ('.env', 'config.yaml', 'cron/jobs.json', '.woow-image-version')   # a file, never a link or a folder
 MANAGED_ENV_RE = re.compile(rb'\s*(?:export\s+)?(?:\x27)?(?:API_SERVER_KEY|WEBHOOK_SECRET|HERMES_DASHBOARD_BASIC_AUTH_[A-Z_]*'
                             rb'|HERMES_DASHBOARD_PUBLIC_URL|HERMES_BASE_URL|HERMES_PASEO_[A-Z_]*)(?:\x27)?\s*=')
 ENV_KEY_RE = re.compile(rb'\s*(?:export\s+)?(?:\x27)?([A-Za-z_][A-Za-z0-9_]{0,100})(?:\x27)?\s*=')
 CONFIG_VERSION_RE = re.compile(r'^_config_version:\s*([0-9]{1,6})\s*$', re.M)
-MAX_ENV = 1024 * 1024
+MAX_ENV = 8 * 1024 * 1024          # H-19: the largest `.env` that is filtered in memory; a larger one is left out and listed
+SCAN_MAX = 32 * 1024 * 1024        # H-20, H-21: the largest config.yaml / jobs.json / SKILL.md read for what it says
+VERSION_BYTES = 1024               # H-18: of `.woow-image-version` (a file that does not move) only its start is read
 MASK_MIN = 12
-MAX_TEXT = 8 * 1024 * 1024
-MAX_SKILL = 4 * 1024 * 1024
+MAX_MASKED = 500                   # values of a `.env` registered as secrets: jobs.mask_secret sorts them all on every call
 UID_RE = re.compile(r'[0-9]{1,9}\Z')
+VIRTUAL_ERROR = 'ValueError: virtual tables are not supported'   # hasqlite's child: an index structure it does not know
+
+ISSUES = {
+    'hermes.layout-unsupported': 'stop',        # H-03: this device's settings have no folder at /opt/data, or dump a whole instance
+    'hermes.extras-carried': 'auto',            # H-03: this device's other volumes and folders go along as they are
+    'hermes.owner-from-folder': 'auto',         # H-05: HERMES_UID / HERMES_GID say no number: the live folder's owner is used
+    'hermes.links-copied': 'auto',              # H-01: a hard link to a file that does not move is copied as a file
+    'hermes.entries-skipped': 'confirm',        # H-02: a link or a folder where a file must be, left out
+    'hermes.databases-skipped': 'confirm',      # H-02, H-11: a secondary database that is damaged or a link, left out
+    'hermes.no-state-db': 'stop',               # H-10: HA's Hermes never started: nothing to move
+    'hermes.state-db-unusable': 'stop',         # H-02, H-11: the main database is damaged or a link
+    'hermes.schema-unreadable': 'stop',         # H-12 (kept)
+    'hermes.schema-newer': 'stop',              # H-13 (kept)
+    'hermes.config-newer': 'notice',            # H-14: a settings file of a newer Hermes is moved as it is
+    'hermes.foreign-programs': 'notice',        # H-16: programs for another processor are moved, they will not run here
+    'hermes.image-version-differs': 'notice',   # H-09: HA updated the add-on before it ran once
+    'hermes.image-version-missing': 'notice',
+    'hermes.digest-differs': 'notice',
+    'hermes.db-unchecked': 'notice',            # H-11: an index structure the sandbox does not know: moved, not checked
+    'hermes.text-unread': 'notice',             # H-20, H-21: a very large text file is copied without being read
+    'hermes.ha-addresses': 'notice',
+    'hermes.media-refs': 'notice',
+    'hermes.plugins-replaced': 'notice',
+}
 
 
 def flat(rel):
@@ -67,9 +103,9 @@ def flat(rel):
 class Source:
     def __init__(self):
         self.addon = None
+        self.report = None        # the walk's habackup.Report: what the reader left out (Sink.skipped)
         self.image_version = None
         self.env_keys = []
-        self.env_symlink = False
         self.ha_urls = set()
         self.media_refs = 0
         self.config_version = None
@@ -77,16 +113,26 @@ class Source:
         self.skills = 0
         self.plugins = set()
         self.dbs = {}             # staged name -> path
+        self.db_meta = {}         # staged name -> (name in the tree, mode, mtime)
+        self.db_skip = set()      # staged names that stay out of the tree (a group left out, with its sidecars)
         self.skipped = []         # runtime files, -shm, ...
         self.foreign = []         # programs for another processor
+        self.specials = haissues.Names()    # H-02: a link or a folder where a file must be
+        self.unread = haissues.Names()      # H-20, H-21: copied without being read
+        self.bad_groups = set()   # known databases (names of KNOWN_DBS) one member of which is not a regular file
+        self.skip_trees = []      # a folder where a file must be: what lies below it is left out
+        self.copied = 0           # hard links copied as files
         self.counts = {}
 
 
 class _Count:
-    """TreeTar's bookkeeping without an output (the check job)."""
+    """TreeTar's bookkeeping without an output (the check job); a link is judged the way TreeTar judges it, so the check lists
+    exactly what the conversion will leave out."""
 
-    def __init__(self):
+    def __init__(self, report=None):
         self.files = set()
+        self.report = report
+        self.copied = 0
         self.counts = {'files': 0, 'dirs': 0, 'symlinks': 0, 'hardlinks': 0, 'bytes': 0}
 
     def dir(self, name, mode, mtime):
@@ -103,34 +149,38 @@ class _Count:
         self.counts['bytes'] += len(data)
 
     def symlink(self, name, target, mtime):
+        if self.report is not None and hacommon.link_escapes(name, target):
+            self.report.skip('symlink', name)
+            return False
         self.counts['symlinks'] += 1
+        return True
 
-    def hardlink(self, name, target, mtime):
-        if target not in self.files:
-            raise BackupError('incompatible', f'HA 備份中的 {name[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
-                                              '已停止。', member=name[:200], target=target[:200])
-        self.counts['hardlinks'] += 1
+    def hardlink(self, name, target, mtime, *, entry=None):
+        if target in self.files:
+            self.counts['hardlinks'] += 1
+            return 'link'
+        copy_later = getattr(entry, 'copy_later', None)
+        if copy_later is not None:
+            copy_later()
+            self.copied += 1
+            return 'copy'
+        if self.report is not None:
+            self.report.skip('hardlink', name)
+            return 'skip'
+        raise BackupError('incompatible', f'HA 備份中的 {name[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
+                                          '已停止。', member=name[:200], target=target[:200])
 
 
-class _Tee:
-    """An Entry read by tarfile while a copy goes to `handle` (a known database staged for the SQLite child)."""
+class _Staged:
+    """The writer of a staged copy of a database: every byte is counted by the job's space guard."""
 
-    def __init__(self, entry, handle, guard=None):
-        self.entry, self.handle, self.guard = entry, handle, guard
+    def __init__(self, handle, guard=None):
+        self.handle, self.guard = handle, guard
 
-    def read(self, n=-1):
-        parts, have = [], 0
-        while n < 0 or have < n:
-            data = self.entry.read(habackup.CHUNK if n < 0 else min(n - have, habackup.CHUNK))
-            if not data:
-                break
-            parts.append(data)
-            have += len(data)
-        data = b''.join(parts)
+    def write(self, data):
         self.handle.write(data)
         if self.guard is not None:
             self.guard.wrote(len(data))
-        return data
 
 
 def strip_env(data):
@@ -158,13 +208,36 @@ def _known_db(rel):
     return None
 
 
+def _leave_out(src, rel, db, kind):
+    """H-02: `rel` is a link or a folder where a regular file must be. It stays out and is listed; a database takes its
+    whole group (the file and its sidecars) with it; a folder takes what lies below it."""
+    src.specials.add(rel[:200])
+    if db is not None:
+        src.bad_groups.add(db)
+    if kind == 'dir':
+        src.skip_trees.append(rel + '/')
+
+
+def _mask_values(values):
+    from . import jobs
+    masked = 0
+    for value in values:
+        if len(value) >= MASK_MIN:  # provider keys and tokens: masked in every log line of this job
+            jobs.mask_secret(value)
+            masked += 1
+            if masked >= MAX_MASKED:
+                break
+
+
 def scan_member(stream, report, staging, out, *, machine=None, guard=None, checkpoint=None):
     """One strict pass over `config/**` into `out` (a TreeTar or _Count; names relative to the tree); the known
-    databases and their sidecars are also staged in `staging` for the SQLite child. Returns a Source."""
-    import os
+    databases and their sidecars are staged in `staging` for the SQLite child and only added to `out` afterwards
+    (`add_databases`). Returns a Source. What is not a regular file where one must be is left out and listed (H-02), a
+    hard link to a file that does not move becomes a copy (H-01)."""
     select = habackup.Select(include=(TREE,), exclude=tuple(f'{TREE}/{name}' for name in EXCLUDED_DIRS),
                              symlinks=(TREE,), absolute_symlinks=ABSOLUTE_LINKS, hardlinks=True)
     src = Source()
+    src.report = report
     count = 0
     for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
@@ -173,27 +246,28 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
         if entry.name == TREE:
             continue  # the volume's top folder is the live one
         rel = entry.name[len(TREE) + 1:]
+        if any(rel.startswith(prefix) for prefix in src.skip_trees):
+            continue  # below a folder that stands where a file must be: left out with it
         top, _, rest = rel.partition('/')
         if top == 'plugins' and rest and '/' not in rest and entry.kind == 'dir':
             src.plugins.add(rest[:100])
-        special = rel in ('.env', 'config.yaml', 'cron/jobs.json', '.woow-image-version') or _known_db(rel) is not None
-        if (special and entry.kind != 'file') or (rel == 'cron' and entry.kind != 'dir'):
-            raise BackupError('incompatible', f'HA 的 Hermes 資料 {rel} 不是一般檔案或目錄，無法安全匯入。', member=rel)
+        db = _known_db(rel)
+        if ((rel in SPECIAL_FILES or db is not None) and entry.kind != 'file') or (rel == 'cron' and entry.kind != 'dir'):
+            _leave_out(src, rel, db, entry.kind)
+            continue
         if entry.kind == 'dir':
             out.dir(rel, entry.mode, entry.mtime)
             continue
         if entry.kind == 'symlink':
-            if rel == '.env':
-                src.env_symlink = True
             out.symlink(rel, entry.linkname, entry.mtime)
             continue
         if entry.kind == 'hardlink':
-            out.hardlink(rel, entry.linkname[len(TREE) + 1:], entry.mtime)
+            out.hardlink(rel, entry.linkname[len(TREE) + 1:], entry.mtime, entry=entry)
             continue
         # a regular file
         if '/' not in rel and rel in RUNTIME_FILES:
             if rel == '.woow-image-version':
-                src.image_version = entry.read_all(1024).decode('ascii', 'replace').strip()[:64]
+                src.image_version = entry.peek(VERSION_BYTES).decode('ascii', 'replace').strip()[:64]
             src.skipped.append(rel)
             continue
         if rel.endswith('-shm'):
@@ -203,16 +277,22 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
             src.foreign.append(rel)
         mode = entry.mode
         if rel == '.env':
-            data, src.env_keys, values = strip_env(entry.read_all(MAX_ENV))
-            from . import jobs
-            for value in values:
-                if len(value) >= MASK_MIN:  # provider keys and tokens: masked in every log line of this job
-                    jobs.mask_secret(value)
+            data = entry.read_or_skip(MAX_ENV)   # a larger one cannot be filtered in memory: the report lists it
+            if data is None:
+                continue
+            data, src.env_keys, values = strip_env(data)
+            _mask_values(values)
             src.ha_urls.update(f'.env：{host}' for host in hacommon.ha_hosts(data.decode('utf-8', 'replace')))
             out.data(rel, data, mode, entry.mtime)
             continue
-        if rel in ('config.yaml', 'cron/jobs.json') or (rel.startswith('skills/') and rel.endswith('/SKILL.md')):
-            data = entry.read_all(MAX_SKILL if rel.endswith('SKILL.md') else MAX_TEXT)
+        skill = rel.startswith('skills/') and rel.endswith('/SKILL.md')
+        if rel in ('config.yaml', 'cron/jobs.json') or skill:
+            if entry.size > SCAN_MAX:   # H-20, H-21: no size refuses it; it is copied without being read for what it says
+                src.unread.add(rel[:200])
+                src.skills += skill
+                out.file(rel, entry, mode)
+                continue
+            data = entry.read_all(SCAN_MAX)
             text = data.decode('utf-8', 'replace')
             src.media_refs += text.count('/media/')
             if rel == 'config.yaml':
@@ -220,124 +300,215 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
                 src.config_version = int(match.group(1)) if match else None
                 src.ha_urls.update(f'config.yaml：{host}' for host in hacommon.ha_hosts(text))
             elif rel == 'cron/jobs.json':
-                doc = hacommon.strict_json(data, MAX_TEXT)
+                doc = hacommon.strict_json(data, SCAN_MAX)
                 jobs = doc.get('jobs') if isinstance(doc, dict) else doc
                 src.cron_jobs = len(jobs) if isinstance(jobs, (list, dict)) else 0
             else:
                 src.skills += 1
             out.data(rel, data, mode, entry.mtime)
             continue
-        db = _known_db(rel)
         if db is not None:
-            path = staging / flat(rel)
+            staged = flat(rel)
+            path = staging / staged
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
             with os.fdopen(fd, 'wb') as handle:
-                if isinstance(out, hacommon.TreeTar):
-                    out.tar.add_member(hacommon.info(rel, 'file', mode=mode & 0o777, uid=out.uid, gid=out.gid,
-                                                     mtime=entry.mtime, size=entry.size), _Tee(entry, handle))
-                    out.files.add(rel)
-                    out.counts['files'] += 1
-                    out.counts['bytes'] += entry.size
-                else:
-                    entry.copy_to(handle)
-                    out.data(rel, b'', mode, entry.mtime)
-                    out.counts['bytes'] += entry.size
+                entry.copy_to(_Staged(handle, guard))
                 handle.flush()
                 os.fsync(handle.fileno())
-            src.dbs[flat(rel)] = path
+            src.dbs[staged] = path
+            src.db_meta[staged] = (rel, mode & 0o777, entry.mtime)
+            if isinstance(out, _Count):
+                out.data(rel, b'', mode, entry.mtime)
+                out.counts['bytes'] += entry.size
             continue
         out.file(rel, entry, mode)
     src.addon = report.addon
+    src.copied = getattr(out, 'copied', 0)
+    for staged in [name for name, (rel, _m, _t) in src.db_meta.items() if _known_db(rel) in src.bad_groups]:
+        src.dbs.pop(staged, None)   # a group with a member that is no file stays out as a whole
+        src.db_skip.add(staged)
     src.counts = dict(out.counts, absolute_symlinks=report.absolute_symlinks, skipped_symlinks=report.skipped_symlinks)
     return src
+
+
+def add_databases(out, src):
+    """Put the databases that stay into the tree: their staged copies, after the checks (a database that is left out leaves
+    nothing behind). `out`: a TreeTar."""
+    for staged, path in sorted(src.dbs.items()):
+        if staged in src.db_skip:
+            continue
+        rel, mode, mtime = src.db_meta[staged]
+        with open(path, 'rb') as handle:
+            size = os.fstat(handle.fileno()).st_size
+            out.tar.add_member(hacommon.info(rel, 'file', mode=mode, uid=out.uid, gid=out.gid, mtime=mtime, size=size), handle)
+        out.files.add(rel)
+        out.counts['files'] += 1
+        out.counts['bytes'] += size
 
 
 # ====================================================================== the live target
 
 class Target:
-    """The hermes app's catalog items the import fills, resolved against the live Quadlet files."""
+    """The hermes app's catalog items the import fills, resolved against the live Quadlet files. Whatever else this device's
+    entry holds (a cold database's volume, a workspace folder) is carried as it is (H-03); only what the import cannot take
+    at all stops the app (`hermes.layout-unsupported`, with what to do)."""
 
-    def __init__(self, work, app):
+    def __init__(self, work, app, sink=None):
         quadlets = work.quadlets(app)
         home = work.runner(app).home
         declared = [v['name'] for v in app.volumes]
         agent_file, data_volume = hacommon.mounted(quadlets, home, '/opt/data')
-        redis_volumes = [v for v in declared if v != data_volume]
-        if (agent_file is None or data_volume not in declared or len(declared) != 2 or len(redis_volumes) != 1
-                or len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database' or app.data_dirs):
-            raise BackupError('incompatible', '這台的 Hermes 應用設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
-        self.data_volume, self.redis_volume = data_volume, redis_volumes[0]
-        self.pg = app.postgres[0]
+        if agent_file is None or data_volume not in declared:
+            raise haissues.stopped(Issue('hermes.layout-unsupported', 'stop',
+                                         '這台 Hermes 的應用設定裡找不到掛在 /opt/data 的資料卷，不知道 HA 的資料要放在哪裡。',
+                                         action='請到「應用軟體」確認這個應用的資料卷設定有包含 Hermes 存放資料的那個資料卷（掛在 /opt/data），再匯入。'),
+                                   'incompatible', app=app.id)
+        self.pgs = list(app.postgres)
+        if any(pg.get('scope', 'database') != 'database' for pg in self.pgs):
+            raise haissues.stopped(Issue('hermes.layout-unsupported', 'stop',
+                                         '這台 Hermes 的資料庫備份模式是「整個執行個體」，Hermes 匯入還不支援這個模式。',
+                                         action='請到「應用軟體」把這個應用的資料庫備份模式改成「單一資料庫」或「冷備份」，再匯入。'),
+                                   'incompatible', app=app.id)
+        self.data_volume = data_volume
+        _file, redis = hacommon.mounted(quadlets, home, '/data')
+        self.redis_volume = redis if redis in declared and redis != data_volume else None
+        self.extra_volumes, self.extra_dirs = hatarget.extras(app, handled_volumes=(data_volume, self.redis_volume))
         self.image = tempctr.quadlet_image(quadlets[agent_file])
         if not self.image:
             raise BackupError('incompatible', '這台 Hermes 的 Quadlet 設定缺少映像。', app=app.id)
         env = hacommon.environment(quadlets, agent_file, {'HERMES_UID', 'HERMES_GID'})
         uid, gid = env.get('HERMES_UID', '10000'), env.get('HERMES_GID', env.get('HERMES_UID', '10000'))
-        if not UID_RE.fullmatch(uid) or not UID_RE.fullmatch(gid):
-            raise BackupError('incompatible', '這台 Hermes 的 HERMES_UID／HERMES_GID 設定格式不正確。', app=app.id)
-        self.uid, self.gid = int(uid), int(gid)
+        self.uid = self.gid = None
+        if UID_RE.fullmatch(uid) and UID_RE.fullmatch(gid):
+            self.uid, self.gid = int(uid), int(gid)
+        if sink is not None:
+            if self.uid is None:
+                sink.auto('hermes.owner-from-folder', '這台 Hermes 的 HERMES_UID／HERMES_GID 設定不是數字，改用這台現有資料夾的擁有者，'
+                                                     '搬過來的檔案會歸它所有。')
+            if self.extra_volumes or self.extra_dirs:
+                sink.auto('hermes.extras-carried', '這台 Hermes 的應用設定還有 Hermes 匯入不處理的資料卷或資料夾，'
+                                                  '匯入時會照這台現在的內容原樣帶過去，不會變。',
+                          [*self.extra_volumes, *self.extra_dirs])
+
+    def owner(self, root):
+        """(uid, gid) every moved file gets: this device's HERMES_UID/GID, else the live folder's owner `root` (H-05)."""
+        return (self.uid, self.gid) if self.uid is not None else (root[0], root[1])
 
 
 def target_release(work, app, target):
-    """(x.y.z, digest) of the live image's Hermes base (label io.woowtech.hermes.base), (None, None) when unknown."""
-    base = hacommon.image_labels(work, app, target.image).get(BASE_LABEL, '')
+    """(x.y.z, digest) of the live image's Hermes base (label io.woowtech.hermes.base), (None, None) when unknown (H-07: the
+    version is then only not compared)."""
+    try:
+        base = hacommon.image_labels(work, app, target.image).get(BASE_LABEL, '')
+    except BackupError as error:
+        if error.code != 'job-failed':   # an image that is not here is the app's stop; labels that cannot be read are not
+            raise
+        base = ''
     match = re.fullmatch(r'[A-Za-z0-9./_-]+:(v?[0-9.]+)(?:@(sha256:[0-9a-f]{64}))?', base)
     if not match:
         return None, None
     return hacommon.semver(match.group(1)), match.group(2)
 
 
-def analyse(src, answers, *, addon_version, release, digest):
-    """(blockers, warnings, details) of HA's Hermes against this device."""
-    blockers, warnings = [], []
-    blocker = VERSIONS.blocker(addon_version, release)
-    if blocker:
-        blockers.append(blocker)
+def judge(sink, src, answers, *, addon_version, release, digest):
+    """What the check and the conversion say about HA's Hermes: every finding goes to `sink` (the check collects, the conversion
+    stops at a `stop` and wants a `confirm` confirmed); returns the details (counts). `answers`: the SQLite child's, by staged
+    name of the main databases. Decides what stays out of the tree (`src.db_skip`)."""
+    sink.extend(VERSIONS.issues(addon_version, release))   # H-06, H-07: the table and this device's version only inform
     mine = VERSIONS.upstream(addon_version)
-    if not blocker and digest and BASE_DIGESTS.get(mine) and digest != BASE_DIGESTS[mine]:
-        warnings.append(f'兩邊都是 Hermes {mine}，但這台映像的上游版本摘要和 HA 的不同，請確認兩邊用的是同一個版本。')
+    if (mine is not None and release is not None and hacommon.semver(mine) == hacommon.semver(release) and digest
+            and BASE_DIGESTS.get(mine) and digest != BASE_DIGESTS[mine]):
+        sink.notice('hermes.digest-differs', f'兩邊都是 Hermes {mine}，但這台映像的上游版本摘要和 HA 的不同，請確認兩邊用的是同一個版本。')
     if src.image_version is None:
-        warnings.append('HA 的 Hermes 資料沒有記錄附加元件版本（.woow-image-version），以 HA 備份中的附加元件版本為準。')
-    elif src.image_version != addon_version:
-        blockers.append(f'HA 的 Hermes 資料是附加元件 {src.image_version} 留下的，和備份中的附加元件版本 {addon_version} 不同；'
-                        '請先啟動一次 HA 的 Hermes 再重新備份。')
-    if 'state.db' not in src.dbs:
-        blockers.append('HA 備份裡沒有 Hermes 的資料（state.db），可能從來沒有啟動過；沒有可搬的資料。')
-    details = {'sessions': 0, 'messages': 0, 'schema_version': None, 'databases': len(
-        [n for n in src.dbs if not n.endswith(SIDECARS)])}
-    for name, answer in sorted(answers.items()):
+        sink.notice('hermes.image-version-missing', 'HA 的 Hermes 資料沒有記錄附加元件版本（.woow-image-version），以 HA 備份中的'
+                                                   '附加元件版本為準。')
+    elif src.image_version != addon_version:   # H-09
+        sink.notice('hermes.image-version-differs', f'HA 的 Hermes 資料是附加元件 {haissues.clean(src.image_version, 40)} 留下的，'
+                                                   f'和備份中的附加元件版本 {haissues.clean(addon_version, 40)} 不同（HA 更新後'
+                                                   '還沒啟動過就備份）；資料照樣搬，Hermes 啟動時會自己整理。')
+    details = {'sessions': 0, 'messages': 0, 'schema_version': None, 'databases': 0}
+    skipped = haissues.Names()
+    unchecked = haissues.Names()
+    if 'state.db' in src.bad_groups:
+        sink.stop('hermes.state-db-unusable', 'HA 的 Hermes 主資料庫（state.db）或它的 WAL 不是一般檔案（是連結或資料夾），'
+                                              '沒有可以安全搬過來的對話。', action='請在 HA 重新備份後再匯入 Hermes；這台的 Hermes 不會變。')
+    elif 'state.db' not in src.dbs:   # H-10: HA's Hermes never started: only Hermes is left out, this device's chats stay
+        sink.stop('hermes.no-state-db', 'HA 備份裡沒有 Hermes 的資料（state.db），可能從來沒有啟動過；沒有可搬的資料，這台的 Hermes 不會變。',
+                  action='請先在 HA 啟動 Hermes 並使用一次，再重新備份後匯入；不需要搬 Hermes 時，取消勾選它即可。')
+    for db in sorted(src.bad_groups - {'state.db'}):
+        skipped.add(db)
+    mains = sorted(name for name in src.dbs if not name.endswith(SIDECARS))
+    for staged in mains:
+        rel = src.db_meta[staged][0]
+        answer = answers.get(staged) or {'error': 'no answer'}
         why = hasqlite.problem(answer)
-        if why:
-            blockers.append(f'HA 的 Hermes 資料庫 {name} 已損毀或無法讀取（{why}）。')
+        if why and answer.get('error') == VIRTUAL_ERROR:   # H-11: an index structure the sandbox does not know
+            unchecked.add(rel)
+            details['databases'] += 1
             continue
-        if name == 'state.db':
+        if why:
+            if staged == 'state.db':
+                sink.stop('hermes.state-db-unusable', f'HA 的 Hermes 主資料庫（state.db）已損毀或無法讀取（{haissues.clean(why, 120)}）。',
+                          action='請在 HA 重新備份後再匯入 Hermes；這台的 Hermes 不會變。')
+            else:
+                skipped.add(rel)
+                src.db_skip.update(name for name in src.dbs if name in (staged, *(staged + s for s in SIDECARS)))
+            continue
+        details['databases'] += 1
+        if staged == 'state.db':
             counts = answer.get('counts') or {}
             details['sessions'] = ha_odoo._int(counts.get('sessions'))
             details['messages'] = ha_odoo._int(counts.get('messages'))
             details['schema_version'] = (answer.get('values') or {}).get('hermes.schema_version')
     schema = details['schema_version']
-    if 'state.db' in answers and not hasqlite.problem(answers['state.db']) and (type(schema) is not int or schema < 0):
-        blockers.append('HA 的 Hermes 資料庫結構版本無法判讀，無法安全匯入。')
-    if type(schema) is int and schema > SCHEMA_VERSION:
-        blockers.append(f'HA 的 Hermes 資料庫結構（{schema}）比這台的 Hermes 新（{SCHEMA_VERSION}），無法搬過來。')
-    if src.config_version is not None and src.config_version > CONFIG_VERSION:
-        blockers.append(f'HA 的 Hermes 設定檔版本（{src.config_version}）比這台的 Hermes 新（{CONFIG_VERSION}），無法搬過來。')
-    if src.env_symlink:
-        blockers.append('HA 的 Hermes 金鑰檔（.env）是符號連結，這台的 Hermes 會拒絕啟動；請先在 HA 改成一般檔案再備份。')
-    if src.foreign:
-        blockers.append(f'HA 的 Hermes 資料含有其他處理器的程式（{len(src.foreign)} 個，例如 {hacommon.names(src.foreign, 3)}），'
-                        '搬過來後無法執行。')
-    if src.counts.get('skipped_symlinks'):
-        warnings.append(f'HA 的 Hermes 資料中有 {src.counts["skipped_symlinks"]} 個指向資料以外的符號連結沒有搬過來。')
+    state = answers.get('state.db')
+    if state is not None and not hasqlite.problem(state) and (type(schema) is not int or schema < 0):   # H-12 (kept)
+        sink.stop('hermes.schema-unreadable', 'HA 的 Hermes 資料庫結構版本無法判讀，無法安全匯入。',
+                  action='請先在 HA 更新並啟動一次 Hermes，再重新備份後匯入。')
+    if type(schema) is int and schema > SCHEMA_VERSION:   # H-13 (kept)
+        sink.stop('hermes.schema-newer', f'HA 的 Hermes 資料庫結構（{schema}）比這台的 Hermes 新（{SCHEMA_VERSION}），無法搬過來。',
+                  action='請先更新這台的 Hermes，再匯入。')
+    if src.config_version is not None and src.config_version > CONFIG_VERSION:   # H-14
+        sink.notice('hermes.config-newer', f'HA 的 Hermes 設定檔版本（{src.config_version}）比這台的 Hermes 新（{CONFIG_VERSION}），'
+                                           '照樣搬過來；這台的 Hermes 看不懂的新設定項目會被忽略。')
+    if src.foreign:   # H-16
+        sink.notice('hermes.foreign-programs', f'HA 的 Hermes 資料含有其他處理器的程式（{len(src.foreign)} 個），照樣搬過來；'
+                                               '對話、記憶和技能都能用，但這些外掛或虛擬環境在這台跑不起來，請在這台重新安裝。',
+                    src.foreign[:200])
+    if src.copied:   # H-01
+        sink.auto('hermes.links-copied', f'HA 的 Hermes 資料中有 {src.copied} 個硬連結指到沒有搬過來的執行期檔案，已改成複製檔案內容。')
+    if src.unread.count:   # H-20, H-21
+        sink.notice('hermes.text-unread', '有很大的文字檔（設定檔、排程或技能說明）照原樣搬過來，沒有讀它的內容，所以版本與位址的提醒不含它們。',
+                    src.unread)
+    if unchecked.count:   # H-11
+        sink.notice('hermes.db-unchecked', 'HA 的 Hermes 資料庫含有這台的檢查程式不認得的索引結構，無法先檢查內容；它們照原樣搬過來，'
+                                           '由 Hermes 自己開啟。', unchecked)
+    if src.specials.count:   # H-02
+        sink.confirm('hermes.entries-skipped', f'HA 的 Hermes 資料中有 {src.specials.count} 個項目應該是一般檔案，但在備份裡是連結或資料夾，'
+                                               '不會搬過來（這台的 Hermes 啟動時會重新建立它們）。', src.specials)
+    if skipped.count:   # H-02, H-11
+        sink.confirm('hermes.databases-skipped', f'HA 的 Hermes 有 {skipped.count} 個次要資料庫損毀或不是一般檔案，不會搬過來；'
+                                                 '這台的 Hermes 啟動時會建立新的空資料庫，那一部分的紀錄會從頭開始。', skipped)
+    if src.report is not None:   # a Source that was made by hand (a test) has no walk
+        sink.skipped(src.report)   # H-01, X-NS-08, IN-27, IN-28, IN-35, IN-38, UP: the reader's own list, one line
     if src.ha_urls:
-        warnings.append(f'HA 的 Hermes 設定連到 HA 內部的位址（{hacommon.names(sorted(src.ha_urls), 8)}），這台連不到，'
-                        '搬過來後請改成實際位址。')
+        sink.notice('hermes.ha-addresses', f'HA 的 Hermes 設定連到 HA 內部的位址（{hacommon.names(sorted(src.ha_urls), 8)}），這台連不到，'
+                                           '搬過來後請改成實際位址。')
     if src.media_refs:
-        warnings.append(f'HA 的 Hermes 設定或技能提到 /media 共 {src.media_refs} 處；HA 的 /media 不會搬過來。')
+        sink.notice('hermes.media-refs', f'HA 的 Hermes 設定或技能提到 /media 共 {src.media_refs} 處；HA 的 /media 不會搬過來。')
     if src.plugins:
-        warnings.append(f'HA 的 Hermes 外掛（{hacommon.names(sorted(src.plugins))}）會一起搬過來並取代這台的外掛；'
-                        'Omnigent、Paseo 等配對需要重新設定。')
-    return blockers, warnings, details
+        sink.notice('hermes.plugins-replaced', f'HA 的 Hermes 外掛（{hacommon.names(sorted(src.plugins))}）會一起搬過來並取代這台的外掛；'
+                                               'Omnigent、Paseo 等配對需要重新設定。')
+    return details
+
+
+def analyse(src, answers, *, addon_version, release, digest):
+    """(blockers, warnings, details) of HA's Hermes against this device, the sentences the older pages read: the lines that
+    stop or must be confirmed, and the others. `judge` with a sink that only collects."""
+    sink = haissues.Sink(APP_ID)
+    details = judge(sink, src, answers, addon_version=addon_version, release=release, digest=digest)
+    return ([i.message for i in sink.found if i.level in ('stop', 'confirm')],
+            [i.message for i in sink.found if i.level in ('auto', 'notice')], details)
 
 
 def section(src, details, *, release):
@@ -368,9 +539,8 @@ def _inspect(work, src, staging):
     return {name: answer for name, answer in answers.items() if name is not None}
 
 
-def _pass(work, app, staging, out):
+def _pass(work, app, staging, out, report):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
     with work.open(member) as stream:
         src = scan_member(stream, report, staging, out, machine=hacommon.host_elf_machine(), guard=work.guard,
                           checkpoint=work.checkpoint)
@@ -382,23 +552,26 @@ def _pass(work, app, staging, out):
 
 
 def check(work, app):
-    target = Target(work, app)
+    sink = work.sink(app)
+    target = Target(work, app, sink)
     release, digest = target_release(work, app, target)
     staging = work.staging / 'hermes-work'
     staging.mkdir(mode=0o700)
-    src = _pass(work, app, staging, _Count())
+    report = habackup.Report(names=haissues.Names)
+    src = _pass(work, app, staging, _Count(report), report)
     work.phase('check')
     answers = _inspect(work, src, staging)
     addon = work.addon_info(SLUG)
-    blockers, warnings, details = analyse(src, answers, addon_version=addon.version, release=release, digest=digest)
-    return {'target_version': release or '', 'blockers': blockers, 'warnings': warnings,
-            'hermes': section(src, details, release=release)}
+    details = judge(sink, src, answers, addon_version=addon.version, release=release, digest=digest)
+    return {'target_version': release or '', 'hermes': section(src, details, release=release)}
 
 
 def convert(work, app, test_mode, out_dir):
-    """Build `out_dir/volumes/<hermes-data>.tar`, the Redis volume's top folder and the live database dump."""
+    """Build `out_dir/volumes/<hermes-data>.tar`, the Redis volume's top folder, the live database dump(s) and what else this
+    device's entry holds (carried as it is)."""
+    sink = work.sink(app)
     adapter = work.adapter(app)
-    target = Target(work, app)
+    target = Target(work, app, sink)
     release, digest = target_release(work, app, target)
     ids = adapter.owner_ids()
     staging = work.staging / 'hermes-work'
@@ -407,33 +580,53 @@ def convert(work, app, test_mode, out_dir):
         (out_dir / sub).mkdir(mode=0o700, parents=True, exist_ok=True)
     data_path = out_dir / 'volumes' / f'{target.data_volume}.tar'
     root = ha_n8n.volume_root(work, app, target.data_volume)
-    out = hacommon.TreeTar(data_path, target.uid, target.gid, work.guard)
+    uid, gid = target.owner(root)
+    report = habackup.Report(names=haissues.Names)
+    out = hacommon.TreeTar(data_path, uid, gid, work.guard, report=report)
     try:
         out.root(root[2], root[0], root[1])
-        src = _pass(work, app, staging, out)
+        src = _pass(work, app, staging, out, report)
+        work.phase('convert')
+        answers = _inspect(work, src, staging)
+        addon = work.addon_info(SLUG)
+        details = judge(sink, src, answers, addon_version=addon.version, release=release, digest=digest)
+        add_databases(out, src)
     finally:
         out.close()
-    work.phase('convert')
-    answers = _inspect(work, src, staging)
-    addon = work.addon_info(SLUG)
-    blockers, _warnings, details = analyse(src, answers, addon_version=addon.version, release=release, digest=digest)
-    if blockers:
-        raise BackupError('incompatible', f'Hermes 不能搬過來：{blockers[0]}', app=app.id)
-    redis_path = out_dir / 'volumes' / f'{target.redis_volume}.tar'
-    tar = hacommon.FileTar(redis_path, work.guard)
-    try:
-        hacommon.top_only(tar, ha_n8n.volume_root(work, app, target.redis_volume))
-    finally:
-        tar.close()
-    work.log('Hermes 未使用的 PostgreSQL 資料庫維持這台現有的內容')
-    dump = adapter._dump_database(target.pg, out_dir)
-    for path in (data_path, redis_path):
+    volumes = {target.data_volume: data_path}
+    if target.redis_volume is not None:
+        redis_path = out_dir / 'volumes' / f'{target.redis_volume}.tar'
+        tar = hacommon.FileTar(redis_path, work.guard)
+        try:
+            hacommon.top_only(tar, ha_n8n.volume_root(work, app, target.redis_volume))
+        finally:
+            tar.close()
+        volumes[target.redis_volume] = redis_path
+    postgres = {}
+    if target.pgs:
+        work.log('Hermes 未使用的 PostgreSQL 資料庫維持這台現有的內容')
+    for pg in target.pgs:
+        dump = adapter._dump_database(pg, out_dir)
+        postgres[pg['id']] = {k: dump[k] for k in ('database', 'server_version', 'major', 'file')}
+    for path in volumes.values():
         ha_odoo.check_volume_tar(path, ids)
-    work.log(f'Hermes 資料整理完成：{details["sessions"]} 個對話、{details["messages"]} 則訊息')
-    return {'volumes': {target.data_volume: data_path, target.redis_volume: redis_path},
-            'postgres': {target.pg['id']: {k: dump[k] for k in ('database', 'server_version', 'major', 'file')}},
-            'sessions': details['sessions'], 'messages': details['messages'], 'plugins': sorted(src.plugins),
-            'ha_urls': sorted(src.ha_urls), 'media_refs': src.media_refs, 'cron_jobs': src.cron_jobs}
+    dirs = {}
+    if target.extra_volumes or target.extra_dirs:   # H-03: this device's own other data goes along as it is
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs,
+                                 report=report, size=hatarget.size_hint(work.ha))
+        volumes.update(carried['volumes'])
+        dirs = carried['dirs']
+        sink.skipped(report)   # X-NS-08: a link of this device's own data the restore would refuse is left out and listed
+    if details['databases']:
+        work.log(f'Hermes 資料整理完成：{details["sessions"]} 個對話、{details["messages"]} 則訊息')
+    else:
+        work.log('Hermes 資料整理完成')
+    result = {'volumes': volumes, 'postgres': postgres,
+              'sessions': details['sessions'], 'messages': details['messages'], 'plugins': sorted(src.plugins),
+              'ha_urls': sorted(src.ha_urls), 'media_refs': src.media_refs, 'cron_jobs': src.cron_jobs}
+    if dirs:
+        result['dirs'] = dirs
+    return result
 
 
 # ====================================================================== texts
