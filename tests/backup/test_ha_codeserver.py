@@ -272,6 +272,14 @@ class World(fk.World):
         return self.live[volume]
 
 
+def issue_of(row, issue_id):
+    return next(item for item in row['issues'] if item['id'] == issue_id)
+
+
+def levels(row, level):
+    return [item['id'] for item in row['issues'] if item['level'] == level]
+
+
 class CodeServerCase(fk.ConversionCase):
     world_class = World
     data_dirs = [{'path': 'Desktop', 'label': '工作區'}]
@@ -322,7 +330,8 @@ class CheckTests(CodeServerCase):
         self.assertEqual(section['ha_urls'], ['globalStorage/agent-host-config.json：homeassistant',
                                               'shared/mcp.json：supervisor'])
         joined = '\n'.join(result['warnings'])
-        for words in ('沒有包含 share 資料夾', 'codex-bootstrap', '其他處理器專用的（rust-lang.rust-analyzer-0.4.1-linux-arm64）',
+        self.assertEqual(issue_of(result, 'codeserver.unknown-entries')['items'], ['codex-bootstrap'])
+        for words in ('沒有包含 share 資料夾', '其他處理器專用的（rust-lang.rust-analyzer-0.4.1-linux-arm64）',
                       '1 個指向資料以外的符號連結', 'homeassistant', '帶有標頭或環境變數（secret-one）'):
             self.assertIn(words, joined)
         run = self.runs('cs-versions')[0]
@@ -331,22 +340,31 @@ class CheckTests(CodeServerCase):
                          'the check exports nothing of this device')
 
     def test_versions(self):
-        cases = (({'version': '0.1.99'}, VERSIONS, '還不認得它'),
-                 ({}, VERSIONS.replace(b'pi=0.99.1', b'pi=0.98.0'), '版本不同：HA 的 Pi 是 0.99.1（附加元件 0.1.14），這台是 0.98.0'),
-                 ({}, VERSIONS.replace(b'codex=codex-cli 0.167.0', b'codex='), '無法讀取這台的 Codex 版本'),
-                 ({}, VERSIONS.replace(b'4.139.1 0d8c1b4c', b'4.140.0 1234567'), 'HA 的 code-server 是 4.139.1'))
-        for kwargs, versions, words in cases:
-            with self.subTest(words=words):
+        # CS-01, CS-02, CS-03, CS-07: the versions only inform; nothing of them stops the import
+        cases = (({'version': '0.1.99'}, VERSIONS, 'codeserver.addon-unknown', []),
+                 ({}, VERSIONS.replace(b'pi=0.99.1', b'pi=0.98.0'), 'codeserver.versions-differ', ['Pi（HA 0.99.1，這台 0.98.0）']),
+                 ({}, VERSIONS.replace(b'codex=codex-cli 0.167.0', b'codex='), 'codeserver.target-versions-unknown', ['Codex']),
+                 ({}, VERSIONS.replace(b'4.139.1 0d8c1b4c', b'4.140.0 1234567'), 'codeserver.versions-differ',
+                  ['code-server（HA 4.139.1，這台 4.140.0）']))
+        for kwargs, versions, issue_id, items in cases:
+            with self.subTest(issue=issue_id, items=items):
                 self.world.versions = versions
                 result = self.check(self.upload_cs(**kwargs), ['woow-code-server'])[0]
-                self.assertFalse(result['ok'])
-                self.assertTrue(any(words in b for b in result['blockers']), result['blockers'])
+                self.assertEqual((result['importable'], result['ok'], levels(result, 'stop')), (True, True, []))
+                issue = issue_of(result, issue_id)
+                self.assertEqual((issue['level'], issue['items']), ('notice', items))
         # 0.1.7 shipped no Codex: an image without one has nothing to compare
         self.world.versions = VERSIONS.replace(b'codex=codex-cli 0.167.0', b'codex=')
-        self.assertTrue(self.check(self.upload_cs(version='0.1.7'), ['woow-code-server'])[0]['ok'])
+        result = self.check(self.upload_cs(version='0.1.7'), ['woow-code-server'])[0]
+        self.assertTrue(result['ok'])
+        self.assertEqual([i['id'] for i in result['issues'] if i['id'].startswith('codeserver.') and 'version' in i['id']], [])
+        # the command did not run at all (CS-07)
+        self.world.versions = VERSIONS
         self.world.version_exit = 1
         result = self.check(self.upload_cs(), ['woow-code-server'])[0]
-        self.assertIn('無法讀取這台 code-server 映像中的程式版本', result['blockers'][0])
+        self.assertEqual((result['importable'], levels(result, 'stop')), (True, []))
+        self.assertEqual(issue_of(result, 'codeserver.version-command-failed')['level'], 'notice')
+        self.assertEqual(result['target_version'], '')
 
     def test_workspace_in_the_share_folder(self):
         result = self.check(self.upload_cs(share=share_tar()), ['woow-code-server'])[0]
@@ -365,8 +383,10 @@ class CheckTests(CodeServerCase):
         self.assertTrue(any('應用設定沒有列出工作區資料夾' in w for w in result['warnings']))
         self.data_dirs = [{'path': 'Documents', 'label': 'x'}]
         self.catalog = self.catalog_apps()
-        result = self.check(self.upload_cs(), ['woow-code-server'])[0]
-        self.assertIn('主機資料夾設定和它的工作區（/workspace）不一致', result['blockers'][0])
+        result = self.check(self.upload_cs(), ['woow-code-server'])[0]    # CS-05: no stop any more, one line to confirm
+        self.assertEqual((result['importable'], result['ok'], levels(result, 'stop')), (True, False, []))
+        self.assertEqual((issue_of(result, 'codeserver.workspace-not-moved')['level'],
+                          issue_of(result, 'codeserver.workspace-not-moved')['items']), ('confirm', ['Documents']))
 
     def test_quadlet_mismatch_and_nothing_to_move(self):
         self.world.quadlets['woow-code-server'] = dict(QUADLETS, **{'code-server.container': CONTAINER.replace(
@@ -391,12 +411,14 @@ class CheckTests(CodeServerCase):
         bad_db = [{'name': 'data/vscode/User/globalStorage/broken.vscdb', 'data': b'SQLite format 3\x00' + b'\xff' * 4000}]
         result = self.check(self.upload_cs(extra=bad_db), ['woow-code-server'])[0]
         self.assertTrue(result['ok'])
-        self.assertTrue(any('損毀或無法讀取的資料庫（globalStorage/broken.vscdb）' in w for w in result['warnings']),
-                        result['warnings'])
+        issue = issue_of(result, 'codeserver.databases-skipped')
+        self.assertEqual((issue['level'], issue['items']), ('notice', ['globalStorage/broken.vscdb']))
         link = [{'name': 'data/pi-agent/sessions/--share-projects--/key', 'type': 'hardlink',
                  'linkname': 'data/pi-agent/claude/cache/x.bin'}]
         result = self.check(self.upload_cs(extra=link), ['woow-code-server'])[0]
-        self.assertTrue(any('硬連結' in b for b in result['blockers']), result['blockers'])
+        # a link to a file that does not move and is no cache: left out and listed (CS-10), no stop
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertEqual(issue_of(result, 'files.skipped')['items'], ['sessions/--share-projects--/key'])
 
 
 class ConvertTests(CodeServerCase):
@@ -515,12 +537,12 @@ class ConvertTests(CodeServerCase):
         self.assertFalse([c for c in self.world.owner.calls if c[0] == 'dir_pack'])
         self.assertEqual(result['ha_import']['apps'], ['woow-code-server'])
 
-    def test_refusals(self):
+    def test_versions_do_not_refuse_and_a_kept_link_to_a_replaced_file_keeps_its_content(self):
         self.world.versions = VERSIONS.replace(b'claude=2.1.285', b'claude=2.1.300')
-        with self.assertRaises(BackupError) as ctx:
-            self.convert(self.upload_cs(), ['woow-code-server'])
-        self.assertIn('Claude Code', ctx.exception.message)
-        self.assertFalse([c for c in self.world.owner.calls if c[0] == 'relay'], 'refused before any export')
+        result = self.convert(self.upload_cs(), ['woow-code-server'])        # CS-03: a notice, not a refusal
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertIn('codeserver.versions-differ', [i['id'] for i in result['results'][0]['issues']])
+        self.assertTrue([c for c in self.world.owner.calls if c[0] == 'relay'], 'it went on and read this device')
         self.world.versions = VERSIONS
         self.world.live[PI] = live_pi(extra=[{'name': 'models2.json', 'type': 'hardlink', 'linkname': 'settings.json'}])
         self.world.live[PI] = fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'models.json', 'data': b'live'},
@@ -529,10 +551,12 @@ class ConvertTests(CodeServerCase):
         pi = self.volume(PI)
         self.assertEqual(pi['models.json'][1], b'live', 'this device\'s file wins; its link stays whole')
         self.assertEqual(result['apps'], ['woow-code-server'])
+        # CS-15: a kept link to a file that HA's data replaces keeps its own content (it was a stop)
         self.world.live[IDE] = live_ide(extra=[{'name': 'kb2.json', 'type': 'hardlink', 'linkname': 'keybindings.json'}])
-        with self.assertRaises(BackupError) as ctx:
-            self.convert(self.upload_cs(), ['woow-code-server'])
-        self.assertIn('硬連結', ctx.exception.message)
+        result = self.convert(self.upload_cs(), ['woow-code-server'])
+        ide = self.volume(IDE)
+        self.assertEqual((ide['kb2.json'][0].isfile(), ide['kb2.json'][1]), (True, b'[{"key": "target"}]'))
+        self.assertNotEqual(ide['keybindings.json'][1], ide['kb2.json'][1], 'HA\'s file replaced the other one')
 
     def test_an_unreadable_extension_list_moves_no_extension(self):
         self.world.live[EXT] = fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'extensions.json', 'data': b'{bad'}])

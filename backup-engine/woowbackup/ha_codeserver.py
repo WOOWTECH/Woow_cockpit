@@ -12,10 +12,13 @@ container `code-server` (`keep-id:uid=1000`, so the owner's namespace root is th
 (owner decision D1 b), the workspace folder bound at /workspace (the owner's `Desktop`). There is no database server;
 the only SQLite files that move are VS Code's (`globalStorage`), checked by the sandboxed child (hasqlite).
 
-Versions (D6): the add-on version maps to the four programs that write the data (code-server, Pi, Claude Code, Codex;
-PINS, from the add-on's Dockerfile and build.yaml at each release tag) and each must equal what this device's image
-prints (`--version` in a throwaway container of the live image, no network); an add-on version the table does not
-know, or a program that differs, is a blocker. A Codex the add-on did not ship has nothing to compare.
+Versions (D6, HAOS parity 2026-11-25: CS-01, CS-02, CS-03, CS-07): the add-on version maps to the four programs that write
+the data (code-server, Pi, Claude Code, Codex; PINS, from the add-on's Dockerfile and build.yaml at each release tag) and
+this device's image prints what it has (`--version` in a throwaway container of the live image, no network). The table and
+the comparison only inform: an add-on version the table does not know, a program whose version cannot be read, a command that
+does not run, and a program that differs are notices (what moves is settings, conversations, skills and extensions: text; a
+newer format of HA that this device cannot read leaves those few conversations closed, never the login). A Codex the add-on
+did not ship has nothing to compare.
 
 What moves (owner decisions 2026-11-23 「決定2 A」 = the facts' recommended answers): VS Code's settings (merged: HA's
 keys over this device's, without the HA-only ones that break here -- zsh as the default shell, the Prettier formatter,
@@ -36,10 +39,15 @@ Never read: `options.json` and the logins above (habackup.NEVER_READ), `.ssh`, `
 
 Every moved entry is owned like the live volume's top folder (0:0 in the owner's namespace = `coder`), permission bits
 without setuid/setgid; relative symlinks that stay inside their own area are link entries, others are skipped and
-counted; a hard link must name an earlier moved file (one to a file that does not move stops the import). The rest of
-each volume is copied from a live export (read while the app runs, like Odoo's web data) with its live owners; a kept
-hard link to a replaced file stops the import too.
+counted. A hard link to a file that does not move is written as a file with the content (the reader hands it out again:
+CS-10, CS-13; never one to a login or an identity: those are left out and listed, default-deny); one this device keeps to
+a file that HA's data replaces keeps its own content (CS-15). The rest of each volume is copied from a live export (read
+while the app runs, like Odoo's web data; a read that fails is tried again and then done once with the app's own container
+paused: CS-14, CS-16) with its live owners. What this device's catalog entry has beyond the three volumes and the
+workspace folder is carried as it is (CS-04); what the reader or this importer had to leave out is one line of the ONE
+confirmation (`files.skipped`), the workspace that does not move is another (`codeserver.workspace-not-moved`, CS-05).
 """
+import contextlib
 import io
 import json
 import os
@@ -48,8 +56,11 @@ import re
 import tarfile
 import time
 
-from . import habackup, hacommon, hasqlite, ha_n8n, ha_odoo, nested, tempctr, util
+from . import habackup, haissues, hacommon, hasqlite, hatarget, ha_n8n, ha_odoo, nested, tempctr, util
 from .errors import BackupError
+from . import ha_opendesign as od
+from .ha_opendesign import links_as_files, read_live, reader_failed, skip_line
+from .haissues import Issue
 
 SLUG = 'woow_ha_code_server'
 APP_ID = 'woow-code-server'
@@ -124,11 +135,42 @@ STANDARD_AGENTS = frozenset({'pi', 'claude', 'codex'})   # both sides ship these
 
 SQLITE_HEAD = b'SQLite format 3\x00'
 SIDECARS = ('-wal', '-journal')
-MAX_JSON = 4 * 1024 * 1024
-MAX_HISTORY = 32 * 1024 * 1024
+MAX_JSON = 16 * 1024 * 1024         # was 4 MiB (CS-11): a larger settings file is left out and listed, this device's stays
+MAX_HISTORY = 64 * 1024 * 1024      # was 32 MiB
 MAX_SCAN = 1024 * 1024
 MAX_DBS_PER_RUN = 32
 MAX_LIST = 1000
+# Below the agents' `home/`: the package managers' caches. A project file that is a hard link into one of them gets the content;
+# a hard link into any other place that does not move (a login, an identity, an account) never does.
+CACHE_ROOTS = ('home/.bun', 'home/.npm', 'home/.cache', 'home/.pnpm-store', 'home/.yarn', 'home/.local/share/pnpm')
+PAUSE_ID = 'codeserver.service-paused'
+
+# Every issue id of this module, with its level (haissues; tests/backup/test_ha_issues.py keeps it exact).
+ISSUES = {
+    'codeserver.no-data': 'stop',                 # CS-08: nothing to move (no VS Code settings, no agent data)
+    'codeserver.target-has-database': 'stop',     # CS-04: this device's catalog entry has a database (carrying it is not built)
+    'codeserver.addon-unknown': 'notice',         # CS-01: the table does not know HA's add-on version
+    'codeserver.target-versions-unknown': 'notice',  # CS-02: a program of this device's image says no version
+    'codeserver.version-command-failed': 'notice',   # CS-07: the version command did not run in this device's image
+    'codeserver.versions-differ': 'notice',       # CS-03: a program differs between HA and this device
+    'codeserver.workspace-not-moved': 'confirm',  # CS-05: this device's folder settings do not name the workspace folder
+    'codeserver.extras-carried': 'auto',          # CS-04: volumes and folders of this device beyond what is converted
+    'codeserver.links-copied': 'auto',            # CS-10, CS-13: hard links to files that do not move got the content
+    'codeserver.kept-links-copied': 'auto',       # CS-15: this device's kept links to replaced files got the content
+    'codeserver.service-paused': 'auto',          # CS-14, CS-16: the app's container was paused for one read
+    'codeserver.databases-skipped': 'notice',     # CS-12 (and damaged ones): VS Code databases that are not moved
+    'codeserver.extensions-skipped': 'notice',    # CS-17, CS-11: HA's extensions are not moved (list too large, staging unreadable)
+    'codeserver.files-kept': 'notice',            # CS-11: a settings file of HA is too large, this device's stays
+    'codeserver.no-workspace-folder': 'notice',
+    'codeserver.no-share': 'notice',
+    'codeserver.no-projects': 'notice',
+    'codeserver.unknown-entries': 'notice',
+    'codeserver.foreign-programs': 'notice',
+    'codeserver.symlinks-skipped': 'notice',
+    'codeserver.ha-addresses': 'notice',
+    'codeserver.mcp-review': 'notice',
+    'codeserver.extensions-other-processor': 'notice',
+}
 
 
 def _rel(name, tree):
@@ -161,24 +203,43 @@ def parse_versions(text):
     return found
 
 
-def version_blockers(addon_version, target):
-    """zh-TW blockers unless every program the add-on version ships equals this device's (`target`: parse_versions)."""
+ADDON_UNKNOWN = ('這台的版本對照表還不認得 HA 的 code-server 附加元件版本 {version}，不用版本判斷能不能匯入；'
+                 '搬的是設定、對話記錄、技能與延伸模組（文字檔），匯入後請確認 code-server 能正常使用。')
+TARGET_UNKNOWN = ('讀不到這台映像裡這些程式的版本（映像裡沒有它，或它沒有回應版本），這次不比對它們的版本；'
+                  '匯入後請確認 code-server 與代理程式能正常使用。')
+COMMAND_FAILED = ('無法在這台的映像裡讀出 code-server 與代理程式的版本（執行 --version 沒有成功），這次不比對版本；'
+                  '匯入後請確認 code-server 與代理程式能正常使用。')
+VERSIONS_DIFFER = ('HA 和這台的程式版本不一樣：搬的多半是設定與對話記錄，不會弄壞這台的登入；HA 較新時，'
+                   '少數對話可能在這台打不開。')
+
+
+def version_issues(addon_version, target, failed=False):
+    """The notices about versions (CS-01, CS-02, CS-03, CS-07): none of them stops the import. `target`: parse_versions of
+    this device's image; `failed`: the command that prints them did not run."""
     pins = PINS.get(addon_version)
+    found = []
     if pins is None:
-        return [f'無法確認 HA 附加元件版本 {addon_version} 搭配的 code-server 與代理程式版本（這台的資料表還不認得它），'
-                '為避免版本不同而無法匯入；請先更新這台的 Cockpit。']
-    blockers = []
+        found.append(Issue('codeserver.addon-unknown', 'notice',
+                           ADDON_UNKNOWN.format(version=haissues.clean(addon_version, 40) or '（讀不到）')))
+        return found if not failed else found + [Issue('codeserver.version-command-failed', 'notice', COMMAND_FAILED)]
+    if failed:
+        found.append(Issue('codeserver.version-command-failed', 'notice', COMMAND_FAILED))
+        return found
+    unreadable, differ = [], []
     for program, label in PROGRAMS:
         mine = pins.get(program)
         if mine is None:
             continue  # the add-on did not ship it: nothing of it to compare
         theirs = target.get(program)
         if theirs is None:
-            blockers.append(f'無法讀取這台的 {label} 版本（映像裡沒有它，或它沒有回應版本）。')
+            unreadable.append(label)
         elif theirs != mine:
-            blockers.append(f'版本不同：HA 的 {label} 是 {mine}（附加元件 {addon_version}），這台是 {theirs}。'
-                            f'請先讓兩邊的 {label} 版本一致後再匯入。')
-    return blockers
+            differ.append(f'{label}（HA {mine}，這台 {theirs}）')
+    if unreadable:
+        found.append(Issue('codeserver.target-versions-unknown', 'notice', TARGET_UNKNOWN, unreadable))
+    if differ:
+        found.append(Issue('codeserver.versions-differ', 'notice', VERSIONS_DIFFER, differ))
+    return found
 
 
 # ====================================================================== JSON settings
@@ -450,11 +511,12 @@ class Volume:
     entries are owned by `owner` (the live top folder's uid/gid); a folder both sides have keeps the live owner and
     mode. `prefer`: 'ha' (HA's entry replaces the live one) or 'live' (the live one stays, HA's is skipped)."""
 
-    def __init__(self, tar, owner, live, what):
+    def __init__(self, tar, owner, live, what, report=None):
         self.tar = tar
         self.uid, self.gid = owner
         self.live = live
         self.what = what
+        self.report = report      # the walk's habackup.Report: what cannot be written is listed there (CS-10)
         self.written = {}         # name -> kind, of HA's entries written
         self.files = set()        # names of regular files written (hard link targets)
         self.skipped = set()      # HA folders whose subtree is skipped (the live one stays)
@@ -534,16 +596,27 @@ class Volume:
         self.counts['symlinks'] += 1
         return True
 
-    def hardlink(self, rel, target, mtime, *, prefer):
-        if target not in self.files:
-            raise BackupError('incompatible', f'HA 備份中的 {rel[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
-                                              '已停止。', member=rel[:200], target=target[:200])
+    def hardlink(self, rel, target, mtime, *, prefer, entry=None):
+        """A hard link of HA's tree. Returns None when this device's own entry stays (nothing is written), 'link' (written as a
+        link to a file this volume holds), 'copy' (the file is not here: the reader hands the same name out again as a file with
+        the content, `entry.copy_later()`: CS-10) or 'skip' (left out and listed in the report). Pass `entry` only for a link
+        whose file may be copied (`_copy_ok`); without a report and an entry the import stops, as it did."""
         if not self._take(rel, prefer):
-            return False
-        self._add(hacommon.info(rel, 'hardlink', mode=0o644, uid=self.uid, gid=self.gid, mtime=mtime, linkname=target))
-        self.written[rel] = 'hardlink'
-        self.counts['hardlinks'] += 1
-        return True
+            return None
+        if target in self.files:
+            self._add(hacommon.info(rel, 'hardlink', mode=0o644, uid=self.uid, gid=self.gid, mtime=mtime, linkname=target))
+            self.written[rel] = 'hardlink'
+            self.counts['hardlinks'] += 1
+            return 'link'
+        copy_later = getattr(entry, 'copy_later', None)
+        if copy_later is not None:
+            copy_later()
+            return 'copy'
+        if self.report is not None:
+            self.report.skip('hardlink', rel)
+            return 'skip'
+        raise BackupError('incompatible', f'HA 備份中的 {rel[:200]} 是另一個沒有搬過來的檔案的硬連結，無法只搬一半；'
+                                          '已停止。', member=rel[:200], target=target[:200])
 
     def stream(self, rel, size, mode, mtime, fileobj, *, prefer):
         """A regular file from another tar (`fileobj` reads exactly `size` bytes), owned like HA's entries."""
@@ -570,10 +643,11 @@ class Volume:
         return any(self.written.get(a, 'dir') != 'dir' for a in _ancestors(name))
 
     def finish(self, live_path):
-        """Copy the live export's entries HA did not replace (their owners and modes as they are)."""
+        """Copy the live export's entries HA did not replace (their owners and modes as they are). A kept hard link to a file
+        that HA's data replaced (or that is not kept) gets its content (CS-15); returns how many did."""
         if self.tar is None or live_path is None:
-            return
-        copied = set()
+            return 0
+        copied, pending = set(), {}
         try:
             with ha_odoo._live_tar(live_path, self.what) as tar:
                 for member in tar:
@@ -586,8 +660,9 @@ class Volume:
                     if member.islnk():
                         target = ha_odoo._norm(member.linkname)
                         if target not in copied:
-                            raise BackupError('job-failed', f'{self.what}中的 {name[:200]} 是另一個被 HA 的資料取代的'
-                                                            '檔案的硬連結，無法只保留一半；已停止。', member=name[:200])
+                            pending.setdefault(target, []).append((name, member))
+                            tar.members.clear()
+                            continue
                     self.tar.add_member(ha_odoo._copy_info(member, name),
                                         tar.extractfile(member) if member.isfile() else None)
                     if member.isfile():
@@ -595,6 +670,7 @@ class Volume:
                     tar.members.clear()
         except tarfile.TarError:
             raise BackupError('job-failed', f'{self.what}的匯出內容無法讀取。') from None
+        return links_as_files(live_path, self.tar, pending, self.what, report=self.report, label='這台：') if pending else 0
 
     def close(self):
         if self.tar is not None:
@@ -618,6 +694,8 @@ class Source:
         self.unknown = {}             # unknown top-level names below data/pi-agent / data/vscode/User -> entries
         self.foreign = []             # programs for another processor in moved trees
         self.ha_urls = set()
+        self.large = []               # HA files too large to read (CS-11): left out and listed, this device's own stays
+        self.links_copied = 0         # hard links of HA that got the content of the file they name (CS-10)
         self.sessions = self.claude_projects = self.codex_sessions = 0
         self.skills = set()
         self.snippets = 0
@@ -675,6 +753,46 @@ def _is_db(rel, head):
     return head[:16] == SQLITE_HEAD or rel.endswith(SIDECARS)
 
 
+def _locate(name):
+    """(`pi` | `user` | `ext`, name below that tree) of a name of the add-on member, (None, None) elsewhere."""
+    for tree, key in ((TREE_PI, 'pi'), (TREE_USER, 'user'), (TREE_EXT, 'ext')):
+        rel = _rel(name, tree)
+        if rel:
+            return key, rel
+    return None, None
+
+
+def _ext_left(rel):
+    """True for what of the extension tree is not HA's own extension (the add-on's connector, dot files, top-level files)."""
+    top = rel.split('/', 1)[0]
+    return top.lower().startswith(CONNECTOR_PUBLISHER) or top.startswith('.') or '/' not in rel
+
+
+def _copy_ok(key, target):
+    """True when the content of `target` (a name below the tree `key`) may be written where a hard link to it is, although the
+    file itself does not move (CS-10). Default-deny: a file that moves (its content is moved anyway) or lies in a package
+    manager's cache; never the agents' logins, the accounts and own files of this device, the connectors' identity, a folder this
+    importer does not know."""
+    if key == 'ext':
+        return not _ext_left(target)
+    route = pi_route(target) if key == 'pi' else user_route(target)
+    if route in ('move', 'merged', 'parent'):
+        return True
+    if key == 'pi' and isinstance(route, tuple) and route[0] == 'left':
+        return any(target == root or target.startswith(root + '/') for root in CACHE_ROOTS)
+    return False
+
+
+def _hardlink(src, out, key, rel, entry, prefer):
+    """A hard link of HA's tree: a link to a file this volume holds, else (`_copy_ok`) the same name handed out again as a
+    file with the content, else left out and listed."""
+    target_key, target = _locate(entry.linkname)
+    ok = target_key is not None and _copy_ok(target_key, target)
+    how = out.hardlink(rel, target if target_key == key else '', entry.mtime, prefer=prefer, entry=entry if ok else None)
+    if how == 'copy':
+        src.links_copied += 1
+
+
 def scan_member(stream, report, staging, outs, *, machine=None, checkpoint=None):
     """One strict pass over the add-on member into `outs` {'pi', 'ide', 'ext'} (Volume objects; `ext` writes into a
     staging tar of HA's extension folders, chosen at the end). SQLite files of the moved trees and their sidecars are
@@ -725,7 +843,10 @@ def scan_member(stream, report, staging, outs, *, machine=None, checkpoint=None)
         if route == 'merged':
             if entry.kind != 'file':
                 continue
-            data = entry.read_all(MAX_HISTORY if rel == 'claude/history.jsonl' else MAX_JSON)
+            data = entry.read_or_skip(MAX_HISTORY if rel == 'claude/history.jsonl' else MAX_JSON)
+            if data is None:
+                src.large.append(rel)   # CS-11: too large to read; listed (files.skipped), this device's own file stays
+                continue
             src.ha_urls.update(f'{rel}：{host}' for host in hacommon.ha_hosts(data.decode('utf-8', 'replace')))
             if key == 'user':
                 src.settings = data
@@ -750,8 +871,7 @@ def scan_member(stream, report, staging, outs, *, machine=None, checkpoint=None)
             out.symlink(rel, entry.linkname, entry.mtime, prefer=prefer)
             continue
         if entry.kind == 'hardlink':
-            out.hardlink(rel, _rel(entry.linkname, TREE_PI if key == 'pi' else TREE_USER) or '', entry.mtime,
-                         prefer=prefer)
+            _hardlink(src, out, key, rel, entry, prefer)
             continue
         head = entry.peek(20)
         if machine is not None and len(src.foreign) < MAX_LIST and hacommon.foreign_elf(head, machine):
@@ -799,7 +919,11 @@ def _ext_entry(src, rel, entry, out, machine):
     top = rel.split('/', 1)[0]
     if rel == 'extensions.json':
         if entry.kind == 'file':
-            src.extensions = hacommon.strict_json(entry.read_all(MAX_JSON), MAX_JSON)
+            data = entry.read_or_skip(MAX_JSON)
+            if data is None:
+                src.large.append(rel)   # CS-11: without the list no extension of HA can be chosen
+            else:
+                src.extensions = hacommon.strict_json(data, MAX_JSON)
         return
     if top.lower().startswith(CONNECTOR_PUBLISHER) or top.startswith('.') or (entry.kind != 'dir' and '/' not in rel):
         src.left['ext:own'] = src.left.get('ext:own', 0) + 1
@@ -810,7 +934,7 @@ def _ext_entry(src, rel, entry, out, machine):
     elif entry.kind == 'symlink':
         out.symlink(rel, entry.linkname, entry.mtime, prefer='ha')
     elif entry.kind == 'hardlink':
-        out.hardlink(rel, _rel(entry.linkname, TREE_EXT) or '', entry.mtime, prefer='ha')
+        _hardlink(src, out, 'ext', rel, entry, 'ha')
     else:
         if machine is not None and hacommon.foreign_elf(entry.peek(20), machine):
             src.ext_foreign.add(top)
@@ -826,6 +950,7 @@ class Workspace:
         self.files = self.dirs = self.bytes = 0
         self.foreign = []
         self.skipped_symlinks = 0
+        self.links_copied = 0
 
 
 class DirOut:
@@ -903,9 +1028,14 @@ def scan_share(stream, report, out=None, *, machine=None, checkpoint=None):
             if out is not None:
                 out.add(dest, 'symlink', mode=0o777, mtime=entry.mtime, linkname=entry.linkname)
         elif entry.kind == 'hardlink':
-            target = entry.linkname[len(SHARE_PROJECTS) + 1:]
-            if out is not None:
+            target = entry.linkname[len(SHARE_PROJECTS) + 1:] if entry.linkname.startswith(SHARE_PROJECTS + '/') else ''
+            if out is None:
+                pass    # the reader only hands a link out when its file came earlier: the conversion writes a link
+            elif target and f'{out.folder}/{target}' in out.files:
                 out.add(dest, 'hardlink', mode=0o644, mtime=entry.mtime, linkname=f'{out.folder}/{target}')
+            else:   # CS-13: the file is not in the folder that is written: the reader hands this name out again as a file
+                entry.copy_later()
+                ws.links_copied += 1
         else:
             ws.files += 1
             ws.bytes += entry.size
@@ -921,7 +1051,9 @@ def scan_share(stream, report, out=None, *, machine=None, checkpoint=None):
 # ====================================================================== the live target
 
 class Target:
-    """The woow-code-server app's catalog items the import fills, resolved against the live Quadlet files."""
+    """The woow-code-server app's catalog items the import fills, resolved against the live Quadlet files. What the catalog
+    has beyond the three volumes and the workspace folder (`extra_volumes`, `extra_dirs`) is carried as it is (CS-04); a
+    folder setting that does not name the workspace folder (`conflict`) leaves the workspace out (CS-05)."""
 
     def __init__(self, work, app):
         quadlets = work.quadlets(app)
@@ -934,36 +1066,70 @@ class Target:
                 mounts[target.rstrip('/')] = source
         self.pi, self.ide, self.ext = mounts.get(PI_TARGET), mounts.get(IDE_TARGET), mounts.get(EXT_TARGET)
         volumes = [self.pi, self.ide, self.ext]
-        if (container is None or any(v not in declared for v in volumes) or len(set(volumes)) != 3
-                or len(declared) != 3 or app.postgres):
+        if container is None or any(v not in declared for v in volumes) or len(set(volumes)) != 3:
             raise BackupError('incompatible', '這台的 code-server 應用設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
+        if app.postgres:
+            raise haissues.stopped(Issue('codeserver.target-has-database', 'stop', TARGET_HAS_DATABASE,
+                                         action='請先在這台重新安裝標準的 code-server 應用，再匯入。'), 'incompatible', app=app.id)
         workspace = mounts.get(WORKSPACE_TARGET)
         rel = workspace[len(home) + 1:] if isinstance(workspace, str) and workspace.startswith(home + '/') else None
         dirs = [d['path'] for d in app.data_dirs]
-        if dirs and dirs != [rel]:
-            raise BackupError('incompatible', '這台 code-server 的主機資料夾設定和它的工作區（/workspace）不一致，無法匯入。',
-                              app=app.id)
-        self.workspace = rel if dirs else None   # the catalog's workspace folder (decision D1 b), else not imported
+        self.workspace_path = workspace if isinstance(workspace, str) else None
+        self.workspace = rel if dirs and dirs == [rel] else None   # the catalog's workspace folder (decision D1 b), else not imported
+        self.conflict = dirs if dirs and dirs != [rel] else []     # CS-05: the catalog names other folders than the workspace's
+        self.extra_volumes, self.extra_dirs = hatarget.extras(app, handled_volumes=(self.pi, self.ide, self.ext),
+                                                              handled_dirs=(self.workspace,) if self.workspace else ())
         self.image = tempctr.quadlet_image(quadlets[container])
         if not self.image:
             raise BackupError('incompatible', '這台 code-server 的 Quadlet 設定缺少映像。', app=app.id)
 
 
+TARGET_HAS_DATABASE = '這台的 code-server 應用設定多了一個資料庫，匯入程式不知道怎麼搬它，為了不弄壞它，這次不匯入 code-server。'
+WORKSPACE_NOT_MOVED = ('這台 code-server 的主機資料夾設定和它的工作區（/workspace）不是同一個資料夾，HA 的工作區專案（/share/projects）'
+                       '不會搬過來，這台的資料夾維持原樣；其他設定與對話照常搬。需要 HA 的專案時，請在匯入後自行複製。')
+EXTRAS_CARRIED = '這台的 code-server 應用設定還有其他資料卷或資料夾，匯入時照原樣保留，匯入後內容不變。'
+NO_DATA = 'HA 備份裡沒有 code-server 的使用者設定或代理程式資料（data/vscode/User、data/pi-agent），沒有可搬的資料。'
+NO_DATA_ACTION = '請確認 HA 的 code-server 有資料後重新備份，再匯入；這台的 code-server 不會有任何變更。'
+
+
 def target_versions(work, app, target):
-    """{program: x.y.z or None} printed by the live image (a throwaway container, no network, the image's own user)."""
+    """({program: x.y.z or None}, failed) of what the live image prints (a throwaway container, no network, the image's own
+    user). The image is downloaded first when it is not here (CM-05; this app stops, with the reason, only when that cannot be
+    done). `failed`: the command did not run in it (CS-07): no version is known, which is a notice, not a stop."""
+    hatarget.ensure_image(work, app, target.image)
     tmp = work.temp(app)
-    result = tmp.run('cs-versions', target.image, ['-c', VERSION_SCRIPT], entrypoint='/bin/sh',
-                     env={'PI_TELEMETRY': '0', 'PI_SKIP_VERSION_CHECK': '1', 'DISABLE_AUTOUPDATER': '1'},
-                     timeout=300, max_output=64 * 1024, check=False)
+    unknown = {program: None for program, _label in PROGRAMS}
+    try:
+        result = tmp.run('cs-versions', target.image, ['-c', VERSION_SCRIPT], entrypoint='/bin/sh',
+                         env={'PI_TELEMETRY': '0', 'PI_SKIP_VERSION_CHECK': '1', 'DISABLE_AUTOUPDATER': '1'},
+                         timeout=300, max_output=64 * 1024, check=False)
+    except BackupError as error:
+        if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
+            raise
+        return unknown, True
     if result.returncode != 0:
-        raise BackupError('job-failed', '無法讀取這台 code-server 映像中的程式版本。', app=app.id)
-    return parse_versions((result.stdout or b'').decode('utf-8', 'replace'))
+        return unknown, True
+    return parse_versions((result.stdout or b'').decode('utf-8', 'replace')), False
+
+
+def target_issues(sink, target):
+    """What this device's catalog entry says about the import (check and conversion): the folders it names that the
+    workspace is not (CS-05, one line to confirm) and what it carries beyond what is converted (CS-04)."""
+    if target.conflict:
+        sink.confirm('codeserver.workspace-not-moved', WORKSPACE_NOT_MOVED, target.conflict)
+    extras = [*target.extra_volumes, *target.extra_dirs]
+    if extras:
+        sink.auto('codeserver.extras-carried', EXTRAS_CARRIED, extras)
 
 
 # ====================================================================== checks and texts
 
+READER_FAILED = '讀取沒有完成'
+
+
 def check_dbs(work, src, staging):
-    """{(area, rel): problem or None} of the staged SQLite files (sidecars ride along with their database)."""
+    """{(area, rel): problem or None} of the staged SQLite files (sidecars ride along with their database). The sandboxed reader
+    is started once more when it does not finish; then the databases of that batch count as damaged, not moved (CS-12)."""
     dbs = {key: value for key, value in src.dbs.items() if not key[1].endswith(SIDECARS)}
     results = {}
     keys = sorted(dbs)
@@ -979,48 +1145,77 @@ def check_dbs(work, src, staging):
                 if side is not None:
                     files[name + suffix] = side[0]
             specs.append({'db': name, 'check': 'quick'})
-        answers = hasqlite.run(specs, files, staging / f'sqlite-{start}', checkpoint=work.checkpoint,
-                               what='VS Code 的資料庫')
+
+        def read(files=files, specs=specs, start=start):
+            return hasqlite.run(specs, files, staging / f'sqlite-{start}', checkpoint=work.checkpoint, what='VS Code 的資料庫')
+
+        try:
+            answers = hatarget.retry(read, attempts=2, pause_first=3, retry_if=reader_failed, abort=work.abort, log=work.log,
+                                     what='讀取 VS Code 的資料庫')
+        except BackupError as error:
+            if not reader_failed(error):
+                raise
+            results.update({key: READER_FAILED for key in names_.values()})
+            continue
         for name, key in names_.items():
             answer = answers.get(name) or {'error': 'no answer'}
             results[key] = hasqlite.problem(answer)
     return results
 
 
-def analyse(src, ws, *, addon_version, versions, db_problems, target):
-    """(blockers, warnings) of HA's code-server against this device."""
-    blockers = version_blockers(addon_version, versions)
+def collect(sink, src, ws, target, db_problems):
+    """What HA's code-server says about itself, as issues (the check and the conversion call it the same way). `ws`, `target`:
+    the workspace walk and the catalog entry in a check (the conversion walks the workspace at its end: None)."""
     if not src.trees & {'pi', 'user'}:
-        blockers.append('HA 備份裡沒有 code-server 的使用者設定或代理程式資料（data/vscode/User、data/pi-agent），沒有可搬的資料。')
-    warnings = []
-    if target is not None and target.workspace is None:
-        warnings.append('這台的 code-server 應用設定沒有列出工作區資料夾，HA 的工作區專案（/share/projects）不會搬過來，'
-                        '需要時請自行複製。')
-    elif not ws.present:
-        warnings.append('這份 HA 備份沒有包含 share 資料夾，HA 的工作區專案（/share/projects）不會搬過來；'
+        sink.stop('codeserver.no-data', NO_DATA, action=NO_DATA_ACTION)
+    if target is not None and ws is not None:
+        if target.workspace is None:
+            if not target.conflict:
+                sink.notice('codeserver.no-workspace-folder',
+                            '這台的 code-server 應用設定沒有列出工作區資料夾，HA 的工作區專案（/share/projects）不會搬過來，'
+                            '需要時請自行複製。')
+        elif not ws.present:
+            sink.notice('codeserver.no-share',
+                        '這份 HA 備份沒有包含 share 資料夾，HA 的工作區專案（/share/projects）不會搬過來；'
                         '要一起搬，請在 HA 建立備份時勾選 share，或自行複製。')
-    elif not ws.projects:
-        warnings.append('HA 備份的 share 資料夾裡沒有 projects 資料夾（HA 的工作區可能設在別處），工作區不會搬過來。')
+        elif not ws.projects:
+            sink.notice('codeserver.no-projects', 'HA 備份的 share 資料夾裡沒有 projects 資料夾（HA 的工作區可能設在別處），工作區不會搬過來。')
     bad = sorted(rel for (_area, rel), why in db_problems.items() if why)
     if bad:
-        warnings.append(f'HA 的 VS Code 資料中有損毀或無法讀取的資料庫（{names(bad, 3)}），不會搬過來。')
+        sink.notice('codeserver.databases-skipped',
+                    f'HA 的 VS Code 資料中有 {len(bad)} 個資料庫損毀或讀取沒有完成，不會搬過來（多半只是畫面狀態，少了也能用）。', bad)
     unknown = unknown_names(src)
     if unknown:
-        warnings.append(f'HA 的 code-server 資料中有這台不認得的項目（{names(unknown, 6)}），不會搬過來；需要時請自行複製。')
-    if src.foreign or ws.foreign:
-        sample = [item.split(':', 1)[-1] for item in src.foreign] + ws.foreign
-        warnings.append(f'HA 的資料中有其他處理器的程式（{len(sample)} 個，例如 {names(sample, 3)}），搬過來後無法執行，'
-                        '需要時請在這台重新安裝或重新建置（例如 node_modules、.venv）。')
+        sink.notice('codeserver.unknown-entries',
+                    f'HA 的 code-server 資料中有 {len(unknown)} 個這台不認得的項目，不會搬過來；需要時請自行複製。', unknown)
+    foreign = [item.split(':', 1)[-1] for item in src.foreign] + (ws.foreign if ws is not None else [])
+    if foreign:
+        sink.notice('codeserver.foreign-programs',
+                    f'HA 的資料中有其他處理器的程式（{len(foreign)} 個，例如 {names(foreign, 3)}），搬過來後無法執行，'
+                    '需要時請在這台重新安裝或重新建置（例如 node_modules、.venv）。')
     if src.counts.get('skipped_symlinks'):
-        warnings.append(f'HA 的 code-server 資料中有 {src.counts["skipped_symlinks"]} 個指向資料以外的符號連結沒有搬過來'
-                        '（這台的代理程式有自己的連結）。')
+        sink.notice('codeserver.symlinks-skipped',
+                    f'HA 的 code-server 資料中有 {src.counts["skipped_symlinks"]} 個指向資料以外的符號連結沒有搬過來'
+                    '（這台的代理程式有自己的連結）。')
     if src.ha_urls:
-        warnings.append(f'HA 的 code-server 設定連到 HA 內部的位址（{names(src.ha_urls, 6)}），這台連不到，搬過來後請改成實際位址。')
-    review, hosts = mcp_review(hacommon.strict_json(src.mcp, MAX_JSON) if src.mcp else {})
+        sink.notice('codeserver.ha-addresses',
+                    f'HA 的 code-server 設定連到 HA 內部的位址（{names(src.ha_urls, 6)}），這台連不到，搬過來後請改成實際位址。')
+    review, _hosts = mcp_review(hacommon.strict_json(src.mcp, MAX_JSON) if src.mcp else {})
     if review:
-        warnings.append(f'HA 的共用 MCP 伺服器中有 {len(review)} 個帶有標頭或環境變數（{names(review, 5)}），'
-                        '可能含有權杖，搬過來後請確認。')
-    return blockers, warnings
+        sink.notice('codeserver.mcp-review',
+                    f'HA 的共用 MCP 伺服器中有 {len(review)} 個帶有標頭或環境變數（{names(review, 5)}），可能含有權杖，搬過來後請確認。')
+    kept = [rel for rel in src.large if rel != 'extensions.json']
+    if kept:
+        sink.notice('codeserver.files-kept',
+                    f'HA 的 {names(kept, 4)} 太大，這次沒有搬過來；這台原有的同名檔案維持不變。', kept)
+    if 'extensions.json' in src.large:
+        sink.notice('codeserver.extensions-skipped',
+                    'HA 的延伸模組清單（extensions.json）太大，這次沒有讀它，HA 自己安裝的延伸模組不會搬過來；需要時請在這台重新安裝。')
+    links = src.links_copied + (ws.links_copied if ws is not None else 0)
+    if links:
+        sink.auto('codeserver.links-copied',
+                  f'HA 的 code-server 資料有 {links} 個硬連結的檔案，這台不能把它們連在一起，已改成各自複製檔案內容'
+                  '（磁碟用量會比 HA 大一些）。')
 
 
 def unknown_names(src):
@@ -1028,7 +1223,7 @@ def unknown_names(src):
     return sorted(label.split(':', 1)[1] for label, count in src.unknown.items() if count)
 
 
-def section(src, ws, *, versions):
+def section(src, ws, report, ws_report, *, versions):
     pins = PINS.get(src.addon.version) if src.addon else None
     ha_ext = extension_entries(src.extensions)
     user_ext = [rel for rel, item in ha_ext.items() if not extension_id(item).startswith(CONNECTOR_PUBLISHER)]
@@ -1043,6 +1238,8 @@ def section(src, ws, *, versions):
             'extensions': len(user_ext), 'mcp_servers': len(mcp_servers(mcp_doc)),
             'workspace': ws.projects, 'share': ws.present, 'workspace_files': ws.files, 'workspace_bytes': ws.bytes,
             'skipped_symlinks': src.counts.get('skipped_symlinks', 0),
+            'links_copied': report.copied_links + ws_report.copied_links,
+            'skipped': report.skip_count(*od.SKIPS) + ws_report.skip_count(*od.SKIPS), 'files_kept': sorted(src.large),
             'ha_urls': sorted(src.ha_urls)[:20],
             'left_out': {label: count for label, count in sorted(src.left.items())},
             'unknown': unknown_names(src)[:20]}
@@ -1050,9 +1247,8 @@ def section(src, ws, *, versions):
 
 # ====================================================================== the job steps
 
-def _pass(work, app, staging, outs):
+def _pass(work, app, staging, outs, report):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
     with work.open(member) as stream:
         src = scan_member(stream, report, staging, outs, machine=hacommon.host_elf_machine(),
                           checkpoint=work.checkpoint)
@@ -1064,11 +1260,10 @@ def _pass(work, app, staging, outs):
     return src
 
 
-def _share_pass(work, out=None):
+def _share_pass(work, report, out=None):
     member = work.share_member()
     if member is None:
         return Workspace()
-    report = habackup.Report()
     with work.open(member) as stream:
         ws = scan_share(stream, report, out, machine=hacommon.host_elf_machine(), checkpoint=work.checkpoint)
     work.log(f'HA 的工作區：{ws.files} 個檔案' if ws.projects else 'HA 的 share 資料夾裡沒有工作區（projects）')
@@ -1076,26 +1271,32 @@ def _share_pass(work, out=None):
 
 
 def check(work, app):
+    sink = work.sink(app)
     target = Target(work, app)
-    versions = target_versions(work, app, target)
+    versions, failed = target_versions(work, app, target)
+    addon = work.addon_info(SLUG)
+    sink.extend(version_issues(addon.version, versions, failed))
+    target_issues(sink, target)
     staging = work.staging / 'codeserver-work'
     staging.mkdir(mode=0o700)
-    outs = {key: Volume(None, (0, 0), {}, key) for key in ('pi', 'ide', 'ext')}
-    src = _pass(work, app, staging, outs)
-    ws = _share_pass(work) if target.workspace is not None else Workspace()
+    report = habackup.Report(names=haissues.Names)
+    ws_report = habackup.Report(names=haissues.Names)
+    outs = {key: Volume(None, (0, 0), {}, key, report) for key in ('pi', 'ide', 'ext')}
+    src = _pass(work, app, staging, outs, report)
+    ws = _share_pass(work, ws_report) if target.workspace is not None else Workspace()
     work.phase('check')
     db_problems = check_dbs(work, src, staging) if src.dbs else {}
-    addon = work.addon_info(SLUG)
-    blockers, warnings = analyse(src, ws, addon_version=addon.version, versions=versions, db_problems=db_problems,
-                                 target=target)
+    collect(sink, src, ws, target, db_problems)
     ext = extension_entries(src.extensions)
     _move, skipped = choose_extensions(ext, {}, src.ext_foreign, hacommon.host_elf_machine())
     other = sorted(rel for rel, why in skipped.items() if why in ('platform', 'foreign'))
     if other:
-        warnings.append(f'HA 的延伸模組中有 {len(other)} 個是其他處理器專用的（{names(other, 4)}），不會搬過來，'
-                        '需要時請在這台重新安裝。')
-    return {'target_version': versions.get('code-server') or '', 'blockers': blockers, 'warnings': warnings,
-            APP_ID: section(src, ws, versions=versions)}
+        sink.notice('codeserver.extensions-other-processor',
+                    f'HA 的延伸模組中有 {len(other)} 個是其他處理器專用的（{names(other, 4)}），不會搬過來，需要時請在這台重新安裝。',
+                    other)
+    skip_line(sink, report)
+    skip_line(sink, ws_report)
+    return {'target_version': versions.get('code-server') or '', APP_ID: section(src, ws, report, ws_report, versions=versions)}
 
 
 def _root(work, app, volume):
@@ -1103,18 +1304,30 @@ def _root(work, app, volume):
     return uid, gid
 
 
+def _volume_reader(work, app, volume, path, what, read):
+    """A read of one live volume that makes sure it is whole (its export is read to its end: `live_index`) -> (path, index, files)."""
+    def attempt():
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+        hacommon.live_export(work, app, volume, path)
+        index, contents = live_index(path, what, read=read)
+        return path, index, contents
+
+    return attempt
+
+
 def convert(work, app, test_mode, out_dir):
-    """Build `out_dir/volumes/<volume>.tar` for the three volumes (HA's data + this device's) and, when the catalog
-    lists the workspace, `out_dir/dirs/0.tar` (this device's workspace + HA's projects)."""
+    """Build `out_dir/volumes/<volume>.tar` for the three volumes (HA's data + this device's), what the catalog has beyond them
+    (carried as it is) and, when the catalog lists the workspace, `out_dir/dirs/0.tar` (this device's workspace + HA's projects)."""
     del test_mode  # a test import changes nothing else of code-server (it runs no scheduled work)
     adapter = work.adapter(app)
     runner = work.runner(app)
+    sink = work.sink(app)
     target = Target(work, app)
-    versions = target_versions(work, app, target)
+    versions, failed = target_versions(work, app, target)
     addon = work.addon_info(SLUG)
-    early = version_blockers(addon.version, versions)
-    if early:
-        raise BackupError('incompatible', f'code-server 不能搬過來：{early[0]}', app=app.id)
+    sink.extend(version_issues(addon.version, versions, failed))
+    target_issues(sink, target)       # a line that was not confirmed ends this app here, before anything of this device is read
     ids = adapter.owner_ids()
     staging = work.staging / 'codeserver-work'
     staging.mkdir(mode=0o700)
@@ -1122,51 +1335,66 @@ def convert(work, app, test_mode, out_dir):
     sizes = {name: adapter._volume_size(name) for name in (target.pi, target.ide, target.ext)}
     work.guard.check(2 * sum(sizes.values()))
     work.log('讀取這台 code-server 的資料卷（代理程式登入、連接器與這台自己的設定會保留）')
-    live = {}
-    for key, volume in (('pi', target.pi), ('ide', target.ide), ('ext', target.ext)):
-        live[key] = hacommon.live_export(work, app, volume, staging / f'live-{key}.tar')
-    pi_index, pi_files = live_index(live['pi'], '這台 code-server 的代理程式資料卷',
-                                    read=('shared/mcp.json', 'claude/history.jsonl'))
-    ide_index, ide_files = live_index(live['ide'], '這台 code-server 的 VS Code 設定資料卷', read=(USER_MERGED,))
-    ext_index, ext_files = live_index(live['ext'], '這台 code-server 的延伸模組資料卷', read=('extensions.json',))
+    what = {'pi': '這台 code-server 的代理程式資料卷', 'ide': '這台 code-server 的 VS Code 設定資料卷',
+            'ext': '這台 code-server 的延伸模組資料卷'}
+    plan = (('pi', target.pi, ('shared/mcp.json', 'claude/history.jsonl')), ('ide', target.ide, (USER_MERGED,)),
+            ('ext', target.ext, ('extensions.json',)))
+    read = read_live(work, app, sink, [_volume_reader(work, app, volume, staging / f'live-{key}.tar', what[key], files)
+                                       for key, volume, files in plan],
+                     sources=(target.pi, target.ide, target.ext), what='這台 code-server 的資料卷', issue_id=PAUSE_ID)
+    live, indexes = {}, {}
+    for (key, _volume, _files), (path, index, contents) in zip(plan, read):
+        live[key], indexes[key] = path, (index, contents)
+    (pi_index, pi_files), (ide_index, ide_files), (ext_index, ext_files) = indexes['pi'], indexes['ide'], indexes['ext']
     paths = {key: out_dir / 'volumes' / f'{volume}.tar'
-             for key, volume in (('pi', target.pi), ('ide', target.ide), ('ext', target.ext))}
-    outs = {'pi': Volume(ha_odoo.FileTar(paths['pi'], work.guard), _root(work, app, target.pi), pi_index,
-                         '這台 code-server 的代理程式資料卷'),
-            'ide': Volume(ha_odoo.FileTar(paths['ide'], work.guard), _root(work, app, target.ide), ide_index,
-                          '這台 code-server 的 VS Code 設定資料卷'),
-            'ext': Volume(ha_odoo.FileTar(staging / 'ha-ext.tar', work.guard), (0, 0), {}, 'HA 的延伸模組')}
+             for key, volume, _files in plan}
+    report = habackup.Report(names=haissues.Names)
+    outs = {'pi': Volume(ha_odoo.FileTar(paths['pi'], work.guard), _root(work, app, target.pi), pi_index, what['pi'], report),
+            'ide': Volume(ha_odoo.FileTar(paths['ide'], work.guard), _root(work, app, target.ide), ide_index, what['ide'], report),
+            'ext': Volume(ha_odoo.FileTar(staging / 'ha-ext.tar', work.guard), (0, 0), {}, 'HA 的延伸模組', report)}
     try:
-        src = _pass(work, app, staging, outs)
+        src = _pass(work, app, staging, outs, report)
     finally:
         outs['ext'].close()
     work.phase('convert')
     db_problems = check_dbs(work, src, staging) if src.dbs else {}
-    details = {}
+    collect(sink, src, None, None, db_problems)      # a stop raises here: nothing of this device was copied yet
+    seen = skip_line(sink, report)                    # ... and so does a line that was not confirmed
+    details, kept_links = {}, 0
     try:
-        details.update(_finish_pi(src, outs['pi'], pi_files, db_problems, live['pi']))
-        details.update(_finish_ide(src, outs['ide'], ide_files, db_problems, live['ide']))
+        for part in (_finish_pi(src, outs['pi'], pi_files, db_problems, live['pi']),
+                     _finish_ide(src, outs['ide'], ide_files, db_problems, live['ide'])):
+            kept_links += part.pop('kept_links', 0)
+            details.update(part)
     finally:
         outs['pi'].close()
         outs['ide'].close()
-    ext_out = Volume(ha_odoo.FileTar(paths['ext'], work.guard), _root(work, app, target.ext), ext_index,
-                     '這台 code-server 的延伸模組資料卷')
+    ext_out = Volume(ha_odoo.FileTar(paths['ext'], work.guard), _root(work, app, target.ext), ext_index, what['ext'], report)
     try:
-        details.update(_finish_ext(src, ext_out, ext_files, staging / 'ha-ext.tar', live['ext']))
+        part = _finish_ext(src, ext_out, ext_files, staging / 'ha-ext.tar', live['ext'])
+        kept_links += part.pop('kept_links', 0)
+        details.update(part)
     finally:
         ext_out.close()
     for key in live:
         os.unlink(live[key])
-    blockers, _warnings = analyse(src, Workspace(), addon_version=addon.version, versions=versions,
-                                  db_problems=db_problems, target=None)
-    if blockers:
-        raise BackupError('incompatible', f'code-server 不能搬過來：{blockers[0]}', app=app.id)
     result = {'volumes': {target.pi: paths['pi'], target.ide: paths['ide'], target.ext: paths['ext']}}
-    ws = Workspace()
+    ws, ws_report = Workspace(), habackup.Report(names=haissues.Names)
     if target.workspace is not None:
-        ws, dir_path, folder = _workspace(work, app, runner, target, staging, out_dir)
+        ws, dir_path, folder = _workspace(work, app, runner, target, staging, out_dir, sink, ws_report)
         result['dirs'] = {target.workspace: dir_path}
         details['workspace_folder'] = folder if ws.projects else ''
+        skip_line(sink, ws_report)
+    if target.extra_volumes or target.extra_dirs:          # CS-04: what this device has beyond them stays as it is
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs, report=report,
+                                 size=sum(sizes.values()))
+        result['volumes'].update(carried['volumes'])
+        result.setdefault('dirs', {}).update(carried['dirs'])
+    if kept_links:
+        sink.auto('codeserver.kept-links-copied',
+                  f'這台 code-server 有 {kept_links} 個保留下來的硬連結，它指到的檔案會被 HA 的資料取代，'
+                  '已改成各自保留原本的檔案內容。')
+    skip_line(sink, report, seen)   # this device's own links that could not be kept (rare): a line of its own
     for path in result['volumes'].values():
         ha_odoo.check_volume_tar(path, ids)
     for path in result.get('dirs', {}).values():
@@ -1178,7 +1406,8 @@ def convert(work, app, test_mode, out_dir):
                   skills=len(src.skills), snippets=src.snippets, workspace=ws.projects, share=ws.present,
                   workspace_files=ws.files, workspace_target=target.workspace or '', ha_urls=sorted(src.ha_urls),
                   mcp_review=review, mcp_hosts=hosts, unknown=unknown_names(src),
-                  foreign=len(src.foreign) + len(ws.foreign))
+                  foreign=len(src.foreign) + len(ws.foreign), links_copied=report.copied_links + ws_report.copied_links,
+                  files_kept=sorted(src.large), workspace_conflict=list(target.conflict))
     return result
 
 
@@ -1210,7 +1439,7 @@ def _finish_pi(src, out, live_files, db_problems, live_path):
                 out.data('claude/history.jsonl', merged, 0o600, int(time.time()), prefer='ha')
                 details['history'] = 'merged'
     _write_dbs(src, 'pi', out, db_problems)
-    out.finish(live_path)
+    details['kept_links'] = out.finish(live_path)
     details['pi_kept'] = sorted(rel.split('/', 1)[1] for rel in out.kept
                                 if rel.startswith('skills/') and rel.count('/') == 1)
     details['pi_conflicts'] = len([rel for rel in out.kept if rel not in ('settings.json', 'models.json')])
@@ -1230,7 +1459,7 @@ def _finish_ide(src, out, live_files, db_problems, live_path):
             details.update(settings='merged', settings_dropped=dropped, acp_agents_added=extra,
                            settings_comments=comments)
     _write_dbs(src, 'user', out, db_problems)
-    out.finish(live_path)
+    details['kept_links'] = out.finish(live_path)
     return details
 
 
@@ -1251,6 +1480,18 @@ def _write_dbs(src, area, out, problems):
         os.unlink(path)
 
 
+def _staging_readable(ha_tar):
+    """True when the staged folders of HA's extensions can be read to their end. This job wrote them: a failure here is a problem of
+    the staging, not of HA's data, so only the extensions are left out (CS-17)."""
+    try:
+        with ha_odoo._live_tar(ha_tar, 'HA 的延伸模組') as tar:
+            for _member in tar:
+                tar.members.clear()
+    except (tarfile.TarError, BackupError, OSError):
+        return False
+    return True
+
+
 def _finish_ext(src, out, live_files, ha_tar, live_path):
     """HA's chosen extension folders (from the staging tar) and extensions.json with them, then the live volume."""
     ha_entries = extension_entries(src.extensions)
@@ -1263,7 +1504,10 @@ def _finish_ext(src, out, live_files, ha_tar, live_path):
     if not isinstance(live_doc, list):
         skipped.update({rel: 'unreadable' for rel in move})  # this device's list cannot be extended safely
         move = []
-    moved = set()
+    moved, unreadable = set(), False
+    if move and not _staging_readable(ha_tar):
+        skipped.update({rel: 'unreadable' for rel in move})     # CS-17: only the extensions are left out, everything else moves
+        move, unreadable = [], True
     if move:
         try:
             with ha_odoo._live_tar(ha_tar, 'HA 的延伸模組') as tar:
@@ -1288,35 +1532,50 @@ def _finish_ext(src, out, live_files, ha_tar, live_path):
         doc = list(live_doc) + [relocate_extension(ha_entries[rel], rel) for rel in move if rel in moved]
         out.data('extensions.json', json_bytes(doc), 0o644, int(time.time()), prefer='ha')
     os.unlink(ha_tar)
-    out.finish(live_path)
-    return {'extensions_moved': sorted(extension_id(ha_entries[rel]) for rel in moved),
+    kept_links = out.finish(live_path)
+    return {'kept_links': kept_links, 'extensions_unreadable': unreadable,
+            'extensions_moved': sorted(extension_id(ha_entries[rel]) for rel in moved),
             'extensions_skipped': sorted(extension_id(ha_entries[rel]) for rel, why in skipped.items()
                                          if why != 'same'),
             'extensions_same': sorted(extension_id(ha_entries[rel]) for rel, why in skipped.items() if why == 'same')}
 
 
-def _workspace(work, app, runner, target, staging, out_dir):
-    """(Workspace, dir tar, folder name): this device's workspace folder plus HA's projects in a new subfolder."""
+def _workspace(work, app, runner, target, staging, out_dir, sink, report):
+    """(Workspace, dir tar, folder name): this device's workspace folder plus HA's projects in a new subfolder. The pack of this
+    device's folder is read to its end; it is tried again and, when that does not help, done once with the app's own container
+    paused (CS-16); what still does not work stops this app (the restore would replace the folder by one that lacks files)."""
     (out_dir / 'dirs').mkdir(mode=0o700, parents=True, exist_ok=True)
     measured = runner.dir_measure(target.workspace)
     member = work.share_member()
     work.guard.check(2 * measured['bytes'])  # HA's projects are counted while they are written (the space guard)
     live_dir = staging / 'live-workspace.tar'
-    with open(live_dir, 'xb') as handle:
-        os.fchmod(handle.fileno(), 0o600)
-        runner.dir_pack(target.workspace, stdout=handle, timeout=3 * 3600, max_output=work.guard.budget(),
-                        abort=work.abort)
-    root, top_names = None, set()
-    with ha_odoo._live_tar(live_dir, '這台 code-server 的工作區') as tar:
-        for item in tar:
-            name = ha_odoo._norm(item.name)
-            if name == '.':
-                root = (item.uid, item.gid, item.mode & 0o7777, item.mtime)
-            elif name:
-                top_names.add(name.split('/', 1)[0])
-            tar.members.clear()
-    if root is None:
-        raise BackupError('job-failed', '這台 code-server 的工作區匯出內容格式不正確。', app=app.id)
+    what = '這台 code-server 的工作區'
+
+    def attempt():
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(live_dir)
+        with open(live_dir, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            runner.dir_pack(target.workspace, stdout=handle, timeout=3 * 3600, max_output=work.guard.budget(),
+                            abort=work.abort)
+        root, top_names = None, set()
+        try:
+            with ha_odoo._live_tar(live_dir, what) as tar:
+                for item in tar:
+                    name = ha_odoo._norm(item.name)
+                    if name == '.':
+                        root = (item.uid, item.gid, item.mode & 0o7777, item.mtime)
+                    elif name:
+                        top_names.add(name.split('/', 1)[0])
+                    tar.members.clear()
+        except tarfile.TarError:
+            raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
+        if root is None:
+            raise BackupError('job-failed', f'{what}的匯出內容格式不正確。', app=app.id)
+        return root, top_names
+
+    root, top_names = read_live(work, app, sink, [attempt], sources=(target.workspace_path,), what=what,
+                                issue_id=PAUSE_ID)[0]
     stamp = _date_stamp(work)
     folder, n = f'ha-projects-{stamp}', 1
     while folder in top_names:
@@ -1325,8 +1584,8 @@ def _workspace(work, app, runner, target, staging, out_dir):
     path = out_dir / 'dirs' / '0.tar'
     out = DirOut(path, work.guard, root, folder)
     try:
-        ws = _share_pass(work, out) if member is not None else Workspace()
-        out.copy_live(live_dir, '這台 code-server 的工作區')
+        ws = _share_pass(work, report, out) if member is not None else Workspace()
+        out.copy_live(live_dir, what)
     finally:
         out.close()
     os.unlink(live_dir)
@@ -1358,6 +1617,8 @@ def import_texts(data):
              '還原會用轉換時讀到的這台資料（加上 HA 的資料）取代 code-server 的資料卷'
              + ('與工作區' if data.get('workspace_target') else '')
              + '：轉換之後才在這台新增的對話或檔案不會保留（還原前備份裡有）。']
+    if data.get('links_copied'):
+        notes.append(f'HA 有 {data["links_copied"]} 個硬連結的檔案（例如 pnpm 安裝過的套件），已改成各自複製檔案內容。')
     if data.get('workspace'):
         notes.append(f'HA 的工作區專案（/share/projects，{data.get("workspace_files", 0)} 個檔案）會放進這台工作區的'
                      f'「{data.get("workspace_folder") or "ha-projects"}」資料夾，這台原有的檔案保持不變。')
@@ -1383,4 +1644,11 @@ def import_texts(data):
         reminders.append(f'HA 的 code-server 資料中這台不認得的項目（{names(data["unknown"], 6)}）沒有搬過來，需要時請自行複製。')
     if data.get('workspace_target') and not data.get('workspace'):
         reminders.append('HA 的工作區專案（/share/projects）不在這份備份裡，沒有搬過來；需要時請自行複製到這台的工作區。')
+    if data.get('workspace_conflict'):
+        reminders.append('這台 code-server 的主機資料夾設定和它的工作區不是同一個資料夾，HA 的工作區專案（/share/projects）沒有搬過來；'
+                         '需要時請自行複製到這台的工作區。')
+    if data.get('files_kept'):
+        reminders.append(f'HA 的 {names(data["files_kept"], 4)} 太大，沒有搬過來；這台原有的同名檔案維持不變。')
+    if data.get('extensions_unreadable'):
+        reminders.append('HA 的延伸模組在轉換時暫存失敗，沒有搬過來；請在這台重新安裝需要的延伸模組。')
     return notes, reminders

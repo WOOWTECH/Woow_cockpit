@@ -741,14 +741,19 @@ def paused(work, app, sink, units, *, issue_id=PAUSE_ID):
                 work.log(f'警告：服務 {unit} 沒有立刻啟動回來，作業結束時會再試一次。')
 
 
-def read_live(work, app, sink, attempt, *, sources, what, issue_id=PAUSE_ID):
-    """`attempt()` -> its value: a read of this device's live data that makes sure what it read is whole (OP-15, CS-14, CS-16).
-    A failure that may pass (a command that failed, a tar that is not whole because files changed under it) is tried again
-    (hatarget.retry: READ_TRIES times); when that does not help and the app's own containers that mount `sources` run, they are
-    paused for one more read and started again. What still fails comes up as it was: this app stops, this device is unchanged."""
+def read_live(work, app, sink, attempts, *, sources, what, issue_id=PAUSE_ID):
+    """The values of `attempts` (callables, in order): each reads this device's live data and makes sure what it read is whole
+    (OP-15, CS-14, CS-16). A failure that may pass (a command that failed, a tar that is not whole because files changed
+    under it) is tried again (hatarget.retry: READ_TRIES times); when that does not help and the app's own containers that
+    mount `sources` run, they are paused, the attempt that failed and the ones after it are done and the containers are started
+    again. What still fails comes up as it was: this app stops, this device is unchanged."""
+    results, pending = [], list(attempts)
     try:
-        return hatarget.retry(attempt, attempts=READ_TRIES, pause_first=2, retry_if=hatarget.transient, abort=work.abort,
-                              log=work.log, what=f'讀取{what}')
+        while pending:
+            results.append(hatarget.retry(pending[0], attempts=READ_TRIES, pause_first=2, retry_if=hatarget.transient,
+                                          abort=work.abort, log=work.log, what=f'讀取{what}'))
+            pending.pop(0)
+        return results
     except BackupError as error:
         if not hatarget.transient(error):
             raise
@@ -756,7 +761,9 @@ def read_live(work, app, sink, attempt, *, sources, what, issue_id=PAUSE_ID):
         if not units:
             raise
     with paused(work, app, sink, units, issue_id=issue_id):
-        return attempt()
+        for attempt in pending:
+            results.append(attempt())
+    return results
 
 
 def validate_live_tar(path, what):
@@ -782,7 +789,7 @@ def live_volume(work, app, sink, volume, path, *, what, issue_id=PAUSE_ID):
         validate_live_tar(path, what)
         return path
 
-    return read_live(work, app, sink, attempt, sources=(volume,), what=what, issue_id=issue_id)
+    return read_live(work, app, sink, [attempt], sources=(volume,), what=what, issue_id=issue_id)[0]
 
 
 def links_as_files(live_path, out, pending, what, *, report=None, label=''):
@@ -822,7 +829,7 @@ def links_as_files(live_path, out, pending, what, *, report=None, label=''):
 
 # ====================================================================== the job steps
 
-def _child_failed(error):
+def reader_failed(error):
     """The sandboxed SQLite reader did not finish (it timed out, could not be cut off the network or ended half way)."""
     return isinstance(error, BackupError) and error.code in ('job-failed', 'corrupt-archive') \
         and not haissues.is_job_wide(error)
@@ -841,10 +848,10 @@ def _inspect(work, sink, src, staging):
                             checkpoint=work.checkpoint, what='OpenDesign 資料庫')
 
     try:
-        answers = hatarget.retry(read, attempts=2, pause_first=3, retry_if=_child_failed, abort=work.abort, log=work.log,
+        answers = hatarget.retry(read, attempts=2, pause_first=3, retry_if=reader_failed, abort=work.abort, log=work.log,
                                  what='讀取 OpenDesign 資料庫')
     except BackupError as error:
-        if not _child_failed(error):
+        if not reader_failed(error):
             raise
         sink.stop('opendesign.database-unreadable', DATABASE_UNREADABLE, action=DATABASE_UNREADABLE_ACTION)
         return {}
