@@ -4214,7 +4214,8 @@
     const blocked = !can.length;
     const needDatabase = !blocked && can.some(app => app.app_id === "odoo") && !wizard.odooDatabase;
     const active = activeJob();
-    const ids = can.map(app => app.app_id);
+    // The words about code and about a test import are for the apps that go; when none can, for the ones that were asked.
+    const ids = (can.length ? can : apps).map(app => app.app_id);
     return [
       h("h3", { class: "step-title", text: "檢查結果與選項" }),
       h("p", { class: "muted", text: "以下是剛才檢查的結果，沒有變更任何資料。" }),
@@ -4222,7 +4223,7 @@
       h("div", { class: "app-preflight-list" }, apps.map(app => haAppCard(ha, wizard, app))),
       unanswered.length ? infoNotice(`檢查結果沒有包含${quoted(unanswered.map(haAppName))}，這次不會匯入${unanswered.length > 1 ? "它們" : "它"}；可以按「重新檢查」再試。`, "warn", "alert-outline") : null,
       cannot.length && !blocked ? infoNotice(`${quoted(cannot.map(app => haAppName(app.app_id)))}沒有通過檢查，這次不會匯入，這台的${cannot.length > 1 ? "它們" : "它"}也不會有任何變更；其他應用可以繼續轉換。`, "warn", "alert-outline") : null,
-      infoNotice(haTrustText(ids.length ? ids : apps.map(app => app.app_id)), "info", "shield-check-outline"),
+      infoNotice(haTrustText(ids), "info", "shield-check-outline"),
       h("label", { class: "choice confirm-choice", htmlFor: "ha-test-mode" },
         h("input", {
           type: "checkbox", id: "ha-test-mode", checked: wizard.testMode, disabled: wizard.busy, "aria-describedby": "ha-test-mode-help",
