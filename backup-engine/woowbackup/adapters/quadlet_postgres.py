@@ -71,6 +71,9 @@ KEPT_TEXT = ('這個應用的資料庫服務裡還有其他資料庫；匯入會
              '（保留在「還原前備份」，不會自動刪除），匯入完成後再自動把這些資料庫放回；放不回去的會告訴你，資料仍在完整複本裡。')
 KEPT_UNKNOWN_TEXT = ('無法確認這個應用的資料庫服務裡是否還有其他資料庫；匯入前會先把整個資料庫服務存成完整複本'
                      '（保留在「還原前備份」，不會自動刪除），匯入完成後如果有其他資料庫會自動放回。')
+KEPT_DOWN_TEXT = ('這個應用的資料庫服務目前沒有執行，無法確認其中是否還有其他資料庫；匯入前會先把整個資料庫服務存成完整複本'
+                  '（保留在「還原前備份」，不會自動刪除），匯入完成後如果有其他資料庫會自動放回。'
+                  '想省下這份複本，請先啟動資料庫服務再重新檢查。')
 PAUSES_TEXT = ('匯入這個應用時，會先暫停下列也在使用它的資料的服務，匯入完成後自動啟動；暫停期間這些服務無法使用，'
                '它們使用的資料夾也會被備份裡的內容取代。')
 MAX_QUADLET_BYTES = 1024 * 1024
@@ -2558,14 +2561,18 @@ class QuadletPostgresAdapter(Adapter):
                     add('units-masked', 'warn', f'服務 {", ".join(masked)} 因先前的還原沒有完成而被暫時停用；這次還原完成後會恢復。')
                 down = [p['unit'] for p in app.postgres if states[p['unit']].get('ActiveState') != 'active']
                 if down and not lost:
-                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它，'
-                                                 '並確認執行個體中沒有應用設定未宣告的資料庫。')
+                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它'
+                                                 + ('。' if self.ha_import else '，並確認執行個體中沒有應用設定未宣告的資料庫。'))
                 for pg in app.postgres:
                     if pg['scope'] == 'instance':
                         self._preflight_instance(pg, _found['postgres'].get(pg['id']), add,
                                                  running=pg['unit'] not in down)
                         continue
                     if pg['unit'] in down:
+                        if self.ha_import and not lost:
+                            # S4: a service that is not running cannot be listed -- the same as "cannot tell" below: the whole
+                            # service is kept as a copy first (keep_cluster starts it), so no other database can be lost.
+                            self._preflight_other_databases(pg, None, add, running=False)
                         continue
                     found = self.undeclared(pg)
                     if self.ha_import and (found is None or found[0]):
@@ -2623,10 +2630,11 @@ class QuadletPostgresAdapter(Adapter):
         self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
 
-    def _preflight_other_databases(self, pg, found, add):
-        """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed. The restore keeps
-        a copy of the whole service (`keep_cluster`) and puts them back; this is the line of the confirmation, and the
-        check that says how much space the copy takes (`kept_estimate`)."""
+    def _preflight_other_databases(self, pg, found, add, *, running=True):
+        """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed (`found` None: it
+        cannot be asked, because it is not running or does not answer). The restore keeps a copy of the whole service
+        (`keep_cluster`) and puts them back; this is the line of the confirmation, and the check that says how much space the
+        copy takes (`kept_estimate`)."""
         names = list(found[0]) if found is not None else []
         try:
             size = self._volume_size(pg['data_volume'])
@@ -2634,7 +2642,11 @@ class QuadletPostgresAdapter(Adapter):
             size = 0
         self.kept_wanted.append(pg['id'])
         self.kept_estimate += size
-        if found is None:
+        if found is None and not running:
+            add('databases', 'warn', f'資料庫服務 {pg["unit"]} 目前未執行，無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；'
+                                     '為免遺失資料，匯入前會先存整個資料庫服務的完整複本。想省下這份複本，請先啟動資料庫服務再重新檢查。')
+            text = KEPT_DOWN_TEXT
+        elif found is None:
             add('databases', 'warn', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；為免遺失資料，匯入前會先存整個資料庫服務的完整複本。')
             text = KEPT_UNKNOWN_TEXT
         else:

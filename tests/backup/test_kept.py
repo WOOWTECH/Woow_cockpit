@@ -379,6 +379,46 @@ class KeptClusterTests(AdapterKeptCase):
         self.assertEqual((issue.id, issue.names), ('restore.other-databases', ()))
         self.assertEqual(self.adapter.kept_wanted, ['main'])
 
+    def test_a_stopped_service_is_kept_too_and_the_check_says_why(self):
+        """A service that is not running cannot be asked what it holds: the same as "cannot tell" -- a copy of all of it."""
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        by_id = {c['id']: c for c in self.adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertEqual(by_id['woowbk-demo/database-down']['status'], 'warn')
+        self.assertNotIn('未宣告', by_id['woowbk-demo/database-down']['message'],
+                         'the promise of an ordinary restore (it refuses other databases) does not hold for an import')
+        self.assertEqual(by_id['woowbk-demo/databases']['status'], 'warn')
+        self.assertIn('目前未執行', by_id['woowbk-demo/databases']['message'])
+        (issue,) = self.adapter.restore_issues
+        self.assertEqual((issue.id, issue.level, list(issue.names)), ('restore.other-databases', 'confirm', []))
+        self.assertIn('先啟動資料庫服務', issue.text)
+        self.assertEqual(self.adapter.kept_wanted, ['main'])
+        self.assertGreater(self.adapter.kept_estimate, 0)
+
+    def test_an_ordinary_restore_with_a_stopped_service_keeps_its_old_way(self):
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        adapter = self.make_adapter(self.owner)
+        by_id = {c['id']: c for c in adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertIn('未宣告', by_id['woowbk-demo/database-down']['message'])
+        self.assertNotIn('woowbk-demo/databases', by_id)
+        self.assertEqual((adapter.restore_issues, adapter.kept_wanted), ([], []))
+
+    def test_a_stopped_service_whose_units_are_lost_is_the_units_problem_not_a_copy(self):
+        del self.owner.units['woowbk-demo-db.service']
+        adapter = self.converted()
+        by_id = {c['id']: c for c in adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertEqual(by_id['woowbk-demo/units']['status'], 'fail')
+        self.assertEqual((adapter.restore_issues, adapter.kept_wanted), ([], []))
+
+    def test_the_copy_of_a_stopped_service_starts_it_before_it_reads_anything(self):
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        argvs = self.owner.argvs()
+        started = argvs.index([SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'])
+        self.assertLess(started, max(i for i, a in enumerate(argvs) if 'pg_dump' in a))
+        self.assertEqual(sorted(info['databases']), ['nextcloud', 'tmpl_custom'])
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'inactive', 'and stopped again for the cold copy')
+
     def test_an_ordinary_restore_still_refuses_and_keeps_nothing(self):
         adapter = self.make_adapter()
         checks = adapter.preflight(self.manifest(), mode='inplace')
