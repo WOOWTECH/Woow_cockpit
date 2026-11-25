@@ -1921,6 +1921,8 @@ class LiveTargetTests(NextcloudCase):
         text = '\n'.join(executed)
         self.assertIn('CREATE ROLE "oc_admin" LOGIN SUPERUSER', text)
         self.assertIn('CREATE ROLE "woowbk_load" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', text)
+        self.assertRegex(text, r'GRANT CONNECT ON DATABASE "[^"]+" TO "woowbk_load"',
+                         'role_sql took the right to connect from every role: the plain role is given it')
         restore = [c for r, c, _d in self.world.execs if r == 'nc-db' and c[:1] == ['pg_restore'] and '-U' in c]
         self.assertEqual(restore[0][:3], ['pg_restore', '-U', 'woowbk_load'], 'HA\'s data is loaded by the plain role')
         first = next(i for i, x in enumerate(executed) if 'REASSIGN OWNED BY "woowbk_load" TO "oc_admin"' in x)
@@ -1944,6 +1946,11 @@ class LiveTargetTests(NextcloudCase):
         self.assertNotIn('CREATE ROLE "nextcloud"', text, 'it exists already')
         self.assertIn(f'ALTER ROLE "nextcloud" PASSWORD \'{VERIFIER}\'', text)
         self.assertIn(f'REASSIGN OWNED BY "woowbk_load" TO "{name}"', text)
+        # nothing took the right to connect from every role here (role_sql did not run): a grant and its revoke would leave a
+        # list of rights in the database's ACL where this device's own database has none (the grants are compared)
+        self.assertIn('CREATE ROLE "woowbk_load" LOGIN NOSUPERUSER', text)
+        self.assertNotIn('GRANT CONNECT ON DATABASE', text)
+        self.assertNotIn('REVOKE ALL PRIVILEGES ON DATABASE', text)
 
     def test_a_superuser_role_that_owns_nothing_after_the_hand_over_stops_the_conversion(self):
         # the verification is what it was: the owner of every table must be the role, the role must be what the live one is

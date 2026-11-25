@@ -1881,12 +1881,15 @@ def skip_toc(text, kinds):
     return ''.join(line for line in text.splitlines(True) if not entry.match(line) and not comment.match(line))
 
 
-def loader_sql(dbname):
+def loader_sql(dbname, *, connect=True):
     """The plain role that loads HA's data when Nextcloud's own database role is a superuser (NC-08): no right but to
-    connect (every role may) and to create in `public`; it is handed over and dropped when the data is in (hand_over_sql)."""
+    connect and to create in `public`; it is handed over and dropped when the data is in (hand_over_sql). `connect` False:
+    nothing revoked the right of every role to connect (the cluster's own superuser is the Nextcloud role, role_sql did not
+    run), so none is granted: a grant and its revoke would leave an explicit list of rights in the database's ACL where this
+    device's own database has none, and the check of the grants would see a difference."""
     ident = ha_odoo.pg_ident(LOADER)
     return (f'CREATE ROLE {ident} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n'
-            f'GRANT CONNECT ON DATABASE {ha_odoo.pg_ident(dbname)} TO {ident};\n')
+            + (f'GRANT CONNECT ON DATABASE {ha_odoo.pg_ident(dbname)} TO {ident};\n' if connect else ''))
 
 
 def hand_over_sql(role):
@@ -2103,12 +2106,13 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
             env=live.db_env, secrets=live.db_secrets)
     pg = ha_odoo.Cluster(tmp, 'nc-db', superuser=live.db_user, log=work.log)
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
-    if role == live.db_user and not plain:      # the cluster's own superuser exists already: it only gets this device's verifier
+    own = role == live.db_user and not plain
+    if own:      # the cluster's own superuser exists already: it only gets this device's verifier
         pg.script(f'ALTER ROLE {ha_odoo.pg_ident(role)} PASSWORD {ha_odoo.sql_literal(db["role"]["password"])};\n')
     else:
         pg.script(role_sql(role, db['role'], live.db_name))
     if not plain:
-        pg.script(loader_sql(live.db_name))
+        pg.script(loader_sql(live.db_name, connect=not own))
     extensions = [e for e in db['extensions'] if e != 'plpgsql' and ROLE_RE.fullmatch(e)]
     # NC-39: what HA's database uses and this device's database image has is enabled too (before HA's data is put in)
     extras = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK and e not in extensions
