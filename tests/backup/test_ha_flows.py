@@ -872,6 +872,9 @@ class OdooDatabaseTests(OdooCase):
         self.assertTrue(any('會留在 HA' in note for note in result['ha_import']['notes']))
         self.assertEqual([i['id'] for i in result['results'][0]['issues'] if i['level'] == 'confirm'],
                          ['odoo.databases-left'])
+        row = haimport.load_registry(self.paths)[result['backup_id']]      # the registry keeps what was confirmed and what stayed
+        self.assertEqual([(c['app_id'], c['id']) for c in row['confirmed']], [('odoo', 'odoo.databases-left')])
+        self.assertEqual(row['left_databases'], ['notodoo', 'broken', 'junkmods', 'ha prod=1$'])
 
     def test_one_more_database_on_ha_needs_the_confirmation_again(self):
         self.several()
