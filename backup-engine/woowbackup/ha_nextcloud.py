@@ -6,28 +6,41 @@ The add-on is all in one container: a PostgreSQL 16 cluster (`data/postgres`, so
 locks only) and Collabora (stateless). The users' files live OUTSIDE the add-on, in Nextcloud's data directory
 (`datadirectory` of config.php, by default /share/nextcloud): they are in the HA backup only when its `share` folder
 was included (`share.tar[.gz]`, entries `nextcloud/**`); a data directory under /data or /config is read from the
-add-on's own member. Without the data directory the import is refused (a database without its files would lose them).
+add-on's own member. Without the data directory (no share folder, no folder or no `.ncdata` in it, or a place no backup
+holds) the accounts, settings, calendars and shares still move and the users' files do not: one line to confirm (HAOS parity,
+NC-22, NC-23, NC-25), the data directory stays empty with its marker and this device's own files are in the safety backup.
 
 The target is the Podman package (Woow_podman_nextcloud): five units, four host data dirs (catalog `data_dirs`: the
 PostgreSQL cluster, Redis, the html dir with code, config.php and custom_apps, and the data dir), no volume and no
 database dump (cold). Versions: HA's config.php `version` (4 parts, written by Nextcloud) must equal the live
-config.php's, and its first three parts the live image's NEXTCLOUD_VERSION, so the image's entrypoint neither upgrades
-nor refuses; HA's PostgreSQL major must not be newer than the target's.
+config.php's (one that cannot be read is inferred from the add-on's version and told), and its first three parts the live
+image's NEXTCLOUD_VERSION, so the image's entrypoint neither upgrades nor refuses. HA's PostgreSQL being newer than the
+target's is not asked beforehand: the restore, in one transaction, says (NC-32).
+Since the HAOS parity line (2026-11-25) a finding is an ISSUE (haissues: `ISSUES` below, each id with its level and the
+DESIGN row it came from): a stop only stops this app, a line to confirm needs the customer's key (every name is in it), a
+notice and an automatic step are told; this device's own Nextcloud is read as it is (a stopped service is started to be read
+and put back, a config.php that is more than data is read by this device's own PHP, a missing or superuser database role is
+dealt with: NC-04, NC-05, NC-07, NC-08).
 
 check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 (socket only, network
 none, HA's settings never used: ha_odoo.start_ha_cluster; every session pinned to pg_catalog names: Pinned); its
 catalogs are read first and a database holding anything beyond Nextcloud's own tables, sequences and indexes
 (functions, triggers, rules, views, operators, types, policies, CHECK constraints, generated columns, non-constant
-defaults...: SHAPE_SQL) is refused without reading its tables; config.php is parsed strictly (never executed: only
-arrays, single-quoted strings, numbers, booleans and null); the data directory is walked (it must exist with its
-`.ncdata`; symlinks, server-side encryption and object storage are refused); counts, apps and storages are read.
+defaults...: SHAPE_SQL) is refused without reading its tables, except the functions, procedures, aggregates and triggers of
+other apps, which are left out of the restore and listed (one line to confirm; only what Memories makes again by itself is a
+notice); config.php is parsed strictly (never executed: arrays, single- and double-quoted texts without a variable, joined
+by a dot, numbers, booleans, null and a few constants: NC-12); the data directory is walked (symlinks and `.htaccess` are left
+out and listed, hard links to a file that is not moved are copied, server-side encryption is one line to confirm, object
+storage is refused); counts, apps and storages are read.
 
 convert: pg_dump of HA's database; a NEW cluster from the live database image, environment and secret (its superuser
 password is the live one), the live Nextcloud database role (`dbuser` of the live config.php, e.g. oc_admin) with the
 LIVE role's attributes and password verifier (read from the live cluster, passed on stdin, masked), the grants
 Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: CONNECT, REVOKE ALL FROM PUBLIC, CREATE on public),
-the live extensions, then the dump restored AS THAT ROLE (`--no-owner --no-acl --exit-on-error --single-transaction`;
-refused before the restore when its list holds a kind of object Nextcloud never creates: TOC_ALLOWED); then, every
+the live extensions (and those of HA's database that this device's image has: NC-39), then the dump restored AS THAT ROLE
+(`--no-owner --no-acl --exit-on-error --single-transaction`; its list is checked against its own header first, the entries
+of the programs left out are taken out, and it is refused before the restore when it still holds a kind of object Nextcloud
+never creates: TOC_ALLOWED; a SUPERUSER role never loads it: a plain role does and hands it over, NC-08); then, every
 session pinned, the superuser reads the catalogs only (the same SHAPE_SQL refusal, the role's attributes, no per-role
 or per-database setting) and the fix-ups and table reads run as that role, never as the superuser; fix-ups: the root
 storage id `local::<HA datadirectory>/` -> `local::<target datadirectory>/` and every local storage below it (Team
@@ -46,7 +59,7 @@ The html dir is the live dir without config.php and without the custom apps HA b
 HA's custom apps (decision D2); the data dir is HA's data directory (owner www-data of the live image, top dir like
 the live one; the web updater's own folder `updater-<instanceid>` skipped, previews kept: decision D5) with Nextcloud's
 own `.htaccess` written on top: here the data dir is inside the web root and that file is what keeps the users' files
-private (HA's data directory is outside its web root; any other `.htaccess` in it is refused); the Redis dir is empty;
+private (HA's data directory is outside its web root; any other `.htaccess` in it is left out and listed); the Redis dir is empty;
 the PostgreSQL dir is the new cluster (top dir like the live one).
 """
 import base64
