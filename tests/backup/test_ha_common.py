@@ -916,5 +916,26 @@ class NotDeployedTests(unittest.TestCase):
             self.assertEqual((error.code, error.message), ('not-deployed', '應用「Odoo 18」尚未部署在此設備，無法備份。'))
 
 
+class ScaleWaitsTests(unittest.TestCase):
+    """X-PD-05: the waits of an app's throwaway containers follow the size of the HA backup it comes from."""
+
+    def test_a_big_backup_stretches_the_waits_of_the_apps_throwaway_objects(self):
+        tmp = tempctr.TempObjects(types.SimpleNamespace(uid=None), JOB, cpus=None)
+        ha = types.SimpleNamespace(layout=types.SimpleNamespace(size=25 * 1024 ** 3))
+        hatarget.scale_waits(tmp, ha)
+        self.assertEqual(tmp.size, 100 * 1024 ** 3, 'four times the stored size: what it may be unpacked')
+        self.assertGreater(tmp._wait(600), 600)
+
+    def test_what_does_not_know_a_size_changes_nothing(self):
+        tmp = tempctr.TempObjects(types.SimpleNamespace(uid=None), JOB, cpus=None)
+        for ha in (None, types.SimpleNamespace(), types.SimpleNamespace(layout=None),
+                   types.SimpleNamespace(layout=types.SimpleNamespace(size=0)),
+                   types.SimpleNamespace(layout=types.SimpleNamespace(size=True)),
+                   types.SimpleNamespace(layout=types.SimpleNamespace(size='9'))):
+            hatarget.scale_waits(tmp, ha)
+            self.assertIsNone(tmp.size)
+        hatarget.scale_waits(types.SimpleNamespace(), types.SimpleNamespace(layout=types.SimpleNamespace(size=5)))  # a double
+
+
 if __name__ == '__main__':
     unittest.main()
