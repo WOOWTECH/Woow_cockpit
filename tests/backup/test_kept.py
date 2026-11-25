@@ -129,6 +129,15 @@ class ConvertedBackupCliTests(CliCase):
         self.assertNotIn('error', got)
         self.assertEqual(self.params(got['job_id'])['acknowledged'], {'woowbk-demo': [self.key()]})
 
+    def test_a_registry_that_cannot_be_read_gives_the_same_answer_as_the_job(self):
+        """While ha-imports.json cannot be read the note of a converted backup tells (the rule the job and retention use): the
+        command asks for the lines exactly like the job will, so a restore is not started only to stop at its first step."""
+        self.storage.index[self.backup_id]['note'] = haimport.NOTE_PREFIX + '示範'
+        with mock.patch.object(haimport, 'load_registry', return_value=None):
+            got = self.call(['restore-start'], self.request())
+        self.assertEqual(got['error']['code'], 'confirmation-required')
+        self.assertEqual(self.launched, [])
+
     def test_an_ordinary_backup_is_not_asked(self):
         got = self.call(['restore-start'], self.request())
         self.assertNotIn('error', got)
@@ -166,6 +175,15 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         (write,) = [w for w in self.archive.writes if w['manifest']['note'].startswith(kept.NOTE_PREFIX)]
         self.assertEqual(write['manifest']['apps'][0]['volumes'], [{'name': 'pgdata', 'entry': 'apps/woowbk-demo/volumes/pgdata.tar'}])
         self.assertEqual(write['manifest']['type'], 'safety')
+
+    def test_the_adapter_that_keeps_is_told_what_the_pre_restore_copy_left_stopped_first(self):
+        """Its record of the stopped units must start from what the pre-restore copy left stopped (it replaces the job's list)."""
+        self.world.pauses['woowbk-demo'] = ['woowbk-files.service']
+        self.run_converted()
+        names = [e[0] for e in self.world.events if e[0] in ('backup', 'take_over', 'keep', 'restore')]
+        self.assertEqual(names, ['backup', 'take_over', 'keep', 'take_over', 'restore'])
+        first = next(e for e in self.world.events if e[0] == 'take_over')
+        self.assertIn('woowbk-files.service', first[2])
 
     def test_the_other_databases_are_put_back_after_the_restore_and_the_result_says_which(self):
         result = self.run_converted()
@@ -215,6 +233,18 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
         self.assertFalse(self.pending().exists(), 'the pre-restore copy is dropped, nothing changed')
 
+    def test_a_copy_that_fails_after_it_stopped_the_database_starts_everything_again(self):
+        self.world.fail_keep_after_stop.add('woowbk-demo')
+        self.converted()
+        with self.assertRaises(BackupError):
+            flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        started = [e for e in self.world.events if e[0] == 'start_units' and e[1] == 'woowbk-demo']
+        self.assertTrue(started)
+        self.assertTrue(set(self.world.adapters[-1].app.units) <= {u for e in started for u in e[2]},
+                        'every unit the copy stopped (the database too) is started again')
+        self.assertEqual([e for e in self.world.events if e[0] in ('restore', 'put-back')], [])
+        self.assertEqual(self.reporter.partial.get('stopped_writers', {}), {})
+
     def test_too_little_space_refuses_before_anything_is_stopped(self):
         self.storage.free = 10 * 1024 ** 2
         self.world.kept_estimate = 100 * 1024 ** 2
@@ -224,6 +254,25 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertEqual(caught.exception.code, 'insufficient-space')
         self.assertIn('完整複本', caught.exception.message)
         self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'keep', 'restore')], [])
+
+    def test_the_room_is_checked_again_when_the_pre_restore_copy_has_used_some(self):
+        """The first question (before anything stops) said yes; the pre-restore copy then used the room: the copy of the service
+        is refused before its first service stops, the pre-restore copy is dropped and the app's units run again."""
+        self.world.kept_estimate = 100 * 1024 ** 2
+        reserve = self.paths.reserve_bytes
+        self.world.hook_probe = lambda: setattr(self.storage, 'free', reserve + 100 * 1024 ** 2)
+        self.converted()
+        with self.assertRaises(BackupError) as caught:
+            flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertIn('保存還原前資料後', caught.exception.message)
+        self.assertIn('完整複本', caught.exception.message)
+        names = [e[0] for e in self.world.events]
+        self.assertIn('backup', names)
+        self.assertEqual([n for n in names if n in ('keep', 'restore', 'put-back')], [])
+        self.assertTrue(any(e[0] == 'start_units' and e[1] == 'woowbk-demo' for e in self.world.events), 'units run again')
+        self.assertEqual(self.kept_backups(), [])
+        self.assertFalse(self.pending().exists())
 
     def test_no_other_database_means_no_copy(self):
         self.world.kept_wanted.clear()
@@ -282,6 +331,68 @@ class PinnedPreRestoreBackupTests(ConvertedRestoreCase):
         self.assertFalse(kept.is_kept(self.storage.get(result['safety_backup_id'])))
 
 
+class KeptCopyListAndDeleteTests(CliCase):
+    """The page needs no magic string to find a kept copy: the backup list says `kept` (derived from the note, only when true),
+    and the converted backup stops pointing at a copy the administrator deleted."""
+
+    def setUp(self):
+        super().setUp()
+        self.source = self.backup()['backup_id']
+        self.copy = self.backup()['backup_id']
+        self.storage.index[self.copy].update(type='safety', note=kept.NOTE_PREFIX + '示範（匯入前整個資料庫服務，含其他資料庫）')
+        os.makedirs(self.paths.data, mode=0o700, exist_ok=True)
+        haimport.register(self.paths, self.source, ha_registry_row(), now=time.time())
+        haimport.update_row(self.paths, self.source, kept=self.copy)
+
+    def listed(self):
+        return {b['id']: b for b in self.call(['list'], {})['backups']}
+
+    def test_the_list_marks_the_kept_copy_and_only_it(self):
+        listed = self.listed()
+        self.assertIs(listed[self.copy].get('kept'), True)
+        self.assertNotIn('kept', listed[self.source])
+        self.assertEqual(listed[self.source]['from_ha']['kept'], self.copy, 'the converted backup names its copy')
+
+    def test_an_ordinary_pre_restore_backup_is_not_marked(self):
+        self.storage.index[self.copy]['note'] = '還原前自動備份（還原來源 x）'
+        self.assertNotIn('kept', self.listed()[self.copy])
+
+    def test_a_pinned_pre_restore_backup_is_marked_too(self):
+        self.storage.index[self.copy]['note'] = kept.note_for(None, source_note='還原前自動備份（還原來源 x）')
+        self.assertIs(self.listed()[self.copy].get('kept'), True)
+
+    def test_deleting_the_copy_clears_the_pointer_and_nothing_else_of_the_row(self):
+        before = haimport.load_registry(self.paths)[self.source]
+        got = self.call(['delete'], {'backup_id': self.copy})
+        self.assertNotIn('error', got)
+        row = haimport.load_registry(self.paths)[self.source]
+        self.assertIsNone(row['kept'])
+        self.assertEqual({k: v for k, v in row.items() if k != 'kept'}, {k: v for k, v in before.items() if k != 'kept'})
+        self.assertIsNone(self.listed()[self.source]['from_ha']['kept'])
+
+    def test_deleting_another_backup_leaves_the_pointer(self):
+        other = self.backup()['backup_id']
+        self.assertNotIn('error', self.call(['delete'], {'backup_id': other}))
+        self.assertEqual(haimport.load_registry(self.paths)[self.source]['kept'], self.copy)
+
+    def test_deleting_one_copy_leaves_the_pointer_of_another_converted_backup(self):
+        second_source = self.backup()['backup_id']
+        second_copy = self.backup()['backup_id']
+        self.storage.index[second_copy].update(type='safety', note=kept.NOTE_PREFIX + '另一份')
+        haimport.register(self.paths, second_source, ha_registry_row(), now=time.time())
+        haimport.update_row(self.paths, second_source, kept=second_copy)
+        self.assertNotIn('error', self.call(['delete'], {'backup_id': self.copy}))
+        rows = haimport.load_registry(self.paths)
+        self.assertIsNone(rows[self.source]['kept'])
+        self.assertEqual(rows[second_source]['kept'], second_copy)
+
+    def test_an_unreadable_registry_does_not_stop_the_delete(self):
+        with mock.patch.object(haimport, 'load_registry', side_effect=OSError('unreadable')):
+            got = self.call(['delete'], {'backup_id': self.copy})
+        self.assertNotIn('error', got)
+        self.assertNotIn(self.copy, self.listed())
+
+
 class KeptModuleTests(unittest.TestCase):
     def test_only_a_safety_backup_with_the_note_is_a_kept_copy(self):
         good = {'id': 'a', 'type': 'safety', 'note': kept.NOTE_PREFIX + 'x'}
@@ -309,6 +420,11 @@ class KeptOwner(strength.StrengthOwner):
     """The instance model of test_strengthen plus the one question put-back asks that no other test does."""
 
     def podman(self, args, data, stdout):
+        if args[0] == 'exec' and 'pg_restore' in args and '--create' in args and self.instance is not None and data:
+            name = bytes(data).split(b':', 2)[1].decode()
+            if name in self.partial_restore:  # created, then failed: what is left is for put-back to drop again
+                self.instance[name] = {'owner': 'restored', 'data': bytes(data), 'extensions': []}
+                return podman.Result(1, b'', b'pg_restore: error: could not execute query')
         if args[0] == 'exec' and args[-2:-1] == ['-c'] and args[-1].startswith('DROP DATABASE IF EXISTS "'):
             name = args[-1][len('DROP DATABASE IF EXISTS "'):-1]
             if name not in (self.instance or {}):
@@ -320,6 +436,7 @@ class KeptOwner(strength.StrengthOwner):
         return super().podman(args, data, stdout)
 
     cut_script = False  # a script arrives short: psql exits 0 but never reaches the end mark
+    partial_restore = frozenset()  # databases whose `pg_restore --create` creates them and then fails half-way
 
     def psql_file(self, database, sql, stdout):
         if sql.startswith("SELECT coalesce(json_agg(rolname), '[]'::json) FROM pg_roles"):
@@ -379,6 +496,46 @@ class KeptClusterTests(AdapterKeptCase):
         self.assertEqual((issue.id, issue.names), ('restore.other-databases', ()))
         self.assertEqual(self.adapter.kept_wanted, ['main'])
 
+    def test_a_stopped_service_is_kept_too_and_the_check_says_why(self):
+        """A service that is not running cannot be asked what it holds: the same as "cannot tell" -- a copy of all of it."""
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        by_id = {c['id']: c for c in self.adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertEqual(by_id['woowbk-demo/database-down']['status'], 'warn')
+        self.assertNotIn('未宣告', by_id['woowbk-demo/database-down']['message'],
+                         'the promise of an ordinary restore (it refuses other databases) does not hold for an import')
+        self.assertEqual(by_id['woowbk-demo/databases']['status'], 'warn')
+        self.assertIn('目前未執行', by_id['woowbk-demo/databases']['message'])
+        (issue,) = self.adapter.restore_issues
+        self.assertEqual((issue.id, issue.level, list(issue.names)), ('restore.other-databases', 'confirm', []))
+        self.assertIn('先啟動資料庫服務', issue.text)
+        self.assertEqual(self.adapter.kept_wanted, ['main'])
+        self.assertGreater(self.adapter.kept_estimate, 0)
+
+    def test_an_ordinary_restore_with_a_stopped_service_keeps_its_old_way(self):
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        adapter = self.make_adapter(self.owner)
+        by_id = {c['id']: c for c in adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertIn('未宣告', by_id['woowbk-demo/database-down']['message'])
+        self.assertNotIn('woowbk-demo/databases', by_id)
+        self.assertEqual((adapter.restore_issues, adapter.kept_wanted), ([], []))
+
+    def test_a_stopped_service_whose_units_are_lost_is_the_units_problem_not_a_copy(self):
+        del self.owner.units['woowbk-demo-db.service']
+        adapter = self.converted()
+        by_id = {c['id']: c for c in adapter.preflight(self.manifest(), mode='inplace')}
+        self.assertEqual(by_id['woowbk-demo/units']['status'], 'fail')
+        self.assertEqual((adapter.restore_issues, adapter.kept_wanted), ([], []))
+
+    def test_the_copy_of_a_stopped_service_starts_it_before_it_reads_anything(self):
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        argvs = self.owner.argvs()
+        started = argvs.index([SYSTEMCTL, '--user', 'start', '--', 'woowbk-demo-db.service'])
+        self.assertLess(started, max(i for i, a in enumerate(argvs) if 'pg_dump' in a))
+        self.assertEqual(sorted(info['databases']), ['nextcloud', 'tmpl_custom'])
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'inactive', 'and stopped again for the cold copy')
+
     def test_an_ordinary_restore_still_refuses_and_keeps_nothing(self):
         adapter = self.make_adapter()
         checks = adapter.preflight(self.manifest(), mode='inplace')
@@ -411,6 +568,38 @@ class KeptClusterTests(AdapterKeptCase):
         exported = next(i for i, a in enumerate(argvs) if 'volume' in a and 'export' in a and 'woowbk-demo-pgdata' in a)
         self.assertLess(dumped, stopped, 'read while the database runs')
         self.assertLess(stopped, exported, 'the volume is exported only after the database stopped: a cold copy')
+
+    def recorder(self, adapter):
+        """Every list the adapter gives the job's record, with the state of the owner's units at that moment."""
+        seen = []
+        adapter.writers_hook = lambda units: seen.append((list(units), dict(self.owner.units)))
+        return seen
+
+    def test_every_unit_the_copy_stops_is_in_the_job_record_before_it_stops_and_nothing_listed_earlier_is_lost(self):
+        """The record is replaced by every list the adapter gives it: what the pre-restore copy left stopped (the app, a paused
+        service) must still be in it, and the database unit must be in it BEFORE it stops (the minutes of the copy are the
+        window in which a dead job would otherwise leave the app without its database)."""
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        seen = self.recorder(self.adapter)
+        self.owner.units['woowbk-demo-app.service'] = 'inactive'  # stopped by the pre-restore copy ...
+        self.adapter.take_over(['woowbk-demo-app.service', 'woowbk-files.service'], 12.0)  # ... which also paused a service
+        self.adapter.keep_cluster(self.work)
+        self.assertTrue(seen)
+        for units, _states in seen:
+            self.assertIn('woowbk-demo-app.service', units)
+            self.assertIn('paused:woowbk-files.service', units)
+        first = next(states for units, states in seen if 'woowbk-demo-db.service' in units)
+        self.assertEqual(first['woowbk-demo-db.service'], 'active', 'listed while it still ran')
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'inactive')
+
+    def test_without_a_pre_restore_copy_the_units_the_copy_stops_are_listed_too(self):
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        seen = self.recorder(self.adapter)
+        self.adapter.keep_cluster(self.work)  # nothing was stopped before: the copy stops the app and the database
+        listed = {unit for units, _states in seen for unit in units}
+        self.assertEqual(listed, {'woowbk-demo-app.service', 'woowbk-demo-db.service'})
+        before_app = next(states for units, states in seen if 'woowbk-demo-app.service' in units)
+        self.assertEqual(before_app['woowbk-demo-app.service'], 'active')
 
     def test_the_section_of_the_copy_is_one_the_real_archive_format_accepts(self):
         """The kept copy is packaged by the ordinary archive writer: its app section and entries pass the real validators."""
@@ -452,6 +641,18 @@ class KeptClusterTests(AdapterKeptCase):
         self.assertEqual(done, [])
         self.assertEqual(sorted(name for name, _reason in failed), ['nextcloud', 'tmpl_custom'])
         self.assertNotIn('nextcloud', self.owner.instance)
+
+    def test_what_a_failed_put_back_half_created_is_dropped_again(self):
+        """pg_restore --create makes the database first: when it then fails, the half-made database must not stay behind."""
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        self.owner.reinit()
+        self.owner.units['woowbk-demo-db.service'] = 'active'
+        self.owner.partial_restore = frozenset({'nextcloud'})
+        done, failed = self.adapter.put_back_databases(self.app.postgres[0], info['logical']['main'])
+        self.assertEqual((done, [name for name, _reason in failed]), (['tmpl_custom'], ['nextcloud']))
+        self.assertNotIn('nextcloud', self.owner.instance, 'the half-made database was dropped again')
+        self.assertIn('tmpl_custom', self.owner.instance)
 
     def test_the_roles_script_needs_its_end_mark(self):
         """pg-stdin follow-up F1: one transaction and an end mark, so a script that arrived short is never half applied."""

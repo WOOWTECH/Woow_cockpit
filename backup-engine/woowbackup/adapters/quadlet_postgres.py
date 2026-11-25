@@ -71,6 +71,9 @@ KEPT_TEXT = ('這個應用的資料庫服務裡還有其他資料庫；匯入會
              '（保留在「還原前備份」，不會自動刪除），匯入完成後再自動把這些資料庫放回；放不回去的會告訴你，資料仍在完整複本裡。')
 KEPT_UNKNOWN_TEXT = ('無法確認這個應用的資料庫服務裡是否還有其他資料庫；匯入前會先把整個資料庫服務存成完整複本'
                      '（保留在「還原前備份」，不會自動刪除），匯入完成後如果有其他資料庫會自動放回。')
+KEPT_DOWN_TEXT = ('這個應用的資料庫服務目前沒有執行，無法確認其中是否還有其他資料庫；匯入前會先把整個資料庫服務存成完整複本'
+                  '（保留在「還原前備份」，不會自動刪除），匯入完成後如果有其他資料庫會自動放回。'
+                  '想省下這份複本，請先啟動資料庫服務再重新檢查。')
 PAUSES_TEXT = ('匯入這個應用時，會先暫停下列也在使用它的資料的服務，匯入完成後自動啟動；暫停期間這些服務無法使用，'
                '它們使用的資料夾也會被備份裡的內容取代。')
 MAX_QUADLET_BYTES = 1024 * 1024
@@ -483,7 +486,10 @@ class QuadletPostgresAdapter(Adapter):
         self._data_bytes = 0      # size of the data the running restore put in place (the patient waits scale with it)
         self.restore_issues = []  # haissues.Issue lines of the last preflight() (see the class attribute)
         self.paused = []          # other services this restore paused (D10): started again by resume_paused()
-        self._planned_pauses = []  # the services the last preflight() listed for the confirmation
+        # The services the customer confirmed to be paused (D10): the last preflight()'s list; flows hands the job's list to the
+        # adapters it makes later (the pre-restore copy, a rollback). A service that uses the data and is not in it stops this
+        # app and asks again (confirmation-required) instead of being paused without the customer having seen it.
+        self.planned_pauses = frozenset()
         self.kept_wanted = []     # ids of the databases whose whole service the restore keeps a copy of first (S4)
         self.kept_estimate = 0    # bytes the kept copy takes (the volumes' export size)
         self.kept_done = False    # keep_cluster() made the copy: other databases cannot be lost any more
@@ -1221,14 +1227,29 @@ class QuadletPostgresAdapter(Adapter):
                 units.append(unit)
         return units, blocked
 
-    def pause_foreign(self, *, when='備份'):
+    def require_planned(self, units):
+        """D10: only the services the customer confirmed are paused. A service that uses the data now and was not in the
+        confirmation (it started since) is not paused behind the customer's back: this app stops, before anything has changed,
+        with `confirmation-required` and the whole list as the new line to confirm (the page asks again; the other apps go on).
+        The services this restore paused already are part of that list."""
+        unplanned = [unit for unit in units if unit not in self.planned_pauses]
+        if not unplanned:
+            return
+        names = sorted({self.service_name(unit) for unit in [*self.paused, *units]})
+        issue = Issue('restore.pauses', 'confirm', PAUSES_TEXT, names)
+        raise haissues.confirmation_required({self.app.id: [issue]}, f'還原「{self.app.name}」前還有事情要確認。')
+
+    def pause_foreign(self, *, when='備份', strict=True):
         """Pause the other services `pause_plan` names, once (D10; the restore of a converted HA backup does this where an
         ordinary one refuses). They are listed in the job's record first, so a crash or a signal still starts them again.
+        `strict` (everything but a rollback, which has to finish): only services of the confirmation (`require_planned`).
         Returns the units paused now."""
         units, blocked = self.pause_plan()
         if blocked:
             raise BackupError('incompatible', f'{"；".join(blocked[:4])}；為避免資料不一致或遺失，已停止{when}。請先停止它。',
                               app=self.app.id)
+        if strict:
+            self.require_planned(units)
         fresh = [unit for unit in units if unit not in self.paused]
         if not fresh:
             return []
@@ -1858,7 +1879,8 @@ class QuadletPostgresAdapter(Adapter):
         foreign = []
         if self.ha_import:
             # D10 (X-AD-14, X-AD-50): the restore of a converted HA backup pauses the other services that use the app's data
-            # (they are in the confirmation) instead of refusing; what cannot be paused is refused here by name.
+            # (they are in the confirmation) instead of refusing; what cannot be paused is refused here by name, and a service
+            # that is not in the confirmation stops this app (`pause_foreign` asks again) before anything is stopped.
             foreign, blocked = self.pause_plan()
             if blocked:
                 raise BackupError('incompatible', f'{"；".join(blocked[:4])}；為避免資料不一致或遺失，已停止備份。請先停止它。',
@@ -2558,14 +2580,18 @@ class QuadletPostgresAdapter(Adapter):
                     add('units-masked', 'warn', f'服務 {", ".join(masked)} 因先前的還原沒有完成而被暫時停用；這次還原完成後會恢復。')
                 down = [p['unit'] for p in app.postgres if states[p['unit']].get('ActiveState') != 'active']
                 if down and not lost:
-                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它，'
-                                                 '並確認執行個體中沒有應用設定未宣告的資料庫。')
+                    add('database-down', 'warn', f'資料庫服務 {", ".join(down)} 目前未執行；建立還原前備份時會先嘗試啟動它'
+                                                 + ('。' if self.ha_import else '，並確認執行個體中沒有應用設定未宣告的資料庫。'))
                 for pg in app.postgres:
                     if pg['scope'] == 'instance':
                         self._preflight_instance(pg, _found['postgres'].get(pg['id']), add,
                                                  running=pg['unit'] not in down)
                         continue
                     if pg['unit'] in down:
+                        if self.ha_import and not lost:
+                            # S4: a service that is not running cannot be listed -- the same as "cannot tell" below: the whole
+                            # service is kept as a copy first (keep_cluster starts it), so no other database can be lost.
+                            self._preflight_other_databases(pg, None, add, running=False)
                         continue
                     found = self.undeclared(pg)
                     if self.ha_import and (found is None or found[0]):
@@ -2623,10 +2649,11 @@ class QuadletPostgresAdapter(Adapter):
         self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
 
-    def _preflight_other_databases(self, pg, found, add):
-        """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed. The restore keeps
-        a copy of the whole service (`keep_cluster`) and puts them back; this is the line of the confirmation, and the
-        check that says how much space the copy takes (`kept_estimate`)."""
+    def _preflight_other_databases(self, pg, found, add, *, running=True):
+        """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed (`found` None: it
+        cannot be asked, because it is not running or does not answer). The restore keeps a copy of the whole service
+        (`keep_cluster`) and puts them back; this is the line of the confirmation, and the check that says how much space the
+        copy takes (`kept_estimate`)."""
         names = list(found[0]) if found is not None else []
         try:
             size = self._volume_size(pg['data_volume'])
@@ -2634,7 +2661,11 @@ class QuadletPostgresAdapter(Adapter):
             size = 0
         self.kept_wanted.append(pg['id'])
         self.kept_estimate += size
-        if found is None:
+        if found is None and not running:
+            add('databases', 'warn', f'資料庫服務 {pg["unit"]} 目前未執行，無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；'
+                                     '為免遺失資料，匯入前會先存整個資料庫服務的完整複本。想省下這份複本，請先啟動資料庫服務再重新檢查。')
+            text = KEPT_DOWN_TEXT
+        elif found is None:
             add('databases', 'warn', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；為免遺失資料，匯入前會先存整個資料庫服務的完整複本。')
             text = KEPT_UNKNOWN_TEXT
         else:
@@ -2785,7 +2816,7 @@ class QuadletPostgresAdapter(Adapter):
             return
         for problem in blocked:
             add('dir-in-use', 'fail', f'{problem}；請先停止它。')
-        self._planned_pauses = list(units)
+        self.planned_pauses = frozenset(units)
         if units:
             names = [self.service_name(unit) for unit in units]
             add('dir-in-use', 'warn', f'服務 {"、".join(names[:6])}{"…" if len(names) > 6 else ""} 使用這個應用的資料；'
@@ -3055,6 +3086,10 @@ class QuadletPostgresAdapter(Adapter):
         if mode == 'inplace' and not rollback:
             # A rollback rebuilds the volume the failed restore itself created from the archive: nothing else is in it.
             self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)  # (not for a service whose copy was kept)
+        if self.ha_import and mode == 'inplace' and not rollback:
+            # D10: a service that started using the data since the confirmation (and was not paused by the pre-restore copy: that
+            # one is stopped) is not paused behind the customer's back -- this app stops here, before anything has changed
+            self.require_planned(self.pause_plan()[0])
         self._remember_tags(needed)
         try:
             self._prepare_images(app_manifest, root, needed, loads, allow_pull=not rollback)
@@ -3109,14 +3144,9 @@ class QuadletPostgresAdapter(Adapter):
                     self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
             if app.data_dirs:
                 if self.ha_import:
-                    # D10 (X-AD-14): a service that started since the pre-restore copy is paused too (it is in the
-                    # confirmation; one the check did not know stops this app, as an ordinary restore does).
-                    late = [unit for unit in self.pause_foreign(when='還原') if unit not in self._planned_pauses]
-                    if late:
-                        note = ('匯入期間有新的服務開始使用這個應用的資料，已一併暫停（完成後自動啟動）：'
-                                + '、'.join(self.service_name(unit) for unit in late[:6]) + '。')
-                        self.warnings.append(note)
-                        self.log(f'注意：{note}')
+                    # D10 (X-AD-14): the confirmed services that the pre-restore copy did not pause (there was none) are paused now;
+                    # one that is not in the confirmation is refused (a rollback has to finish and pauses what it finds)
+                    self.pause_foreign(when='還原', strict=not rollback)
                 # Right before the swap: a container still running with a directory mounted would keep using (and
                 # writing into) the replaced copy, which is deleted once the job succeeded (review M5).
                 self._require_unused_dirs(exclude=(), writable_only=False, when='還原')
@@ -3198,8 +3228,13 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'啟動資料庫服務 {pg["unit"]}，以便保留完整複本')
                 self.runner.systemctl('start', '--', pg['unit'], timeout=START_TIMEOUT)
             self._wait_for_postgres(pg)
+        # The job's record of the stopped units is replaced by every `_hook`: what the pre-restore copy left stopped (taken over by
+        # kept.keep) and what this stops are listed together, and before they stop, so a job that dies in the long minutes of
+        # the copy still has every one of them started again by the recovery.
+        noted = list(dict.fromkeys([*self._taken_over, *self._own_noted]))
         if writers:
-            self._hook([*self._own_noted, *[unit for unit in writers if unit not in self._own_noted]])
+            noted = list(dict.fromkeys([*noted, *writers]))
+            self._hook(noted)
             self._stop_units(writers, label='暫停服務')
         self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *writers]))
         info = {'volumes': {}, 'logical': {}, 'databases': [], 'notes': []}
@@ -3224,8 +3259,10 @@ class QuadletPostgresAdapter(Adapter):
             info['logical'][pg['id']] = dump
             info['databases'] += [item['name'] for item in dump['databases'] if item['name'] not in (pg['database'], 'postgres')]
             manifest_postgres.append(self._instance_manifest(dump, entry))
-        self._stop_units(sorted(databases_units, key=app.units.index), label='停止資料庫服務')
-        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *sorted(databases_units, key=app.units.index)]))
+        stopping = sorted(databases_units, key=app.units.index)
+        self._hook(list(dict.fromkeys([*noted, *stopping])))  # listed before it stops: the app cannot run without its database
+        self._stop_units(stopping, label='停止資料庫服務')
+        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *stopping]))
         volumes = []
         for pg in wanted:
             exported = self._export_volume(pg['data_volume'], work)

@@ -70,11 +70,6 @@ def find_podman(paths=PODMAN_PATHS, trusted=root_only):
 PODMAN = find_podman()
 SYSTEMCTL = '/usr/bin/systemctl'
 LOGINCTL = '/usr/bin/loginctl'
-USERMOD = '/usr/sbin/usermod'
-CAT = '/usr/bin/cat'
-SUBID_FILES = {'uid': '/etc/subuid', 'gid': '/etc/subgid'}
-SUBID_BLOCK = 65536      # subordinate ids are added in blocks of this many (what useradd gives an account)
-SUBID_MAX_NEED = 16 * SUBID_BLOCK  # an owner id above this is not a container user: nothing is widened for it
 PYTHON = '/usr/bin/python3'
 SAFE_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 ROOT_ENV = {'PATH': SAFE_PATH, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
@@ -89,6 +84,12 @@ STDERR_TAIL = 64 * 1024
 READ_CHUNK = 1024 * 1024
 SMALL_JSON = 1024 * 1024          # stdout of the directory helper's small operations
 SHORT_TIMEOUT = 60
+# The account's subordinate ids (X-NS-09, the restore of a converted HA backup widens them; OwnerRunner.widen_subids):
+USERMOD = '/usr/sbin/usermod'
+CAT = '/usr/bin/cat'
+SUBID_FILES = {'uid': '/etc/subuid', 'gid': '/etc/subgid'}
+SUBID_BLOCK = 65536      # subordinate ids are added in blocks of this many (what useradd gives an account)
+SUBID_MAX_NEED = 16 * SUBID_BLOCK  # an owner id above this is not a container user: nothing is widened for it
 # Sibling tokens: a job id (`j<stamp>-<hex>`), optionally with `-rollback`.
 TOKEN_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z')
 

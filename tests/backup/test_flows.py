@@ -403,10 +403,12 @@ class World:
         self.no_snapshot = set()  # app ids whose backups carry no http-json snapshot (a converted HA backup has none)
         self.restore_issues = {}  # app id -> the haissues.Issue lines its preflight() leaves in adapter.restore_issues
         self.pauses = {}          # app id -> other services its pre-restore copy / restore pauses (D10)
+        self.planned_seen = {}    # 'backup'|'restore'|'rollback' -> {app id: the confirmed list (planned_pauses) its adapter held}
         self.resume_fail = set()  # services resume_paused() cannot start again
         self.paused_started = []  # units start_paused() was asked for (the recovery of a dead job)
         self.kept_wanted = {}     # app id -> pg ids whose whole database service the restore keeps a copy of first (S4)
         self.fail_keep = set()    # app ids whose keep_cluster() fails
+        self.fail_keep_after_stop = set()  # app ids whose keep_cluster() fails AFTER it stopped the app's units
         self.put_back_failed = {}  # app id -> [(database, reason)] put_back_databases() cannot put back
         self.put_back_raises = {}  # app id -> exception put_back_databases() raises
         self.keep_safety = set()  # app ids whose backups carry keep_safety (L-38)
@@ -448,6 +450,7 @@ class FakeAdapter:
         self.kept_wanted = []
         self.kept_estimate = 0
         self.acknowledged = frozenset()
+        self.planned_pauses = frozenset()
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -478,6 +481,7 @@ class FakeAdapter:
 
     def backup(self, staging_dir, *, include_images, keep_stopped=False):
         self.world.events.append(('backup', self.app.id))
+        self.world.planned_seen.setdefault('backup', {})[self.app.id] = self.planned_pauses
         if self.app.id in self.world.backup_error:
             raise self.world.backup_error[self.app.id]
         self.phase('stop')
@@ -525,6 +529,7 @@ class FakeAdapter:
     def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
         self.world.preflight_dirs.append(extracted_dir)
         self.restore_issues = list(self.world.restore_issues.get(self.app.id, []))
+        self.planned_pauses = frozenset(self.world.pauses.get(self.app.id, ())) if self.ha_import else frozenset()
         self.kept_wanted = list(self.world.kept_wanted.get(self.app.id, []))
         self.kept_estimate = self.world.kept_estimate if self.kept_wanted else 0
         if self.app.id in self.world.preflight_fail:
@@ -536,6 +541,7 @@ class FakeAdapter:
                 replaced_dirs=(), kept_volumes=None):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        self.world.planned_seen.setdefault('rollback' if rollback else 'restore', {})[self.app.id] = self.planned_pauses
         if kept_volumes:
             self.world.events.append(('kept-volumes', self.app.id, tuple(sorted(kept_volumes))))
         if rollback:
@@ -579,6 +585,9 @@ class FakeAdapter:
         """Like the real adapter: stops the app's units, writes the cold copy and the dumps under `work`."""
         self.world.events.append(('keep', self.app.id))
         if self.app.id in self.world.fail_keep:
+            raise BackupError('job-failed', '無法匯出資料庫服務的資料卷。', app=self.app.id)
+        if self.app.id in self.world.fail_keep_after_stop:
+            self.kept_stopped = list(self.app.units)  # the database is stopped for the cold copy, then the export fails
             raise BackupError('job-failed', '無法匯出資料庫服務的資料卷。', app=self.app.id)
         (Path(work) / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
         (Path(work) / 'postgres').mkdir(mode=0o700, exist_ok=True)
@@ -2775,6 +2784,19 @@ class ConfirmedPausesTests(ConvertedRestoreCase):
         self.assertEqual(self.reporter.partial.get('stopped_writers', {}), {})
         self.assertTrue(any('已重新啟動匯入時暫停的服務' in line and self.UNIT in line for line in self.reporter.logs))
 
+    def test_the_adapters_the_job_makes_later_get_the_list_the_customer_confirmed(self):
+        """D10: the pre-restore copy and a rollback make their own adapters; what they may pause is that list and nothing else."""
+        self.converted()
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        for kind in ('backup', 'restore', 'rollback'):
+            self.assertEqual(self.world.planned_seen[kind]['woowbk-demo'], frozenset({self.UNIT}), kind)
+
+    def test_an_ordinary_restore_hands_no_list_to_anyone(self):
+        self.restore()
+        self.assertEqual(self.world.planned_seen['backup']['woowbk-demo'], frozenset())
+
     def test_one_more_name_needs_the_confirmation_again(self):
         self.converted()
         acknowledged = {'woowbk-demo': [self.key('woowbk-files')]}
@@ -2801,6 +2823,15 @@ class ConfirmedPausesTests(ConvertedRestoreCase):
         self.restore_with({'woowbk-demo': [mine], 'woowbk-two': [other], 'x': 'not a list', 'y': ['not a key']})
         for adapter in self.world.adapters:
             self.assertEqual(adapter.acknowledged, frozenset({mine}) if adapter.app.id == 'woowbk-demo' else frozenset())
+
+    def test_a_malformed_key_among_the_keys_confirms_nothing(self):
+        """The keys a request carries are checked before any adapter gets them: one that is not a key spoils the whole list for
+        that app (fail closed), so the line is not confirmed by the good key next to it."""
+        self.converted()
+        with self.assertRaises(BackupError) as caught:
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files'), 'not a key']})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'restore')], [])
 
     def test_an_ordinary_restore_has_no_lines_to_confirm(self):
         result = self.restore_with()  # the backup is not a converted one (H6)

@@ -15,16 +15,16 @@ neighbour in that folder). So, before anything is touched and only when the chec
 * after a successful restore `put_back` puts the other databases and roles back into the new cluster (the app's own
   database and what the HA data brought are never touched); one that cannot go back is named and stays in the copy.
 
-The page's list needs nothing new: the copy is a backup of type `safety` with `from_ha.kept` on its converted backup.
+The page's list: the backup list marks such a backup `kept: true` (`cli.backup_view`), and `from_ha.kept` on the converted
+backup names the copy (cleared again when the administrator deletes it: `forget_pointer`).
 
 API for other lanes (LITELLM, L-38 "other schemas in the same database"): the pre-restore backup of an app already holds
 the whole database, every schema of it. A converted backup whose app section has `keep_safety: true`
 (`adapter.import_manifest(..., keep_safety=True)`) makes the restore write that pre-restore backup with NOTE_PREFIX, so it
 is pinned like a kept copy (`flows._take_safety_copy`, `wants_pin`); the importer lists its own line to confirm.
 """
-import contextlib
-import traceback
 import sys
+import traceback
 from pathlib import Path
 
 from .errors import BackupError
@@ -51,6 +51,16 @@ def kept_ids(backups):
     return {record['id'] for record in backups if is_kept(record) and isinstance(record.get('id'), str)}
 
 
+def forget_pointer(paths, backup_id):
+    """The copy `backup_id` was deleted: the converted backup whose ha-imports.json row names it no longer does (the row says
+    `kept` null again). Nothing else of the row changes; a file that cannot be read or written is left as it is."""
+    from . import haimport
+    rows = haimport.load_registry(paths) or {}
+    for source_id, row in rows.items():
+        if row.get('kept') == backup_id:
+            haimport.update_row(paths, source_id, kept=None)
+
+
 def wants_pin(plans):
     """True when an app of the restore asks for its pre-restore backup to be kept (`keep_safety`, see the module text)."""
     return any(isinstance(getattr(plan, 'manifest', None), dict) and plan.manifest.get('keep_safety') is True
@@ -74,9 +84,11 @@ class Kept:
                 'more': max(0, len(self.databases) - MAX_NAMES), 'put_back': [], 'not_put_back': [], 'notes': list(self.notes)}
 
 
-def check_space(ctx, plans):
+def check_space(ctx, plans, *, again=False):
     """Before anything stops: the kept copies need the export of every database volume twice (the plain copy a rollback
-    reads and the archive) and the device reserve. Refused with `insufficient-space` for this app only; nothing changed."""
+    reads and the archive) and the device reserve. Refused with `insufficient-space` for this app only; nothing changed.
+    `again`: the same question once the pre-restore copy is on disk (it has used some of the room), before the first
+    service of the copy stops."""
     need = sum(int(getattr(plan.adapter, 'kept_estimate', 0) or 0) for plan in plans if getattr(plan.adapter, 'kept_wanted', None))
     if not need:
         return
@@ -84,10 +96,12 @@ def check_space(ctx, plans):
     required = int(need * SPACE_FACTOR) + int(ctx.paths.reserve_bytes)
     from .flows import human
     if free < required:
-        raise BackupError('insufficient-space', f'這台的磁碟空間不夠保留資料庫服務的完整複本：需要約 {human(required, up=True)}，'
+        after = '保存還原前資料後，' if again else ''
+        raise BackupError('insufficient-space', f'{after}這台的磁碟空間不夠保留資料庫服務的完整複本：需要約 {human(required, up=True)}，'
                                                 f'目前可用 {human(free)}。沒有做任何變更，請先清出空間再匯入。',
                           required=required, free=free)
-    ctx.log(f'保留資料庫服務的完整複本，預估需要 {human(required, up=True)}，目前可用 {human(free)}')
+    if not again:
+        ctx.log(f'保留資料庫服務的完整複本，預估需要 {human(required, up=True)}，目前可用 {human(free)}')
 
 
 def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
@@ -99,13 +113,22 @@ def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
         adapter = plan.adapter
         if plan.mode != 'inplace' or not getattr(adapter, 'kept_wanted', None):
             continue
+        check_space(ctx, [plan], again=True)  # the pre-restore copy is on disk now: is there still room? (nothing has stopped for this)
+        left = handover.get(plan.app.id)
+        take_over = getattr(adapter, 'take_over', None)
+        if left and take_over is not None:  # what the pre-restore copy left stopped is this adapter's to record from here on
+            take_over(left.get('units') or [], left.get('first_stop'))
         ctx.log(f'保留「{plan.app.name}」資料庫服務的完整複本…')
         work = Path(staging) / 'kept' / plan.app.id
-        section, entries, info = adapter.keep_cluster(work)
-        stopped = handover.setdefault(plan.app.id, {'units': [], 'first_stop': None})
-        stopped['units'] = list(dict.fromkeys([*stopped.get('units', []), *getattr(adapter, 'kept_stopped', [])]))
-        if stopped.get('first_stop') is None:
-            stopped['first_stop'] = adapter.timing.get('first_stop')
+        try:
+            section, entries, info = adapter.keep_cluster(work)
+        finally:
+            # What the copy stopped is handed to the restore (or, when the copy fails half-way, to the refusal that starts it
+            # again): also when it fails after it stopped the database
+            stopped = handover.setdefault(plan.app.id, {'units': [], 'first_stop': None})
+            stopped['units'] = list(dict.fromkeys([*stopped.get('units', []), *getattr(adapter, 'kept_stopped', [])]))
+            if stopped.get('first_stop') is None:
+                stopped['first_stop'] = getattr(adapter, 'timing', {}).get('first_stop')
         packaged = flows._package(ctx, [plan.app], staging, include_images=False, note=note_for(plan.app), backup_type='safety',
                                   key=key, phases=False, manifest_apps=[section], entries=entries, downtime=0.0)
         copy = Kept(packaged['backup_id'], info)
