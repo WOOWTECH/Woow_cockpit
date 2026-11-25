@@ -199,6 +199,16 @@ class CheckTests(HermesCase):
         self.assertIn('omnigent-plugin/venv/evil', line['items'][0])
         self.assertIn('指到資料以外的符號連結', line['message'])
 
+    def test_programs_for_another_processor_are_listed_and_move(self):   # H-16
+        ha_id = self.upload_hermes(extra=[{'name': 'config/arm.so', 'data': ARM_ELF, **OWN}], evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        line = self.issues(result, 'notice')['hermes.foreign-programs']
+        self.assertEqual(line['items'], ['arm.so'])
+        self.assertIn('跑不起來', line['message'])
+        self.convert(ha_id, ['hermes'])
+        self.assertEqual(self.volume('hermes-data')['arm.so'][1], ARM_ELF, 'moved as it is')
+
     def test_a_missing_version_record_is_a_notice(self):
         result = self.checked(self.upload_hermes(image_version=None, evil=False))
         self.assertTrue(result['ok'])

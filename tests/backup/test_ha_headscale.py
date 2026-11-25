@@ -695,6 +695,12 @@ class PrefixTests(HeadscaleCase):
             self.convert(more, ['headscale'], acknowledged={'headscale': keys})
         self.assertEqual(caught.exception.code, 'confirmation-required')
 
+    def test_a_device_outside_the_range_moves_with_the_others_after_the_confirmation(self):   # HS-19
+        self.catalog['headscale'].data_dirs = []
+        ha_id = self.upload_headscale(db=database(prefixes=['ha'], ips=('10.0.0.5', 'fd7a:115c:a1e0::1')))
+        self.convert_confirmed(ha_id)
+        self.assertEqual(self.keys_of(self.volume('headscale-data')['db.sqlite'][1])[1], ['alice'], 'the device moves, the others too')
+
     def test_a_range_that_cannot_be_read_is_no_refusal(self):   # HS-21
         self.catalog['headscale'].data_dirs = []
         ha_id = self.upload_headscale(config=b'')
@@ -1105,6 +1111,11 @@ class RealChildPolicyTests(PolicyTests):
         patcher = mock.patch.object(__import__(__name__, fromlist=['x']), 'PolicyCopy', _Spy)
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_the_real_child_puts_this_devices_policy_into_the_converted_database(self):
+        self.world.live_db = database(prefixes=['live'], policies=['{"acls": ["mine"]}'])
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(self.policies_of(self.volume('headscale-data')['db.sqlite'][1]), ['{"acls": ["mine"]}'])
 
 
 class ConvertTests(HeadscaleCase):
