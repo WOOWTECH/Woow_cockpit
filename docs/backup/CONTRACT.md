@@ -1206,8 +1206,9 @@ Shapes:
   another processor, newer PostgreSQL, unsupported extensions,
   pending module operations, not enough space; batch 1: an add-on version the engine's table does not know, a different
   alembic revision, unexpected database objects, a missing Omnigent cookie key or artifact, a damaged SQLite file, a hard
-  link to a file that does not move, programs for another processor in Hermes's data, EMQX's admin/public Dashboard
-  account, an ambiguous EMQX node, HA's EMQX storing MQTT passwords with `plain` (SR-5), different Headscale prefixes
+  link to a file that does not move, programs for another processor in Hermes's data (EMQX: since 2026-11-25 only no database in
+  the backup, a node that is not in it, this device's settings that keep changing and a different version stop the app; the admin/public
+  Dashboard account, a node to choose and MQTT passwords stored with `plain` are notices, choices or lines to confirm), different Headscale prefixes
   or a node outside them, Headscale migrations this release does not know, a missing Noise key).
 * `HaImport` (part B; `result.ha_import` and `BackupMeta.from_ha`): `ha_backup_id, name, date, apps[app_id],
   odoo_database|null, test_mode(bool), workflows_to_fix[{name, active, reasons[]}], reminders[zh-TW],
@@ -2269,152 +2270,103 @@ PostgreSQL 15).
 3. `hermes-redis-data`: its top folder only, owned like the live one; database `main`: the live database's dump
    (`adapter._dump_database`, read while it runs: nothing uses it).
 
-**EMQX** (`woow-emqx` → `emqx`: volumes `woow_emqx_data`, `woow_emqx_log`).
-1. Versions: add-on 5.8.9, 5.9.0, 5.9.1 → EMQX 5.8.9 (pinned by the add-on's Dockerfile) must equal the live image's
-   `org.opencontainers.image.version`.
+**EMQX** (`woow-emqx` → `emqx`: volumes `woow_emqx_data`, `woow_emqx_log`). Revised 2026-11-25 (HAOS parity, lane EMQX-A; owner decisions
+D0-D5, S1, S2, H1, H3, H7): restoring HA's backup is what HAOS does, so HA's access settings come with it; what could hurt the customer is a
+line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids are declared in `ha_emqx.ISSUES`.
+1. Versions only inform (`haissues.version_issues`): add-on 5.8.9, 5.9.0, 5.9.1 → EMQX 5.8.9 (pinned by the add-on's Dockerfile). An add-on
+   version the table does not know (`version.addon-unknown`, notice) or an image of this device without a version label (the running
+   broker is asked: `emqx.version-asked`, auto; nothing said: `version.target-unknown`, notice) stops nothing; both known and different
+   is the one stop (`version.different`; installing HA's version is wave 2). This device's image is downloaded as the owner when it is not
+   here (`target.image-pulled`, `hatarget.ensure_image`); a Quadlet that names no image is the one case that still stops.
 2. One pass stages `data/emqx/data/{mnesia/**, configs/cluster.hocon, certs/**, authz/**}` root-owned (certs 0600) into
-   a throwaway volume and reads `data/emqx/node.name`; never the cookie, generated `app.*.config`/`vm.*.args`, plugins,
-   patches, backups, traces or logs. The node is `node.name`, else the single `mnesia/*@*` folder (several without
-   `node.name`, none at all, or a name without its folder: a blocker).
+   a throwaway volume and reads `data/emqx/node.name` and the latest modification time of every `mnesia/<node>/`; never the cookie,
+   generated `app.*.config`/`vm.*.args`, plugins, patches, backups, traces or logs. The node database used (`ha_emqx.pick_node`): the
+   customer's choice (`choices.node`, request `choices.emqx.node`), else the one `node.name` names, else the only one there is, else the
+   one written last (`emqx.node-chosen`, auto, named; `choices.node` lists them all with the default). No database at all stops only this
+   app (`emqx.no-database`); a node name EMQX would not take or a choice not in the backup stops only this app (`emqx.node-gone`).
 3. HA's broker: the live image, `--network none`, a read-only root, user 0 (as on HA), HA's node name (`--add-host
    <host>:127.0.0.1` when its host is not an IPv4 literal), the staged volume at `/data/emqx/data` mounted
    `rw,noexec,nosuid,nodev` (`EMQX_NODE__DATA_DIR`), the image's `VOLUME` paths `/opt/emqx/data` and `/opt/emqx/log`
-   on this job's own volumes, also `rw,noexec,nosuid,nodev` (a path no mount covers would get an anonymous volume that
-   `podman rm` keeps on the device), an empty `EMQX_DASHBOARD__DEFAULT_PASSWORD` (nothing is created at
-   boot); ready when `emqx ctl status` says "is started" (300 s). `emqx eval` of fixed expressions answers
-   whether admin/public still logs in (a blocker), the table counts (a table every 5.8.9 broker has missing: HA's
-   database did not load completely, refused), root names, authenticators, the built-in password database's
-   hashing (SR-5 below; an answer that cannot be read refuses) and authorization
-   policy; then `emqx ctl data export --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,
-   dashboard_users,api_keys,psk,builtin_retainer --dir /work/out` (settings such as listeners, dashboard, node, log,
-   mqtt, zones are never exported).
-4. This device's broker (the candidate). Read first from the running broker as the owner, with fixed `emqx eval`
-   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR`
-   (must be `/opt/emqx/etc`; vendor rel/emqx_vars, bin/emqx) and the no-follow state of `data/configs/cluster.hocon`.
-   Supported, else `incompatible` with a message naming what (the check reports the same message as the app's
-   blocker; a stopped broker is named too): authorization sources exactly `[file]` or `[file, built_in_database]`, both
-   enabled, in that order (EMQX 5.8.9 allows one source per type, emqx_authz.erl check_dup_types); a file ACL at
-   `${EMQX_ETC_DIR}/acl.conf` (resolved with the verified directory, as the vendor's `naive_env_interpolation` does),
-   an absolute path or a data-volume path under `authz/`, `configs/` or `certs/`, on exactly one read-only mount or in
-   the data volume; the built-in password database's bootstrap file on a read-only mount or a `type=mount` secret (mode
-   0400/0440); the image's own TLS files (fingerprinted); only configuration roots whose file dependencies were
-   reviewed for 5.8.9. The data volume's `configs/cluster.hocon` and the data-volume files the configuration names are
-   snapshotted (an override that is absent stays absent, proven by a complete volume traversal); configuration and
-   override state are read again afterwards and must be unchanged. The candidate is the live image with the Quadlet's
-   `EMQX_*` environment, its `EnvironmentFile=` files (in the owner's home, plain `EMQX_*` lines only, read by podman
-   itself with `--env-file` as for the running broker: their values never appear in a command line, which every local
-   account can read), its `Secret=` mounts and its read-only host files, the snapshot in an otherwise empty data
-   volume and the export (owned by the image's emqx user) at `/work/in`. It starts with this device's scheduler
-   counts (fixed `emqx eval` of `erlang:system_info(schedulers)` and `schedulers_online` on the running broker,
-   passed as `ERL_AFLAGS="+S total:online"` at the start of the command line; `ERL_FLAGS` would land after the
-   `-emqx_data_dir` that bin/emqx reads back from `ps`, bin/emqx:570,1321-1324): a boot stores schema defaults derived from them in
-   the raw configuration (Dashboard listeners' `num_acceptors` = online schedulers, emqx_dashboard_schema.erl:125-131;
-   node pool sizes, emqx_conf_schema.erl:688-706) and the candidate runs under `--cpus`. Before anything is imported
-   its scheduler counts, `EMQX_ETC_DIR`, effective configuration and image TLS fingerprints must equal this device's, and HA's
-   export is listed in it by the vendor's own functions on the very file the import reads (`erl_tar`, `hocon`; bounded
-   at 1800 s like the import): `META.hocon`, `cluster.hocon` (8 MiB, roots within `DATA_ROOTS`, no `include`) and the
-   backup files of the exported tables, each once and a regular file in the export's own folder; anything else, or an
-   unreadable listing, refuses (`incompatible`, member and root names only) and nothing is imported (B1-03).
-   `emqx ctl data import` must say "imported successfully". Then this device's settings come back: every root that is not HA data
-   (`DATA_ROOTS`), and `authorization`, is loaded back exactly as it was (`emqx ctl conf load --replace`, no merge of
-   stale fields); the bootstrap file of this device's built-in authenticator is re-attached to HA's matching
-   authenticator. When this device authorizes with the file ACL only and HA's import enabled the built-in database
-   source, that source is first disabled (EMQX 5.8.9 destroys an enabled source's table when it is removed) and the
-   ACL table is proven unchanged by a native receipt (rows, bytes, sorted row hashes) before and after. HA's ACL rows
-   only take effect through an enabled built-in database source and the import never adds or changes this device's
-   sources (owner decision 2026-11-23 「C」): on a target that authorizes with the file ACL only, a backup with ACL
-   rows (`emqx_acl` > 0 in HA's broker) is refused, `incompatible` with the owner's text 「Podman 上的 EMQX 沒有開啟
-   『內建資料庫』權限，HA 的裝置權限搬過去不會生效，裝置會被拒絕。請先在 Podman EMQX 的管理頁「存取控制 → 授權」新增
-   「內建資料庫」（排在檔案規則之後），再匯入。」: by the check as the app's blocker (nothing changed) and by the
-   conversion, which reads this device's profile before anything runs and stops as soon as HA's rows are counted,
-   before any candidate; the finished candidate must hold the profile read before the build. Security review
-   2026-11-23: HA's broker runs with `EMQX_PLUGINS__STATES=[]` and the image's plugin folder pinned through the
-   environment (it wins over cluster.hocon; EMQX 5.8.9 starts every enabled plugin at boot) and all its volumes
-   `noexec,nosuid,nodev` (SR-1); after this device's settings came back the candidate is refused (`incompatible`,
-   with a message naming what) when a data-volume file of this device's snapshot other than `configs/cluster.hocon`
-   is not byte-identical (SR-2: HA's export inlines HA's file ACL and the import would rewrite this device's), when a
-   value in the roots HA's import brought uses EMQX's `file://` secret loader (SR-3), when a migrated rule calls `jq`
-   (SR-6: jq reads the broker's environment), or when an enabled authenticator other than the built-in database
-   (`password_based`/`scram`) or an enabled ExHook server remains (SR-7: they receive every client's credentials).
-   The final effective configuration must equal this device's in every preserved root; node, rpc and cluster never change; an enabled authenticator must remain (no
-   anonymous login); every table holds at least HA's rows and at most HA's plus what the empty broker seeded. HA's
-   API keys replace this device's. The candidate's other fixed `emqx eval` reads are bounded at 120 s each (the vendor CLI
-   itself waits without a limit, bin/nodetool); their output bounds are unchanged.
-   Hot backups (addon.json `state` `started`: the add-on has no cold backup mode) are tried; when HA's broker does not
-   start, a table is missing, EMQX's own export fails or the import reports errors, the job refuses (`incompatible`) with
-   the advice to make a new backup with the add-on stopped -- never a silently incomplete result.
-   SR-5 (owner decision 2026-11-24, option C: MQTT password hashing). HA's `authentication` root replaces this
-   device's and EMQX 5.8.9 checks every stored row of the built-in password database with the authenticator's
-   current hashing, never re-hashing a stored row (emqx_authn_mnesia.erl:130-161; the bootstrap import never
-   overwrites a row, :556-565). Both brokers answer the same fixed expression (`HASH_EXPR`): the `password_based` +
-   `built_in_database` authenticator's `enable`, hashing `name`, `salt_position`, and pbkdf2's `mac_fun`,
-   `iterations`, `dk_length` (at most one such authenticator; two, a cut or an unknown shape refuses: 「無法讀取…
-   EMQX 帳號驗證設定（MQTT 密碼的雜湊方式），已停止。」). This device is read with it read-only as the owner (the
-   check after its preflight, the conversion before anything is built), and when it has that authenticator, the
-   user ids of its global chain (`USERS_EXPR`: `mnesia:dirty_all_keys(emqx_authn_mnesia)` filtered to
-   `'mqtt:global'`, the count and the first ten ids base64 each; never a password hash or salt). A row this device
-   wrote is still accepted by HA's hashing (`rows_still_verify`, after emqx_authn_password_hashing.erl:252-269 and
-   emqx_passwd.erl:67-104) when both are bcrypt (the rounds and salt come from the stored hash), both pbkdf2 with
-   the same `mac_fun`, `iterations` and derived length (no `dk_length` = the MAC's own length), or the same simple
-   algorithm with the same `salt_position` (a row written with `disable` has an empty salt and is accepted with any
-   position). Otherwise, when this device has users there, the check adds the warning 「HA 的 EMQX 保存 MQTT
-   密碼的方式（<HA's>）和這台（<this device's>）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（<names>）匯入後
-   無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設
-   密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」 (names through
-   the shared name list: at most ten, each cut at 60 characters, control and format characters (Unicode Cc, Cf, Cs,
-   Cn, Zl, Zp: also zero-width and other invisible characters, iteration 8) shown as `?`, 「等 N 個」 for more), the page
-   shows it with the check's other warnings before any conversion, and the conversion repeats it in the import notes
-   and the EMQX reminders. Equal hashing: nothing is added. Iteration 8 (O-3): when HA's built-in password database is
-   disabled or absent and this device has users there, the check warns instead 「HA 的 EMQX 沒有啟用內建資料庫的帳號密碼認證，匯入後以 HA
-   的為準：這台的 MQTT 帳號（<names>）匯入後無法再用帳號密碼登入，這台設有 bootstrap 帳號檔時轉換也會停止。要繼續使用這些帳號，請先在 HA 的 EMQX 管理頁「存取控制 →
-   認證」啟用內建資料庫認證，再重新製作 HA 備份。」 (a bootstrap file of this device then has no enabled HA authenticator to stay attached
-   to, so the conversion stops while building the candidate). HA's `plain` stores every password as
-   it is (emqx_passwd.erl:104, an empty salt: emqx_authn_password_hashing.erl:206-207): refused (`incompatible`),
-   enabled or not, as the check's blocker and by the conversion right after HA's readings, before HA's export:
-   「HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在
-   HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式
-   （例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的
-   帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。」 (update = create: the stored rows keep the plain value
-   and are checked with the new hashing, emqx_authn_mnesia.erl:130-161; a password set again is hashed with it,
-   :390-401).
-   Security re-review 2026-11-24 (iteration 7): HA's broker also answers `PLAIN_EXPR`: the number of `plain` built-in
-   password databases outside the global chain (an MQTT listener's `listeners.<type>.<name>.authentication`, a
-   gateway's `gateway.<name>.authentication` and a gateway listener's; their rows share the one exported table,
-   emqx_authn_mnesia.erl:105, and the `gateway` root is imported), the number of rows NOT stored in the form of their
-   authenticator's hashing (iteration 8: every algorithm verifies a row only in one form, so any other value never
-   logs in and may be the password itself: md5 / sha / sha256 / sha512 hex of 32 / 40 / 64 / 128 characters in any
-   case, emqx_passwd.erl:77-79,106-113,148-150; pbkdf2 hex of twice `dk_length` or of the MAC's own length,
-   :67-69,140-158; bcrypt `$2<a|b|x|y>$<04..31>$` + 53 characters of [./A-Za-z0-9],
-   emqx_authn_password_hashing.erl:220-224,252-253, minors and rounds proven in the 5.8.9 image; `plain` never;
-   whatever the salt, so `hash` imports and bootstrap files that stored a clear value are caught,
-   emqx_authn_mnesia.erl:541-542; a row of a user group no built-in database of HA's configuration owns, left by a
-   removed gateway or listener, must have one of these forms) and the first ten of them (base64 user id + base64 user
-   group; never a hash or salt; a row of an unknown shape answers `bad` and refuses like an unreadable answer). Either
-   refuses (`incompatible`) at the check and in the conversion before HA's export, after the global text above: 「HA 的
-   EMQX 在 MQTT 監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 把這些認證的密碼雜湊方式改成
-   plain 以外的方式，再替這些帳號重新設定一次密碼（或刪除這些認證和帳號），然後重新製作 HA 備份再匯入。」 or 「HA 的 EMQX 內建資料庫裡有 MQTT
-   帳號的密碼沒有以所屬認證目前的雜湊方式保存，可能是明文（<names>；例如在改用其他雜湊方式之前用「plain」設定，或以「hash」方式匯入帳號時填入了沒有雜湊的密碼；括號裡是不屬於全域認證的帳號所在的監聽器或閘道），這些帳號現在也無法用密碼登入。搬過來可能把明文密碼留在這台，所以不能匯入。請先在
-   HA 的 EMQX 管理頁「存取控制 → 認證」替這些帳號重新設定一次密碼，或刪除不用的帳號（所在的閘道或監聽器已經刪除時，先重新建立它的內建資料庫認證，再刪除這些帳號），然後重新製作 HA 備份再匯入。」
-   (names through the shared name list). Not covered: a SCRAM
-   authenticator's algorithm, the account warning for listener-level or gateway users (the warning reads the global
-   chain only), and a bootstrap file of type `hash` (the conversion still refuses one whose hashing differs).
+   on this job's own volumes, also `rw,noexec,nosuid,nodev`, an empty `EMQX_DASHBOARD__DEFAULT_PASSWORD`; ready when `emqx ctl status` says
+   "is started": the wait grows with the data (`podman.scaled_timeout`) and, while the broker still runs, goes on for another hour; the job's
+   cancel is asked at every step; only a broker that ended (or never answers) stops the app. `emqx eval` of fixed expressions answers whether
+   admin/public still logs in, the table counts (a table every 5.8.9 broker has missing: HA's database did not load completely, refused),
+   root names, authenticators, authorization sources (`[{type, enable}]`, types and flags only) and the no-match rule, and the built-in password
+   database's hashing. The system-message ticker is paused so rows stay countable; when it cannot be (or restarts), `emqx.sys-ticker` (notice)
+   says so and the retained-message count may differ by up to 64 rows (`SYS_SLACK`; never an account, rule or key). Then `emqx ctl data export
+   --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,dashboard_users,api_keys,psk,builtin_retainer --dir
+   /work/out` (listeners, dashboard, node, log, mqtt, zones are never exported). No size cap of 2 GiB any more (E-64): the room for the copy
+   decides (`SpaceGuard.check`), 64 GiB is only a sanity bound per table file.
+   D1 (E-16..E-19): how MQTT passwords are stored is said, never refused: `plain` in the global built-in database (`emqx.plain-passwords`),
+   in a listener's or gateway's (`emqx.plain-elsewhere`), rows not in the form of their authenticator's hashing (`emqx.clear-rows`, names
+   up to 20) are all notices that say the clear text stays on this device and in every later backup; an unreadable answer is
+   `emqx.hashing-unreadable` (notice). D2 (E-20): HA's admin/public Dashboard account is restored as it is (`emqx.default-dashboard`,
+   notice); when this device's Dashboard is published beyond the loopback (the installed Quadlet's `PublishPort=`, an entrance container of
+   the app) or a tunnel container (ngrok, Cloudflare) is installed it is `emqx.default-dashboard-exposed` (confirm, H3).
+4. This device's broker (the candidate). A stopped broker is started for the read and put back (`hatarget.ensure_running`: `target.service-started`
+   auto, `target.service-failed` stop; E-22). Read first from the running broker as the owner, with fixed `emqx eval`
+   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR` (must be `/opt/emqx/etc`)
+   and the no-follow state of `data/configs/cluster.hocon`. HA's authorization replaces this device's (D0), so this device's authorization
+   sources are not judged (E-26, E-27, E-31): they only name files the candidate needs (a path may be the list of character codes EMQX makes of
+   it, E-28); a file source's path on a read-only mount, under `${EMQX_ETC_DIR}`, or in the data volume under `authz/`, `configs/`, `certs/`;
+   a bootstrap file that cannot be followed (E-48, E-49) or that the candidate cannot read (E-61) is left off and said (`emqx.bootstrap-lost`,
+   notice); the image's own TLS files are fingerprinted (one that cannot be read is left out, E-54). The data volume's
+   `configs/cluster.hocon` and the data-volume files the configuration names are snapshotted; one named file that is not there is said
+   (`emqx.target-file-missing`, notice, E-55: this device's own broker has the same hole); the read is made again up to three times when the
+   configuration changes meanwhile (`emqx.config-reread`, auto; still changing: `emqx.config-changing`, stop with the advice not to edit,
+   E-58). The candidate is the live image with the Quadlet's `EMQX_*` environment, its `EnvironmentFile=` files (read by podman itself with
+   `--env-file`, never into a command line; what they hold is no longer judged, E-53), its `Secret=` mounts and read-only host files, the
+   snapshot in an otherwise empty data volume (owned by the image's emqx user, which may be root, E-56) and the export at `/work/in`. It starts
+   with this device's scheduler counts (`ERL_AFLAGS="+S total:online"`; a count that cannot be read or is not answered is only logged, E-57).
+   Before anything is imported its `EMQX_ETC_DIR`, node name and image TLS fingerprints must equal this device's, and HA's export is listed by the
+   vendor's own functions on the very file the import reads (B1-03: only `META.hocon`, `cluster.hocon` with `DATA_ROOTS` and the table backups).
+   A root where the candidate's boot differs from this device's running configuration (changed, not yet restarted) is listed (`emqx.config-differs`,
+   notice, E-60) and what the candidate booted with is the baseline of every later comparison; only another node name stops.
+   H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
+   `EnvironmentFile=` lines: names only) win over HA's after the next start: `emqx.env-wins` (notice, names).
+   `emqx ctl data import` then runs. Output that does not say "imported successfully" names, as far as it names roots or tables, what EMQX could
+   not import: `emqx.import-partial` (confirm, E-67; the rest goes on and the row counts decide the tables).
+   D0 (HAOS parity): then HA's `authentication` and `authorization` are made exactly HA's in the candidate (`apply_ha_access`): the authenticators
+   and the authorization sources are cut to HA's, in HA's order, each as the import left it; HA's no-match rule and deny action are set
+   explicitly; HA without any authenticator is an explicit empty list; a built-in database source HA does not have is first disabled and then removed
+   (EMQX 5.8.9 clears the ACL rules of a source it destroys, not of a disabled one); this device's bootstrap file is attached to HA's built-in database
+   authenticator of the same identity when it is enabled and, for a `hash` file, hashes the same way (otherwise `emqx.bootstrap-lost`: E-68, E-69).
+   The result is read back and must be what was meant (E-80). HA's ACL file replaces this device's: `emqx.acl-replaced` (notice, D3, E-75), nothing is
+   written back; any other data-volume file of this device's snapshot (a certificate) must still be byte-identical. Every other root that is not HA data
+   (`DATA_ROOTS`) is loaded back exactly as it was (`emqx ctl conf load --replace`, E-72, E-74); node, rpc and cluster never change.
+   Security review 2026-11-23, S1 (D4; E-76..E-79): HA's settings run as they are; their NAMES are read from the candidate's finished configuration by the
+   same functions in the check and in the conversion (so the confirmation key is the same): `emqx.file-secret` (a value of the roots HA's import
+   brought uses EMQX's `file://` secret loader), `emqx.jq-rule` (rule ids that call `jq`, which reads the broker's environment), `emqx.external-authn` (enabled
+   authenticators other than the built-in database), `emqx.external-authz` (authorization sources other than file and built-in database),
+   `emqx.exhook` (enabled ExHook servers); all `confirm`: the customer confirms the names, a conversion without the key stops only this app
+   (`confirmation-required`), one more name is another key. S2 (D5; E-82): HA's authentication that lets everybody in is restored;
+   `emqx.no-authentication` (confirm) when this device had authentication before, saying whether the installed Quadlet publishes the MQTT ports beyond
+   the loopback and that a public address (Cloudflare, ngrok) cannot be told from here. Every table holds at least HA's rows and at most HA's plus what
+   the empty broker seeded (`check_counts`, E-83). HA's API keys replace this device's. Hot backups (addon.json `state` `started`) are tried; when HA's broker
+   does not start, a table is missing or EMQX's own export fails the app stops with the advice to back up again with the add-on stopped.
+   H7 (DESIGN H-6): the CHECK builds the same candidate (about +1-2 minutes) and collects the lines; the conversion builds it again and stops at the
+   first confirm line the customer did not confirm. HA's add-on option `env_vars` is not read (D0 (4), open: needs a READ-lane reader).
+   SR-5 (MQTT password hashing; owner decision 2026-11-24, option C, replaced by D1 on 2026-11-25): HA's `authentication` root replaces this device's and EMQX 5.8.9
+   checks every stored row of the built-in password database with the authenticator's CURRENT hashing, never re-hashing a stored row (emqx_authn_mnesia.erl:130-161;
+   the bootstrap import never overwrites a row). This device is read read-only as the owner (`HASH_EXPR`, `USERS_EXPR`: the first ten user ids of the global
+   chain, never a password hash or salt). When a row this device's hashing wrote is no longer accepted by HA's (`rows_still_verify`), the check says
+   `emqx.accounts-reset` (notice) naming the accounts (names through the shared name list, first ten and 「等 N 個」): 「HA 的 EMQX 保存 MQTT 密碼的方式（<HA's>）和這台（<this device's>）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（<names>）匯入後無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」;
+   HA's built-in database disabled or absent is the same notice with another text: 「HA 的 EMQX 沒有啟用內建資料庫的帳號密碼認證，匯入後以 HA 的為準：這台的 MQTT 帳號（<names>）匯入後無法再用帳號密碼登入。要繼續使用這些帳號，請先在 HA 的 EMQX 管理頁「存取控制 → 認證」啟用內建資料庫認證，再重新製作 HA 備份。」;
+   an unreadable answer is `emqx.accounts-unknown` (notice, E-52: said, never guessed, nothing stops): 「讀不出這台 EMQX 的 MQTT 帳號和密碼保存方式，沒辦法事先列出匯入後會失效的帳號（功能不受影響）；匯入後這台原本的 MQTT 帳號可能要重設密碼：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」.
+   D1 texts (notices): `emqx.plain-passwords` 「HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼；會照 HA 原樣匯入，明文密碼會留在這台的資料卷、轉換出的備份和之後每一份備份裡，這台之後新增的 MQTT 帳號也會用明文保存。裝置照常登入。若要避免，請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把密碼雜湊方式改成 plain 以外的方式並重設密碼，再重新備份。」; `emqx.plain-elsewhere` 「HA 的 EMQX 在 MQTT 監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼；會照 HA 原樣匯入，這些帳號的明文密碼會留在這台的資料卷和之後每一份備份裡（監聽器的認證設定不會搬，那些帳號在這台沒人用）。」; `emqx.clear-rows` 「HA 的 EMQX 內建資料庫裡有 <count> 個 MQTT 帳號的密碼沒有以所屬認證目前的雜湊方式保存，可能是明文（例如在改用其他雜湊方式之前用「plain」設定，或以「hash」方式匯入帳號時填入了沒有雜湊的密碼；括號裡是不屬於全域認證的帳號所在的監聽器或閘道）；這些帳號在 HA 現在也無法用密碼登入，會照 HA 原樣匯入。真的是明文時，明文密碼會留在這台的資料卷和之後每一份備份裡。可以略過它們：在 HA 重設這些帳號的密碼或刪除不用的帳號，再重新備份。」;
+   `emqx.hashing-unreadable` 「讀不出 HA 的 EMQX 的 MQTT 密碼保存方式，無法事先知道有沒有明文密碼；照 HA 原樣匯入，真有明文密碼時它會留在這台和之後每一份備份裡。」.
 5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
    `configs/*.bak`, `backup/**`, `trace/**`; `woow_emqx_log`: its top folder only, owned like the live one.
-6. Readback (2026-11-23). Before the candidate stops, its readback goes into the converted backup's app section as
-   `import_check` (section 5): a SHA-256 per root of its effective raw configuration (canonical JSON per root; first
-   every value under a key containing password, passwd, secret, cookie, token or key, every value below `headers` and
-   the user part of a `scheme://user@host` URL become one fixed marker, so the digests never carry this device's
-   Dashboard password or Erlang cookie, which the raw configuration holds; security review SR-4) and,
-   per table only an administrator changes (`emqx_authn_mnesia`, `emqx_authn_scram_mnesia`, `emqx_acl`, `emqx_admin`,
-   `emqx_app`, `emqx_psk`, `emqx_banned_rules`), the row count and the SHA-256 of the sorted SHA-256s of the rows'
-   external terms (one read-locked transaction per table; -1 for a table the broker does not have). Retained
-   messages and the banned list move with clients and expiry and are only counted by the conversion. After a restore
-   of that backup started the units and its health checks passed, the engine waits until `emqx ctl status` says "is
-   started" (300 s) and reads the same values from the restored broker; any difference fails the restore with the
-   names of the differing roots or tables (「EMQX 還原後的設定（…）和轉換時核對的不同…」), and the restore rolls back
-   by itself; an equal readback logs 「EMQX 還原後核對一致…」. A section whose `import_check` this engine does not know
-   (another kind or app) refuses the restore in its preflight, before anything changes. The digests are derived from
-   data the same archive holds and never appear in a log or job record.
+6. Readback. Before the candidate stops, its readback goes into the converted backup's app section as `import_check` (section 5): a SHA-256 per root of its
+   effective raw configuration in its boot form (secrets redacted first, SR-4) and, per table only an administrator changes (`emqx_authn_mnesia`,
+   `emqx_authn_scram_mnesia`, `emqx_acl`, `emqx_admin`, `emqx_app`, `emqx_psk`, `emqx_banned_rules`), the row count and the SHA-256 of the sorted SHA-256s of the
+   rows' external terms. A receipt that cannot be read (E-84) is written as `[-1, null]` for every table (the one form the schema knows for "no such table") and
+   `emqx.receipt-unreadable` (notice) says it. After a restore of that backup started the units and its health checks passed, the engine waits until `emqx ctl
+   status` says "is started" (the wait grows with the data and goes on while the container runs; a container that ended fails the restore, E-88) and reads the same
+   values from the restored broker. A difference in the TABLES (accounts, ACL rules, keys: 「EMQX 還原後的內建資料庫（…）和轉換時核對的不同…」) fails the restore, which rolls back by
+   itself; a difference in the SETTINGS only (a setting changed after the conversion, the CPU count) is reminded in the job log and nothing is undone (E-90); an equal readback logs
+   「EMQX 還原後核對一致…」. A record this engine does not know after the restore (E-89) is skipped with a reminder; the restore's preflight (`haimport.import_check_problem`) has already refused
+   a backup whose `import_check` kind is not the engine's (E-87). The digests are derived from data the same archive holds and never appear in a log or job record.
 
 **Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`; an entry may also name the package's
 read-only configuration folder, the one mounted at `/etc/headscale`, as its one host folder: the form catalog-suggest drafts).

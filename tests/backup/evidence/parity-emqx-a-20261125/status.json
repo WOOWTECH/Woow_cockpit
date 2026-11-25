@@ -1,0 +1,25 @@
+{
+ "lane": "EMQX-A",
+ "branch": "parity/emqx-a-20261125",
+ "tip": "7840a18",
+ "base": "3db6988",
+ "rows": {
+  "done": 48,
+  "part": 0,
+  "open": 0
+ },
+ "unit_tests": {
+  "modules": 19,
+  "tests": 303,
+  "skipped": 3,
+  "failures": 0,
+  "errors": 0
+ },
+ "neighbours": {
+  "tests": 572,
+  "skipped": 5
+ },
+ "registry": "merged on a copy of 3db6988: OK",
+ "real": false,
+ "commercial_acceptance": "not-complete"
+}

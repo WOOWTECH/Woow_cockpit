@@ -22,7 +22,7 @@ PACKAGE_MANIFESTS = ('apps-catalog/manifest.json', 'backup/manifest.json', 'pi-w
 ENGINE_MODULES = ('__init__', 'errors', 'paths', 'archive', 'keys', 'storage', 'util', 'catalog', 'podman',
                   'flows', 'jobs', 'cli', 'schedule', 'hasecuretar', 'habackup', 'hastore', 'tempctr', 'ha_odoo',
                   'ha_n8n', 'haimport', 'haapps', 'haissues', 'hachain', 'hacommon', 'hasqlite', 'ha_omnigent', 'ha_hermes', 'ha_emqx',
-                  'ha_emqx_settings', 'ha_emqx_authorizers', 'ha_emqx_acl_preservation', 'ha_emqx_acl_path_proof',
+                  'ha_emqx_settings',
                   'ha_headscale', 'ha_opendesign', 'ha_codeserver', 'ha_nextcloud', 'ha_litellm', 'ha_litellm_candidate',
                   'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres', 'hatarget')
 # 排程備份 (docs/backup/CONTRACT.md section 8): the static timer and its tick service, exactly these settings. Unit files
