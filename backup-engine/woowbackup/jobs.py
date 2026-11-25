@@ -1571,10 +1571,18 @@ class _Run:
 
     def __init__(self, paths, store, lock_fd, masks, deps, handlers, follow):
         self.paths, self.store, self.lock_fd, self.masks = paths, store, lock_fd, masks
-        self.deps, self.handlers, self.follow = deps, handlers, follow
+        self._deps, self.handlers, self.follow = deps, handlers, follow
         self.ha_key = None
         self.key_file = None   # the first job's key file while a restore chain still needs it
         self.taken = []        # the ids of the jobs this run took: a cancel request of each is cleared at the end
+
+    @property
+    def deps(self):
+        """The production dependencies, built when a job really starts (a job that is cancelled or taken never needs them)."""
+        if self._deps is None:
+            from . import flows
+            self._deps = flows.default_deps(self.paths)
+        return self._deps
 
     def go(self, job_id):
         """Run `job_id` and what follows it; returns the record of `job_id` (the job this process was started for)."""
@@ -1675,7 +1683,6 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
     """Execute a queued job in this process (the systemd-run unit). Never replays finished jobs. Returns the record of
     `job_id`. A job of a Home Assistant import (`params.group`, hachain.py) is followed by the jobs its chain adds, in this
     process and under the same engine lock (`chain=False` runs only the given job: the tests of one step)."""
-    from . import flows
     store = JobStore(paths)
     lock_fd = None
     masks = contextlib.ExitStack()
@@ -1695,7 +1702,7 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
                             hachain.unstarted(paths, store, reporter.record, hachain.Stop('busy'))
                         reporter.record = store.get(job_id)
             return reporter.record
-        run = _Run(paths, store, lock_fd, masks, deps or flows.default_deps(paths), handlers, chain)
+        run = _Run(paths, store, lock_fd, masks, deps, handlers, chain)
         return run.go(job_id)
     finally:
         _remove_key_file(store, job_id)

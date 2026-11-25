@@ -1167,6 +1167,29 @@ class RecoveryTests(ChainCase):
                          {'odoo': 'converted', 'n8n': 'not-started', 'emqx': 'not-started'})
         self.assertEqual(self.start(request_id='req-after-kill-0002')['deduplicated'], False, 'the engine is free again')
 
+    def test_a_job_that_was_written_after_its_predecessor_finished_and_never_began(self):
+        """Killed between two jobs: the first one is finished (its result names the next), the next never began."""
+        original = jobs.JobReporter.begin
+
+        def begin(reporter):
+            if reporter.record['params']['group']['step'] == 'restore':
+                raise Killed()
+            return original(reporter)
+
+        self.start_chain()
+        with mock.patch.object(jobs.JobReporter, 'begin', begin):
+            self.run_until_killed()
+        self.assertEqual(self.shape(), [('convert', 'odoo', 'succeeded'), ('restore', 'odoo', 'queued')])
+        self.assertEqual(self.records()[0]['result']['group']['next_job_id'], self.records()[1]['id'])
+        self.assertEqual(self.recover(), [], 'young: left alone for its grace')
+        self.recover(now=time.time() + jobs.QUEUED_GRACE_SECONDS + 5)
+        self.assertEqual(self.shape(), [('convert', 'odoo', 'succeeded'), ('restore', 'odoo', 'interrupted')])
+        self.assertEqual(self.records()[1]['error']['message'], hachain.NOT_STARTED)
+        row = self.last_results()['odoo']
+        self.assertEqual((row['status'], row['backup_id'], row['code']), ('converted', backup_id(1), 'interrupted'))
+        self.assertEqual({app: r['status'] for app, r in self.last_results().items() if app != 'odoo'},
+                         {'n8n': 'not-started', 'emqx': 'not-started'})
+
     def test_while_the_unit_lives_neither_job_is_touched(self):
         """Every job of the import carries the unit of the first one: it keeps the queued job from being judged dead."""
         self.killed_between()
