@@ -707,7 +707,14 @@ class OdooTargetTests(OdooCase):
         for dpkg, env, expected in (('18.0.20260926', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
                                     (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
                                     (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=18.0.20260926'], '18.0.20260926'),
-                                    ('not a version!', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926')):
+                                    ('not a version!', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
+                                    # what upgrade-gate.sh makes of a package version: epoch and suffix cut, three fields, 18.0.<8 digits>
+                                    ('1:18.0.20260926-1', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    ('18.0.20260926+dfsg', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    ('18.0.20260926.1', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=18.0.20260926-1'], '18.0.20260926'),
+                                    ('19.0.20260926', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
+                                    ('18.0.2026092', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926')):
             with self.subTest(dpkg=dpkg, env=env):
                 self.world.dpkg_version, self.world.web_env = dpkg, env
                 self.world.owner.psql.clear()

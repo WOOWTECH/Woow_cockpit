@@ -572,6 +572,56 @@ class LiveTests(unittest.TestCase):
                 self.assertEqual(live.web_mounts, [('odoo18-web-data', '/var/lib/odoo', 'ro')])
 
 
+class PackageQuadletTests(unittest.TestCase):
+    """The Quadlet files of the real tenant package (committed with the lab evidence: Woow_podman_odoo c578b8a), rendered
+    with test values as its installer does, read by `Live`: the layout the import has to know is the package's own."""
+
+    FOLDER = (Path(__file__).resolve().parents[1] / 'e2e' / 'lab' / 'evidence' / 'arm54-final-20261123' / 'odoo-package-c578b8a'
+              / 'quadlet')
+    VALUES = {'DB_IMAGE': 'jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:7a47',
+              'DB_BOOTSTRAP_USER': 'postgres', 'DB_BOOTSTRAP_SECRET': 'odoo18-postgres-super-password',
+              'DB_VOLUME_NAME': 'odoo18-db-data-isolated', 'ODOO_IMAGE': 'localhost/woow-odoo-tenant-ha:20261101.1152-51856b0',
+              'ODOO_PUBLISH': '127.0.0.1:8069', 'WOOW_ODOO_ADDONS_DIR': '%h/.local/share/odoo18/addons', 'ODOO_PRESTART': ''}
+
+    def rendered(self):
+        found = {}
+        for path in sorted(self.FOLDER.iterdir()):
+            text = path.read_text(encoding='utf-8')
+            for key, value in self.VALUES.items():
+                text = text.replace(f'@@{key}@@', value)
+            self.assertNotIn('@@', text, path.name)
+            found[path.name] = text.encode('utf-8')
+        return found
+
+    def test_the_packages_own_files_are_a_layout_the_import_knows(self):
+        live = ha_odoo.Live(self.rendered(), '/home/appowner')
+        self.assertEqual((live.db_file, live.web_file, live.db_container), ('odoo-db.container', 'odoo.container', 'odoo18-db'))
+        self.assertEqual((live.db_volume, live.db_target, live.pgdata, live.db_user),
+                         ('odoo18-db-data-isolated', '/var/lib/postgresql/data', '/var/lib/postgresql/data', 'postgres'))
+        self.assertEqual(live.db_env, {'POSTGRES_USER': 'postgres', 'POSTGRES_DB': 'postgres',
+                                       'POSTGRES_INITDB_ARGS': '--data-checksums',
+                                       'POSTGRES_PASSWORD_FILE': '/run/secrets/postgres_password'})
+        self.assertEqual(live.db_secrets, ['odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,'
+                                           'mode=0400'], 'the superuser password is a podman secret, never a variable')
+        self.assertEqual(live.web_mounts, [('odoo18-web-data', '/var/lib/odoo', 'ro'),
+                                           ('/home/appowner/.local/share/odoo18/addons', '/mnt/extra-addons', 'ro')])
+        self.assertTrue(live.conf_secret.startswith('odoo18-odoo-conf,type=mount,target=/etc/odoo/odoo.conf'))
+        self.assertEqual(live.skipped_mounts, [])
+        self.assertFalse(ha_odoo._password_elsewhere(self.rendered()['odoo-db.container']), 'nothing for the OD-57 stop to say')
+
+    def test_and_the_target_resolves_them_against_the_app_settings_of_the_tenant(self):
+        runner = types.SimpleNamespace(home='/home/appowner')
+        work = types.SimpleNamespace(runner=lambda _app: runner, quadlets=lambda _app: self.rendered())
+        app = types.SimpleNamespace(id='odoo', name='Odoo 18', volumes=[{'name': 'odoo18-db-data-isolated'},
+                                                                         {'name': 'odoo18-web-data'}],
+                                    data_dirs=[{'path': '.local/share/odoo18/addons'}], postgres=[])
+        sink = haissues.Sink('odoo')
+        target = ha_odoo.Target(work, app, sink)
+        self.assertEqual((target.db_volume, target.web_volume, target.addons_rel, target.extra_volumes, target.extra_dirs),
+                         ('odoo18-db-data-isolated', 'odoo18-web-data', '.local/share/odoo18/addons', [], []))
+        self.assertEqual(sink.found, [], 'the package standard needs nothing said')
+
+
 class MountTests(unittest.TestCase):
     """OD-05, OD-08, OD-09: what the Quadlet files mount that is no data of Odoo is left out, never mounted anywhere."""
 
@@ -1436,6 +1486,40 @@ class DatabaseVerdictExtraTests(unittest.TestCase):
         (issue_id, _text, names), = ha_odoo.converted_notes(doc, details, live_values)
         self.assertEqual((issue_id, names), ('odoo.website-domain-kept', ['https://ha.example.com']))
         self.assertIn('UPDATE website SET domain = NULL', ha_odoo.CLEAR_WEBSITE_DOMAINS_SQL)
+
+
+class GateCoreTests(unittest.TestCase):
+    """OD-18: the `core_date` of the marker is the one upgrade-gate.sh would make of the image (its lines 29-31)."""
+
+    CASES = ('18.0.20260926', '1:18.0.20260926-1', '18.0.20260926+dfsg', '18.0.20260926~rc1', '18.0.20260926.1', '2:1:18.0.20260926',
+             '18.0.20260926-1+b2', '18.0.2026092', '18.0.202609261', '19.0.20260926', '18.1.20260926', '18.0', '18', '', ':', '-',
+             '18.0.20260926:x', 'x:18.0.20260926', '18..20260926', '18.0.2026092a', ' 18.0.20260926', '18.0.20260926 ')
+
+    def test_the_core_date_is_made_like_the_gate_makes_it(self):
+        self.assertEqual(ha_odoo.gate_core('18.0.20260926'), '18.0.20260926')
+        self.assertEqual(ha_odoo.gate_core('1:18.0.20260926-1'), '18.0.20260926', 'epoch and suffix are cut')
+        self.assertEqual(ha_odoo.gate_core('18.0.20260926.1'), '18.0.20260926', 'three fields')
+        for bad in ('19.0.20260926', '18.0.2026092', '18.0', '', 'not a version!'):
+            self.assertIsNone(ha_odoo.gate_core(bad), bad)
+        for not_text in (None, 18, b'18.0.20260926'):
+            self.assertIsNone(ha_odoo.gate_core(not_text))
+
+    def test_it_is_what_the_gates_own_shell_lines_make(self):
+        """The three lines of upgrade-gate.sh (core=${raw#*:}; core=${core%%[-+~]*}; cut -d. -f1-3; ^18\\.0\\.[0-9]{8}$) run by
+        the real bash on every case: the same answer."""
+        import shutil
+        import subprocess
+        bash = shutil.which('bash')
+        if bash is None:
+            self.skipTest('no bash on this host')
+        script = ('raw=$1; core=${raw#*:}; core=${core%%[-+~]*}; core=$(cut -d. -f1-3 <<<"$core"); '
+                  r'[[ $core =~ ^18\.0\.[0-9]{8}$ ]] && printf %s "$core" || printf NONE')
+        for raw in self.CASES:
+            done = subprocess.run([bash, '-c', script, 'gate', raw], capture_output=True, timeout=30)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            wanted = None if done.stdout == b'NONE' else done.stdout.decode()
+            with self.subTest(raw=raw):
+                self.assertEqual(ha_odoo.gate_core(raw), wanted)
 
 
 class GapTests(unittest.TestCase):

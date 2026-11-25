@@ -1875,14 +1875,26 @@ def live_image_id(work, app, live):
     return info['id']
 
 
-RELEASE_RE = re.compile(r'[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}\Z')   # a Debian package version, or ODOO_VERSION.ODOO_RELEASE
+CORE_RE = re.compile(r'18\.0\.[0-9]{8}\Z')   # the only core date the package's upgrade-gate.sh accepts (its line 31)
+
+
+def gate_core(version):
+    """The `core_date` that upgrade-gate.sh (lines 29-31, package commit c578b8a) makes of a dpkg version: the epoch (up to the
+    first `:`) and everything from the first `-`, `+` or `~` on are cut, the first three dot-separated fields are kept, and only
+    `18.0.<8 digits>` counts; None for anything else (the gate would refuse such an image itself)."""
+    if not isinstance(version, str):
+        return None
+    core = version.split(':', 1)[1] if ':' in version else version
+    core = re.split(r'[-+~]', core, maxsplit=1)[0]
+    core = '.'.join(core.split('.')[:3])
+    return core if CORE_RE.fullmatch(core) else None
 
 
 def image_release(work, app, live):
-    """The release of this device's Odoo core, which is the `core_date` of the upgrade marker (the lab evidence of the real
-    tenant shows `18.0.20260926`): the version of the image's `odoo` package (`dpkg-query`, run in a throwaway container
-    without a network and with a read-only root), else `ODOO_VERSION.ODOO_RELEASE` of the image (the official image installs
-    that very package); None when neither says."""
+    """The release of this device's Odoo core, which is the `core_date` of the upgrade marker, made the way upgrade-gate.sh
+    makes it (`gate_core`; the lab evidence of the real tenant shows `18.0.20260926`): the version of the image's `odoo`
+    package (`dpkg-query`, run in a throwaway container without a network and with a read-only root), else
+    `ODOO_VERSION.ODOO_RELEASE` of the image (the official image installs that very package); None when neither says."""
     tmp = work.temp(app)
     value = ''
     try:
@@ -1893,8 +1905,9 @@ def image_release(work, app, live):
     except BackupError as error:
         if haissues.is_job_wide(error):
             raise
-    if RELEASE_RE.fullmatch(value):
-        return value
+    core = gate_core(value)
+    if core is not None:
+        return core
     info = work.adapter(app).image_inspect(live.web_image) or {}
     env = dict(item.split('=', 1) for item in info.get('env') or [] if isinstance(item, str) and '=' in item)
     version, release = env.get('ODOO_VERSION', ''), env.get('ODOO_RELEASE', '')
@@ -1904,7 +1917,7 @@ def image_release(work, app, live):
         composite = f'{version}.{release}'
     else:
         return None
-    return composite if RELEASE_RE.fullmatch(composite) else None
+    return gate_core(composite)
 
 
 def _read(work, app, tmp, live, image16, *, size=None, can_copy=True):
