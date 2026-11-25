@@ -49,7 +49,9 @@ own `.htaccess` written on top: here the data dir is inside the web root and tha
 private (HA's data directory is outside its web root; any other `.htaccess` in it is refused); the Redis dir is empty;
 the PostgreSQL dir is the new cluster (top dir like the live one).
 """
+import base64
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -58,7 +60,7 @@ import tarfile
 import time
 import xml.etree.ElementTree as ElementTree
 
-from . import habackup, hacommon, ha_odoo, nested, tempctr
+from . import habackup, hacommon, haissues, ha_odoo, hatarget, nested, tempctr
 from .errors import BackupError
 
 SLUG = 'woow-nextcloud-office'
@@ -73,11 +75,48 @@ ADDON_ITEMS = (PG_PREFIX, 'data/nextcloud/config', CUSTOM_APPS, 'data/redis', 'd
 # `version` is what is compared.
 VERSIONS = hacommon.VersionTable('Nextcloud', {'0.2.1': '33.0.9', '0.2.2': '34.0.4', '0.2.3': '35.0.1',
                                                '0.2.4': '35.0.1'})
+# Every issue of this module (haissues): id -> level. Rows of DESIGN K, lane NEXTCLOUD, are named in the comments.
+ISSUES = {
+    'nextcloud.config-unreadable': 'stop',        # NC-12: HA's config.php is more than a file of values (a variable, a function)
+    'nextcloud.config-missing': 'stop',           # NC-12: HA's backup has no config.php
+    'nextcloud.not-installed': 'stop',            # NC-13 (skip this app only)
+    'nextcloud.maintenance-mode': 'notice',       # NC-14: in maintenance mode when HA made the backup, same version
+    'nextcloud.maintenance-upgrading': 'stop',    # NC-14: ... and not the same version: an upgrade may have been half done
+    'nextcloud.not-postgres': 'stop',             # NC-15
+    'nextcloud.table-prefix': 'stop',             # NC-16
+    'nextcloud.object-storage': 'stop',           # NC-17
+    'nextcloud.no-identity': 'stop',              # NC-18
+    'nextcloud.no-dbname': 'stop',                # NC-19
+    'nextcloud.live-not-installed': 'stop',       # NC-10
+    'nextcloud.version-unreadable': 'notice',     # NC-20: HA's version comes from the add-on's version
+    'nextcloud.version-different': 'stop',        # NC-21
+    'nextcloud.image-version': 'stop',            # NC-11
+    'nextcloud.no-datadir-setting': 'stop',       # NC-24
+    'nextcloud.no-share': 'confirm',              # NC-22: no share folder in the backup: the users' files stay behind
+    'nextcloud.no-datadir': 'confirm',            # NC-23: ... no data folder (or no .ncdata) in it
+    'nextcloud.datadir-elsewhere': 'confirm',     # NC-25: ... the data folder is somewhere a backup never holds
+    'nextcloud.symlinks-skipped': 'confirm',      # NC-26
+    'nextcloud.htaccess-skipped': 'confirm',      # NC-27
+    'nextcloud.server-side-encryption': 'confirm',  # NC-28 (owner decision D8/S5)
+    'nextcloud.hardlinks-copied': 'auto',         # NC-29
+    'nextcloud.no-database': 'stop',              # NC-30 (skip this app only)
+    'nextcloud.database-version': 'stop',         # NC-31
+    'nextcloud.online-backup': 'stop',            # NC-33
+    'nextcloud.no-database-name': 'stop',         # NC-35
+    'nextcloud.not-nextcloud-db': 'stop',         # NC-36
+    'nextcloud.shape-unreadable': 'stop',         # NC-37
+    'nextcloud.db-objects': 'stop',               # NC-38: objects that cannot be left out
+    'nextcloud.extension-missing': 'stop',        # NC-39
+    'nextcloud.storage-missing': 'stop',          # NC-41
+    'nextcloud.storage-taken': 'stop',            # NC-42
+}
 NC_VERSION_RE = re.compile(r'[0-9]{1,4}(?:\.[0-9]{1,6}){2,3}\Z')
 APP_ID_RE = re.compile(r'[a-z0-9_]{1,64}\Z')
 INSTANCE_RE = re.compile(r'[a-z0-9]{6,40}\Z')
 SECRET_VALUE_RE = re.compile(r'[A-Za-z0-9+/=._-]{8,512}\Z')
-DATADIR_SEG_RE = re.compile(r'[A-Za-z0-9._@+-]{1,255}\Z')
+# A folder of the data directory's path as HA's config.php writes it: any name a person can type (spaces, Chinese ...), no
+# control character (habackup leaves such a name out of what it hands out) and no slash (NC-25).
+DATADIR_SEG_RE = re.compile(r'[^\x00-\x1f\x7f/]{1,255}\Z')
 ROLE_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
 DB_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
 STAT_RE = re.compile(rb'\s*([0-9]{1,10}) ([0-9]{1,10}) ([0-7]{1,4})\s*\Z')
@@ -192,15 +231,20 @@ SHAPE_LABELS = (('functions', '函式'), ('operators', '運算子'), ('types', '
 _PG_TYPE = r'[a-z][a-z ]{0,40}(?:\([0-9]{1,4}(?:,[0-9]{1,4})?\))?(?: with(?:out)? time zone)?(?:\[\])?'
 DEFAULT_RE = re.compile(rf"(?:nextval\('(?:public\.)?[a-z0-9_]{{1,63}}'::regclass\)|'(?:[^']|''){{0,1024}}'::{_PG_TYPE}"
                         rf"|-?[0-9]{{1,20}}(?:\.[0-9]{{1,20}})?|true|false|NULL::{_PG_TYPE})")
-MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（{kinds}），無法安全地搬過來。'
+MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立、這台也無法略過的資料庫物件（{kinds}），無法安全地搬過來。'
 MSG_SHAPE_UNREAD = '無法讀取 HA 的 Nextcloud 資料庫結構，無法確認可以安全地搬過來。'
-MSG_TOC = 'HA 的 Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立的物件（{kinds}），無法安全地搬過來。'
+MSG_TOC = 'HA 的 Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立、這台也無法略過的物件（{kinds}），無法安全地搬過來。'
 MSG_ONLINE = ('HA 的 Nextcloud 資料庫不是在停止狀態下備份的（含有 backup_label 或 tablespace_map），無法安全地搬過來；'
               '請在 HA 重新做一份 Nextcloud 的備份。')
-MSG_NO_SHARE = ('這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（{dir}）不在備份裡，無法匯入'
-                '（只搬資料庫會讓檔案遺失）。請在 HA 重新做一份備份，並勾選 share 資料夾。')
-MSG_NO_DATADIR = ('HA 備份裡找不到 Nextcloud 的使用者檔案資料夾 {dir}（或缺少 Nextcloud 的 .ncdata 標記），'
-                  '無法匯入。請確認 HA 的 Nextcloud 資料夾設定，並重新做一份包含它的備份。')
+# The users' files that are not in the backup (NC-22, NC-23, NC-25): the import goes on once the customer confirmed it (DESIGN
+# H-b 1, owner rule 3). The accounts, calendars, shares and settings move; the data directory stays empty (with its
+# .ncdata marker and Nextcloud's own .htaccess) and this device's own user files are in the safety backup of the restore.
+MSG_FILES_LEFT = ('帳號、設定、行事曆、聯絡人與分享會照常搬，使用者檔案不會搬：Nextcloud 的檔案列表看得到名稱但打不開；'
+                  '這台原本的使用者檔案會先存進匯入前的備份。把檔案補回這台後，請執行一次檔案掃描。')
+MSG_NO_SHARE = '這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案放在那裡。' + MSG_FILES_LEFT
+MSG_NO_DATADIR = ('HA 備份的 share 裡找不到 Nextcloud 的使用者檔案資料夾（或資料夾裡缺少 .ncdata 標記，可能當時沒有掛上），'
+                  '為避免搬錯資料夾，不會搬它。' + MSG_FILES_LEFT)
+MSG_ELSEWHERE = 'HA 的 Nextcloud 使用者檔案放在 HA 備份不會包含的位置（網路磁碟或其他路徑，不在 /share、/data 或 /config）。' + MSG_FILES_LEFT
 # The official image serves the data dir from inside Apache's web root (/var/www/html/data; docker-php.conf:
 # `AllowOverride All` for /var/www/), so the .htaccess at its top is what keeps the users' files from being fetched
 # without a login, and one further down could open its folder again or run files as programs. HA's data directory is
@@ -237,8 +281,14 @@ DATA_HTACCESS = b'''# Written by the WOOWTECH backup when it imported this data 
   IndexIgnore *
 </IfModule>
 '''
-MSG_HTACCESS = ('HA 的 Nextcloud 使用者檔案裡有 {count} 個網站伺服器設定檔 .htaccess（例如 {sample}）。這台的使用者檔案在網站資料夾裡，'
-                '這種檔案可能讓檔案被公開或被當成程式執行，無法安全地搬過來。請在 HA 把它們改名或刪除後重新備份。')
+NCDATA = b'# Nextcloud data directory\n# Do not change this file\n'   # the marker Nextcloud's installer writes (only its existence counts)
+MSG_HTACCESS = ('HA 的 Nextcloud 使用者檔案裡有 {count} 個網站伺服器設定檔 .htaccess。這台的使用者檔案在網站資料夾裡，'
+                '這種檔案可能讓檔案被公開或被當成程式執行，所以不會搬它們（這台會寫入 Nextcloud 自己的 .htaccess），其他檔案照常搬。'
+                '匯入後請執行一次檔案掃描。')
+MSG_SYMLINKS = ('HA 的 Nextcloud 使用者檔案裡有 {count} 個符號連結（捷徑）。連結可能指到這台資料夾外的檔案，所以不會搬它們'
+                '（Nextcloud 預設本來就不跟連結），其他檔案照常搬。匯入後請執行一次檔案掃描。')
+MSG_ENCRYPTION = ('HA 的 Nextcloud 開啟了伺服器端加密。金鑰和檔案會一起搬，但這種備份這台還沒有實測過；'
+                  '匯入後如果檔案打不開，請用匯入前自動做的備份退回。')
 SCAN_COMMAND = 'podman exec -u www-data {container} php occ files:scan --all'
 MSG_STORAGE_TAKEN = ('HA 的 Nextcloud 資料庫裡已經有這台使用者檔案資料夾（{dir}）的儲存空間記錄，和 HA 自己的資料夾記錄衝突，'
                      '無法安全地搬過來。')
@@ -282,11 +332,39 @@ _TOKEN_RE = re.compile(r"""
 |(?P<close>\?>)
 |(?P<var>\$CONFIG(?![A-Za-z0-9_]))
 |(?P<string>'(?:[^'\\]|\\.)*')
+|(?P<dstring>"(?:[^"\\$]|\\.)*")
 |(?P<number>-?(?:[0-9]+\.[0-9]+(?:[eE][-+]?[0-9]+)?|[0-9]+[eE][-+]?[0-9]+|[0-9]+))
 |(?P<word>[A-Za-z_][A-Za-z0-9_]*)
 |(?P<arrow>=>)
 |(?P<punct>[=,;()\[\]])
+|(?P<dot>\.)
 """, re.S | re.X)
+
+
+# NC-12: a hand-edited config.php may write a text in double quotes, join texts with a dot or name a constant. Those are
+# still only values: a double-quoted text without a variable (a `$` is never accepted unescaped, so nothing is
+# interpolated), the escapes that mean one fixed character, a dot between two texts and the constants below. A variable, a
+# function call, another constant or another escape still stops the import of Nextcloud (the file is never run).
+_DQ_ESCAPES = {'n': '\n', 'r': '\r', 't': '\t', '\\': '\\', '"': '"', '$': '$'}
+CONSTANTS = {'PHP_EOL': '\n', 'DIRECTORY_SEPARATOR': '/', 'PATH_SEPARATOR': ':', 'PHP_INT_SIZE': 8,
+             'PHP_INT_MAX': 2 ** 63 - 1, 'PHP_INT_MIN': -2 ** 63, 'E_ERROR': 1, 'E_WARNING': 2, 'E_NOTICE': 8,
+             'E_DEPRECATED': 8192, 'E_STRICT': 2048, 'E_ALL': 32767}
+
+
+def _php_dstring(token):
+    body, out, i = token[1:-1], [], 0
+    if '{\\$' in body:
+        raise ValueError('ambiguous interpolation')
+    while i < len(body):
+        if body[i] == '\\':
+            if body[i + 1] not in _DQ_ESCAPES:
+                raise ValueError('unsupported escape')
+            out.append(_DQ_ESCAPES[body[i + 1]])
+            i += 2
+        else:
+            out.append(body[i])
+            i += 1
+    return ''.join(out)
 
 
 def _php_string(token):
@@ -316,11 +394,25 @@ class _Parser:
         return token
 
     def value(self, depth=0):
+        first = self.term(depth)
+        while self.peek()[0] == 'dot':
+            self.i += 1
+            other = self.term(depth)
+            if not isinstance(first, str) or not isinstance(other, str):
+                raise ValueError('only texts are joined')
+            first += other
+            if len(first) > MAX_CONFIG:
+                raise ValueError('text too long')
+        return first
+
+    def term(self, depth=0):
         if depth > MAX_DEPTH:
             raise ValueError('too deep')
         kind, text = self.take()
         if kind == 'string':
             return _php_string(text)
+        if kind == 'dstring':
+            return _php_dstring(text)
         if kind == 'number':
             if re.fullmatch(r'-?[0-9]+', text):
                 number = int(text)
@@ -337,6 +429,8 @@ class _Parser:
             if lower == 'array':
                 self.take('punct', '(')
                 return self.array(')', depth)
+            if text in CONSTANTS:
+                return CONSTANTS[text]
             raise ValueError('unsupported word')
         if kind == 'punct' and text == '[':
             return self.array(']', depth)
@@ -476,39 +570,74 @@ def _enforced_for_all(config):
     return _enforced(config) and not any(config.get(key) for key in TWOFACTOR[1:])
 
 
-def config_blockers(ha, live, image_version):
-    """zh-TW blockers of HA's and the live config.php (versions, installation state, database, identity)."""
+def _version3(version):
+    return '.'.join(version.split('.')[:3]) if version else None
+
+
+def config_issues(sink, ha, live, image_version, *, found=True, addon_version=None):
+    """What HA's and the live config.php say against an import, into `sink` (versions, installation state, database,
+    identity). `found`: HA's backup has a config.php at all. `addon_version`: HA's add-on version (HA's own Nextcloud version
+    is inferred from it when config.php does not say: NC-20)."""
     if not isinstance(ha, dict):
-        return ['無法解讀 HA 的 Nextcloud 設定檔 config.php（格式不是 Nextcloud 自己寫的樣子），為了安全不會執行它，無法匯入。']
-    blockers = []
+        if found:
+            sink.stop('nextcloud.config-unreadable',
+                      '無法解讀 HA 的 Nextcloud 設定檔 config.php（它不只是一份設定值：含有變數、函式或這台不認得的寫法），'
+                      '為了安全不會執行它，無法匯入 Nextcloud。',
+                      action='請在 HA 把 config.php 裡的變數、函式換成固定的值後重新備份，再匯入 Nextcloud；這台的 Nextcloud 不會變。')
+        else:
+            sink.stop('nextcloud.config-missing',
+                      'HA 備份裡找不到 Nextcloud 的設定檔 config.php，沒有它就不知道 Nextcloud 的身分金鑰與使用者檔案位置，無法匯入。',
+                      action='請先在 HA 讓 Nextcloud 附加元件正常啟動過（會產生 config.php），再重新備份並匯入 Nextcloud。')
+        return
+    ha_version, live_version = nc_version(ha.get('version')), nc_version(live.get('version'))
     if ha.get('installed') is not True:
-        blockers.append('HA 的 Nextcloud 還沒有安裝完成（config.php 沒有 installed），無法匯入。')
-    if ha.get('maintenance') is True:
-        blockers.append('HA 的 Nextcloud 做備份時處於維護模式（可能正在升級），請在 HA 讓它正常啟動後重新備份。')
+        sink.stop('nextcloud.not-installed', 'HA 的 Nextcloud 還沒有安裝完成（config.php 沒有 installed），沒有資料可以匯入。',
+                  action='請先在 HA 完成 Nextcloud 的安裝並使用過，再重新備份；這次只有 Nextcloud 不會匯入，其他應用照常。')
     if ha.get('dbtype') != 'pgsql':
-        blockers.append('HA 的 Nextcloud 不是使用 PostgreSQL 資料庫，無法匯入。')
+        sink.stop('nextcloud.not-postgres', 'HA 的 Nextcloud 不是使用 PostgreSQL 資料庫，無法匯入。')
     if ha.get('dbtableprefix', PREFIX) != PREFIX or live.get('dbtableprefix', PREFIX) != PREFIX:
-        blockers.append('Nextcloud 的資料表前綴不是 oc_，目前無法匯入。')
+        sink.stop('nextcloud.table-prefix', 'Nextcloud 的資料表前綴不是 oc_，目前無法匯入。')
     if any(key in ha for key in ('objectstore', 'objectstore_multibucket')):
-        blockers.append('HA 的 Nextcloud 把檔案放在物件儲存（例如 S3），無法搬到這台。')
+        sink.stop('nextcloud.object-storage', 'HA 的 Nextcloud 把檔案放在物件儲存（例如 S3），無法搬到這台。')
     if not (isinstance(ha.get('instanceid'), str) and INSTANCE_RE.fullmatch(ha['instanceid'])
             and all(isinstance(ha.get(key), str) and SECRET_VALUE_RE.fullmatch(ha[key])
                     for key in ('passwordsalt', 'secret'))):
-        blockers.append('HA 的 Nextcloud 設定缺少它的身分資料（instanceid、secret），無法匯入。')
+        sink.stop('nextcloud.no-identity', 'HA 的 Nextcloud 設定缺少它的身分資料（instanceid、secret），無法匯入。')
     if not (isinstance(ha.get('dbname'), str) and DB_RE.fullmatch(ha['dbname'])):
-        blockers.append('HA 的 Nextcloud 設定沒有可用的資料庫名稱。')
-    ha_version, live_version = nc_version(ha.get('version')), nc_version(live.get('version'))
+        sink.stop('nextcloud.no-dbname', 'HA 的 Nextcloud 設定沒有可用的資料庫名稱。')
+    consistent = None
     if live.get('installed') is not True or live_version is None:
-        blockers.append('這台的 Nextcloud 還沒有安裝完成，請先到「應用軟體」完成安裝。')
+        sink.stop('nextcloud.live-not-installed', '這台的 Nextcloud 還沒有安裝完成，請先到「應用軟體」完成安裝。')
     elif ha_version is None:
-        blockers.append('無法讀取 HA 的 Nextcloud 版本。')
+        # NC-20: the add-on's version says which Nextcloud it ships (VERSIONS); the two sides are only compared by what
+        # is known, and what is not known is said.
+        sink.notice('nextcloud.version-unreadable',
+                    '讀不到 HA 的 Nextcloud 版本（config.php 沒有可用的 version），改用附加元件版本推算；'
+                    '兩邊的 Nextcloud 版本可能不同，匯入後請確認 Nextcloud 能正常使用。')
+        addon_version = addon_version or ''
+        sink.extend(VERSIONS.issues(addon_version, hacommon.semver(_version3(live_version))))
+        inferred = VERSIONS.upstream(addon_version)
+        consistent = inferred is not None and hacommon.semver(inferred) == hacommon.semver(_version3(live_version))
     elif ha_version != live_version:
-        blockers.append(f'版本不同：HA 的 Nextcloud 是 {ha_version}，這台是 {live_version}。'
-                        '請先讓兩邊的 Nextcloud 版本一致後再匯入。')
-    elif '.'.join(live_version.split('.')[:3]) != image_version:
-        blockers.append(f'這台 Nextcloud 的映像版本（{image_version or "未知"}）和已安裝的版本 {live_version} 不同，'
-                        '請先讓這台的 Nextcloud 正常完成升級。')
-    return blockers
+        sink.stop('nextcloud.version-different', f'版本不同：HA 的 Nextcloud 是 {shown(ha_version, 40)}，這台是 {live_version}。',
+                  action='請先讓兩邊的 Nextcloud 版本一致後再匯入。')
+        consistent = False
+    elif _version3(live_version) != image_version:
+        sink.stop('nextcloud.image-version',
+                  f'這台 Nextcloud 的映像版本（{shown(image_version or "未知", 40)}）和已安裝的版本 {live_version} 不同，'
+                  '請先讓這台的 Nextcloud 正常完成升級。')
+    else:
+        consistent = True
+    if ha.get('maintenance') is True:
+        if consistent:
+            sink.notice('nextcloud.maintenance-mode',
+                        'HA 的 Nextcloud 做備份時處於維護模式（多半是忘了關），兩邊版本相同，所以照常匯入；'
+                        '這台的 Nextcloud 匯入後不會在維護模式。')
+        else:
+            sink.stop('nextcloud.maintenance-upgrading',
+                      'HA 的 Nextcloud 做備份時處於維護模式，而且兩邊版本不同或無法確認，可能正在升級；'
+                      '資料庫可能升級到一半，搬過來會壞。',
+                      action='請在 HA 讓 Nextcloud 正常啟動並完成升級後，重新備份再匯入。')
 
 
 def merge_config(ha, live):
@@ -682,6 +811,7 @@ class Source:
         self.apps = {}
         self.app_bytes = 0
         self.bad_apps = []
+        self.report = None          # the walk's habackup.Report: the entries it left out (haissues.Sink.skipped)
 
 
 def scan_member(stream, report, *, pg=None, apps=None, machine=None, checkpoint=None):
@@ -764,6 +894,9 @@ class DataDir:
         self.symlink_samples = []
         self.htaccess = 0
         self.htaccess_samples = []
+        self.htaccess_names = haissues.Names()   # every .htaccess left out (NC-27): its key covers all of them
+        self.hardlinks_copied = 0   # hard links to a file that is left out: handed out again as files (NC-29)
+        self.report = None          # the walk's habackup.Report: what the reader left out (haissues.Sink.skipped)
         self.users = set()
         self.team_folders = set()  # the folder names below `__groupfolders`
         self.lists = {}     # user -> [files, bytes, digest] of `<user>/files/**` (FILES_SQL's values)
@@ -811,6 +944,15 @@ class DirTar:
         self.tar.close()
 
 
+def _left_out(parts, updater, remote):
+    """Why the walk of the data directory does not take the entry `parts` (its names below the directory): 'updater' (the web
+    updater's folder, HA's cached Collabora discovery) or 'htaccess' (any `.htaccess`), else None."""
+    rel = '/'.join(parts)
+    if parts[0] == updater or (remote is not None and _under(rel, remote)):
+        return 'updater'
+    return 'htaccess' if HTACCESS in parts else None
+
+
 def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, ids=None, checkpoint=None):
     """Walk HA's data directory (`prefix` and below) in a member; with `out` (DirTar) write it as the data dir,
     every entry owned by `ids` (www-data of the live image), modes as in HA, the top written by the caller. Skipped:
@@ -833,14 +975,16 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
             continue
         rel = entry.name[len(prefix) + 1:]
         parts = rel.split('/')
-        if parts[0] == updater or (remote is not None and _under(rel, remote)):
+        left = _left_out(parts, updater, remote)
+        if left == 'updater':
             if entry.kind == 'file':
                 data.skipped_files += 1
                 data.skipped_bytes += entry.size
             continue
-        if HTACCESS in parts:
+        if left == 'htaccess':
             if len(parts) > 1 or entry.kind != 'file':
                 data.htaccess += 1
+                data.htaccess_names.add(rel)
                 if len(data.htaccess_samples) < 3:
                     data.htaccess_samples.append(rel[:200])
             continue
@@ -866,9 +1010,16 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
                 out.add(rel, 'file', mode=entry.mode, uid=uid, gid=gid, mtime=entry.mtime, size=entry.size,
                         fileobj=hacommon._Exact(entry, None))
         elif entry.kind == 'hardlink':
+            inside = _under(entry.linkname, prefix) and entry.linkname != prefix
+            if inside and _left_out(entry.linkname[len(prefix) + 1:].split('/'), updater, remote):
+                # NC-29: the file it names is not moved (an updater backup, the Office cache, an .htaccess): the same name
+                # comes again after the walk as a regular file with that content
+                entry.copy_later()
+                data.hardlinks_copied += 1
+                continue
             data.hardlinks += 1
             if out is not None:
-                if not _under(entry.linkname, prefix) or entry.linkname == prefix:
+                if not inside:
                     raise BackupError('incompatible', f'HA 備份中的 {shown(rel, 200)} 是資料夾外檔案的硬連結，無法搬過來。',
                                       member=shown(rel, 200))
                 out.add(rel, 'hardlink', mode=0o644, uid=uid, gid=gid, mtime=entry.mtime,
@@ -876,6 +1027,7 @@ def scan_datadir(stream, report, prefix, *, addon, instanceid=None, out=None, id
     if report.skipped_symlinks:  # every one is below `prefix` (Select.include)
         data.symlinks = report.skipped_symlinks
         data.symlink_samples = list(report.skipped_symlink_samples)
+    data.report = report
     return data
 
 
@@ -1206,29 +1358,38 @@ def ha_database(cluster, dbname):
     return doc
 
 
-def datadir_blockers(config, data, ha_source):
-    """zh-TW blockers about HA's data directory (where it is, whether the backup holds it, what it holds)."""
-    blockers = []
-    datadir = config.get('datadirectory') if isinstance(config, dict) else None
-    if isinstance(config, dict):
-        if not isinstance(datadir, str):
-            blockers.append('HA 的 Nextcloud 設定檔沒有使用者檔案資料夾（datadirectory）。')
-        elif ha_source is None:
-            blockers.append(f'HA 的 Nextcloud 使用者檔案放在 {shown(datadir, 200)}，不在 HA 備份會包含的位置'
-                            '（/share、/data 或 /config），無法匯入。')
-        elif data == 'no-share':
-            blockers.append(MSG_NO_SHARE.format(dir=shown(datadir, 200)))
-        elif not isinstance(data, DataDir) or not data.present or not data.ncdata:
-            blockers.append(MSG_NO_DATADIR.format(dir=shown(datadir, 200)))
-        else:
-            if data.symlinks:
-                blockers.append(f'HA 的 Nextcloud 使用者檔案裡有 {data.symlinks} 個符號連結（例如 '
-                                f'{shown(data.symlink_samples[0])}），無法安全地搬過來。')
-            if data.htaccess:
-                blockers.append(MSG_HTACCESS.format(count=data.htaccess, sample=shown(data.htaccess_samples[0])))
-            if data.encryption:
-                blockers.append('HA 的 Nextcloud 開啟了伺服器端加密（files_encryption），目前不支援匯入。')
-    return blockers
+def userfiles_moved(data):
+    """Whether HA's users' files are in the backup and move: a data folder that is there, with its .ncdata marker."""
+    return isinstance(data, DataDir) and data.present and data.ncdata
+
+
+def datadir_issues(sink, config, data, ha_source):
+    """What HA's data directory (where it is, whether the backup holds it, what it holds) asks of the customer. The users'
+    files that are not in the backup are one line to confirm (NC-22, NC-23, NC-25); what the walk leaves out of the data that
+    is there is listed (NC-26, NC-27, and the reader's own list)."""
+    if not isinstance(config, dict):
+        return
+    datadir = config.get('datadirectory')
+    if not isinstance(datadir, str):
+        sink.stop('nextcloud.no-datadir-setting', 'HA 的 Nextcloud 設定檔沒有使用者檔案資料夾（datadirectory）。')
+    elif ha_source is None:
+        sink.confirm('nextcloud.datadir-elsewhere', MSG_ELSEWHERE, [shown(datadir, 200)])
+    elif data == 'no-share':
+        sink.confirm('nextcloud.no-share', MSG_NO_SHARE, [shown(datadir, 200)])
+    elif not userfiles_moved(data):
+        sink.confirm('nextcloud.no-datadir', MSG_NO_DATADIR, [shown(datadir, 200)])
+    else:
+        if data.symlinks:
+            names = data.report.skips.get('symlink') if data.report is not None else None
+            sink.confirm('nextcloud.symlinks-skipped', MSG_SYMLINKS.format(count=data.symlinks), names or data.symlink_samples)
+        if data.htaccess:
+            sink.confirm('nextcloud.htaccess-skipped', MSG_HTACCESS.format(count=data.htaccess), data.htaccess_names)
+        if data.hardlinks_copied:
+            sink.auto('nextcloud.hardlinks-copied',
+                      f'HA 的 Nextcloud 使用者檔案裡有 {data.hardlinks_copied} 個硬連結指到沒有搬過來的檔案（暫存檔），'
+                      '已改成複製檔案內容。')
+        if data.report is not None:
+            sink.skipped(data.report, *[kind for kind in habackup.SKIP_KINDS if kind != 'symlink'])
 
 
 def moves_of(config, live, storages, data):
@@ -1237,48 +1398,69 @@ def moves_of(config, live, storages, data):
     return storage_moves(config['datadirectory'], live['datadirectory'], storages, folders)
 
 
-def analyse(src, data, details, target, *, ha_source, pg_major):
-    """(blockers, warnings) of everything a check found."""
+def ha_datadir_source(src):
+    config = src.config if isinstance(src.config, dict) else {}
+    return datadir_source(config.get('datadirectory'))
+
+
+def member_issues(sink, src, target):
+    """What the add-on's own files say (check and conversion, right after the add-on member was read): config.php, the
+    PostgreSQL data, the files of an online backup, what the reader left out. Returns the reminders (notice texts)."""
     config, live = src.config, target.config
-    blockers = config_blockers(config if src.config_found else None, live, target.image_version)
     warnings = []
+    config_issues(sink, config, live, target.image_version, found=src.config_found,
+                  addon_version=src.addon.version if src.addon else None)
     ha_major = ha_odoo._ha_major(src)
     if src.pg_version is None or ha_major is None:
-        blockers.append('HA 備份裡沒有 Nextcloud 的 PostgreSQL 資料庫。')
+        sink.stop('nextcloud.no-database', 'HA 備份裡沒有 Nextcloud 的 PostgreSQL 資料庫。',
+                  action='請在 HA 確認 Nextcloud 附加元件有它的資料（資料庫）後重新備份；這次只有 Nextcloud 不會匯入，其他應用照常。')
     elif ha_major != 16:
-        blockers.append(f'HA 的 PostgreSQL 是 {src.pg_version} 版，目前只支援 16 版。')
-    elif pg_major is None or ha_major > pg_major:
-        blockers.append(f'HA 的 PostgreSQL（{src.pg_version}）比這台的（{pg_major or "未知"}）新，無法匯入。')
+        sink.stop('nextcloud.database-version', f'HA 的 PostgreSQL 是 {src.pg_version} 版，目前只支援 16 版。')
+    # NC-32: HA's PostgreSQL against this device's is not asked here: the restore itself says (restore_dump).
     if src.recovery_files:
-        blockers.append(MSG_ONLINE)
-    blockers += datadir_blockers(config, data, ha_source)
+        sink.stop('nextcloud.online-backup', MSG_ONLINE)
+    if src.report is not None:
+        sink.skipped(src.report)
+    if src.bad_apps:
+        warnings.append(f'HA 的 custom_apps 裡有名稱不符合 Nextcloud 規則的資料夾（{hacommon.names(src.bad_apps)}），不會搬過來。')
+    return warnings
+
+
+def database_issues(sink, src, data, details, target):
+    """What HA's database says (check and conversion, once its catalogs and counts are read); returns the reminders."""
+    config, live = src.config, target.config
+    warnings = []
+    ha_major = ha_odoo._ha_major(src)
     if details is None and ha_major == 16 and not src.recovery_files:
-        blockers.append('HA 的 PostgreSQL 裡沒有 Nextcloud 的資料庫。')
+        sink.stop('nextcloud.no-database-name', 'HA 的 PostgreSQL 裡沒有 Nextcloud 的資料庫。')
     elif isinstance(details, dict):
         shape = shape_problems(details.get('shape')) if details.get('nextcloud') else None
+        reasons = ['files_encryption'] if isinstance(data, DataDir) and data.encryption else []
         if not details.get('nextcloud'):
-            blockers.append('HA 的資料庫不是 Nextcloud 的資料庫（找不到 Nextcloud 的資料表）。')
+            sink.stop('nextcloud.not-nextcloud-db', 'HA 的資料庫不是 Nextcloud 的資料庫（找不到 Nextcloud 的資料表）。')
         elif shape is None:
-            blockers.append(MSG_SHAPE_UNREAD)
+            sink.stop('nextcloud.shape-unreadable', MSG_SHAPE_UNREAD)
         elif shape:
-            blockers.append(MSG_SHAPE.format(kinds=hacommon.names(shape)))
+            sink.stop('nextcloud.db-objects', MSG_SHAPE.format(kinds=hacommon.names(shape)))
         else:
             extra = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK]
             if extra:
-                blockers.append(f'HA 的 Nextcloud 資料庫使用了擴充功能 {hacommon.names(extra)}，目前無法搬過來。')
+                sink.stop('nextcloud.extension-missing',
+                          f'HA 的 Nextcloud 資料庫使用了擴充功能 {hacommon.names(extra)}，目前無法搬過來。')
             if details.get('schemas'):
-                blockers.append(f'HA 的 Nextcloud 資料庫有額外的 schema（{hacommon.names(details["schemas"])}），'
-                                '目前無法搬過來。')
+                sink.stop('nextcloud.db-objects',
+                          f'HA 的 Nextcloud 資料庫有額外的 schema（{hacommon.names(details["schemas"])}），目前無法搬過來。')
             if details.get('encryption') == 'yes':
-                blockers.append('HA 的 Nextcloud 開啟了伺服器端加密，目前不支援匯入。')
+                reasons.append('encryption_enabled')
             storages = [s for s in details.get('local_storages') or [] if isinstance(s, str)]
             if isinstance(config, dict) and isinstance(config.get('datadirectory'), str):
                 root = storage_id(config['datadirectory'])
                 moves = moves_of(config, live, storages, data)
                 if root not in storages:
-                    blockers.append('HA 的 Nextcloud 資料庫和它的資料夾設定不一致（找不到使用者檔案資料夾的儲存空間記錄），無法匯入。')
+                    sink.stop('nextcloud.storage-missing',
+                              'HA 的 Nextcloud 資料庫和它的資料夾設定不一致（找不到使用者檔案資料夾的儲存空間記錄），無法匯入。')
                 if any(new in storages for _old, new in moves):
-                    blockers.append(MSG_STORAGE_TAKEN.format(dir=shown(live.get('datadirectory') or '', 200)))
+                    sink.stop('nextcloud.storage-taken', MSG_STORAGE_TAKEN.format(dir=shown(live.get('datadirectory') or '', 200)))
                 moved = {old for old, _new in moves} | {root}
                 other = [s for s in storages if s.startswith('local::') and s not in moved]
                 if other:
@@ -1294,15 +1476,16 @@ def analyse(src, data, details, target, *, ha_source, pg_major):
             missing = [a for a in enabled if a not in target.shipped and a not in src.apps and a not in target.custom]
             if missing:
                 warnings.append(f'HA 啟用的 Nextcloud 應用 {hacommon.names(missing)} 在這台沒有程式，匯入後不會載入。')
-    if src.bad_apps:
-        warnings.append(f'HA 的 custom_apps 裡有名稱不符合 Nextcloud 規則的資料夾（{hacommon.names(src.bad_apps)}），不會搬過來。')
+        if reasons:
+            sink.confirm('nextcloud.server-side-encryption', MSG_ENCRYPTION, reasons)
     if isinstance(config, dict) and isinstance(live, dict):
         warnings += app_warnings(src.apps, nc_version_text=nc_version(live.get('version')) or '',
                                  php_version=target.php_version)
-        _merged, _carried, skipped = merge_config(config, live) if not blockers else (None, [], [])
-        if skipped:
-            warnings.append(f'HA 的 Nextcloud 設定 {hacommon.names(skipped)} 不會搬過來（以這台的設定為準）。')
-    return blockers, warnings
+        if not any(issue.level == 'stop' for issue in sink.found):
+            _merged, _carried, skipped = merge_config(config, live)
+            if skipped:
+                warnings.append(f'HA 的 Nextcloud 設定 {hacommon.names(skipped)} 不會搬過來（以這台的設定為準）。')
+    return warnings
 
 
 def section(src, data, details, target):
@@ -1328,7 +1511,7 @@ def section(src, data, details, target):
 def member_pass(work, app, tmp, image, *, apps=None):
     """The add-on member streamed once: the cluster into the throwaway volume `hapg`, config.php, custom apps."""
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)
     holder = {}
     pg_ids = tmp.user_ids('ids-pg', image, 'postgres')
 
@@ -1344,6 +1527,7 @@ def member_pass(work, app, tmp, image, *, apps=None):
     for note in report.warnings():
         work.log(note)
     src = holder['src']
+    src.report = report
     work.log(f'HA 的 Nextcloud：PostgreSQL {src.pg_version or "?"}，{src.pg_files} 個資料庫檔案'
              f'（{ha_odoo._mib(src.pg_bytes)}），{len(src.apps)} 個自訂應用')
     return src
@@ -1360,7 +1544,7 @@ def datadir_pass(work, src, *, out=None, ids=None):
     member = work.share_member() if kind == 'share' else work.addon_member(SLUG)
     if member is None:
         return 'no-share'
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)
     with work.open(member) as stream:
         data = scan_datadir(stream, report, prefix, addon=kind == 'addon', instanceid=config.get('instanceid'),
                             out=out, ids=ids, checkpoint=work.checkpoint)
@@ -1373,12 +1557,13 @@ def datadir_pass(work, src, *, out=None, ids=None):
 
 def _source(work, app, tmp, *, apps=None):
     """(PostgreSQL 16 image, Source): HA's add-on ships PostgreSQL 16 (Dockerfile:21-37); another major is a blocker
-    found after the pass (analyse), the cluster is then never started."""
+    found after the pass (member_issues), the cluster is then never started."""
     image = ha_odoo.pick_pg16(work, app)
     return image, member_pass(work, app, tmp, image, apps=apps)
 
 
 def check(work, app):
+    sink = work.sink(app)
     target = Target(work, app)
     tmp = work.temp(app)
     try:
@@ -1393,11 +1578,10 @@ def check(work, app):
     finally:
         tmp.remove('hapg')
         tmp.remove_volume('hapg')
-    pg_major = ha_odoo.target_pg_major(work, app, target.live.db_image)
-    blockers, warnings = analyse(src, data, details, target, ha_source=datadir_source(
-        (src.config or {}).get('datadirectory') if isinstance(src.config, dict) else None), pg_major=pg_major)
-    return {'target_version': nc_version(target.config.get('version')) or '', 'blockers': blockers,
-            'warnings': warnings,
+    warnings = member_issues(sink, src, target)
+    datadir_issues(sink, src.config, data, ha_datadir_source(src))
+    warnings += database_issues(sink, src, data, details, target)
+    return {'target_version': nc_version(target.config.get('version')) or '', 'warnings': warnings,
             'nextcloud': section(src, data, details, target)}
 
 
@@ -1419,6 +1603,9 @@ def import_texts(data):
                  '公開分享連結與聯邦雲端 ID 仍是 HA 的網址，請重新分享或通知對方。']
     if data.get('mail'):
         reminders.append('HA 的 Nextcloud 寄信（SMTP）設定沒有搬過來，請在這台 Nextcloud 的管理設定確認寄信設定。')
+    if data.get('userfiles') is False:
+        reminders.append('HA 的使用者檔案沒有搬過來：這台 Nextcloud 的使用者檔案資料夾目前是空的。請把 HA 的使用者檔案複製到這台的使用者檔案資料夾'
+                         '（擁有者 www-data）後，執行一次檔案掃描：' + SCAN_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
     if data.get('lists_differ'):
         reminders.append('HA 備份時有人在使用 Nextcloud，有些使用者的檔案清單和實際檔案不一致；匯入後請執行一次檔案掃描：'
                          + SCAN_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
@@ -1449,13 +1636,63 @@ def role_sql(name, role, dbname):
             f'REVOKE ALL PRIVILEGES ON DATABASE {db} FROM PUBLIC;\n')
 
 
-def restore_dump(work, tmp, dump, role, dbname):
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
+
+
+def toc_entries(text):
+    """(entries, declared, shown) of a `pg_restore -l` listing: how many lines are entries (`<id>; <oid> <oid> <kind> ...`),
+    the `TOC Entries:` its header says the archive has (None when the header is not there) and how many of the archive
+    settings ENCODING, STDSTRINGS and SEARCHPATH the lines show."""
+    declared, entries, shown_settings = None, 0, set()
+    for line in text.splitlines():
+        header = re.match(r';\s+TOC Entries:\s+([0-9]{1,9})\s*\Z', line)
+        if header:
+            declared = int(header.group(1))
+        elif re.match(r'\s*\d+;\s+\d+\s+\d+\s', line):
+            entries += 1
+            kind = re.match(r'\s*\d+;\s+\d+\s+\d+\s+([A-Z]+)\s', line)
+            if kind and kind.group(1) in ARCHIVE_SETTINGS:
+                shown_settings.add(kind.group(1))
+    return entries, declared, len(shown_settings)
+
+
+def check_listing(text):
+    """The `pg_restore -l` listing is whole when the number of its entries is what its own header says the archive has
+    (pg-stdin follow-up F4: a listing that came back short would restore only the part it names, and nothing would notice).
+    The header counts the three archive settings of a pg_dump 16 archive, which pg_restore keeps out of a plain listing: the
+    lines are short by exactly the ones they do not show. A listing without the header cannot be checked and is refused
+    (the same rule as Odoo's). Returns the number of entries."""
+    entries, declared, shown_settings = toc_entries(text)
+    if declared is None or declared != entries + len(ARCHIVE_SETTINGS) - shown_settings:
+        # the numbers (no content) go with the error: what a real run shows decides whether the relation is right
+        raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, shown=shown_settings,
+                          **({} if declared is None else {'declared': declared}))
+    return entries
+
+
+def restore_failed(majors):
+    """The sentence of a restore that PostgreSQL refused (NC-32, NC-46): HA's PostgreSQL being newer than this device's is
+    the likely reason when it is, and what to do about it."""
+    ha_major, pg_major = majors if majors else (None, None)
+    if ha_major is not None and pg_major is not None and ha_major > pg_major:
+        return (f'無法把 HA 的 Nextcloud 資料庫還原到新的叢集：HA 的 PostgreSQL（{ha_major}）比這台的（{pg_major}）新，'
+                '這台的資料庫放不進去。請先把這台 Nextcloud 的資料庫更新到同一版（或更新這台的 Nextcloud 套件）後再匯入；'
+                '這台的 Nextcloud 沒有任何變更。')
+    return ('無法把 HA 的 Nextcloud 資料庫還原到新的叢集（可能含有這台不支援、或需要資料庫超級使用者權限的內容）；'
+            '這台的 Nextcloud 沒有任何變更。')
+
+
+def restore_dump(work, tmp, dump, role, dbname, *, majors=None):
     """HA's dump into the new database AS THE NEXTCLOUD ROLE (HA's server is untrusted: review HA-SEC-01), without
-    its EXTENSION entries, refused when it holds superuser-only objects; streamed on stdin."""
+    its EXTENSION entries, refused when it holds superuser-only objects; streamed on stdin. The listing is cross-checked
+    against its own header first and the retry note of its write reaches the job log (pg-stdin follow-ups F4, F3).
+    `majors`: (HA's, this device's) PostgreSQL major, to say why a refused restore was refused (NC-32)."""
     with open(dump, 'rb') as handle:
         toc = tmp.exec('nc-db', ['pg_restore', '-l'], user='postgres', input=handle, timeout=ha_odoo.DUMP_TIMEOUT,
                        max_output=ha_odoo.TOC_OUTPUT).stdout or b''
     text = toc.decode('utf-8', 'surrogateescape')
+    check_listing(text)
     kinds = ha_odoo.superuser_kinds(text)
     if kinds:
         raise BackupError('incompatible', f'HA 的 Nextcloud 資料庫含有只有資料庫超級使用者才能建立的物件'
@@ -1463,8 +1700,8 @@ def restore_dump(work, tmp, dump, role, dbname):
     odd = [kind for kind in toc_kinds(text) if kind not in TOC_ALLOWED]
     if odd:
         raise BackupError('incompatible', MSG_TOC.format(kinds=hacommon.names(odd)))
-    ha_odoo.Cluster(tmp, 'nc-db').write_file('/tmp/woowbk-nc.toc',
-                                             ha_odoo.filter_toc(text).encode('utf-8', 'surrogateescape'))
+    ha_odoo.Cluster(tmp, 'nc-db', log=work.log).write_file('/tmp/woowbk-nc.toc',
+                                                           ha_odoo.filter_toc(text).encode('utf-8', 'surrogateescape'))
     work.log(f'把 HA 的 Nextcloud 資料庫還原到新的叢集（以 {role} 角色還原）')
     with open(dump, 'rb') as handle:
         try:
@@ -1474,8 +1711,7 @@ def restore_dump(work, tmp, dump, role, dbname):
         except BackupError as error:
             if error.code != 'job-failed':
                 raise
-            raise BackupError('job-failed', '無法把 HA 的 Nextcloud 資料庫還原到新的叢集（可能含有這台不支援、'
-                                            '或需要資料庫超級使用者權限的內容）。') from None
+            raise BackupError('job-failed', restore_failed(majors)) from None
     tmp.exec('nc-db', ['rm', '-f', '/tmp/woowbk-nc.toc'], user='postgres', timeout=120)
 
 
@@ -1611,7 +1847,7 @@ def carry_settings(work, app, live, cluster):
     return carried
 
 
-def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, moves, remote):
+def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, moves, remote, majors=None):
     """The new cluster in the throwaway volume `nc-db` (stopped cleanly); returns the verified document."""
     live, db, role = target.live, target.db, target.role
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
@@ -1624,7 +1860,7 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     extensions = [e for e in db['extensions'] if e != 'plpgsql' and ROLE_RE.fullmatch(e)]
     pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(role)};\n'
               + ''.join(f'CREATE EXTENSION IF NOT EXISTS {ha_odoo.pg_ident(e)};\n' for e in extensions), live.db_name)
-    restore_dump(work, tmp, dump, role, live.db_name)
+    restore_dump(work, tmp, dump, role, live.db_name, majors=majors)
     # From here on the cluster holds HA's objects: every session is pinned (Pinned); the superuser reads catalogs only
     # and never touches a table of HA's, the fix-ups and table reads run as the tables' owner (the live Nextcloud role),
     # so a default, constraint or index expression of HA's never runs with more rights than Nextcloud itself has.
@@ -1794,43 +2030,45 @@ def convert(work, app, test_mode, out_dir):
     paths = {role: out_dir / 'dirs' / f'{target.index[rel]}.tar' for role, rel in live.rels.items()}
 
     # HA's add-on member: the cluster into a throwaway volume, config.php, the custom apps into staging.
+    sink = work.sink(app)
     apps = ha_odoo.FileTar(staging / 'ha-apps.tar', work.guard)
     try:
         image, src = _source(work, app, tmp, apps=apps)
     finally:
         apps.close()
-    if not isinstance(src.config, dict) or config_blockers(src.config, target.config, target.image_version):
-        blockers = config_blockers(src.config if src.config_found else None, target.config, target.image_version)
-        raise BackupError('incompatible', blockers[0] if blockers else '無法解讀 HA 的 Nextcloud 設定檔。', app=app.id)
+    member_issues(sink, src, target)      # a stop stops this app, a line to confirm needs its key (haissues.Sink)
 
-    # HA's data directory, written as the data dir while it is read (owner www-data, top like the live one).
-    data_out = DirTar(paths['data'], work.guard)
-    try:
+    # HA's data directory, written as the data dir while it is read (owner www-data, top like the live one). When its files are
+    # not in the backup (or the folder is not the data directory: no .ncdata) the data dir stays empty with its marker.
+    def new_data_dir():
+        out = DirTar(paths['data'], work.guard)
         uid, gid, mode = tops['data']
-        data_out.add('.', 'dir', mode=mode, uid=uid, gid=gid, mtime=time.time())
-        data_out.add(HTACCESS, 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(DATA_HTACCESS),
-                     fileobj=io.BytesIO(DATA_HTACCESS))
+        out.add('.', 'dir', mode=mode, uid=uid, gid=gid, mtime=time.time())
+        out.add(HTACCESS, 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(DATA_HTACCESS),
+                fileobj=io.BytesIO(DATA_HTACCESS))
+        return out
+
+    data_out = new_data_dir()
+    try:
         data = datadir_pass(work, src, out=data_out, ids=www)
-        office_cache = live_office_cache(work, app, live, target.config) if isinstance(data, DataDir) else {}
+        if isinstance(data, DataDir) and data.present and not data.ncdata:
+            data_out.close()           # NC-23: a folder without the marker is not moved: start the folder again, empty
+            paths['data'].unlink()
+            data_out = new_data_dir()
+        if not userfiles_moved(data):
+            data_out.add('.ncdata', 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(NCDATA),
+                         fileobj=io.BytesIO(NCDATA))
+        office_cache = live_office_cache(work, app, live, target.config)
         add_office_cache(data_out, src.config['instanceid'], office_cache, www)
     finally:
         data_out.close()
-    early = datadir_blockers(src.config, data, datadir_source(src.config.get('datadirectory')))
-    if ha_odoo._ha_major(src) != 16:
-        early.append(f'HA 的 PostgreSQL 是 {src.pg_version or "未知"} 版，目前只支援 16 版。')
-    if src.recovery_files:
-        early.append(MSG_ONLINE)
-    if early:  # refused before any cluster is started or anything else is built
-        raise BackupError('incompatible', early[0], app=app.id)
+    datadir_issues(sink, src.config, data, ha_datadir_source(src))
     work.phase('convert')
     hapg = Pinned(tmp, 'hapg')
     cluster = ha_odoo.start_ha_cluster(work, hapg, image)
     dbname = src.config['dbname']
     details = ha_database(cluster, dbname)
-    blockers, _warnings = analyse(src, data, details, target, ha_source=datadir_source(src.config.get('datadirectory')),
-                                  pg_major=ha_odoo.target_pg_major(work, app, live.db_image))
-    if blockers:
-        raise BackupError('incompatible', blockers[0], app=app.id)
+    database_issues(sink, src, data, details, target)
     # What is still to be written: the dump, the new cluster with its WAL and its export, the html dir twice.
     html_bytes = runner.dir_measure(live.rels['html'])['bytes']
     work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE + 2 * html_bytes)
@@ -1848,7 +2086,8 @@ def convert(work, app, test_mode, out_dir):
     if len(moves) > 1:
         work.log(f'Nextcloud 的儲存空間記錄：使用者檔案資料夾，和它裡面的 {len(moves) - 1} 個資料夾（團隊資料夾）一起改成這台的路徑')
     built = build_cluster(work, app, tmp, target, dump, details=details, old_root=old_root, new_root=new_root,
-                          moves=moves, remote=remote)
+                          moves=moves, remote=remote,
+                          majors=(ha_odoo._ha_major(src), ha_odoo.target_pg_major(work, app, live.db_image)))
     dump.unlink()
     export = staging / 'nc-db.tar'
     with _private(export) as handle:
@@ -1887,8 +2126,10 @@ def convert(work, app, test_mode, out_dir):
     for role, label in (('postgres', 'PostgreSQL 資料夾'), ('redis', 'Redis 資料夾'), ('html', 'Nextcloud 程式資料夾'),
                         ('data', '使用者檔案資料夾')):
         check_dir_tar(paths[role], ids, label)
+    moved = userfiles_moved(data)
     return {'dirs': {live.rels[role]: paths[role] for role in paths}, 'custom_apps': sorted(src.apps),
-            'policy': carried, 'counts': built['counts'], 'datadir_files': data.files, 'datadir_bytes': data.bytes,
+            'policy': carried, 'counts': built['counts'], 'datadir_files': data.files if moved else 0,
+            'datadir_bytes': data.bytes if moved else 0, 'userfiles': moved,
             'mail': any(isinstance(k, str) and k.startswith('mail_') for k in src.config),
             'office': 'richdocuments' in (details.get('enabled') or []),
             'office_cache': sorted(office_cache),
