@@ -398,6 +398,9 @@ class World:
         self.recover_notes = {}   # app id -> notes recover_dirs() returns
         self.digest_results = {}  # app id -> digest checks its restore() compared (adapter.digest_results)
         self.fail_stage = set()   # app ids whose stage_dirs() fails
+        self.unreadable = {}      # app id -> runs ('restore', 'rollback') whose verify_snapshot() cannot read the answer (X-AD-39)
+        self.verify_reads = []    # app ids verify_snapshot() was asked for
+        self.no_snapshot = set()  # app ids whose backups carry no http-json snapshot (a converted HA backup has none)
 
     def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
         adapter = FakeAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
@@ -486,7 +489,8 @@ class FakeAdapter:
                     'catalog_sha256': self.app.sha256, 'owner': {'name': 'appowner', 'uid': 1001},
                     'images': [{'ref': 'localhost/x:1', 'id': 'sha256:' + 'a' * 64, 'digest': '', 'arch': 'amd64'}],
                     'postgres': [], 'volumes': [{'name': 'data', 'entry': entry.path}], 'secrets': [],
-                    'config_files': [], 'quadlet_files': [], 'verify_snapshot': snapshot_of(data)}
+                    'config_files': [], 'quadlet_files': [],
+                    'verify_snapshot': {} if self.app.id in self.world.no_snapshot else snapshot_of(data)}
         if keep_stopped and self.world.keep_stopped_drops_snapshot:
             manifest['verify_snapshot'] = {}
         return manifest, [entry]
@@ -607,6 +611,9 @@ class FakeAdapter:
         return self.world.health_hints.get(self.app.id)
 
     def verify_snapshot(self):
+        self.world.verify_reads.append(self.app.id)
+        if self.run in self.world.unreadable.get(self.app.id, ()):
+            raise BackupError('job-failed', '無法取得資料核對結果（http://127.0.0.1:8000/check）。', app=self.app.id)
         return snapshot_of(self.world.data[self.app.id])
 
 
@@ -2517,6 +2524,126 @@ class SafetyPruneTests(FlowCase):
         safety = [m for m in self.storage.list_backups() if m['type'] == 'safety']
         self.assertEqual(len(safety), 3)
         self.assertEqual(len(self.storage.deleted), 1)
+
+
+def ha_registry_row(apps=('odoo',)):
+    """A row of ha-imports.json, what a conversion registered, for a backup of these apps (RESTORE lane tests)."""
+    return {'ha_backup_id': 'ha-' + '0' * 20, 'name': 'WOOW', 'date': '2026-11-18T00:00:00Z', 'apps': list(apps),
+            'odoo_database': None, 'test_mode': False, 'workflows_to_fix': [], 'reminders': [], 'addons': [],
+            'job_id': 'j20261125T100000Z-00000001', 'created': '2026-11-25T10:00:00Z'}
+
+
+class ConvertedRestoreCase(RestoreCase):
+    """A restore of a backup the HA import converted (ha-imports.json lists it): RESTORE lane, HAOS parity 2026-11-25.
+    `converted()` registers the backup the way the conversion does; without it the very same restore is an ordinary one
+    (owner decision H6: ordinary restores keep today's checks)."""
+
+    def converted(self):
+        import time
+        from woowbackup import haimport
+        os.makedirs(self.paths.data, mode=0o700, exist_ok=True)
+        haimport.register(self.paths, self.backup_id, dict(ha_registry_row(), created='2026-11-25T10:00:00Z'),
+                          now=time.time())
+
+
+class HaImportRegistryTests(ConvertedRestoreCase):
+    def test_a_registered_backup_is_a_converted_one_and_an_unregistered_one_is_not(self):
+        self.assertFalse(flows.from_ha(self.paths, self.backup_id, self.storage.get(self.backup_id)))
+        self.converted()
+        self.assertTrue(flows.from_ha(self.paths, self.backup_id, self.storage.get(self.backup_id)))
+        self.assertFalse(flows.from_ha(self.paths, '20261125T100000Z-ffffffff', {}))
+
+    def test_while_the_registry_cannot_be_read_the_note_tells(self):
+        from woowbackup import haimport
+        path = haimport.registry_path(self.paths)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        with open(path, 'w', encoding='utf-8') as handle:
+            handle.write('{not json')
+        self.assertFalse(flows.from_ha(self.paths, self.backup_id, {'note': '手動'}))
+        self.assertTrue(flows.from_ha(self.paths, self.backup_id, {'note': haimport.NOTE_PREFIX + 'WOOW（2026-11-18）'}))
+
+    def test_the_restore_marks_its_context_and_every_adapter_it_makes(self):
+        self.converted()
+        self.world.adapters.clear()
+        context = self.ctx()
+        flows.run_restore(context, {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertTrue(context.ha_import)
+        self.assertTrue(self.world.adapters and all(adapter.ha_import for adapter in self.world.adapters))
+        self.world.adapters.clear()
+        self.backup_id = self.backup(apps=['woowbk-demo'])['backup_id']
+        context = self.ctx()
+        flows.run_restore(context, {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertFalse(context.ha_import)
+        self.assertTrue(self.world.adapters and not any(adapter.ha_import for adapter in self.world.adapters))
+
+
+class UnreadableCheckValueTests(ConvertedRestoreCase):
+    """X-AD-39 (HAOS parity 2026-11-25): a value the app does not answer after a restore of a converted HA backup is
+    "not compared", with a notice, instead of a failed restore; with nothing to compare against nothing is read. What can
+    be compared still is, exactly."""
+
+    def test_an_ordinary_restore_still_rolls_back_when_the_value_cannot_be_read(self):
+        self.world.unreadable['woowbk-demo'] = {'restore'}
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertIn('無法取得資料核對結果', caught.exception.error.message)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+
+    def test_a_converted_backup_goes_on_when_the_value_cannot_be_read_and_says_so(self):
+        self.converted()
+        self.world.unreadable['woowbk-demo'] = {'restore', 'rollback'}
+        result = self.restore()
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
+        self.assertFalse(result['rolled_back'])
+        self.assertIsNone(result['verification'][0]['match'])
+        self.assertTrue(any('讀不到' in note and '沒有比對資料' in note for note in result['warnings']), result['warnings'])
+        self.assertTrue(any('讀不到' in line for line in self.reporter.logs))
+        self.assertNotIn('http://127.0.0.1', ' '.join(result['warnings']), 'the raw address of the failed read stays out')
+
+    def test_a_converted_backup_without_a_snapshot_reads_nothing_at_all(self):
+        self.world.no_snapshot.add('woowbk-demo')
+        self.backup_id = self.backup(apps=['woowbk-demo', 'woowbk-two'])['backup_id']
+        self.world.data['woowbk-demo'] = b'notes-v2-changed'
+        self.converted()
+        self.world.unreadable['woowbk-demo'] = {'restore', 'rollback'}
+        self.world.verify_reads.clear()
+        result = self.restore()
+        self.assertEqual(self.world.verify_reads, [])
+        self.assertIsNone(result['verification'][0]['match'])
+        self.assertTrue(any('已略過資料比對' in line for line in self.reporter.logs))
+        self.assertEqual(result['warnings'], [])
+
+    def test_an_ordinary_restore_without_a_snapshot_still_asks_the_app(self):
+        self.world.no_snapshot.add('woowbk-demo')
+        self.backup_id = self.backup(apps=['woowbk-demo'])['backup_id']
+        self.world.verify_reads.clear()
+        self.restore()
+        self.assertEqual(self.world.verify_reads, ['woowbk-demo'])
+
+    def test_a_converted_backup_whose_app_answers_differently_is_still_rolled_back(self):
+        self.converted()
+        self.world.corrupt_restore.add('woowbk-demo')
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertIs(caught.exception.result['verification'][0]['match'], False)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+
+    def test_a_converted_backups_rollback_is_complete_when_the_value_cannot_be_read(self):
+        self.converted()
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.unreadable['woowbk-demo'] = {'rollback'}
+        with self.assertRaises(flows.RolledBack) as caught:
+            self.restore()
+        self.assertTrue(caught.exception.result['rolled_back'])
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertTrue(any('沒有比對資料' in note for note in caught.exception.result['warnings']))
+
+    def test_an_ordinary_rollback_that_cannot_read_the_value_needs_manual_work(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.unreadable['woowbk-demo'] = {'rollback'}
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertIn('需人工處理', caught.exception.message)
 
 
 class CompareTests(unittest.TestCase):

@@ -586,6 +586,47 @@ class InnerArchiveTests(unittest.TestCase):
                 path = self.backup(inner_tar(inner, self.FILES), inner, encryption)
                 self.assertIsNone(self.outcome(path))
 
+    def many_files(self, count):
+        return {f'apps/{APP}/secrets/s{i:05d}': b'x' for i in range(count)}
+
+    def test_x_ar_03_the_caps_are_bomb_guards_far_above_an_ordinary_backup(self):
+        """X-AR-03 (HAOS parity 2026-11-25): HAOS has no such cap; they were 1 MiB of manifest, 4,000 entries, 2 TiB."""
+        self.assertEqual((archive.MAX_MANIFEST, archive.MAX_MEMBERS, archive.Limits().max_manifest,
+                          archive.Limits().max_members, archive.Limits().max_total_bytes),
+                         (16 * 1024 ** 2, 40_000, 16 * 1024 ** 2, 40_000, 16 * 1024 ** 4))
+
+    def test_x_ar_03_the_entry_cap_counts_exactly_and_a_crafted_manifest_is_still_refused(self):
+        files = self.many_files(5)
+        inner = small_inner(APP, self.ws.key.key_id, files)
+        path = self.backup(inner_tar(inner, files), inner)
+        for limit, expected in ((6, None), (5, 'limit-exceeded')):  # five entries and the manifest itself
+            target = self.ws.dest(f'cap{limit}')
+            try:
+                archive.extract_archive(path, self.ids, target, limits=archive.Limits(max_members=limit))
+                got = None
+            except BackupError as error:
+                got = error.code
+            self.assertEqual(got, expected, limit)
+        many = dict(inner, entries=inner['entries'] + [{'path': f'apps/{APP}/secrets/z{i}', 'size': 0,
+                                                         'sha256': hashlib.sha256(b'').hexdigest()}
+                                                        for i in range(archive.MAX_MEMBERS)])
+        self.assertEqual(self.outcome(self.backup(tar_of([reg('manifest.json', json.dumps(many).encode())]), inner)),
+                         'limit-exceeded')
+
+    def test_x_ar_03_the_declared_total_is_still_capped_and_still_checked_against_the_free_space(self):
+        files = self.many_files(3)
+        inner = small_inner(APP, self.ws.key.key_id, files)
+        path = self.backup(inner_tar(inner, files), inner)
+        target = self.ws.dest('total-ok')
+        archive.extract_archive(path, self.ids, target, limits=archive.Limits(max_total_bytes=3))
+        with self.assertRaises(BackupError) as caught:
+            archive.extract_archive(path, self.ids, self.ws.dest('total-over'), limits=archive.Limits(max_total_bytes=2))
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        with self.assertRaises(BackupError) as caught:
+            archive.extract_archive(path, self.ids, self.ws.dest('space'),
+                                    limits=archive.Limits(free_bytes=lambda _path: 6, reserve_bytes=4))
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+
     def test_hostile_inner_tars(self):
         inner = small_inner(APP, self.ws.key.key_id, self.FILES)
         secret, config = list(self.FILES)

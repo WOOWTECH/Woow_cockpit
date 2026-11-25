@@ -58,8 +58,11 @@ FORMAT = 1            # the v1 format number (`.woowbackup`)
 FORMAT_V2 = 2         # the native format (`.tar`)
 FORMATS = (FORMAT, FORMAT_V2)
 MAX_HEADER = 4096
-MAX_MANIFEST = 1024 * 1024
-MAX_MEMBERS = 4000
+# Bomb guards, not verdicts on the data (X-AR-03, HAOS parity 2026-11-25: HAOS has none). They were 1 MiB, 4,000 entries and
+# 2 TiB; now what no ordinary backup reaches. An extraction still checks the declared size of what it writes against the
+# free space (reserve included) before it writes anything, and every entry is read against its declared size and sha256.
+MAX_MANIFEST = 16 * 1024 * 1024
+MAX_MEMBERS = 40_000
 
 FAMILY = b'WOOWTECH-BACKUP/'
 AGE_MAGIC = b'age-encryption.org/v1\n'
@@ -151,7 +154,7 @@ class Limits:
     """Reader limits. `free_bytes(path) -> int` overrides statvfs (tests inject it)."""
     max_members: int = MAX_MEMBERS
     max_manifest: int = MAX_MANIFEST
-    max_total_bytes: int = 2 * 1024 ** 4
+    max_total_bytes: int = 16 * 1024 ** 4
     reserve_bytes: int = 512 * 1024 * 1024
     free_bytes: object = None
 

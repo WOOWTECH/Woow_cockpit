@@ -184,6 +184,10 @@ class FlowContext:
         self.reporter = reporter
         self.key_file = Path(key_file) if key_file else None
         self.ha_key = None  # an HA import job's key text (run-job reads and masks it; haimport.py)
+        # The restore of a backup converted from a Home Assistant backup (`from_ha`): the adapters then handle what
+        # differs on this device on their own (a slower start, a missing volume, other containers using a folder, ...) and
+        # list it in the confirmation. Other restores keep their checks (owner decision H6, 2026-11-25).
+        self.ha_import = False
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
@@ -294,6 +298,7 @@ class FlowContext:
                                             writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units),
                                             imported_hook=lambda app_id=app.id: self.note_imported(app_id))
         adapter.job_id = self.job_id  # names the restore's host-directory siblings
+        adapter.ha_import = self.ha_import
         return adapter
 
     def identities(self):
@@ -387,6 +392,19 @@ def resolve_apps(catalog, app_ids):
     if not apps:
         raise BackupError('invalid-request', '請至少選擇一個應用。')
     return apps
+
+
+def from_ha(paths, backup_id, meta=None):
+    """True for a backup converted from a Home Assistant backup: ha-imports.json lists it; while that file cannot be read
+    the note says it (the same rule retention.py applies). Never raises: the answer only decides how forgiving a restore is."""
+    from . import haimport
+    try:
+        rows = haimport.load_registry(paths)
+    except Exception:  # noqa: BLE001 - never decides anything else
+        rows = None
+    if rows is not None:
+        return backup_id in rows
+    return str((meta or {}).get('note') or '').startswith(haimport.NOTE_PREFIX)
 
 
 def created_from_id(backup_id):
@@ -532,15 +550,32 @@ def digest_entry(app, adapter, entry=None):
     return entry
 
 
-def verification_entry(app, adapter, app_manifest):
+def verification_entry(app, adapter, app_manifest, *, lenient=False, notes=None):
     """The data check of one restored app: the http-json snapshot compared after the health checks, plus the digest
-    checks compared before the units started (digest_entry)."""
+    checks compared before the units started (digest_entry).
+
+    `lenient` (the restore of a converted Home Assistant backup; X-AD-39, HAOS parity 2026-11-25): a conversion stores no
+    snapshot, so with nothing to compare against nothing is read; and a value the app does not answer counts as not
+    compared (`match` null, a note in `notes`) instead of failing the restore. What can be compared still is, exactly:
+    the digest checks, and a snapshot the backup does hold that the app answers differently."""
     entry = None
     if _http_specs(app):
         before = app_manifest.get('verify_snapshot') or {}
-        after = adapter.verify_snapshot()
-        entry = {'app': app.id, 'match': compare_snapshots(app, before, after), 'before': bounded_snapshot(app, before),
-                 'after': bounded_snapshot(app, after)}
+        unread = False
+        if lenient and not before:
+            after = {}
+        else:
+            try:
+                after = adapter.verify_snapshot()
+            except BackupError:
+                if not lenient:
+                    raise
+                after, unread = {}, True
+                if notes is not None:  # a fixed text: what the failed read said (an address, a status) stays in the journal
+                    notes.append(f'還原後讀不到「{app.name}」回報的資料核對值，這個項目沒有比對資料；'
+                                 '其他核對（資料摘要、健康檢查）照常做過。')
+        entry = {'app': app.id, 'match': None if unread else compare_snapshots(app, before, after),
+                 'before': bounded_snapshot(app, before), 'after': bounded_snapshot(app, after)}
     return digest_entry(app, adapter, entry)
 
 
@@ -1192,6 +1227,7 @@ def run_restore(ctx, params):
     apps = resolve_apps(ctx.catalog(), params.get('apps') or [])
     header = ctx.archive.read_header(path)
     _require_key(ctx, header)
+    ctx.ha_import = from_ha(ctx.paths, backup_id, meta)
     if _unauthenticated(meta, header) and params.get('accept_unauthenticated') is not True:
         raise BackupError('invalid-request', '這份上傳的備份沒有加密，內容無法驗證來源與完整性；'
                                              '需要另外確認信任這個檔案才能還原。', field='accept_unauthenticated')
@@ -1287,7 +1323,11 @@ def run_restore(ctx, params):
                 if failed:
                     raise BackupError('job-failed', f'應用「{plan.app.name}」還原後健康檢查未通過：{failed[0]["message"]}',
                                       app=plan.app.id)
-                entry = verification_entry(plan.app, plan.adapter, plan.manifest)
+                unread = []
+                entry = verification_entry(plan.app, plan.adapter, plan.manifest, lenient=ctx.ha_import, notes=unread)
+                for note in unread:
+                    ctx.log(f'注意：{note}')
+                    _add_warning(result, note)
                 if entry is not None:
                     result['verification'].append(entry)
                     if entry['match'] is False:
@@ -2095,7 +2135,11 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                 if failed:
                     problems.append(f'「{name}」回復後健康檢查未通過')
                 else:
-                    entry = verification_entry(plan.app, adapter, app_manifest)
+                    unread = []
+                    entry = verification_entry(plan.app, adapter, app_manifest, lenient=ctx.ha_import, notes=unread)
+                    for note in unread:
+                        ctx.log(f'注意：{note}')
+                        _add_warning(result, note)
                     if entry is not None and entry['match'] is False:
                         problems.append(f'「{name}」回復後資料與還原前不一致')
                     else:

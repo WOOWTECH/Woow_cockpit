@@ -366,6 +366,78 @@ DIR_MEMBERS = [
 LAB_IDS = (nested.IdMap('0 1001 1\n1 10000 55000\n'), nested.IdMap('0 1001 1\n1 10000 55000\n'))
 
 
+class MemberCapTests(TempCase):
+    """X-NS-03 (HAOS parity 2026-11-25, RESTORE lane): the member caps are bomb guards, not verdicts on the data. HAOS has
+    none; here they were 2,000,000 members of a volume or host directory and 10,000 of an image. They now sit where no
+    ordinary volume reaches, a crafted tar still stops at them, and the memory of a pass at the cap stays bounded."""
+
+    def test_the_caps_are_far_above_an_ordinary_volume_and_still_there(self):
+        self.assertEqual((nested.MAX_VOLUME_MEMBERS, nested.MAX_OCI_MEMBERS), (4_000_000, 100_000))
+
+    def test_a_volume_with_exactly_the_cap_passes_and_one_more_member_is_refused(self):
+        members = [{'name': f'files/f{i}', 'data': b''} for i in range(3)]
+        original = nested.MAX_VOLUME_MEMBERS
+        nested.MAX_VOLUME_MEMBERS = 3
+        try:
+            self.assertEqual(nested.check_volume(self.file(volume_tar(members), 'at.tar')).members, 3)
+            error = self.rejected(nested.check_volume, volume_tar(members + [{'name': 'files/f3', 'data': b''}]),
+                                  'too many members')
+            self.assertEqual(error.details['limit'], 3)
+            self.assertIn('不安全或不支援', error.message)
+        finally:
+            nested.MAX_VOLUME_MEMBERS = original
+
+    def test_a_host_directory_has_the_same_cap(self):
+        path = self.file(volume_tar([{'name': './', 'kind': tarfile.DIRTYPE}] +
+                                    [{'name': f'f{i}', 'data': b''} for i in range(4)]), 'dir.tar')
+        original = nested.MAX_VOLUME_MEMBERS
+        nested.MAX_VOLUME_MEMBERS = 4
+        try:
+            with self.assertRaises(BackupError) as caught:
+                nested.check_dir(path)
+            self.assertEqual(caught.exception.code, 'corrupt-archive')
+            self.assertIn('too many members', caught.exception.details['reason'])
+        finally:
+            nested.MAX_VOLUME_MEMBERS = original
+        self.assertEqual(nested.check_dir(path).members, 5)
+
+    def test_an_image_with_exactly_the_cap_passes_and_one_more_member_is_refused(self):
+        data = oci_archive(REF)
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            count = len(tar.getmembers())
+        original = nested.MAX_OCI_MEMBERS
+        try:
+            nested.MAX_OCI_MEMBERS = count
+            nested.check_oci(self.file(data), ref=REF, image_id=image_id(REF))
+            nested.MAX_OCI_MEMBERS = count - 1
+            with self.assertRaises(BackupError) as caught:
+                nested.check_oci(self.file(data, 'second.tar'), ref=REF, image_id=image_id(REF))
+            self.assertIn('too many members', caught.exception.details['reason'])
+        finally:
+            nested.MAX_OCI_MEMBERS = original
+
+    def test_a_pass_at_the_cap_costs_a_bounded_amount_of_memory(self):
+        import tracemalloc
+        count = 20000
+        infos = []
+        for i in range(count):
+            info = tarfile.TarInfo(f'appdata_ocb2c3d4e5f6/preview/{i // 100:05d}/{i:07d}-4096-4096-max-and-crop-preview-'
+                                   'file-of-a-photo.jpg')
+            info.size = 0
+            infos.append(info)
+        policy = nested._VolumePolicy()
+        tracemalloc.start()
+        try:
+            before = tracemalloc.get_traced_memory()[0]
+            for info in infos:
+                policy.admit(info)
+            per_member = (tracemalloc.get_traced_memory()[0] - before) / count
+        finally:
+            tracemalloc.stop()
+        at_the_cap = per_member * nested.MAX_VOLUME_MEMBERS
+        self.assertLess(at_the_cap, 512 * 1024 ** 2, f'{per_member:.0f} bytes per member: {at_the_cap / 1024 ** 2:.0f} MiB at the cap')
+
+
 class HostDirectoryTests(TempCase):
     """Host directory tars: the volume rules, a root entry, symlinks that may point outside (kept, never followed)."""
 
