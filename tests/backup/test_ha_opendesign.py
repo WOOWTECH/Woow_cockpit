@@ -1,7 +1,9 @@
 """HA import, OpenDesign part (ha_opendesign.py): HA's daemon data moves with this device's owner, this device's agent
 logins, Omnigent and Paseo identities, installation id and MCP volume stay, HA's preferences are merged and its paths
 remapped, the database is checked by the sandboxed child, versions, blockers and the texts (CONTRACT section 9).
-Team E2."""
+Team E2. HAOS parity (2026-11-25, lane OPENDESIGN-CODESERVER): OP-01 .. OP-16 (the versions only inform, what is left out
+is one line to confirm, a hard link gets the content, a read that fails is tried again and then done with the app's own
+containers paused) -- see the classes ParityCheckTests .. ParityLiveTests."""
 import gzip
 import io
 import json
@@ -12,8 +14,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, hacommon, ha_opendesign as od
+from woowbackup import habackup, haissues, hacommon, ha_opendesign as od, hasqlite, hatarget
 from woowbackup.errors import BackupError
+from woowbackup.podman import Result
 
 from . import hab1fakes as fk
 from . import hafixtures as hx
@@ -172,14 +175,71 @@ LIVE_MCP = fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 10001, 'gid': 10001, '
                       {'name': 'state/token', 'data': b'target-mcp-token', 'uid': 10001, 'gid': 10001, 'mode': 0o600}])
 
 
+class Owner(fk.Owner):
+    """The app owner's runner with systemctl, and an export that fails, is torn or only works while the writers are stopped."""
+
+    def __init__(self, world):
+        super().__init__(world)
+        self.systemd = []
+
+    def systemctl(self, *args, timeout=None, max_output=None, check=True, abort=None):
+        verb, unit = args[0], args[-1]
+        self.calls.append(('systemctl', verb, unit))
+        self.systemd.append((verb, unit))
+        if self.world.start_fails and verb == 'start':
+            self.world.start_fails -= 1
+            raise BackupError('job-failed', 'systemctl start 執行失敗（結束碼 1）。')
+        return Result(0, b'', b'')
+
+    def stopped(self):
+        state = {}
+        for verb, unit in self.systemd:
+            state[unit] = verb
+        return {unit for unit, verb in state.items() if verb == 'stop'}
+
+    def relay(self, args, *, stdout, timeout=None, max_output=None, check=True, abort=None):
+        volume = args[-1]
+        self.calls.append(('relay', *args))
+        plan = self.world.export_plan.get(volume)
+        step = plan.pop(0) if plan else 'ok'
+        if self.world.needs_stopped and volume == DATA and not self.world.needs_stopped <= self.stopped():
+            step = 'fail'
+        if step == 'fail':
+            raise BackupError('job-failed', 'podman volume export 執行失敗（結束碼 125）。')
+        data = self.world.export(volume)
+        stdout.write(data[:len(data) // 2 + 5] if step == 'torn' else data)
+        return Result(0, None, b'')
+
+
 class World(fk.World):
     def __init__(self):
         super().__init__()
+        self.owner = Owner(self)
         self.quadlets = {'open-design': QUADLETS}
         self.revision = REV
         self.app_version = '0.24.1'
         self.live_prefs = LIVE_PREFS
         self.live_extra = ()
+        self.export_plan = {}          # volume -> ['fail' | 'torn' | 'ok', ...] one per export call
+        self.needs_stopped = set()     # units that must be stopped before the data volume can be exported
+        self.start_fails = 0
+        self.pulled = True             # False: the image is not on this device until `podman pull`
+        self.pull_fails = False
+        self.pulls = []
+        self.label_text = None         # a label output that is not JSON
+
+    def podman(self, args, data, stdout):
+        if args[:1] == ['pull']:
+            self.pulls.append(args[-1])
+            if self.pull_fails:
+                return Result(125, b'', b'Error: initializing source docker://x: pinging container registry: dial tcp: lookup x')
+            self.pulled = True
+            return Result(0, b'sha256:abc\n', b'')
+        if args[:2] == ['image', 'inspect'] and not self.pulled:
+            return Result(1, b'', b'Error: no such image')
+        if args[:2] == ['image', 'inspect'] and self.label_text is not None:
+            return Result(0, self.label_text, b'')
+        return super().podman(args, data, stdout)
 
     def labels(self, image):
         return {od.SOURCE_LABEL: self.revision} if self.revision else {}
@@ -243,15 +303,11 @@ class CheckTests(OpenDesignCase):
         self.assertTrue(any('3 個從資料夾匯入的專案' in w and '其中 1 個' in w for w in result['warnings']))
 
     def test_blockers(self):
-        arm = [{'name': 'data/opendesign/projects/p0/arm.node', 'data': ARM_ELF}]
-        cases = (({'version': '0.2.14'}, '還不認得它'),
-                 ({'db': b'SQLite format 3\x00' + b'\xff' * 4000}, '已損毀'),
+        # what still stops OpenDesign (and only OpenDesign); the old stops that became notices or lines to confirm
+        # (a version the table does not know, an entry it does not know, a hard link to a login) are in the Parity classes
+        cases = (({'db': b'SQLite format 3\x00' + b'\xff' * 4000}, '已損毀'),
                  ({'db': sqlite_bytes(tables=False)}, '沒有專案資料表'),
                  ({'without': ('data/opendesign/app.sqlite',)}, '沒有 OpenDesign 的資料庫'),
-                 ({'extra': [{'name': 'data/opendesign/mystery', 'type': 'dir'},
-                             {'name': 'data/opendesign/mystery/x', 'data': b'?'}]}, '還不認得的項目（mystery）'),
-                 ({'extra': [{'name': 'data/opendesign/projects/p0/key', 'type': 'hardlink',
-                              'linkname': 'data/opendesign/home/.claude/.credentials.json'}]}, '硬連結'),
                  ({'extra': [{'name': 'data/opendesign/media-config.json', 'type': 'symlink',
                               'linkname': 'projects/p0/index.html'}],
                    'without': ('data/opendesign/media-config.json',)}, '不是一般檔案'))
@@ -259,19 +315,20 @@ class CheckTests(OpenDesignCase):
             with self.subTest(words=words):
                 result = self.check(self.upload_od(**kwargs), ['open-design'])[0]
                 self.assertFalse(result['ok'])
+                self.assertFalse(result['importable'])
                 self.assertTrue(any(words in b for b in result['blockers']), result['blockers'])
+        arm = [{'name': 'data/opendesign/projects/p0/arm.node', 'data': ARM_ELF}]
         result = self.check(self.upload_od(extra=arm), ['open-design'])[0]
         self.assertTrue(result['ok'], 'programs for another processor in projects are a warning')
         self.assertTrue(any('其他處理器的程式' in w for w in result['warnings']))
 
     def test_the_core_revision_must_be_the_same(self):
+        # OP-03 stays: both revisions known and different stops OpenDesign (installing HA's core is a later phase)
         self.world.revision = 'c8cd57f0' + 'a' * 32
         result = self.check(self.upload_od(), ['open-design'])[0]
         self.assertIn('版本不同', result['blockers'][0])
         self.assertIn('c8cd57f0', result['blockers'][0])
-        self.world.revision = None
-        result = self.check(self.upload_od(), ['open-design'])[0]
-        self.assertIn('無法讀取這台 OpenDesign 的核心版本', result['blockers'][0])
+        self.assertEqual([i['id'] for i in result['issues'] if i['level'] == 'stop'], ['opendesign.core-different'])
         self.world.revision = REV[:12]  # a short label of the same revision
         self.assertTrue(self.check(self.upload_od(), ['open-design'])[0]['ok'])
 
@@ -340,22 +397,6 @@ class ConvertTests(OpenDesignCase):
                 self.world.volume_data.clear()
                 self.convert(self.upload_od(prefs=prefs), ['open-design'])
                 self.assertEqual(json.loads(self.volume(DATA)['app-config.json'][1]), LIVE_PREFS)
-
-    def test_a_kept_hard_link_to_a_replaced_file_stops_the_conversion(self):
-        self.world.live_extra = [{'name': 'home/db-link', 'type': 'hardlink', 'linkname': 'app.sqlite'}]
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_od(), ['open-design'])
-        self.assertEqual(caught.exception.code, 'job-failed')
-        self.assertIn('硬連結', caught.exception.message)
-        self.assertEqual(self.storage.list_backups(), [])
-
-    def test_a_hard_link_to_a_file_that_does_not_move_stops_the_conversion(self):
-        extra = [{'name': 'data/opendesign/projects/p0/key', 'type': 'hardlink',
-                  'linkname': 'data/opendesign/home/.claude/.credentials.json'}]
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_od(extra=extra), ['open-design'])
-        self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertEqual(self.storage.list_backups(), [])
 
     def test_a_target_of_another_shape_is_refused(self):
         self.catalog['open-design'] = fk.app('open-design', 'OpenDesign', volumes=[{'name': DATA}])
