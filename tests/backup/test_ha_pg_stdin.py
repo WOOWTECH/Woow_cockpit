@@ -402,30 +402,48 @@ class ListingTests(unittest.TestCase):
     """pg-stdin follow-up F4: the list `pg_restore -l` prints is checked against the entry count in its own header before
     anything is restored from it (a list that came back short would restore only the part it names)."""
 
-    def test_a_whole_listing_passes_with_and_without_the_archive_settings_shown(self):
-        hidden = hx.toc_listing(LISTING)                        # the plain listing: ENCODING, STDSTRINGS, SEARCHPATH kept back
-        self.assertEqual(ha_odoo.check_listing(hidden.decode()), len(LISTING))
-        shown = hx.toc_listing(['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS',
-                                '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING], hidden=0)
-        self.assertEqual(ha_odoo.check_listing(shown.decode()), len(LISTING) + 3)
+    def test_a_whole_listing_passes_with_the_entries_a_real_listing_keeps_back(self):
+        # a REAL PostgreSQL 16.15 listing (Nextcloud lane's probe, 2026-11-24): 1131 entry lines, `TOC Entries: 1136`
+        real = hx.toc_listing([f'{n}; 1259 {16000 + n} TABLE public t{n} odoo' for n in range(1, 1132)], declared=1136)
+        self.assertEqual(ha_odoo.check_listing(real.decode()), 1131)
+        for hidden in (3, 5, 3 + ha_odoo.LISTING_SLACK):        # the settings only, what a real listing keeps back, the most
+            with self.subTest(hidden=hidden):
+                self.assertEqual(ha_odoo.check_listing(hx.toc_listing(LISTING, hidden=hidden).decode()), len(LISTING))
+        self.assertEqual(ha_odoo.check_listing(hx.toc_listing(LISTING).decode()), len(LISTING), 'the fixture default is the real 5')
 
-    def test_a_listing_that_lost_entries_is_refused_wherever_they_were_lost(self):
+    def test_a_listing_that_shows_the_archive_settings_keeps_back_less(self):
+        shown = ['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS', '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING]
+        for hidden in (0, 2, ha_odoo.LISTING_SLACK):
+            with self.subTest(hidden=hidden):
+                self.assertEqual(ha_odoo.check_listing(hx.toc_listing(shown, hidden=hidden).decode()), len(LISTING) + 3)
+        with self.assertRaises(BackupError):                    # one setting shown: the other two are still kept back
+            ha_odoo.check_listing(hx.toc_listing(['1; 0 0 ENCODING - ENCODING', *LISTING], hidden=1).decode())
+        with self.assertRaises(BackupError):
+            ha_odoo.check_listing(hx.toc_listing(shown, hidden=ha_odoo.LISTING_SLACK + 1).decode())
+
+    def test_a_listing_that_lost_its_end_is_refused_wherever_the_loss_began(self):
         whole = hx.toc_listing(LISTING).decode()
         lines = whole.splitlines()
         first = lines.index(LISTING[0])
-        cases = {'the last line': lines[:-1], 'a middle line': lines[:first + 100] + lines[first + 101:],
-                 'the first entry': lines[:first] + lines[first + 1:], 'half': lines[:first + 200],
-                 'every entry': lines[:first], 'a few at the end': lines[:-3]}
+        cases = {'the last twenty lines': lines[:-20], 'a middle stretch': lines[:first + 100] + lines[first + 160:],
+                 'half': lines[:first + 200], 'every entry': lines[:first], 'all but the first entry': lines[:first + 1]}
         for name, kept in cases.items():
             with self.subTest(name), self.assertRaises(BackupError) as caught:
                 ha_odoo.check_listing('\n'.join(kept) + '\n')
             self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_odoo.INCOMPLETE_LIST))
-            self.assertEqual(caught.exception.details['declared'], len(LISTING) + 3, 'the numbers say what was counted')
+            self.assertEqual(caught.exception.details['declared'], len(LISTING) + 5, 'the numbers say what was counted')
             self.assertLess(caught.exception.details['listed'], len(LISTING))
-        shown = hx.toc_listing(['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS',
-                                '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING], hidden=0).decode().splitlines()
-        with self.assertRaises(BackupError):
-            ha_odoo.check_listing('\n'.join(shown[:-1]) + '\n')
+
+    def test_what_the_check_cannot_see_is_exactly_the_slack(self):
+        # a gap of the settings not shown plus LISTING_SLACK passes, one more is refused: the limit is a number, not a guess
+        for lost, passes in ((0, True), (ha_odoo.LISTING_SLACK - 2, True), (ha_odoo.LISTING_SLACK - 1, False), (400, False)):
+            with self.subTest(lost=lost):
+                text = hx.toc_listing(LISTING[:len(LISTING) - lost], declared=len(LISTING) + 5).decode()
+                if passes:
+                    self.assertEqual(ha_odoo.check_listing(text), len(LISTING) - lost)
+                else:
+                    with self.assertRaises(BackupError):
+                        ha_odoo.check_listing(text)
 
     def test_a_listing_without_its_header_or_with_a_header_that_is_no_count_cannot_be_checked(self):
         body = ''.join(line + '\n' for line in LISTING)
@@ -450,9 +468,12 @@ class ListingTests(unittest.TestCase):
             self.assertNotIn('TABLE public', text)
 
     def test_a_whole_listing_restores(self):
-        tmp, _rec, error = run_restore(hx.toc_listing(LISTING))
+        tmp, rec, error = run_restore(hx.toc_listing(LISTING))
         self.assertIsNone(error)
         self.assertTrue([argv for _r, argv, _d in tmp.calls if argv[:1] == ['pg_restore'] and '-d' in argv])
+        # the numbers of the listing are in the job log (the real run reads them there: FOR-REAL.txt 1), and nothing else of it
+        counted = [line for line in rec.lines if '項目清單' in line]
+        self.assertEqual(counted, [f'已檢查資料庫匯出檔的項目清單：共 {len(LISTING)} 項（檔頭記載 {len(LISTING) + 5} 項）。'])
 
 
 class RestoreLogTests(unittest.TestCase):

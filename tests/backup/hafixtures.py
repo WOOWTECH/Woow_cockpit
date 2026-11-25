@@ -240,11 +240,13 @@ def v3_encrypt(plaintext, password=PASSWORD, *, tags=None, chunks=None, declared
 
 # ---------------------------------------------------------------- a pg_restore -l listing (HAOS parity, ODOO lane)
 
-def toc_listing(lines, *, hidden=3, declared=None):
+def toc_listing(lines, *, hidden=5, declared=None):
     """What `pg_restore -l` prints for an archive whose objects are the lines `lines` (bytes or text, one per entry, as
     pg_restore lists them: `<id>; <oid> <oid> <kind> ...`): the header with the `TOC Entries:` count (the entries plus the
-    `hidden` archive settings ENCODING, STDSTRINGS and SEARCHPATH that a plain listing keeps back; `declared` overrides the
-    count) and then the lines. Simulated format (no PostgreSQL tool is on the host): the header text is pg_restore's."""
+    `hidden` ones that a plain listing keeps back; `declared` overrides the count) and then the lines. The default is what
+    a REAL PostgreSQL 16.15 listing shows (the Nextcloud lane's probe of 2026-11-24: 1131 entry lines under `TOC Entries:
+    1136`): the settings ENCODING, STDSTRINGS and SEARCHPATH and two more entries. Simulated format (no
+    PostgreSQL tool is on the host): the header text is pg_restore's."""
     texts = [line.decode() if isinstance(line, bytes) else line for line in lines]
     count = len(texts) + hidden if declared is None else declared
     head = (';\n; Archive created at 2026-11-25 10:00:00 UTC\n;     dbname: woowtest\n'

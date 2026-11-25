@@ -5,6 +5,7 @@ block (C-19) and the row counts refuse more than 100 function arguments (C-11). 
 import gzip
 import io
 import json
+import os
 import re
 import sqlite3
 import tarfile
@@ -127,7 +128,7 @@ class FakeOwner:
         if verb == 'container' and args[1] == 'inspect':
             fmt = args[3]
             stopped = args[-1] == 'odoo18-db' and self.world.live_db_stopped
-            return Result(0, b'0\n' if 'ExitCode' in fmt else b'false\n' if stopped else b'true\n', b'')
+            return Result(0, f'{self.world.exit_code}\n'.encode() if 'ExitCode' in fmt else b'false\n' if stopped else b'true\n', b'')
         if verb == 'volume' and args[1] == 'import':
             self.world.imported[args[2]] = data
             return Result(0, b'', b'')
@@ -165,7 +166,7 @@ class FakeAdapter:
 
     def image_inspect(self, image):
         if image == self.world.web_image:
-            return {'id': WEB_ID, 'env': list(self.world.web_env)}
+            return {'id': self.world.web_id, 'env': list(self.world.web_env)}
         return {'id': 'sha256:' + 'c' * 64, 'env': ['PG_MAJOR=17' if 'paas-postgres' in image else 'PG_MAJOR=16']}
 
     def read_quadlets(self):
@@ -229,6 +230,11 @@ class World(HaWorld):
         self.dpkg_version = '18.0.20260926'                            # `dpkg-query -W -f '${Version}' odoo` in the image
         self.n8n_tables = {}
         self.unpublished = False
+        self.exit_code = 0             # what `podman container inspect` says the stopped new cluster exited with
+        self.controldata_state = 'shut down'   # `pg_controldata` of the new cluster
+        self.verify_partners = None    # None: what HA had; else what the converted database counts
+        self.web_id = WEB_ID           # what `podman image inspect` says the ID of the live Odoo image is
+        self.live_freeze = 'True'
 
     def factory(self, app, **_kwargs):
         return FakeAdapter(app, self)
@@ -250,6 +256,8 @@ class World(HaWorld):
         if role == 'conf':
             return Result(0, json.dumps(self.conf).encode(), b'')
         if role == 'release':
+            if self.dpkg_version == 'jobwide':
+                raise haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。'))
             if self.dpkg_version is None:
                 return Result(1, b'', b'dpkg-query: no packages found matching odoo')
             return Result(0, self.dpkg_version.encode(), b'')
@@ -260,7 +268,7 @@ class World(HaWorld):
                    'bin': {'wkhtmltopdf': True}, 'broken': self.scan_broken}
             return Result(0, json.dumps(doc).encode(), b'')
         if role == 'controldata':
-            return Result(0, b'Database cluster state:               shut down\n', b'')
+            return Result(0, f'Database cluster state:               {self.controldata_state}\n'.encode(), b'')
         if role == 'n8n-version':
             return Result(0, b'2.43.6\n', b'')
         if role == 'n8n-import':
@@ -290,8 +298,8 @@ class World(HaWorld):
                 if self.web_link else []
             return tar_of([*link, {'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
-                           {'name': 'filestore/odoo', 'type': 'dir', 'uid': 100, 'gid': 101},
-                           {'name': 'filestore/odoo/old', 'data': b'old', 'uid': 100, 'gid': 101},
+                           {'name': f'filestore/{self.conf.get("db_name", "odoo")}', 'type': 'dir', 'uid': 100, 'gid': 101},
+                           {'name': f'filestore/{self.conf.get("db_name", "odoo")}/old', 'data': b'old', 'uid': 100, 'gid': 101},
                            {'name': 'sessions', 'type': 'dir', 'uid': 100, 'gid': 101, 'mode': 0o700},
                            {'name': 'sessions/s1', 'data': b's', 'uid': 100, 'gid': 101},
                            {'name': 'addons', 'type': 'dir', 'uid': 100, 'gid': 101}])
@@ -306,10 +314,14 @@ class World(HaWorld):
             if sql == ha_odoo.LIVE_TABLE_SQL:
                 return self.live_table
             if sql == ha_odoo.LIVE_SQL:
-                return {'base_url': self.live_base_url, 'freeze': 'True', 'marker': self.live_marker}
+                return {'base_url': self.live_base_url, 'freeze': self.live_freeze, 'marker': self.live_marker}
             if 'FROM pg_authid' in sql:
                 return self.live_role
             if sql == ha_odoo.AVAILABLE_EXTENSIONS_SQL:
+                if self.live_extensions == 'raise':
+                    raise BackupError('job-failed', 'psql 執行失敗')
+                if self.live_extensions == 'jobwide':
+                    raise haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。'))
                 return self.live_extensions
             if sql == ha_odoo.SETTINGS_SQL:
                 return self.live_settings
@@ -341,7 +353,8 @@ class World(HaWorld):
                 return 'uuid-ha'
         if role == 'odoo-db':
             if sql == ha_odoo.VERIFY_SQL:
-                return {'modules': self.ha_modules, 'partners': 5, 'attachments': 1, 'marker': self.expected_marker(container),
+                return {'modules': self.ha_modules, 'partners': 5 if self.verify_partners is None else self.verify_partners,
+                        'attachments': 1, 'marker': self.expected_marker(container),
                         'attempt': 0, 'base_url': self.verify_base_url, 'uuid': 'uuid-new'}
             if sql == ha_odoo.HAS_WEBSITE_SQL:
                 return True
@@ -643,6 +656,12 @@ class OdooTargetTests(OdooCase):
         self.assertEqual((restore[restore.index('-U') + 1], restore[restore.index('-d') + 1]), ('odoo18', 'prod'))
         self.assertTrue(any(db == 'prod' for psql in self.world.owner.psql.values() for db, _s, _t in psql.executed))
         self.assertEqual(result['apps'], ['odoo'])
+        # the filestore of the chosen HA database lives in the folder Odoo looks in: named like its configured database
+        with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo18-web-data'])) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith('filestore/prod/') for name in names), names)
+        self.assertFalse(any(name.startswith('filestore/odoo') for name in names), 'no folder of a database that is not there')
+        self.assertNotIn('filestore/prod/old', names, 'what this device had of that database is replaced, as before')
 
     def test_a_role_password_that_is_no_verifier_is_set_again_from_the_configuration(self):
         """OD-21: only a SCRAM or md5 verifier is taken over; anything else (a plain text, nothing) is not."""
@@ -676,7 +695,7 @@ class OdooTargetTests(OdooCase):
 
     def test_a_superuser_role_becomes_an_ordinary_one(self):
         """OD-22: HA's content never runs as a superuser: the new role has none of the live role's powers."""
-        self.world.live_role = {**self.world.live_role, 'super': True, 'createrole': True, 'replication': True,
+        self.world.live_role = {**self.world.live_role, 'super': True, 'createdb': True, 'createrole': True, 'replication': True,
                                 'bypassrls': True}
         ha_id = self.upload_odoo()
         row = self.check(ha_id)
@@ -684,7 +703,7 @@ class OdooTargetTests(OdooCase):
         self.assertEqual(self.ids(row)['odoo.role-normalised'], 'auto')
         self.convert(ha_id, ['odoo'])
         (create,) = [s for s in self.executed() if s.startswith('CREATE ROLE odoo')]
-        self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION '
+        self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION '
                                           'NOBYPASSRLS'), create)
 
     def test_the_release_of_the_marker_is_the_version_of_the_odoo_package_else_the_variables_of_the_image(self):
@@ -694,7 +713,14 @@ class OdooTargetTests(OdooCase):
         for dpkg, env, expected in (('18.0.20260926', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
                                     (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
                                     (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=18.0.20260926'], '18.0.20260926'),
-                                    ('not a version!', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926')):
+                                    ('not a version!', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
+                                    # what upgrade-gate.sh makes of a package version: epoch and suffix cut, three fields, 18.0.<8 digits>
+                                    ('1:18.0.20260926-1', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    ('18.0.20260926+dfsg', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    ('18.0.20260926.1', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20270101'], '18.0.20260926'),
+                                    (None, ['ODOO_VERSION=18.0', 'ODOO_RELEASE=18.0.20260926-1'], '18.0.20260926'),
+                                    ('19.0.20260926', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926'),
+                                    ('18.0.2026092', ['ODOO_VERSION=18.0', 'ODOO_RELEASE=20260926'], '18.0.20260926')):
             with self.subTest(dpkg=dpkg, env=env):
                 self.world.dpkg_version, self.world.web_env = dpkg, env
                 self.world.owner.psql.clear()
@@ -1154,6 +1180,223 @@ class OdooDatabaseTests(OdooCase):
         self.assertGreater(scan[1], ha_odoo.SCAN_OUTPUT)
         dump = next(timeout for args, timeout, _m in limits if 'pg_dump' in args)
         self.assertGreater(dump, ha_odoo.DUMP_TIMEOUT)
+
+
+class OdooGapTests(OdooCase):
+    """Places of the Odoo flow that no test ran before (a line-coverage pass of iteration 2): the checks after the
+    conversion, what ends the whole job, what this device's own side cannot say, and the share folder's modules."""
+
+    def convert_odoo(self, **params):
+        return self.convert(self.upload_odoo(), ['odoo'], **params)
+
+    def nothing_was_carried(self):
+        self.assertEqual(self.world.manifests, {}, 'nothing was handed to the import')
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertEqual(self.reporter.partial.get('temp_owners'), [])
+
+    # ----------------------------------------------------- the checks after the conversion stay (rule 2)
+    def test_a_new_cluster_that_stops_with_an_error_stops_the_conversion_and_nothing_is_carried(self):
+        self.world.exit_code = 3
+        with self.assertRaises(BackupError) as caught:
+            self.convert_odoo()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('結束碼 3', caught.exception.message)
+        self.nothing_was_carried()
+
+    def test_a_new_cluster_that_is_not_marked_shut_down_stops_the_conversion_and_nothing_is_carried(self):
+        self.world.controldata_state = 'in production'
+        with self.assertRaises(BackupError) as caught:
+            self.convert_odoo()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('沒有正常關閉', caught.exception.message)
+        self.nothing_was_carried()
+
+    def test_a_converted_database_that_fails_the_check_after_the_conversion_stops_it_and_nothing_is_carried(self):
+        self.world.verify_partners = 4          # HA had 5 partners
+        with self.assertRaises(BackupError) as caught:
+            self.convert_odoo()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('轉換後的 Odoo 資料庫檢查沒有通過', caught.exception.message)
+        self.assertIn('聯絡人或附件數量', caught.exception.message)
+        self.nothing_was_carried()
+
+    def test_a_database_that_is_not_in_the_backup_is_not_found_and_nothing_is_carried(self):
+        with self.assertRaises(BackupError) as caught:
+            self.convert_odoo(odoo_database='gone')
+        self.assertEqual(caught.exception.code, 'not-found')
+        self.nothing_was_carried()
+
+    # ----------------------------------------------------- what ends the whole job is never a database's own fault
+    def test_a_job_wide_failure_of_the_restore_goes_up_through_the_app_and_the_job(self):
+        original = self.world.exec
+        for code, wide in (('insufficient-space', False), ('job-failed', True)):
+            with self.subTest(code=code, wide=wide):
+                def execute(container, command, data, stdout, original=original, code=code, wide=wide):
+                    if command[0] == 'pg_restore' and '-d' in command:
+                        error = BackupError(code, '磁碟空間不足。')
+                        raise haissues.job_wide(error) if wide else error
+                    return original(container, command, data, stdout)
+
+                self.world.exec = execute
+                with self.assertRaises(BackupError) as caught:
+                    self.convert_odoo()
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(haissues.is_job_wide(caught.exception), wide)
+                self.nothing_was_carried()
+        self.world.exec = original
+
+    def test_a_full_disk_while_the_image_that_reads_vector_is_fetched_ends_the_job_in_the_check_and_in_the_conversion(self):
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['vector', '0.8.0']]
+        real = ha_odoo.hatarget.ensure_image
+
+        def ensure(work, app, image):
+            if image == ha_odoo.PG16_IMAGES[0]:
+                raise haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。'))
+            return real(work, app, image)
+
+        with mock.patch.object(ha_odoo.hatarget, 'ensure_image', ensure):
+            with self.assertRaises(BackupError) as caught:
+                self.check()
+            self.assertEqual(caught.exception.code, 'insufficient-space')
+            with self.assertRaises(BackupError) as caught:
+                self.convert_odoo()
+            self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.nothing_was_carried()
+
+    def test_the_conversion_fetches_the_vector_image_for_the_next_try_and_this_one_stops_that_database_only(self):
+        """OD-40: the conversion reads with what the device has; the image is fetched, so that a new check finds it."""
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['vector', '0.8.0']]
+        with self.assertRaises(BackupError) as caught:
+            self.convert_odoo()
+        self.assertEqual(self.world.pulls, [ha_odoo.PG16_IMAGES[0]])
+        self.assertIn('pgvector', caught.exception.message)
+        self.nothing_was_carried()
+
+    # ----------------------------------------------------- what this device's own side cannot say
+    def test_a_device_whose_extensions_cannot_be_listed_uses_the_fixed_list_and_a_failure_that_ends_the_job_is_not_hidden(self):
+        """OD-39: the list of extensions of this device's PostgreSQL could not be read: the fixed list; a job-wide failure goes up."""
+        self.world.extensions_by_db = {'woowtest': [['plpgsql', '1.0'], ['pgcrypto', '1.3']]}
+        row = self.check()
+        self.assertTrue(row['importable'], 'pgcrypto is one the device offers and PostgreSQL calls trusted')
+        for kind in ('raise', None):
+            with self.subTest(kind=kind):
+                self.world.live_extensions = kind
+                row = self.check()
+                self.assertFalse(row['importable'], 'the fixed list has no pgcrypto')
+                (stop,) = self.issues(row, 'woowtest', only='stop')
+                self.assertEqual((stop['id'], stop['items']), ('odoo.extension-unsupported', ['pgcrypto']))
+        self.world.live_extensions = 'jobwide'
+        with self.assertRaises(BackupError) as caught:
+            self.check()
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+
+    def test_an_odoo_image_whose_id_cannot_be_read_stops_only_this_app_and_nothing_is_read(self):
+        self.world.web_id = 'not-an-image-id'
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertIn('找不到這台 Odoo 使用的映像', row['blockers'][0])
+        self.assertEqual(self.runs('hapg'), [], 'HA data was not read')
+
+    def test_the_release_date_that_the_image_cannot_say_because_the_job_ends_goes_up_and_is_not_a_missing_date(self):
+        self.world.live_marker = None            # a marker has to be written, so the release is asked
+        self.world.dpkg_version = 'jobwide'
+        with self.assertRaises(BackupError) as caught:
+            self.check()
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+
+    def test_a_freeze_flag_that_is_not_a_short_text_is_not_carried(self):
+        self.world.live_freeze = 7
+        row = self.check()
+        self.assertTrue(row['importable'], row['blockers'])
+        self.convert_odoo()
+        self.assertTrue(any("DELETE FROM ir_config_parameter WHERE key = 'web.base.url.freeze'" in s
+                            for s in self.executed()))
+        self.assertFalse(any("'web.base.url.freeze'," in s for s in self.executed() if s.startswith('INSERT')))
+
+    # ----------------------------------------------------- the share folder's modules (read like the data folder's)
+    def upload_with_share(self, entries):
+        share = hx.tar_bytes([{'name': 'odoo_addons', 'type': 'dir'}, *entries], compress=True)
+        return self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', odoo_member()), ('share.tar.gz', share)],
+                                          hx.ha_doc(addons=(hx.ODOO,), folders=('share',))))
+
+    def test_a_module_that_is_only_in_the_share_folder_is_copied_to_this_devices_modules_folder(self):
+        self.world.ha_modules = [*self.world.ha_modules, ['shared_mod', '18.0.1.0.0', 'installed']]
+        ha_id = self.upload_with_share([
+            {'name': 'odoo_addons/shared_mod', 'type': 'dir'},
+            {'name': 'odoo_addons/shared_mod/__manifest__.py', 'data': manifest_of()},
+            {'name': 'odoo_addons/shared_mod/__init__.py', 'data': b''},
+            {'name': 'odoo_addons/shared_mod/__pycache__/x.pyc', 'data': b'x'}])
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'], row['blockers'])
+        self.assertNotIn('odoo.modules-missing', self.ids(row), 'found in the share folder, so not missing')
+        (database,) = row['odoo']['databases']
+        self.assertEqual([m['name'] for m in database['custom_modules']], ['shared_mod', 'woow_import_probe'])
+        self.assertEqual({m['from'] for m in database['custom_modules'] if m['name'] == 'shared_mod'}, {'share/odoo_addons'})
+        self.convert(ha_id, ['odoo'])
+        with tarfile.open(fileobj=io.BytesIO(self.world.dir_data['.local/share/odoo18/addons'])) as tar:
+            names = set(tar.getnames())
+        self.assertIn('./shared_mod/__manifest__.py', names)
+        self.assertFalse(any('__pycache__' in name for name in names))
+
+    def test_a_manifest_in_the_share_folder_that_is_too_large_is_listed_and_its_module_stays_behind(self):
+        self.world.ha_modules = [*self.world.ha_modules, ['big_share', '18.0.1.0.0', 'installed']]
+        ha_id = self.upload_with_share([
+            {'name': 'odoo_addons/big_share', 'type': 'dir'},
+            {'name': 'odoo_addons/big_share/__manifest__.py', 'data': b'#' * (ha_odoo.MAX_MANIFEST + 1)}])
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        self.assertEqual({i['id'] for i in row['issues'] if i['level'] == 'confirm'}, {'files.skipped', 'odoo.modules-missing'})
+        (missing,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-missing']
+        self.assertEqual(missing['items'], ['big_share'])
+
+
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_FIXTURES'), 'set WOOWBK_HA_FIXTURES to read the real HA backups made for this feature')
+class RealOdooFlowTests(OdooCase):
+    """A REAL HA backup (Supervisor 2026.11.0, plain, never committed) of the Odoo add-on through the check and the conversion:
+    its bytes are real, what PostgreSQL would answer is the double's (no PostgreSQL tool is on this host). Only structure is
+    asserted; nothing of the backup is printed."""
+
+    def real_backup(self):
+        path = Path(os.environ['WOOWBK_HA_FIXTURES']) / 'woow-import-test-plain' / 'woow-import-test-plain.tar'
+        if not path.exists():
+            self.skipTest('the plain real backup is not in WOOWBK_HA_FIXTURES')
+        from woowbackup import habackup
+        with habackup.open_backup(path) as ha:
+            member = next(m for m in ha.layout.members if m.role == 'addon' and m.name.endswith('odoo18ce.tar.gz'))
+            with ha.open_member(member.name, None) as stream:
+                src = ha_odoo.scan_member(stream, habackup.Report())
+        return path.read_bytes(), src
+
+    def test_the_real_odoo_addon_is_checked_and_converted_and_carries_its_filestore_and_modules(self):
+        data, src = self.real_backup()
+        database = sorted(src.filestore)[0]
+        module, info = sorted(src.modules.items())[0]
+        self.world.ha_databases = [[database, 9000000, 'C', 'C']]
+        self.world.ha_modules = [['base', '18.0.1.3', 'installed'], [module, info['manifest']['version'], 'installed']]
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['pg_trgm', '1.6']]
+        ha_id = self.upload(data)
+        row = self.check(ha_id, odoo_database=database)
+        self.assertTrue(row['importable'], row['blockers'])
+        (shown,) = row['odoo']['databases']
+        self.assertEqual([m['name'] for m in shown['custom_modules']], [module])
+        result = self.convert(ha_id, ['odoo'], odoo_database=database)
+        self.assertEqual(result['ha_import']['apps'], ['odoo'])
+        items = self.world.manifests['odoo']
+        self.assertEqual(sorted(items['volumes']), ['odoo18-db-data-isolated', 'odoo18-web-data'])
+        hapg = next(blob for name, blob in self.world.imported.items() if name.endswith('-hapg'))
+        with tarfile.open(fileobj=io.BytesIO(hapg)) as tar:
+            members = tar.getnames()
+        self.assertIn('PG_VERSION', members)
+        self.assertFalse(any(name.startswith('/') or '..' in name.split('/') for name in members))
+        web = self.world.volume_data['odoo18-web-data']
+        with tarfile.open(fileobj=io.BytesIO(web)) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith('filestore/odoo/') for name in names), 'the filestore of the chosen database')
+        self.assertTrue(any(name == 'sessions' for name in names))
+        addons = self.world.dir_data['.local/share/odoo18/addons']
+        with tarfile.open(fileobj=io.BytesIO(addons)) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith(f'./{module}/') for name in names), 'the custom module of the backup')
 
 
 class VerifyConvertedTests(unittest.TestCase):
