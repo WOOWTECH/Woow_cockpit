@@ -421,7 +421,7 @@
   function jobLabel(job) {
     if (scheduleOf(job)) return "排程備份作業";
     const group = groupOf(job);
-    if (group) return `${group.step === "convert" ? "轉換 HA 備份" : "匯入 HA 備份"}：${haAppName(group.app_id)}`;
+    if (group) return `${group.step === "convert" ? "轉換 HA 備份" : "匯入 HA 備份"}「${haAppName(group.app_id)}」`;
     return HA_JOB_TITLES[haJobKind(job)] || jobTitle(job?.type);
   }
   const partialRun = job => Boolean(scheduleOf(job)) && job.state === "succeeded" && job.result?.partial === true;
@@ -7815,7 +7815,7 @@
       h("th", { scope: "row", "data-label": "時間" }, link(date(job.created), ["jobs", job.id], {
         class: "row-title", dataset: { focus: `job-${job.id}` }, "aria-label": `查看 ${date(job.created)} 的${jobLabel(job)}`
       }), h("span", { class: "secondary mono", text: job.id })),
-      h("td", { "data-label": "作業", text: schedule ? "排程備份" : HA_JOB_TITLES[ha] || `${JOB_TYPES[job.type]}` }),
+      h("td", { "data-label": "作業", text: schedule ? "排程備份" : groupOf(job) ? jobLabel(job) : HA_JOB_TITLES[ha] || `${JOB_TYPES[job.type]}` }),
       h("td", { "data-label": "狀態" }, runStateChip(job)),
       h("td", { "data-label": "內容", text: summary || "—" }),
       h("td", { "data-label": "結果", text: outcome }));

@@ -6582,7 +6582,7 @@ try {
       const lines = await v2Lines(page);
       assert.deepEqual(lines.map(line => line.label), ['全部', 'Odoo', '全部', 'Odoo', 'n8n']);
       assert.equal(lines[0].text, '匯入會取代這台這 2 個應用現在的資料。匯入前會自動各做一份備份，失敗會自動退回。');
-      assert.equal(lines[1].text, 'HA 有 3 個資料庫。這次搬「prod」；「test」「demo-old」會留在 HA，HA 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。');
+      assert.equal(lines[1].text, 'HA 有 3 個資料庫。這次搬「prod」；「test」、「demo-old」會留在 HA，HA 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。');
       assert.deepEqual(lines[2], { label: '全部', text: V2_PAUSES.message, names: ['檔案管理 filebrowser', 'code-server'] });
       assert.deepEqual(lines[3], { label: 'Odoo', text: V2_ODOO_MODULES.message, names: ['website_sale_extra'] });
       assert.deepEqual(lines[4], { label: 'n8n', text: V2_N8N_KEY.message, names: [] });
@@ -6884,7 +6884,7 @@ try {
       assert.equal(await section.locator('.ha-group-row[data-ha-app="n8n"]').getAttribute('data-status'), 'pending');
       assert.match(await section.locator('.ha-group-row[data-ha-app="n8n"]').textContent(), /轉換中[\s\S]*正在把 HA 的資料轉成這台的備份/);
       assert.equal(await section.locator(`a[href="#/backups/${B_V2_SAFETY.odoo}"]`).count(), 1);
-      assert.match(await page.locator('#view-heading').textContent(), /轉換 HA 備份：n8n 工作流程/);
+      assert.match(await page.locator('#view-heading').textContent(), /轉換 HA 備份「n8n 工作流程」/);
     });
 
   await check('HAOS 一次確認: a job that is not found says the job may still be running and offers to read it again (X-JOB-03)', fixture(), async page => {
