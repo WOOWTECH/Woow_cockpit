@@ -977,12 +977,13 @@ class PolicyTests(HeadscaleCase):
     def test_a_policy_of_this_device_that_cannot_be_kept_stops_only_headscale(self):   # HS-25, HS-30
         self.world.live_db = database(prefixes=['live'], policies=['{"acls": []}'])
         ha_id = self.upload_headscale()
-        result = self.checked(ha_id)
-        self.assertFalse(result['importable'])
-        line = self.issues(result, 'stop')['headscale.policy-keep-unsupported']
-        self.assertIn('所有裝置就會互通', line['message'])
-        self.assertTrue(line['action'])
-        self.refused(ha_id, 'incompatible')   # the conversion asks again (HS-30)
+        with mock.patch.object(hasqlite, 'COPY_POLICIES', False, create=True):   # a child that cannot copy policies
+            result = self.checked(ha_id)
+            self.assertFalse(result['importable'])
+            line = self.issues(result, 'stop')['headscale.policy-keep-unsupported']
+            self.assertIn('所有裝置就會互通', line['message'])
+            self.assertTrue(line['action'])
+            self.refused(ha_id, 'incompatible')   # the conversion asks again (HS-30)
         self.assertEqual(self.world.manifests, {})
 
     def test_when_ha_has_none_this_devices_stays_in_the_converted_database(self):   # HS-25
@@ -1045,7 +1046,8 @@ class PolicyTests(HeadscaleCase):
     def test_a_policy_ha_does_not_use_must_not_apply_here(self):   # HS-25
         stale = database(prefixes=['ha'], policies=['{"acls": ["old"]}'])
         ha_id = self.upload_headscale(db=stale)   # HA's mode is file: the row in its database is not in use
-        result = self.checked(ha_id)
+        with mock.patch.object(hasqlite, 'COPY_POLICIES', False, create=True):   # a child that cannot copy policies
+            result = self.checked(ha_id)
         self.assertEqual((result['importable'], result['ok']), (True, False))
         self.assertIn('headscale.policy-stale', self.issues(result, 'confirm'))
         with PolicyCopy():   # where the child can replace it, it is replaced by this device's (none): no question
