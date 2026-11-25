@@ -449,7 +449,7 @@ class RunTests(ChainCase):
         text = '\n'.join(self.store.read_log(self.records()[0]['id']))
         self.assertIn('匯入進度：odoo 已轉換成備份，接著匯入它。', text)
         text = '\n'.join(self.store.read_log(self.records()[1]['id']))
-        self.assertIn('匯入進度：odoo已匯入；接著轉換 n8n。', text)
+        self.assertIn('匯入進度：odoo 已匯入；接著轉換 n8n。', text)
         self.assertIn('這次匯入的應用都處理完了', '\n'.join(self.store.read_log(self.records()[3]['id'])))
 
     def test_the_jobs_of_the_chain_are_listed_in_order_even_in_one_second(self):
@@ -555,6 +555,19 @@ class IsolationTests(ChainCase):
         self.assertIn('需人工處理', row['message'])
         self.assertEqual(row['safety_backup_id'], '20261125T110000Z-5afe0003')
         self.assertNotIn(hachain.UNCHANGED_TAIL, row['message'], 'this app did change: it is not told that nothing did')
+
+    def test_a_restore_that_wants_a_line_confirmed_is_skipped_not_failed(self):
+        """RESTORE lane: `confirmation-required` of a restore (a line of its check was not confirmed) kept the app out before
+        anything of it was touched; its converted backup stays."""
+        error = BackupError('confirmation-required', '還原 n8n 前還有事情要確認。')
+        error.result = {'changed': False}
+        self.script.restore_fail['n8n'] = error
+        self.start_chain()
+        self.run_chain()
+        self.assertEqual(self.statuses(), {'odoo': 'imported', 'n8n': 'skipped', 'emqx': 'imported'})
+        row = self.last_results()['n8n']
+        self.assertEqual((row['code'], row['backup_id']), ('confirmation-required', backup_id(2)))
+        self.assertTrue(row['message'].endswith(hachain.UNCHANGED_TAIL))
 
     def test_an_unexpected_exception_of_one_step_is_told_generically(self):
         self.script.restore_fail['n8n'] = RuntimeError('boom detail with /home/secret/path')

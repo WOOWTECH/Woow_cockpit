@@ -346,6 +346,8 @@ def _entry(record, params, group, chain, outcome):
     elif state == 'cancelled':
         entry.update(status='converted', code='cancelled', message=CANCELLED_RESTORE)
     elif state == 'failed':
+        if error.get('code') == 'confirmation-required':
+            entry['status'] = 'skipped'  # kept out before anything of it was touched (a line of the restore check)
         if result.get('changed') is not True and error.get('message'):
             entry['message'] = _short(f'{_reason(error)}{UNCHANGED_TAIL}')
     return clean_result(entry) or entry
@@ -455,11 +457,11 @@ def _log_line(group, entry, created, stop, restoring):
         return f'匯入進度：{app} 已轉換成備份，接著匯入它。'
     said = SAID.get(entry['status'], entry['status'])
     if created is not None:
-        return f'匯入進度：{app}{said}；接著{"轉換" if created["type"] == "backup" else "匯入"}'\
+        return f'匯入進度：{app} {said}；接著{"轉換" if created["type"] == "backup" else "匯入"}'\
                f' {created["params"]["group"]["app_id"]}。'
     if stop is not None:
         return f'匯入在 {app}（{said}）之後停止（{stop.code}），後面的應用沒有開始。'
-    return f'匯入進度：{app}{said}；這次匯入的應用都處理完了。'
+    return f'匯入進度：{app} {said}；這次匯入的應用都處理完了。'
 
 
 def conclude(ctx, record, outcome):
