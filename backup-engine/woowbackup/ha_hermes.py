@@ -489,7 +489,8 @@ def judge(sink, src, answers, *, addon_version, release, digest):
     if skipped.count:   # H-02, H-11
         sink.confirm('hermes.databases-skipped', f'HA 的 Hermes 有 {skipped.count} 個次要資料庫損毀或不是一般檔案，不會搬過來；'
                                                  '這台的 Hermes 啟動時會建立新的空資料庫，那一部分的紀錄會從頭開始。', skipped)
-    sink.skipped(src.report)   # H-01, X-NS-08, IN-27, IN-28, IN-35, IN-38, UP: the reader's own list, one line
+    if src.report is not None:   # a Source that was made by hand (a test) has no walk
+        sink.skipped(src.report)   # H-01, X-NS-08, IN-27, IN-28, IN-35, IN-38, UP: the reader's own list, one line
     if src.ha_urls:
         sink.notice('hermes.ha-addresses', f'HA 的 Hermes 設定連到 HA 內部的位址（{hacommon.names(sorted(src.ha_urls), 8)}），這台連不到，'
                                            '搬過來後請改成實際位址。')
