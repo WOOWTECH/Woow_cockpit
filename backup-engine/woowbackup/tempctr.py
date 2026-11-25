@@ -22,9 +22,10 @@ containers of their own, made from images that are already on the device, and re
 
 HAOS parity (2026-11-25, lane F3-helpers):
 
-* `scope` (switch SCOPES): the throwaway objects of one app of a check are named `woowbk-<job>-<scope>-<role>`, so two
-  apps of one job never meet the same name and what one app could not remove never stands in the way of the next one's
-  (X-TC-05; the label stays the job id, so `sweep` and the recovery keep matching).
+* `scope` (SCOPES): the objects of one app of a check are named `woowbk-<job>-<scope>-<role>` -- but only when the plain
+  name `woowbk-<job>-<role>` is held by an object of another TempObjects of the same job and owner that is still there (what
+  an earlier app could not remove, see `stuck`), so what one app could not remove never stands in the way of the next
+  one's (X-TC-05); every other name stays as it was. The label stays the job id, so `sweep` and the recovery keep matching.
 * An object that cannot be removed only takes space: `remove` / `remove_volume` say so in the log, keep it listed for
   `cleanup` and the sweeps and go on instead of stopping the app (X-TC-05). A list of objects that cannot be read stops
   nothing either (X-TC-07: `sweep` raises, its callers report it).
@@ -41,6 +42,7 @@ import re
 import shlex
 import tarfile
 import threading
+import weakref
 
 from . import podman
 from .errors import BackupError
@@ -64,11 +66,12 @@ SECRET_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
 SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,255}|uid=[0-9]{1,10}|gid=[0-9]{1,10}'
                               r'|mode=0?[0-7]{3,4})\Z')
 SECRETS_TMPFS = '/run/secrets:rw,noexec,nosuid,nodev,mode=0755'
-# TempObjects takes `scope`; haimport.Work.temp passes the app's place in the job once this is True. It stays False until
-# the doubles of the importer tests (hab1fakes.role_of, test_ha_flows, test_ha_omnigent: they read the role out of the name)
-# know scoped names: the patches that do, and the one-line switch, are snippets/parity-f3/scopes-on.patch (verified together).
-SCOPES = False
+# TempObjects takes `scope`; haimport.Work.temp passes the app's place in the job while this is True. A scoped TempObjects only
+# uses a scoped name where the plain one is stuck (see `stuck`): the importer tests' doubles read the role out of the name
+# (hab1fakes.role_of, test_ha_flows, test_ha_omnigent) and keep working, nothing is renamed that does not have to be.
+SCOPES = True
 SCOPE_RE = re.compile(r'[0-9]{1,2}\Z')
+_LIVE = weakref.WeakSet()     # every TempObjects of this process that is still referenced (the job keeps its leftovers' owners)
 REMOVE_ARGS = {'container': ('rm', '--force', '--time', '10'), 'volume': ('volume', 'rm', '--force'),
                'network': ('network', 'rm', '--force')}
 KIND_LABELS = {'container': '容器', 'volume': '資料卷', 'network': '網路'}
@@ -83,6 +86,19 @@ def secret_mount_path(spec):
         return ''
     target = options.get('target') or parts[0]
     return target if target.startswith('/') else '/run/secrets/' + target
+
+
+def stuck(job_id, owner=None, exclude=None):
+    """The names of this job's throwaway objects of `owner` (whose Podman storage they are in) that another TempObjects of
+    this process still lists -- what it created and could not remove (an app that left something behind), or a sibling that
+    is still working: a scoped TempObjects takes a name of its own instead of the same one."""
+    names = set()
+    for other in list(_LIVE):
+        if other is not exclude and other.job_id == job_id and other._owner == owner:
+            names.update(other.containers)
+            names.update(other.volumes)
+            names.update(other.networks)
+    return frozenset(names)
 
 
 MEMORY = '2g'
@@ -225,6 +241,9 @@ class TempObjects:
         self.volumes = []
         self.networks = []
         self._noted = set()    # objects whose removal failed once (one log line each: X-TC-05)
+        self._names = {}       # role -> the name this instance uses for it (chosen once, see name())
+        self._owner = getattr(runner, 'owner', None)   # whose Podman storage the objects are in (a name only collides there)
+        _LIVE.add(self)
         self._puts_back = []   # [(label, action)] what cleanup() puts back first (put_back_later)
         self.services = {}     # {container: unit} of the services this job started for its reading (hatarget.ensure_running)
         self.size = None       # bytes of the app's data when known (scale_to): the waits below grow with it
@@ -250,7 +269,16 @@ class TempObjects:
         return podman.scaled_timeout(seconds, self.size)
 
     def name(self, role):
-        return object_name(self.job_id, role if self.scope is None else f'{self.scope}-{role}')
+        """`woowbk-<job>-<role>`; with a scope and when that name is held by an object of an earlier app that could not be
+        removed: `woowbk-<job>-<scope>-<role>`. Chosen once per role: the name of an object never changes under it."""
+        chosen = self._names.get(role)
+        if chosen is None:
+            chosen = object_name(self.job_id, role)
+            if self.scope is not None and chosen in stuck(self.job_id, self._owner, exclude=self):
+                with contextlib.suppress(BackupError):   # a role too long for it keeps the plain name: the app stops there
+                    chosen = object_name(self.job_id, f'{self.scope}-{role}')
+            self._names[role] = chosen
+        return chosen
 
     @property
     def label(self):

@@ -404,39 +404,92 @@ class SweepTests(unittest.TestCase):
 
 
 class ScopeTests(unittest.TestCase):
-    """DESIGN C2 (lane F3): one name for every object an app of a check makes, so two apps never meet the same one."""
+    """DESIGN C2 (lane F3): what one app of a check could not remove never stands in the way of the next one's. A scoped
+    TempObjects only takes a name of its own where the plain one is still held by another TempObjects of the job."""
 
-    def test_the_scope_is_part_of_the_name_the_label_stays_the_job(self):
-        self.assertIs(tempctr.SCOPES, False, 'the switch: off until the importer tests\' doubles know scoped names')
+    def stuck_first_app(self, runner=None, role='hapg'):
+        """An earlier app of the job left its volume behind (its TempObjects stays referenced, as Work._stale keeps it)."""
+        runner = runner or FakeRunner({('volume', 'rm'): Result(125, b'', b'busy'), ('volume', 'exists'): Result(0, b'', b'')})
+        first = tempctr.TempObjects(runner, JOB, scope='0', log=[].append)
+        first.volume(role)
+        self.assertEqual(first.cleanup(), [f'woowbk-{JOB}-{role}'])
+        return first, runner
+
+    def test_the_names_stay_plain_while_nothing_is_there(self):
+        self.assertIs(tempctr.SCOPES, True, 'haimport.Work.temp passes the scope')
         runner = FakeRunner()
-        tmp = tempctr.TempObjects(runner, JOB, scope='0')
-        name = tmp.name('hapg')
-        self.assertEqual(name, f'woowbk-{JOB}-0-hapg')
-        argv = tmp.run_argv('hapg', 'img:1', [], detach=True)
-        self.assertEqual(argv[argv.index('--name') + 1], name)
-        self.assertEqual(argv[argv.index('--label') + 1], f'{tempctr.LABEL}={JOB}')
-        self.assertEqual(tempctr.NAME_RE.fullmatch(name).group(1), JOB, 'sweep and the recovery still find it')
-        self.assertEqual(tempctr.TempObjects(runner, JOB).name('hapg'), f'woowbk-{JOB}-hapg', 'no scope: as before')
+        for scope in ('0', '1', None):
+            tmp = tempctr.TempObjects(runner, JOB, scope=scope)
+            self.assertEqual(tmp.name('hapg'), f'woowbk-{JOB}-hapg')
+            argv = tmp.run_argv('hapg', 'img:1', [], detach=True)
+            self.assertEqual(argv[argv.index('--name') + 1], f'woowbk-{JOB}-hapg')
+            self.assertEqual(argv[argv.index('--label') + 1], f'{tempctr.LABEL}={JOB}')
 
-    def test_two_apps_use_the_same_role_without_meeting(self):
+    def test_the_next_app_gets_a_name_of_its_own_where_the_plain_one_is_stuck(self):
+        first, _runner = self.stuck_first_app()
+        runner = FakeRunner()
+        second = tempctr.TempObjects(runner, JOB, scope='1')
+        third = tempctr.TempObjects(runner, JOB, scope='2')
+        self.assertEqual(second.volume('hapg'), f'woowbk-{JOB}-1-hapg')
+        self.assertEqual(third.volume('hapg'), f'woowbk-{JOB}-2-hapg')
+        self.assertEqual(second.name('db'), f'woowbk-{JOB}-db', 'only the role that is stuck is renamed')
+        self.assertIn(('volume', 'create', '--label', f'{tempctr.LABEL}={JOB}', f'woowbk-{JOB}-1-hapg'), runner.calls)
+        argv = second.run_argv('hapg', 'img:1', [], detach=True)
+        self.assertEqual(argv[argv.index('--label') + 1], f'{tempctr.LABEL}={JOB}', 'the label stays the job id')
+        self.assertEqual(tempctr.NAME_RE.fullmatch(second.name('hapg')).group(1), JOB, 'sweep and the recovery still find it')
+        self.assertEqual(second.cleanup(), [])
+        self.assertEqual(runner.calls[-1][:3], ('volume', 'rm', '--force'))
+        self.assertTrue(first.volumes, 'the leftover is still listed by the app that made it')
+
+    def test_two_instances_that_are_alive_together_do_not_meet_either(self):
         runner = FakeRunner()
         first, second = (tempctr.TempObjects(runner, JOB, scope=scope) for scope in ('0', '1'))
-        names = {tmp.volume('hapg') for tmp in (first, second)}
-        self.assertEqual(names, {f'woowbk-{JOB}-0-hapg', f'woowbk-{JOB}-1-hapg'})
-        first.run('hapg', 'img:1', [], detach=True)
-        second.run('hapg', 'img:1', [], detach=True)   # the same role in the same job: no "name used twice"
+        self.assertEqual(first.volume('hapg'), f'woowbk-{JOB}-hapg')
+        self.assertEqual(second.volume('hapg'), f'woowbk-{JOB}-1-hapg')
         self.assertEqual(first.cleanup(), [])
         self.assertEqual(second.volumes, [f'woowbk-{JOB}-1-hapg'], 'one app removes only its own objects')
 
-    def test_a_bad_scope_or_a_role_too_long_for_it_is_refused(self):
+    def test_without_a_scope_nothing_is_renamed_and_another_job_or_owner_is_not_touched(self):
+        first, _runner = self.stuck_first_app()
+        runner = FakeRunner()
+        self.assertEqual(tempctr.TempObjects(runner, JOB).name('hapg'), f'woowbk-{JOB}-hapg')
+        self.assertEqual(tempctr.TempObjects(runner, OTHER, scope='1').name('hapg'), f'woowbk-{OTHER}-hapg')
+        elsewhere = FakeRunner()
+        elsewhere.owner = 'someone-else'    # another account's Podman storage: the name is free there
+        self.assertEqual(tempctr.TempObjects(elsewhere, JOB, scope='1').name('hapg'), f'woowbk-{JOB}-hapg')
+        self.assertTrue(first.volumes)
+
+    def test_the_name_an_object_has_never_changes_under_it(self):
+        first, runner = self.stuck_first_app()
+        second = tempctr.TempObjects(FakeRunner(), JOB, scope='1')
+        before = second.name('hapg')
+        self.assertEqual(before, f'woowbk-{JOB}-1-hapg')
+        runner.answers[('volume', 'exists')] = Result(1, b'', b'')     # the old one goes after all
+        self.assertEqual(first.cleanup(), [])
+        self.assertEqual(second.name('hapg'), before, 'chosen once')
+        self.assertEqual(tempctr.TempObjects(FakeRunner(), JOB, scope='2').name('hapg'), f'woowbk-{JOB}-hapg',
+                         'once the leftover is gone the plain name is free again')
+
+    def test_a_leftover_that_nobody_holds_any_more_is_forgotten(self):
+        import gc
+        first, _runner = self.stuck_first_app()
+        self.assertEqual(tempctr.stuck(JOB, 'appowner'), {f'woowbk-{JOB}-hapg'})
+        del first
+        gc.collect()
+        self.assertEqual(tempctr.stuck(JOB, 'appowner'), frozenset())
+        self.assertEqual(tempctr.TempObjects(FakeRunner(), JOB, scope='1').name('hapg'), f'woowbk-{JOB}-hapg')
+
+    def test_a_role_too_long_for_a_scoped_name_keeps_the_plain_one(self):
+        role = 'r' * 30
+        first, _runner = self.stuck_first_app(role=role)
+        self.assertEqual(tempctr.TempObjects(FakeRunner(), JOB, scope='12').name(role), f'woowbk-{JOB}-{role}')
+        self.assertTrue(first.volumes)
+
+    def test_a_bad_scope_is_refused(self):
         runner = FakeRunner()
         for scope in ('', 'A', '123', 'a', 'x1', 'a b', 'a-b', -1, 5, b'0'):
             with self.subTest(scope=scope), self.assertRaises(BackupError):
                 tempctr.TempObjects(runner, JOB, scope=scope)
-        tmp = tempctr.TempObjects(runner, JOB, scope='12')
-        with self.assertRaises(BackupError):
-            tmp.name('r' * 29)    # `<scope>-<role>` has to fit the role's 31 characters
-        self.assertEqual(tmp.name('r' * 28), f'woowbk-{JOB}-12-' + 'r' * 28)
 
     def test_the_sweep_finds_scoped_objects_of_a_dead_job(self):
         listing = [{'Names': [f'woowbk-{OTHER}-0-hapg'], 'Labels': {tempctr.LABEL: OTHER}},
@@ -445,6 +498,34 @@ class ScopeTests(unittest.TestCase):
                              ('volume', 'ls'): Result(0, b'[]', b''), ('network', 'ls'): Result(0, b'[]', b'')})
         removed, left = tempctr.sweep(runner, lambda _job: False, only_job=OTHER)
         self.assertEqual((removed, left), ([f'woowbk-{OTHER}-0-hapg', f'woowbk-{OTHER}-1-odoo-db'], []))
+
+    def test_through_the_real_work_the_second_app_does_not_meet_the_first_ones_leftover(self):
+        from woowbackup import haimport
+        from . import test_ha_import as hi
+
+        class Case(hi.FlowCase):
+            def runTest(self):
+                pass
+
+        case = Case()
+        case.setUp()
+        self.addCleanup(case.tearDown)
+        runner = FakeRunner({('volume', 'rm'): Result(125, b'', b'busy'), ('volume', 'exists'): Result(0, b'', b'')})
+        runner.home = str(case.root)
+        adapter = hi.FakeHaAdapter(hi.app('odoo', 'Odoo 18'), case.world)
+        adapter.runner = runner
+        case.deps.adapter_factory = lambda _app, **_kwargs: adapter
+        work = haimport.Work(case.ctx(), None, None, case.root)
+        work.guard.folders = []
+        first, second = hi.app('odoo', 'Odoo 18'), hi.app('n8n', 'n8n')
+        work.begin_app(0, 2, 'Odoo 18')
+        work.temp(first).volume('hapg')
+        work.reset_app(first)                       # the removal fails: the volume is left behind, Work keeps it
+        work.begin_app(1, 2, 'n8n')
+        self.assertEqual(work.temp(second).volume('hapg'), f'woowbk-{case.job_id}-1-hapg')
+        self.assertEqual(work.temp(second).name('db'), f'woowbk-{case.job_id}-db')
+        runner.answers[('volume', 'rm')] = Result(0, b'', b'')
+        work.close()
 
 
 class LeftoverTests(unittest.TestCase):
