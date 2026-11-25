@@ -5674,11 +5674,11 @@ try {
       await page.locator('[data-nav="backups"]').click();
       await page.locator(`[data-focus="open-${HA_PLAIN}"]`).click();
       const odooRow = page.locator(`.ha-addons-table tr[data-addon="${ODOO_SLUG}"]`);
-      assert.equal(await odooRow.locator('td[data-label="匯入到這台"]').textContent(), '還沒安裝「Odoo 18」：這台還沒安裝，請先到「應用軟體」安裝同版本');
+      assert.equal(await odooRow.locator('td[data-label="匯入到這台"]').textContent(), '還沒安裝「Odoo 18」：這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它');
       await page.locator(`[data-focus="ha-import-${HA_PLAIN}"]`).click();
       assert.equal(await page.locator('#ha-app-odoo').isDisabled(), true);
       assert.equal(await page.locator('#ha-app-odoo').isChecked(), false);
-      assert.equal(await page.locator('#ha-app-odoo-help').textContent(), '這台還沒安裝，請先到「應用軟體」安裝同版本。');
+      assert.equal(await page.locator('#ha-app-odoo-help').textContent(), '這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它。');
       assert.equal(await page.locator('#ha-app-n8n').isChecked(), true);
       assert.match(await page.locator('.wizard-card').textContent(), /其他附加元件（Mosquitto broker）這台沒有對應的應用，不會匯入。/);
       await page.locator('[data-focus="ha-apps-next"]').click();
@@ -6066,8 +6066,8 @@ try {
         '從 Home Assistant 上傳的備份。可以把其中的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale 匯入這台的應用；匯入前會先檢查內容與版本。');
       const rows = await page.locator('.ha-addons-table tbody tr').evaluateAll(items => items.map(row => [...row.children].map(cell => cell.textContent.trim())));
       assert.deepEqual(rows, [
-        [`Odoo 18 CE${ODOO_SLUG}`, ODOO_ADDON_VERSION, '還沒安裝「Odoo 18」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
-        [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先到「應用軟體」安裝同版本'],
+        [`Odoo 18 CE${ODOO_SLUG}`, ODOO_ADDON_VERSION, '還沒安裝「Odoo 18」：這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它'],
+        [`WOOW n8n${N8N_SLUG}`, '2.43.6', '還沒安裝「n8n 工作流程」：這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它'],
         ...B1_APPS.map(id => [`${B1[id].addon}${B1[id].slug}`, B1[id].version, `可以匯入這台的「${B1[id].app}」`]),
         ['Mosquitto brokercore_mosquitto', '6.5.1', '這台沒有對應的應用']]);
       await page.getByText('只有支援的 Odoo、n8n、Omnigent、Hermes、EMQX、Headscale、OpenDesign、code-server、Nextcloud、LiteLLM 附加元件能匯入這台；Home Assistant 本身和其他附加元件不會匯入。').waitFor();

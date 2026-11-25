@@ -3367,6 +3367,9 @@
       workflows: Array.isArray(info.workflows_to_fix) ? haWorkflows(info.workflows_to_fix) : list(fallback.workflows),
       notes: lines(info.notes),
       reminders: lines(info.reminders),
+      // HAOS parity: the Odoo databases that stayed on HA (S6) and the full copy kept before an import (S4, by its id).
+      leftDatabases: list(info.left_databases).filter(item => isString(item) && item.trim()),
+      kept: isString(info.kept) && info.kept.trim() ? info.kept.trim() : null,
       remindersByApp: isObject(info.reminders_by_app) ? Object.fromEntries(Object.entries(info.reminders_by_app)
         .filter(([id]) => APP_ID_RE.test(id)).map(([id, items]) => [id, lines(items)])) : null,
       addons: list(info.addons).filter(item => isObject(item) && isString(item.app_id) && isString(item.name) && item.name.trim())
@@ -3512,6 +3515,15 @@
     return (wizard && wizardFromHa(wizard)) || fromHaOf(state.backups?.find(item => item.id === job.params?.backup_id));
   }
 
+  // What stays behind, from what the conversion recorded (HAOS parity): Odoo databases that stay on HA, the copy kept before.
+  function haStayedLines(info, apps) {
+    return [
+      apps.includes("odoo") && info.leftDatabases.length
+        ? `HA 的 Odoo 還有 ${quoted(info.leftDatabases)} 沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。` : null,
+      info.kept ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${info.kept}），不會自動刪除；確定用不到時再請工程人員清掉。` : null
+    ].filter(Boolean);
+  }
+
   function haAfterImport(info, restored) {
     const apps = info.apps.length ? restored.filter(id => info.apps.includes(id)) : restored;
     const workflows = apps.includes("n8n") ? info.workflows : [];
@@ -3521,7 +3533,7 @@
     return [
       h("h4", { class: "subheading", text: "匯入之後請做" }),
       h("ul", { class: "bullet-list ha-reminders", "aria-label": "匯入之後請做" },
-        haReminderLines(info, apps).filter(line => !own(line)).map(line => h("li", { text: line })),
+        [...haReminderLines(info, apps), ...haStayedLines(info, apps)].filter(line => !own(line)).map(line => h("li", { text: line })),
         ha ? h("li", { class: "ha-delete-reminder" }, `${HA_DELETE_REMINDER} `,
           link(`前往 HA 備份「${haName(ha)}」`, ["ha", ha.id], { class: "text-link", dataset: { focus: "result-ha-delete" } })) : null),
       workflows.length ? [h("p", { text: "下列 n8n 工作流程用到 HA 那邊的位置或功能，可能需要修改：" }),
@@ -3742,7 +3754,7 @@
       ...apps.map(app => row(app.addon, app.slug, app.version, app.installed
         ? [h("span", { class: "chips" }, chip("可以匯入", "ok", "check-circle-outline")), h("span", { class: "secondary", text: `這台的「${app.name}」` })]
         : [h("span", { class: "chips" }, chip("還沒安裝", "warn", "alert-outline")),
-          h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先到「應用軟體」安裝同版本` })])),
+          h("span", { class: "secondary", text: `「${app.name}」：這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它` })])),
       ...haOtherAddons(ha).map(item => row(str(item.name) || str(item.slug), str(item.slug), str(item.version),
         haNotMovedText(item)
           ? [h("span", { class: "chips" }, chip("不會搬過來", "warn", "alert-outline")),
@@ -3760,7 +3772,7 @@
         notMoved.length ? h("ul", { class: "bullet-list ha-not-moved" }, notMoved.map(line => h("li", { text: line }))) : null,
         !apps.length ? infoNotice("這份 HA 備份沒有這台可以匯入的應用。")
           : !apps.some(app => app.installed)
-            ? infoNotice("要匯入，請先到「應用軟體」安裝這台還沒有的應用（版本要和 HA 那邊相同），再回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
+            ? infoNotice("要匯入，請先用安裝套件在這台安裝並啟動這台還沒有的應用（版本要和 HA 那邊相同），再到「應用設定」加入它，然後回來按「檢查並匯入…」。", "warn", "alert-outline") : null));
   }
 
   function deleteHaBackup(ha) {
@@ -3898,7 +3910,7 @@
           h("span", { class: "choice-body" }, h("strong", { text: `這台的「${app.name}」` }),
             h("small", { id: `${id}-help`, text: app.installed
               ? `資料來自 HA 附加元件「${app.addon}」${app.version ? `（版本 ${app.version}）` : ""}。`
-              : "這台還沒安裝，請先到「應用軟體」安裝同版本。" })));
+              : "這台還沒安裝，請先用它的安裝套件安裝並啟動，再到「應用設定」加入它。" })));
       })) : infoNotice("這份 HA 備份沒有這台可以匯入的應用。", "warn", "alert-outline"),
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
       haNotMoved(ha).length ? h("ul", { class: "bullet-list ha-not-moved" }, haNotMoved(ha).map(line => h("li", { text: line }))) : null,
@@ -4880,8 +4892,9 @@
       const data = await haStartCall(wizard, "ha-import-start", request);
       requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
       if (state.haWizard !== wizard) return;
+      // The engine holds the HA key for the whole import now: the page does not need it any more.
       Object.assign(wizard, { requestId: null, signature: "", step: "import", jobId: data.job_id, finishedJob: null, ui: null, group: null, groupEnded: null,
-        groupJobs: [data.job_id], keyCreated: data.key_created === true, thenRestore, importApps: apps, notice: null });
+        groupJobs: [data.job_id], keyCreated: data.key_created === true, thenRestore, importApps: apps, notice: null, keyText: "" });
       announce(data.deduplicated ? "這個匯入要求先前已送出，正在顯示同一個作業。" : "已開始匯入。");
       watchJob(data.job_id);
       loadStatus({ quiet: true });
