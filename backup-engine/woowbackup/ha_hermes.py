@@ -361,7 +361,7 @@ class Target:
         if agent_file is None or data_volume not in declared:
             raise haissues.stopped(Issue('hermes.layout-unsupported', 'stop',
                                          '這台 Hermes 的應用設定裡找不到掛在 /opt/data 的資料卷，不知道 HA 的資料要放在哪裡。',
-                                         action='請到「應用軟體」確認這個應用的資料卷設定包含 Hermes 的資料資料卷，再匯入。'),
+                                         action='請到「應用軟體」確認這個應用的資料卷設定有包含 Hermes 存放資料的那個資料卷（掛在 /opt/data），再匯入。'),
                                    'incompatible', app=app.id)
         self.pgs = list(app.postgres)
         if any(pg.get('scope', 'database') != 'database' for pg in self.pgs):
