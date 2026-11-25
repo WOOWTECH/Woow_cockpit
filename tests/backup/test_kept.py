@@ -176,6 +176,15 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertEqual(write['manifest']['apps'][0]['volumes'], [{'name': 'pgdata', 'entry': 'apps/woowbk-demo/volumes/pgdata.tar'}])
         self.assertEqual(write['manifest']['type'], 'safety')
 
+    def test_the_adapter_that_keeps_is_told_what_the_pre_restore_copy_left_stopped_first(self):
+        """Its record of the stopped units must start from what the pre-restore copy left stopped (it replaces the job's list)."""
+        self.world.pauses['woowbk-demo'] = ['woowbk-files.service']
+        self.run_converted()
+        names = [e[0] for e in self.world.events if e[0] in ('backup', 'take_over', 'keep', 'restore')]
+        self.assertEqual(names, ['backup', 'take_over', 'keep', 'take_over', 'restore'])
+        first = next(e for e in self.world.events if e[0] == 'take_over')
+        self.assertIn('woowbk-files.service', first[2])
+
     def test_the_other_databases_are_put_back_after_the_restore_and_the_result_says_which(self):
         result = self.run_converted()
         self.assertEqual(result['kept']['woowbk-demo']['put_back'], list(self.DATABASES))
@@ -547,6 +556,38 @@ class KeptClusterTests(AdapterKeptCase):
         exported = next(i for i, a in enumerate(argvs) if 'volume' in a and 'export' in a and 'woowbk-demo-pgdata' in a)
         self.assertLess(dumped, stopped, 'read while the database runs')
         self.assertLess(stopped, exported, 'the volume is exported only after the database stopped: a cold copy')
+
+    def recorder(self, adapter):
+        """Every list the adapter gives the job's record, with the state of the owner's units at that moment."""
+        seen = []
+        adapter.writers_hook = lambda units: seen.append((list(units), dict(self.owner.units)))
+        return seen
+
+    def test_every_unit_the_copy_stops_is_in_the_job_record_before_it_stops_and_nothing_listed_earlier_is_lost(self):
+        """The record is replaced by every list the adapter gives it: what the pre-restore copy left stopped (the app, a paused
+        service) must still be in it, and the database unit must be in it BEFORE it stops (the minutes of the copy are the
+        window in which a dead job would otherwise leave the app without its database)."""
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        seen = self.recorder(self.adapter)
+        self.owner.units['woowbk-demo-app.service'] = 'inactive'  # stopped by the pre-restore copy ...
+        self.adapter.take_over(['woowbk-demo-app.service', 'woowbk-files.service'], 12.0)  # ... which also paused a service
+        self.adapter.keep_cluster(self.work)
+        self.assertTrue(seen)
+        for units, _states in seen:
+            self.assertIn('woowbk-demo-app.service', units)
+            self.assertIn('paused:woowbk-files.service', units)
+        first = next(states for units, states in seen if 'woowbk-demo-db.service' in units)
+        self.assertEqual(first['woowbk-demo-db.service'], 'active', 'listed while it still ran')
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'inactive')
+
+    def test_without_a_pre_restore_copy_the_units_the_copy_stops_are_listed_too(self):
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        seen = self.recorder(self.adapter)
+        self.adapter.keep_cluster(self.work)  # nothing was stopped before: the copy stops the app and the database
+        listed = {unit for units, _states in seen for unit in units}
+        self.assertEqual(listed, {'woowbk-demo-app.service', 'woowbk-demo-db.service'})
+        before_app = next(states for units, states in seen if 'woowbk-demo-app.service' in units)
+        self.assertEqual(before_app['woowbk-demo-app.service'], 'active')
 
     def test_the_section_of_the_copy_is_one_the_real_archive_format_accepts(self):
         """The kept copy is packaged by the ordinary archive writer: its app section and entries pass the real validators."""

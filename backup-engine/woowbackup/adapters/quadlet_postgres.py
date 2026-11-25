@@ -3228,8 +3228,13 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'啟動資料庫服務 {pg["unit"]}，以便保留完整複本')
                 self.runner.systemctl('start', '--', pg['unit'], timeout=START_TIMEOUT)
             self._wait_for_postgres(pg)
+        # The job's record of the stopped units is replaced by every `_hook`: what the pre-restore copy left stopped (taken over by
+        # kept.keep) and what this stops are listed together, and before they stop, so a job that dies in the long minutes of
+        # the copy still has every one of them started again by the recovery.
+        noted = list(dict.fromkeys([*self._taken_over, *self._own_noted]))
         if writers:
-            self._hook([*self._own_noted, *[unit for unit in writers if unit not in self._own_noted]])
+            noted = list(dict.fromkeys([*noted, *writers]))
+            self._hook(noted)
             self._stop_units(writers, label='暫停服務')
         self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *writers]))
         info = {'volumes': {}, 'logical': {}, 'databases': [], 'notes': []}
@@ -3254,8 +3259,10 @@ class QuadletPostgresAdapter(Adapter):
             info['logical'][pg['id']] = dump
             info['databases'] += [item['name'] for item in dump['databases'] if item['name'] not in (pg['database'], 'postgres')]
             manifest_postgres.append(self._instance_manifest(dump, entry))
-        self._stop_units(sorted(databases_units, key=app.units.index), label='停止資料庫服務')
-        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *sorted(databases_units, key=app.units.index)]))
+        stopping = sorted(databases_units, key=app.units.index)
+        self._hook(list(dict.fromkeys([*noted, *stopping])))  # listed before it stops: the app cannot run without its database
+        self._stop_units(stopping, label='停止資料庫服務')
+        self.kept_stopped = list(dict.fromkeys([*self.kept_stopped, *stopping]))
         volumes = []
         for pg in wanted:
             exported = self._export_volume(pg['data_volume'], work)

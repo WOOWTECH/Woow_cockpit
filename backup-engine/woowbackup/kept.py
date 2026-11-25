@@ -114,6 +114,10 @@ def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
         if plan.mode != 'inplace' or not getattr(adapter, 'kept_wanted', None):
             continue
         check_space(ctx, [plan], again=True)  # the pre-restore copy is on disk now: is there still room? (nothing has stopped for this)
+        left = handover.get(plan.app.id)
+        take_over = getattr(adapter, 'take_over', None)
+        if left and take_over is not None:  # what the pre-restore copy left stopped is this adapter's to record from here on
+            take_over(left.get('units') or [], left.get('first_stop'))
         ctx.log(f'保留「{plan.app.name}」資料庫服務的完整複本…')
         work = Path(staging) / 'kept' / plan.app.id
         section, entries, info = adapter.keep_cluster(work)
