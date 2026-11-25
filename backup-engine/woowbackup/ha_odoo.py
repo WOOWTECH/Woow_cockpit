@@ -31,10 +31,12 @@ an empty `sessions/`. The custom modules folder is the live folder plus the cust
 in another version only there), owned by the app owner, o+rX.
 """
 import ast
+import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import tarfile
 import time
 
@@ -561,6 +563,61 @@ def pg_ident(value):
     return '"' + value + '"'
 
 
+# What the engine sends into a throwaway container on a `podman exec` stdin is checked to have arrived whole (final
+# verification 2026-11-24: an Odoo conversion on a host with load ~21 restored only part of its pg_restore list and
+# failed only at a later step).
+WRITE_ATTEMPTS = 3        # Cluster.write_file: the first write and at most 2 more
+WRITE_RETRY_PAUSE = 2     # seconds between them
+SQL_END_MARK = 'woowbk-sql-end-'
+INCOMPLETE_FILE = '暫用容器裡的暫存檔沒有完整寫入（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
+INCOMPLETE_SQL = '送進暫用 PostgreSQL 的資料庫指令沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
+# The size, then the digest's kind and line: sha256sum where the image has one (busybox in the Alpine images and
+# coreutils in the Debian ones do), else POSIX cksum. `path` is a fixed name (Cluster.write_file checks it).
+READBACK = ('wc -c < {path} && if command -v sha256sum >/dev/null 2>&1; then echo sha256 && sha256sum < {path}; '
+            'else echo cksum && cksum < {path}; fi')
+
+
+def _cksum_table():
+    table = []
+    for i in range(256):
+        crc = i << 24
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x04C11DB7) if crc & 0x80000000 else crc << 1
+        table.append(crc & 0xFFFFFFFF)
+    return tuple(table)
+
+
+CKSUM_TABLE = _cksum_table()
+
+
+def _cksum_update(crc, data):
+    for byte in data:
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ CKSUM_TABLE[(crc >> 24) ^ byte]
+    return crc
+
+
+def source_digest(source, start, kind):
+    """(size, digest text) of what Cluster.write_file sends: `source` is bytes (`start` None) or a file read from
+    `start` to its end; `kind` 'sha256' (hex, as sha256sum prints it) or 'cksum' (POSIX cksum's CRC in decimal)."""
+    chunks = [source] if start is None else iter(lambda: source.read(1024 * 1024), b'')
+    if start is not None:
+        source.seek(start)
+    size, sha, crc = 0, hashlib.sha256(), 0
+    for chunk in chunks:
+        size += len(chunk)
+        if kind == 'sha256':
+            sha.update(chunk)
+        else:
+            crc = _cksum_update(crc, chunk)
+    if kind == 'sha256':
+        return size, sha.hexdigest()
+    length = size
+    while length:
+        crc = _cksum_update(crc, bytes([length & 0xFF]))
+        length >>= 8
+    return size, str(~crc & 0xFFFFFFFF)
+
+
 class Cluster:
     """A PostgreSQL server in a throwaway container (`role` of `tmp`), used as its OS user postgres through the unix
     socket (trust): psql/pg_dump/pg_restore by `podman exec`."""
@@ -598,27 +655,84 @@ class Cluster:
             raise BackupError('job-failed', '暫用 PostgreSQL 的回應格式不正確。') from None
 
     def script(self, sql, database='postgres', *, timeout=600):
-        """Run SQL from stdin in ONE transaction (`psql -v ON_ERROR_STOP=1 -1`): values never appear in argv. Never
-        for a statement PostgreSQL refuses inside a transaction block (ALTER SYSTEM, VACUUM...): `statement`."""
-        self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-1', '-U', self.superuser, '-d',
-                                  database, '-f', '-'], user='postgres', input=sql.encode('utf-8'), timeout=timeout,
-                      max_output=1024 * 1024)
+        """Run SQL from stdin in ONE transaction that the input itself opens and closes (`BEGIN;` sql `COMMIT;`, then
+        an end mark: `_run`); ON_ERROR_STOP, values never appear in argv. Not `psql -1`: it commits at the end of its
+        input, so an input that arrived short committed the part that arrived, a cut last statement included (psql
+        sends what is left at EOF; real psql 17.11, evidence pg-stdin-fix-20261124). Never for a statement PostgreSQL
+        refuses inside a transaction block (ALTER SYSTEM, VACUUM...): `statement`."""
+        if not isinstance(sql, str):
+            raise BackupError('internal-error', '資料庫指令格式不正確。')
+        self._run(f'BEGIN;\n{sql}\nCOMMIT;\n', database, timeout)
 
     def statement(self, sql, database='postgres', *, timeout=600):
-        """Run exactly one SQL statement from stdin outside any transaction block (no `-1`; review C-19: ALTER SYSTEM
-        cannot run inside one): values never appear in argv."""
+        """Run exactly one SQL statement from stdin outside any transaction block (review C-19: ALTER SYSTEM cannot
+        run inside one), then the end mark (`_run`): values never appear in argv."""
         if not isinstance(sql, str) or not sql.strip() or ';' in re.sub(r"'(?:[^']|'')*'", '', sql.strip().rstrip(';')):
             raise BackupError('internal-error', '一次只能執行一個資料庫指令。')
-        self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', self.superuser, '-d', database,
-                                  '-f', '-'], user='postgres', input=sql.encode('utf-8'), timeout=timeout,
-                      max_output=1024 * 1024)
+        self._run(sql.strip().rstrip(';') + ';\n', database, timeout)
+
+    def _run(self, text, database, timeout):
+        """`text` on psql's stdin, followed by `\\echo <a new end mark>`: psql prints the mark only after it has read
+        and run everything before it, so stdout must end with it. A `podman exec` stdin transfer can arrive short
+        under host load (final verification 2026-11-24): without COMMIT PostgreSQL rolls the transaction back when
+        psql disconnects (psql still exits 0), and the missing mark stops the job (INCOMPLETE_SQL)."""
+        mark = SQL_END_MARK + secrets.token_hex(8)
+        out = self.tmp.exec(self.role, ['psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', self.superuser, '-d',
+                                        database, '-f', '-'], user='postgres',
+                            input=(text + f'\\echo {mark}\n').encode('utf-8'), timeout=timeout,
+                            max_output=1024 * 1024).stdout or b''
+        if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
+            raise BackupError('job-failed', INCOMPLETE_SQL)
 
     def write_file(self, path, source, *, timeout=DUMP_TIMEOUT):
-        """Copy `source` (an open file or bytes) into the container at `path` (fixed paths under /tmp only)."""
+        """Copy `source` (bytes, or a seekable binary file from its current position) into the container at `path`
+        (fixed paths under /tmp only) and check that it arrived whole: the file's size and digest, read back inside
+        the container (READBACK), must be the source's. A `podman exec` stdin transfer can arrive short under host
+        load (final verification 2026-11-24: pg_restore then restored only part of its list), so a copy that does not
+        match is written again, WRITE_ATTEMPTS times in all, then the job stops (INCOMPLETE_FILE). Neither the
+        content nor a digest is logged."""
         if not re.fullmatch(r'/tmp/woowbk-[a-z0-9.-]{1,40}', path):
             raise BackupError('internal-error', '暫存檔路徑不正確。')
-        self.tmp.exec(self.role, ['sh', '-c', f'umask 077 && cat > {path}'], user='postgres', input=source,
-                      timeout=timeout, max_output=64 * 1024)
+        if isinstance(source, (bytes, bytearray, memoryview)):
+            source, start = bytes(source), None
+        else:
+            try:
+                start = source.tell()
+                source.seek(start)
+            except (AttributeError, OSError, ValueError):
+                raise BackupError('internal-error', '暫存檔的來源無法重新讀取。') from None
+        expected = {}
+        for attempt in range(1, WRITE_ATTEMPTS + 1):
+            if start is not None:
+                source.seek(start)
+            self.tmp.exec(self.role, ['sh', '-c', f'umask 077 && cat > {path}'], user='postgres', input=source,
+                          timeout=timeout, max_output=64 * 1024)
+            found = self._read_back(path, timeout)
+            if found is not None:
+                kind, size, value = found
+                if kind not in expected:
+                    expected[kind] = source_digest(source, start, kind)
+                if expected[kind] == (size, value):
+                    return
+            if attempt < WRITE_ATTEMPTS:
+                self.log(f'暫用容器裡的暫存檔沒有完整寫入，重新寫入（第 {attempt + 1} 次，共 {WRITE_ATTEMPTS} 次）。')
+                self.sleep(WRITE_RETRY_PAUSE)
+        raise BackupError('job-failed', INCOMPLETE_FILE)
+
+    def _read_back(self, path, timeout):
+        """(digest kind, size, digest text) of the file at `path` in the container, None when it cannot be read."""
+        result = self.tmp.exec(self.role, ['sh', '-c', READBACK.format(path=path)], user='postgres', check=False,
+                               timeout=timeout, max_output=64 * 1024)
+        lines = (result.stdout or b'').decode('ascii', 'replace').split('\n')
+        if result.returncode != 0 or len(lines) < 3 or not re.fullmatch(r'\s*[0-9]{1,15}\s*', lines[0]):
+            return None
+        size, kind, fields = int(lines[0]), lines[1].strip(), lines[2].split()
+        if kind == 'sha256' and fields and re.fullmatch(r'[0-9a-f]{64}', fields[0]):
+            return kind, size, fields[0]
+        if (kind == 'cksum' and len(fields) >= 2 and all(re.fullmatch(r'[0-9]{1,15}', f) for f in fields[:2])
+                and int(fields[1]) == size):
+            return kind, size, str(int(fields[0]))
+        return None
 
 
 DATABASES_SQL = ("SELECT coalesce(json_agg(json_build_array(datname, pg_database_size(oid), datcollate, datctype) "

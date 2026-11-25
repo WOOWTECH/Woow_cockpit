@@ -33,6 +33,17 @@ class RegistryTests(unittest.TestCase):
                                           'out_dir'])
                 self.assertTrue(set(importer.convert_args) <= {'odoo_database', 'test_mode'})
 
+    def test_what_may_be_chosen(self):
+        """HA-04, HA-14, E-07/E-09: every app may have its add-on in two stores; only Odoo has databases, only EMQX nodes."""
+        for importer in haapps.IMPORTERS:
+            with self.subTest(app=importer.app_id):
+                self.assertEqual(importer.choices[0], 'addon')
+                self.assertLessEqual(set(importer.choices), {'addon', 'database', 'node'})
+                self.assertEqual('database' in importer.choices, 'odoo_database' in importer.convert_args)
+        self.assertEqual([i.app_id for i in haapps.IMPORTERS if 'database' in i.choices], ['odoo'])
+        self.assertEqual([i.app_id for i in haapps.IMPORTERS if 'node' in i.choices], ['emqx'])
+        self.assertEqual([i.app_id for i in haapps.IMPORTERS if i.needs_share], ['odoo', 'woow-code-server', 'nextcloud'])
+
     def test_cli_validation_follows_the_registry(self):
         for value in (list(cli.HA_APP_IDS), list(cli.HA_APP_IDS)[:1]):
             self.assertEqual(cli.v_ha_apps(value, 'apps'), value)

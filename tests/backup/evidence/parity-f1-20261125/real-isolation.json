@@ -1,0 +1,143 @@
+{
+ "result": "pass",
+ "runs": [
+  {
+   "damaged": null,
+   "staging_left": false,
+   "apps": {
+    "omnigent": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "hermes": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "emqx": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "headscale": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    }
+   }
+  },
+  {
+   "damaged": "omnigent",
+   "staging_left": false,
+   "apps": {
+    "omnigent": {
+     "importable": false,
+     "issues": [
+      "failure.corrupt-archive"
+     ],
+     "section": false
+    },
+    "hermes": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "emqx": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "headscale": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    }
+   }
+  },
+  {
+   "damaged": "hermes",
+   "staging_left": false,
+   "apps": {
+    "omnigent": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "hermes": {
+     "importable": false,
+     "issues": [
+      "failure.corrupt-archive"
+     ],
+     "section": false
+    },
+    "emqx": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "headscale": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    }
+   }
+  },
+  {
+   "damaged": "emqx",
+   "staging_left": false,
+   "apps": {
+    "omnigent": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "hermes": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "emqx": {
+     "importable": false,
+     "issues": [
+      "failure.corrupt-archive"
+     ],
+     "section": false
+    },
+    "headscale": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    }
+   }
+  },
+  {
+   "damaged": "headscale",
+   "staging_left": false,
+   "apps": {
+    "omnigent": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "hermes": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "emqx": {
+     "importable": true,
+     "issues": [],
+     "section": true
+    },
+    "headscale": {
+     "importable": false,
+     "issues": [
+      "failure.corrupt-archive"
+     ],
+     "section": false
+    }
+   }
+  }
+ ]
+}

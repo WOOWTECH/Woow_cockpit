@@ -1,0 +1,1477 @@
+{
+ "lane": "F1-foundation",
+ "head": "77b33c0651ef128977304af267f2c62f7539a607",
+ "baseline": {
+  "returncode": 0,
+  "tests": 199
+ },
+ "sources": {
+  "woowbackup/haissues.py": "adee673e5f011adb6a50f9a1dabdd8695cee718aab13acbac92a2370e4e027e7",
+  "woowbackup/haimport.py": "7804003d7c37e289b2eba867b05b911762799218747a170b86f97f32310d84d5",
+  "woowbackup/cli.py": "c9f9e0095028e2600e4d20f9cfb5b8b910369bb81d7ceda97c28214b02320884",
+  "woowbackup/haapps.py": "17fd62bd8a4ebe9aa00a4e80727dd8a2c30b9e8592d627f1f2ac2ba7f208362d",
+  "woowbackup/errors.py": "c0b31c5a69bd5d0ac57409719b37fbc0f8d161d80e83c9826e7b836c7882a975"
+ },
+ "tests": [
+  "tests.backup.test_ha_issues",
+  "tests.backup.test_ha_registry",
+  "tests.backup.test_ha_cli",
+  "tests.backup.test_ha_import",
+  "tests.backup.test_ha_space"
+ ],
+ "caught": 205,
+ "total": 205,
+ "missed": [],
+ "controls_noticed": [],
+ "rows": [
+  {
+   "id": "S01",
+   "what": "a conversion needs the confirmed key",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 39
+  },
+  {
+   "id": "S02",
+   "what": "a confirm is a confirm, not a notice",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 38
+  },
+  {
+   "id": "S03",
+   "what": "a stop stops a conversion",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 40
+  },
+  {
+   "id": "S04",
+   "what": "the key covers the names",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 13
+  },
+  {
+   "id": "S05",
+   "what": "the key covers the app",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 16
+  },
+  {
+   "id": "S06",
+   "what": "the key covers the database",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 16
+  },
+  {
+   "id": "S07",
+   "what": "the key covers the issue",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 17
+  },
+  {
+   "id": "S08",
+   "what": "the key covers names that are not shown",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 14
+  },
+  {
+   "id": "S09",
+   "what": "a long list of names counts completely",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 15
+  },
+  {
+   "id": "S10",
+   "what": "invisible and reordering characters are not shown",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 24
+  },
+  {
+   "id": "S11",
+   "what": "messages are masked",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 32
+  },
+  {
+   "id": "S12",
+   "what": "names are masked",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 32
+  },
+  {
+   "id": "S13",
+   "what": "actions are masked",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 32
+  },
+  {
+   "id": "S14",
+   "what": "at most 40 lines",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 19
+  },
+  {
+   "id": "S15",
+   "what": "a stop or confirm is never dropped (lines)",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 19
+  },
+  {
+   "id": "S16",
+   "what": "at most 40 KiB",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 23
+  },
+  {
+   "id": "S17",
+   "what": "a stop or confirm is never dropped (bytes)",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 23
+  },
+  {
+   "id": "S18",
+   "what": "dropped lines are counted",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 19
+  },
+  {
+   "id": "S19",
+   "what": "names give way before lines, reminders first",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 22
+  },
+  {
+   "id": "S20",
+   "what": "a stop makes the app not importable",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 3
+  },
+  {
+   "id": "S21",
+   "what": "no movable database: not importable",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "S22",
+   "what": "a stop of a database counts",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "S23",
+   "what": "the only database that can move is the default",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 1
+  },
+  {
+   "id": "S24",
+   "what": "several movable databases have no default",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "S25",
+   "what": "an older page does not import what needs confirming",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "S26",
+   "what": "what ends the job ends it",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S27",
+   "what": "job_wide errors end the job",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S28",
+   "what": "a full disk ends the job",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S29",
+   "what": "a busy engine ends the job",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S30",
+   "what": "an unexpected exception is only its app's",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 9
+  },
+  {
+   "id": "S31",
+   "what": "a cancel ends the job",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S32",
+   "what": "EDQUOT is a full disk too",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 12
+  },
+  {
+   "id": "S33",
+   "what": "an unexpected error's text stays in the journal",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 9
+  },
+  {
+   "id": "S34",
+   "what": "the journal text is masked",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 11
+  },
+  {
+   "id": "S35",
+   "what": "an unknown add-on version is no gate (CM-01)",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 27
+  },
+  {
+   "id": "S36",
+   "what": "an unreadable version is no gate (CM-02)",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 27
+  },
+  {
+   "id": "S37",
+   "what": "known different versions still stop",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 47
+  },
+  {
+   "id": "S38",
+   "what": "another database does not matter to a conversion",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 41
+  },
+  {
+   "id": "S39",
+   "what": "only Issue objects get into a sink",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 154
+  },
+  {
+   "id": "S40",
+   "what": "a wrong level is a programming error",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 31
+  },
+  {
+   "id": "S41",
+   "what": "missing confirmations are found",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 13
+  },
+  {
+   "id": "S42",
+   "what": "old text lists are bounded",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 4
+  },
+  {
+   "id": "S43",
+   "what": "an error's own issues are kept",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 8
+  },
+  {
+   "id": "S44",
+   "what": "every issue once",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 43
+  },
+  {
+   "id": "S45",
+   "what": "confirmed keys are read strictly",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 18
+  },
+  {
+   "id": "S46",
+   "what": "a cut sentence says so",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 36
+  },
+  {
+   "id": "S47",
+   "what": "a long list keeps what can be chosen",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 1
+  },
+  {
+   "id": "I01",
+   "what": "one app's failure never stops the others (HA-12)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 108
+  },
+  {
+   "id": "I02",
+   "what": "nothing of an app is left for the next",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 155
+  },
+  {
+   "id": "I03",
+   "what": "reset removes the throwaway objects",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I04",
+   "what": "reset closes open members",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I05",
+   "what": "reset empties staging",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "I06",
+   "what": "reset keeps what a conversion wrote",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "I07",
+   "what": "objects that stay are kept for the end",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I08",
+   "what": "objects that stay are tried again and recorded",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I72",
+   "what": "the clean-up at the end never costs the result",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I73",
+   "what": "a scope per app once tempctr knows it",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 156
+  },
+  {
+   "id": "I74",
+   "what": "every app its own throwaway objects",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 156
+  },
+  {
+   "id": "I75",
+   "what": "the watchdog kills what an app left",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 191
+  },
+  {
+   "id": "I09",
+   "what": "a job that ends hands over what it found",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 151
+  },
+  {
+   "id": "I10",
+   "what": "a full disk is told as one",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 166
+  },
+  {
+   "id": "I11",
+   "what": "apps that were not reached say so",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 151
+  },
+  {
+   "id": "I12",
+   "what": "a key that opens nothing ends the job",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 69
+  },
+  {
+   "id": "I13",
+   "what": "that end is the whole job's",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 132
+  },
+  {
+   "id": "I14",
+   "what": "a missing key ends the job",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 114
+  },
+  {
+   "id": "I15",
+   "what": "one member that does not open stops only its app",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 169
+  },
+  {
+   "id": "I16",
+   "what": "the share folder counts (KEY-16)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 101
+  },
+  {
+   "id": "I17",
+   "what": "... only for the apps that read it",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 175
+  },
+  {
+   "id": "I18",
+   "what": "the chosen add-on is taken (HA-04)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 107
+  },
+  {
+   "id": "I19",
+   "what": "two add-ons need a choice",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 107
+  },
+  {
+   "id": "I20",
+   "what": "a choice that is not there is refused",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 111
+  },
+  {
+   "id": "I21",
+   "what": "an add-on that is not ours is refused (HA-05)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 110
+  },
+  {
+   "id": "I22",
+   "what": "a missing add-on is told (HA-03)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 25
+  },
+  {
+   "id": "I23",
+   "what": "below the floor the whole job ends",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 163
+  },
+  {
+   "id": "I24",
+   "what": "an app's own estimate stops only it",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 165
+  },
+  {
+   "id": "I25",
+   "what": "the watchdog ends the whole job",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 191
+  },
+  {
+   "id": "I26",
+   "what": "a conversion gets the confirmed keys",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 80
+  },
+  {
+   "id": "I27",
+   "what": "one app's failed conversion reports itself",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 81
+  },
+  {
+   "id": "I28",
+   "what": "several apps in one job stay as they were",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 139
+  },
+  {
+   "id": "I29",
+   "what": "a cancel stays a cancel",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 130
+  },
+  {
+   "id": "I30",
+   "what": "what a conversion found before it failed is kept",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 137
+  },
+  {
+   "id": "I31",
+   "what": "skipped and failed differ",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 81
+  },
+  {
+   "id": "I32",
+   "what": "the device key is created (HA-13)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 120
+  },
+  {
+   "id": "I33",
+   "what": "... only for an encrypted backup",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 120
+  },
+  {
+   "id": "I34",
+   "what": "... and journaled",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 128
+  },
+  {
+   "id": "I35",
+   "what": "a key that cannot be created ends the import",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 120
+  },
+  {
+   "id": "I36",
+   "what": "database names are checked in the job",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 126
+  },
+  {
+   "id": "I37",
+   "what": "no control characters in a database name",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 70
+  },
+  {
+   "id": "I38",
+   "what": "63 bytes, not characters",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 126
+  },
+  {
+   "id": "I39",
+   "what": "several movable databases: the customer chooses",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "I40",
+   "what": "the choice's reading is removed",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "I41",
+   "what": "the choice in the request is used",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 123
+  },
+  {
+   "id": "I42",
+   "what": "the conversion's sink knows its database",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 80
+  },
+  {
+   "id": "I43",
+   "what": "registry schema 2 is written",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 178
+  },
+  {
+   "id": "I44",
+   "what": "schema 1 is still read",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 178
+  },
+  {
+   "id": "I45",
+   "what": "an unknown schema is not read",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 183
+  },
+  {
+   "id": "I46",
+   "what": "the registry never outgrows what is read",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 184
+  },
+  {
+   "id": "I47",
+   "what": "the newest row stays",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 184
+  },
+  {
+   "id": "I48",
+   "what": "what was confirmed is recorded",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 80
+  },
+  {
+   "id": "I49",
+   "what": "the import's group is recorded",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 80
+  },
+  {
+   "id": "I50",
+   "what": "databases that stay on HA are recorded",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 80
+  },
+  {
+   "id": "I51",
+   "what": "a row's results are checked",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 177
+  },
+  {
+   "id": "I52",
+   "what": "a row's confirmed lines are checked",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 177
+  },
+  {
+   "id": "I76",
+   "what": "only what comes later is changed in a row",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 186
+  },
+  {
+   "id": "I77",
+   "what": "a row that is not there is not made",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 186
+  },
+  {
+   "id": "I78",
+   "what": "anything unexpected while opening stops only its app",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 171
+  },
+  {
+   "id": "I79",
+   "what": "what ends the job ends it while opening, too",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 171
+  },
+  {
+   "id": "I80",
+   "what": "a listed add-on without a usable member says why",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 108
+  },
+  {
+   "id": "I81",
+   "what": "a backup without a readable date keeps its origin",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 176
+  },
+  {
+   "id": "I82",
+   "what": "a date that is no date is not believed",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 176
+  },
+  {
+   "id": "I83",
+   "what": "an import that names no date says so",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 189
+  },
+  {
+   "id": "I84",
+   "what": "what is no single app's is told once",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 167
+  },
+  {
+   "id": "I85",
+   "what": "what the apps found that is no single app's is told",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 167
+  },
+  {
+   "id": "S48",
+   "what": "ten apps fit into one job record",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 5
+  },
+  {
+   "id": "I53",
+   "what": "confirmed names of a row are bounded",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 185
+  },
+  {
+   "id": "I54",
+   "what": "the created key is announced in the check",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 153
+  },
+  {
+   "id": "I55",
+   "what": "... only when something is encrypted",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 153
+  },
+  {
+   "id": "I56",
+   "what": "a key store that cannot be read does not fail the check",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 153
+  },
+  {
+   "id": "I57",
+   "what": "no section of an unfinished check",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 154
+  },
+  {
+   "id": "I58",
+   "what": "a cancel between two apps",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 151
+  },
+  {
+   "id": "I59",
+   "what": "watching an owner never fails the check",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 165
+  },
+  {
+   "id": "I60",
+   "what": "the version is read from the settings (CM-06)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 149
+  },
+  {
+   "id": "I61",
+   "what": "the version is read from the program (CM-06)",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 149
+  },
+  {
+   "id": "I62",
+   "what": "only the named settings count",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 149
+  },
+  {
+   "id": "I63",
+   "what": "a program that failed tells nothing",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 147
+  },
+  {
+   "id": "I64",
+   "what": "an image that is not here is not hidden",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 150
+  },
+  {
+   "id": "I65",
+   "what": "the job's end is not hidden by a version",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 150
+  },
+  {
+   "id": "I66",
+   "what": "the program container is removed",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 147
+  },
+  {
+   "id": "I67",
+   "what": "a check collects",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 111
+  },
+  {
+   "id": "I68",
+   "what": "not-deployed apps stop",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 116
+  },
+  {
+   "id": "I69",
+   "what": "not-deployed apps stop in a conversion",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 135
+  },
+  {
+   "id": "I70",
+   "what": "the throwaway owners stay in the record while something is left",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 159
+  },
+  {
+   "id": "I71",
+   "what": "a database in odd characters can be chosen only if valid",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 152
+  },
+  {
+   "id": "C01",
+   "what": "replacing data needs an explicit yes",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 75
+  },
+  {
+   "id": "C02",
+   "what": "only selected apps are confirmed or chosen for",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 82
+  },
+  {
+   "id": "C03",
+   "what": "at most 80 keys",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C04",
+   "what": "keys are well formed",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C05",
+   "what": "no key twice",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C06",
+   "what": "only choices the importer knows",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C07",
+   "what": "a node name is checked",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C08",
+   "what": "an add-on slug is checked",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C09",
+   "what": "a database name is checked",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 64
+  },
+  {
+   "id": "C10",
+   "what": "a missing add-on only leaves its app out (X-CLI-03)",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 62
+  },
+  {
+   "id": "C11",
+   "what": "nothing of the selection is refused",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 62
+  },
+  {
+   "id": "C12",
+   "what": "the share folder is looked at (KEY-16)",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 101
+  },
+  {
+   "id": "C13",
+   "what": "the key is kept for the job (KEY-16)",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 69
+  },
+  {
+   "id": "C14",
+   "what": "a wrong key is refused before a job starts",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 69
+  },
+  {
+   "id": "C15",
+   "what": "a missing key is refused before a job starts",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 69
+  },
+  {
+   "id": "C16",
+   "what": "an unneeded key is not kept",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 100
+  },
+  {
+   "id": "C17",
+   "what": "left out apps are in the plan",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 72
+  },
+  {
+   "id": "C18",
+   "what": "an app without settings is left out",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 72
+  },
+  {
+   "id": "C19",
+   "what": "nothing left to import is refused",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 74
+  },
+  {
+   "id": "C20",
+   "what": "the key is created for an import",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 73
+  },
+  {
+   "id": "C21",
+   "what": "... only when something is encrypted",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 78
+  },
+  {
+   "id": "C22",
+   "what": "the key is created for a conversion",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 66
+  },
+  {
+   "id": "C23",
+   "what": "the key is created for a restore (FL-07)",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 94
+  },
+  {
+   "id": "C24",
+   "what": "... only in place",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 96
+  },
+  {
+   "id": "C25",
+   "what": "... only when encrypted",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 99
+  },
+  {
+   "id": "C26",
+   "what": "a creation is journaled",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 66
+  },
+  {
+   "id": "C27",
+   "what": "a creation that fails is told",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 66
+  },
+  {
+   "id": "C28",
+   "what": "confirmed lines are journaled",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 83
+  },
+  {
+   "id": "C29",
+   "what": "a retry returns the same group",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 71
+  },
+  {
+   "id": "C30",
+   "what": "a request id of another job is refused",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 71
+  },
+  {
+   "id": "C31",
+   "what": "the restore check does not refuse for a missing key (X-PF-03)",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 97
+  },
+  {
+   "id": "C32",
+   "what": "the restore check announces the key",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 25
+  },
+  {
+   "id": "C33",
+   "what": "a restore needs its confirmed lines",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 89
+  },
+  {
+   "id": "C34",
+   "what": "restore lines are listed",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 90
+  },
+  {
+   "id": "C35",
+   "what": "confirmed restore lines are recorded",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 86
+  },
+  {
+   "id": "C36",
+   "what": "one job of several apps stays strict",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 62
+  },
+  {
+   "id": "C37",
+   "what": "a job gets only its apps' confirmations",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 68
+  },
+  {
+   "id": "C38",
+   "what": "a job gets only its apps' choices",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 68
+  },
+  {
+   "id": "C39",
+   "what": "choices reach the check job",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 62
+  },
+  {
+   "id": "C40",
+   "what": "the chosen database reaches the first job",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 79
+  },
+  {
+   "id": "C42",
+   "what": "an adapter that cannot be made never refuses a restore",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 88
+  },
+  {
+   "id": "C43",
+   "what": "a restore keeps only its apps' confirmations",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 92
+  },
+  {
+   "id": "C41",
+   "what": "the install hint is not the page that installs nothing",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 67
+  },
+  {
+   "id": "H01",
+   "what": "Nextcloud reads the share folder",
+   "module": "woowbackup/haapps.py",
+   "caught": true,
+   "tests_run": 52
+  },
+  {
+   "id": "H02",
+   "what": "only Odoo has databases to choose from",
+   "module": "woowbackup/haapps.py",
+   "caught": true,
+   "tests_run": 52
+  },
+  {
+   "id": "H03",
+   "what": "EMQX nodes can be chosen",
+   "module": "woowbackup/haapps.py",
+   "caught": true,
+   "tests_run": 52
+  },
+  {
+   "id": "E01",
+   "what": "errors are the app's unless they say otherwise",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 8
+  },
+  {
+   "id": "E02",
+   "what": "the confirmation code is known",
+   "module": "woowbackup/errors.py",
+   "caught": true,
+   "tests_run": 13
+  },
+  {
+   "id": "R00",
+   "what": "a message is masked before it is cut",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 34
+  },
+  {
+   "id": "R01",
+   "what": "an action is masked before it is cut",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 34
+  },
+  {
+   "id": "R02",
+   "what": "nothing to say is nothing",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 30
+  },
+  {
+   "id": "R03",
+   "what": "no database at all: not importable",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "R04",
+   "what": "empty choices are not sent",
+   "module": "woowbackup/haissues.py",
+   "caught": true,
+   "tests_run": 2
+  },
+  {
+   "id": "R10",
+   "what": "the whole result fits into the record",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 164
+  },
+  {
+   "id": "R11",
+   "what": "what fits stays as it is",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 103
+  },
+  {
+   "id": "R12",
+   "what": "the app with the most to say gives way",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 164
+  },
+  {
+   "id": "R13",
+   "what": "the section goes before the result",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 164
+  },
+  {
+   "id": "R14",
+   "what": "an app whose result was too large is a stop",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 27
+  },
+  {
+   "id": "R15",
+   "what": "its choices go with it",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 164
+  },
+  {
+   "id": "R16",
+   "what": "one app of an import never ends it because its member does not open",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 132
+  },
+  {
+   "id": "R17",
+   "what": "a conversion of its own has nothing to go on with",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 132
+  },
+  {
+   "id": "R18",
+   "what": "a missing key ends the import",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 132
+  },
+  {
+   "id": "R19",
+   "what": "only a real group is an import",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 132
+  },
+  {
+   "id": "R20",
+   "what": "the choice collects the shared lines, too",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 119
+  },
+  {
+   "id": "R21",
+   "what": "what the choice found is not the conversion",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 119
+  },
+  {
+   "id": "R22",
+   "what": "issues a module returns count for the choice",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "R23",
+   "what": "what keeps the whole app out counts before the choice",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "R24",
+   "what": "a stop of one database does not keep the app out",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 129
+  },
+  {
+   "id": "R25",
+   "what": "settings that cannot be used are to be corrected",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 112
+  },
+  {
+   "id": "R26",
+   "what": "a missing owner is to be created",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 112
+  },
+  {
+   "id": "R27",
+   "what": "a database name never changes how the log reads",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 123
+  },
+  {
+   "id": "R28",
+   "what": "an app that was not checked says what to do",
+   "module": "woowbackup/haimport.py",
+   "caught": true,
+   "tests_run": 166
+  },
+  {
+   "id": "K01",
+   "what": "a changed comment in haissues.py",
+   "module": "woowbackup/haissues.py",
+   "caught": false,
+   "tests_run": 199
+  },
+  {
+   "id": "K02",
+   "what": "a changed comment in haimport.py",
+   "module": "woowbackup/haimport.py",
+   "caught": false,
+   "tests_run": 199
+  }
+ ]
+}

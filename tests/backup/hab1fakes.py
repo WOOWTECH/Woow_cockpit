@@ -139,6 +139,7 @@ class World:
         self.runs, self.execs, self.live_dumps = [], [], []
         self.psql = {}
         self.exit_codes = {}
+        self.container_files = hafakes.ContainerFiles()   # what Cluster.write_file's writes received
 
     def factory(self, app, **_kwargs):
         return Adapter(app, self)
@@ -172,7 +173,11 @@ class World:
                 if role not in self.psql:
                     self.psql[role] = hafakes.Psql(lambda sql, db, r=role: self.answer(r, sql, db))
                 return self.psql[role](command, data)
-            return self.exec(role, command, data, stdout)
+            # Cluster.write_file: the container keeps what the write received; its read-back answers from that
+            answer = self.container_files.read_back(role, command)
+            if answer is not None:
+                return answer
+            return self.container_files.wrote(role, command, data, self.exec(role, command, data, stdout))
         if verb == 'image' and args[1] == 'exists':
             return Result(0 if args[2] in self.images else 1, b'', b'')
         if verb == 'image' and args[1] == 'inspect':

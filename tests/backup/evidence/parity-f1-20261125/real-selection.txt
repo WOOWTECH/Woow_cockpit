@@ -1,0 +1,7 @@
+real HA backups opened: 27
+12 members ['none'], share folder read by 0 app(s), a wrong key: can start
+12 members ['none'], share folder read by 0 app(s), no key: can start
+14 members ['v3'], share folder read by 0 app(s), a wrong key: wrong-key job_wide=True
+14 members ['v3'], share folder read by 0 app(s), no key: key-required job_wide=True
+1 members ['v3'], share folder read by 1 app(s), a wrong key: wrong-key job_wide=True
+1 members ['v3'], share folder read by 1 app(s), no key: key-required job_wide=True

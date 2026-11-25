@@ -13,6 +13,8 @@ from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
 from woowbackup.podman import CommandError, Result
 
+from . import hafakes
+
 class TrustedDataTests(unittest.TestCase):
     def test_schema_entries_are_not_selected(self):
         toc = ('; archive\n1; 0 0 TABLE public users owner\n'
@@ -57,9 +59,11 @@ class TrustedDataTests(unittest.TestCase):
                                         b'2; 0 0 CHECK CONSTRAINT public users evil owner\n')
         work = SimpleNamespace(log=Mock())
         columns = [['users', 'id', 'text', True, '', '']]
-        tmp.exec.side_effect = lambda role, argv, **kw: SimpleNamespace(stdout=(
-            b'[["users","id","text",true,"",""]]' if argv[0] == 'psql' and '-c' in argv else
-            b'1; 0 0 TABLE DATA public users owner\n2; 0 0 CHECK CONSTRAINT public users evil owner\n'))
+        files = hafakes.ContainerFiles()
+        tmp.exec.side_effect = lambda role, argv, **kw: hafakes.container_reply(
+            files, role, argv, kw.get('input')) or SimpleNamespace(stdout=(
+                b'[["users","id","text",true,"",""]]' if argv[0] == 'psql' and '-c' in argv else
+                b'1; 0 0 TABLE DATA public users owner\n2; 0 0 CHECK CONSTRAINT public users evil owner\n'))
         with tempfile.TemporaryDirectory() as directory:
             schema, data = Path(directory) / 's', Path(directory) / 'd'
             schema.write_bytes(b'trusted-schema')

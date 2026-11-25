@@ -11,6 +11,8 @@ from unittest.mock import Mock
 from woowbackup import ha_omnigent
 from woowbackup.errors import BackupError
 
+from . import hafakes
+
 
 class OmnigentTrustedSchemaContractTest(unittest.TestCase):
     def test_the_helpers_that_ran_has_ddl_or_wrote_as_superuser_are_gone(self):
@@ -34,9 +36,10 @@ class OmnigentTrustedSchemaContractTest(unittest.TestCase):
         listing = (b'1; 0 0 TABLE public users owner\n2; 0 0 DEFAULT public users x owner\n'
                    b'3; 0 0 CHECK CONSTRAINT public users evil owner\n4; 0 0 TABLE DATA public users owner\n'
                    b'5; 0 0 DOMAIN public evil owner\n')
-        tmp = Mock()
-        tmp.exec.side_effect = lambda role, argv, **kw: SimpleNamespace(stdout=(
-            b'[["users","id","text",true,"",""]]' if argv[0] == 'psql' and '-c' in argv else listing))
+        tmp, files = Mock(), hafakes.ContainerFiles()
+        tmp.exec.side_effect = lambda role, argv, **kw: hafakes.container_reply(
+            files, role, argv, kw.get('input')) or SimpleNamespace(stdout=(
+                b'[["users","id","text",true,"",""]]' if argv[0] == 'psql' and '-c' in argv else listing))
         with TemporaryDirectory() as directory:
             schema, data = Path(directory) / 'schema', Path(directory) / 'data'
             schema.write_bytes(b'TRUSTED')
@@ -54,8 +57,10 @@ class OmnigentTrustedSchemaContractTest(unittest.TestCase):
                 self.assertIn('-L', argv)
             else:
                 self.assertTrue(source.endswith('/schema'), 'every other restore reads the trusted schema only')
-        written = [c.kwargs['input'] for c in tmp.exec.call_args_list if c.args[1][:2] == ['sh', '-c']]
+        written = [c.kwargs['input'] for c in tmp.exec.call_args_list
+                   if c.args[1][:2] == ['sh', '-c'] and 'input' in c.kwargs]   # not the read-backs (no input)
         self.assertEqual(written, [b'4; 0 0 TABLE DATA public users owner\n'])
+        self.assertEqual(files.files, {('omni-db', '/tmp/woowbk-omnigent.toc'): b'4; 0 0 TABLE DATA public users owner\n'})
 
 
 if __name__ == '__main__':
