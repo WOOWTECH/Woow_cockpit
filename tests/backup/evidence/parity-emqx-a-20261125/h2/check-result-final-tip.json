@@ -1,0 +1,58 @@
+{
+ "schema": 2,
+ "ha_backup_id": "ha-0a53e93888209316040a",
+ "shared": [],
+ "apps": [
+  {
+   "app_id": "emqx",
+   "slug": "e2bba4b7_woow-emqx",
+   "name": "Woow EMQX",
+   "arch": "amd64",
+   "version": "5.9.1",
+   "target_version": "5.8.9",
+   "importable": true,
+   "ok": true,
+   "blockers": [],
+   "warnings": [
+    "EMQX 的帳號驗證、授權來源（含 ACL 檔案）和「沒有符合規則的主題時允許」的處理，匯入後都以 HA 的為準（HAOS 還原也是這樣）；這台的位址、連接埠、節點名稱和其他設定不變。",
+    "HA 的 EMQX API 金鑰會取代這台的，EMQX MCP 管理需要重新登入。"
+   ],
+   "issues": [
+    {
+     "id": "emqx.access-from-ha",
+     "level": "auto",
+     "message": "EMQX 的帳號驗證、授權來源（含 ACL 檔案）和「沒有符合規則的主題時允許」的處理，匯入後都以 HA 的為準（HAOS 還原也是這樣）；這台的位址、連接埠、節點名稱和其他設定不變。",
+     "items": [],
+     "more": 0
+    },
+    {
+     "id": "legacy.warning",
+     "level": "notice",
+     "message": "HA 的 EMQX API 金鑰會取代這台的，EMQX MCP 管理需要重新登入。",
+     "items": [],
+     "more": 0
+    }
+   ],
+   "emqx": {
+    "emqx_version": "5.8.9",
+    "target_version": "5.8.9",
+    "node_name": "emqx@127.0.0.1",
+    "files": 29,
+    "bytes": 63461,
+    "mqtt_users": 3,
+    "acl_rules": 4,
+    "dashboard_users": 2,
+    "api_keys": 1,
+    "banned": 1,
+    "psk": 0,
+    "retained_messages": 5,
+    "default_dashboard_password": false,
+    "anonymous": false,
+    "hot_backup": false,
+    "plugins": [],
+    "ha_hosts": [],
+    "target_authorization": []
+   }
+  }
+ ]
+}

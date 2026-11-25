@@ -1,0 +1,6 @@
+wall-clock seconds of each real job on dev-d (host load 15-30 on 4 CPUs, other lanes' heavy runs in parallel)
+20261125T192147  check    emqx     526.6 s  succeeded
+20261125T192147  convert  emqx     454.3 s  succeeded
+20261125T193955  restore  emqx     348.5 s  succeeded
+20261125T193955  restart  emqx      36.2 s  None
+20261125T193955  restore  emqx      87.6 s  succeeded

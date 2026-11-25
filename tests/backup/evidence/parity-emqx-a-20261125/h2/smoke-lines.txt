@@ -1,0 +1,124 @@
+SMOKE.SH OF THE EMQX PACKAGE ON woowbk-dev-d (lab), 2026-11-25, tip d5ddf6a of parity/emqx-a-20261125, the real x86 cold HA backup.
+Only the PASS/FAIL/WARN lines and the exit code (rc) of each run; the text of the scripts is Woow_podman_emqx ea5886c (unmodified) and fix/smoke-after-ha-import-20261125@1ea37da (fixed).
+
+--- 1. baseline, no import, unmodified smoke.sh (run r3)
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+PASS A4 dashboard login with the generated password
+PASS A4 admin/public is rejected
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+PASS A5 anonymous MQTT is refused (bad user name or password)
+PASS A6 authenticated publish/subscribe as woow
+PASS A10 cross-user topic subscription is denied
+PASS A7 bootstrap CSV is 0400 emqx
+PASS A7 base.hocon is mounted read-only
+WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+16 passed, 0 failed, 1 warnings
+rc=0
+
+--- 2. after the import, unmodified smoke.sh, full (what scripts/upgrade.sh runs after install.sh)
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+PASS A4 admin/public is rejected
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+PASS A5 anonymous MQTT is refused (bad user name or password)
+PASS A6 authenticated publish/subscribe as woow
+FAIL A10 cross-user topic subscription was not explicitly denied
+PASS A7 bootstrap CSV is 0400 emqx
+PASS A7 base.hocon is mounted read-only
+WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+14 passed, 2 failed, 1 warnings
+rc=1
+
+--- 3. after the import, unmodified smoke.sh --quick (upgrade.sh's rollback check)
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+PASS A4 admin/public is rejected
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+9 passed, 1 failed, 0 warnings (quick)
+rc=1
+
+--- 4. after the import, the draft-fixed smoke.sh, full
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+WARN A4 dashboard login skipped: this broker's Dashboard accounts come from a Home Assistant import (marker woow-ha-import.json in the data volume); reachability was already proved by A1/A2/A9
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+WARN A5/A6/A10 MQTT access checks skipped: this broker's authentication and ACL come from a Home Assistant import (marker woow-ha-import.json in the data volume)
+PASS A7 bootstrap CSV is 0400 emqx
+PASS A7 base.hocon is mounted read-only
+PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+11 passed, 0 failed, 2 warnings
+rc=0
+
+--- 5. after the import, the draft-fixed smoke.sh --quick
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+WARN A4 dashboard login skipped: this broker's Dashboard accounts come from a Home Assistant import (marker woow-ha-import.json in the data volume); reachability was already proved by A1/A2/A9
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+8 passed, 0 failed, 1 warnings (quick)
+rc=0
+
+--- 6. after a restart of emqx.service, unmodified smoke.sh --quick
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+PASS A4 admin/public is rejected
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+9 passed, 1 failed, 0 warnings (quick)
+rc=1
+
+--- 7. baseline again (B0 restored, no marker), the draft-fixed smoke.sh, full
+PASS A1 emqx.service is active
+PASS A1 emqx-entrance.service is active
+PASS A2 woow-emqx is healthy
+PASS A2 woow-emqx-entrance is healthy
+PASS A3 five ports published on 127.0.0.1
+PASS A4 dashboard login with the generated password
+PASS A4 admin/public is rejected
+PASS A9 dashboard entrance answers HTTP 200
+PASS A9 private endpoints return 404
+PASS A9 MQTT WebSocket upgrade through /mqtt
+PASS A5 anonymous MQTT is refused (bad user name or password)
+PASS A6 authenticated publish/subscribe as woow
+PASS A10 cross-user topic subscription is denied
+PASS A7 bootstrap CSV is 0400 emqx
+PASS A7 base.hocon is mounted read-only
+WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+16 passed, 0 failed, 1 warnings
+rc=0
+

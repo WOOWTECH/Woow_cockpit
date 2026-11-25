@@ -1,7 +1,7 @@
 {
  "lane": "EMQX-A",
  "branch": "parity/emqx-a-20261125",
- "tip": "7840a18",
+ "tip": "d5ddf6a",
  "base": "3db6988",
  "rows": {
   "done": 48,
@@ -10,7 +10,7 @@
  },
  "unit_tests": {
   "modules": 19,
-  "tests": 303,
+  "tests": 305,
   "skipped": 3,
   "failures": 0,
   "errors": 0
@@ -20,6 +20,20 @@
   "skipped": 5
  },
  "registry": "merged on a copy of 3db6988: OK",
- "real": false,
- "commercial_acceptance": "not-complete"
+ "real": "partial: the H2 lab proof on dev-d (real engine, real EMQX 5.8.9, the real x86 HA backup, the package smoke.sh); everything else unit level",
+ "commercial_acceptance": "not-complete",
+ "h2": {
+  "run": "2026-11-25 on woowbk-dev-d, tips 3fd576d and d5ddf6a",
+  "unmodified_smoke_after_import": "14 passed, 2 failed (A4, A10), exit 1",
+  "upgrade_would_roll_back": true,
+  "upgrade_sh_run": false,
+  "fixed_smoke_after_import": "11 passed, 0 failed, 2 warnings, exit 0",
+  "fixed_without_marker_equals_unmodified": true,
+  "leak_scan_hits": 0,
+  "package_fix": "Woow_podman_emqx fix/smoke-after-ha-import-20261125@5c748a6 (local, not pushed)"
+ },
+ "heavy_runs": {
+  "full_suite_b1_top_ha118": "not run in iteration 2 (host overloaded; the integrator runs the combined tip)",
+  "mutation_sweep": "not run on the final tip (38 mutants + 2 controls prepared)"
+ }
 }
