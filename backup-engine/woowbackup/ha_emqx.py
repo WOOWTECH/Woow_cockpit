@@ -608,6 +608,10 @@ def parse_authn(text):
     return [{'mechanism': m, 'backend': b, 'enable': e == 'true', 'algorithm': a, 'salt': s} for m, b, e, a, s in rows]
 
 
+AUTHN_ROW = (r'\{\s*[a-z_]{1,40}\s*,\s*[a-z_]{1,40}\s*,\s*(?:true|false)\s*,\s*[a-z0-9_]{1,40}\s*,\s*[a-z_]{1,40}\s*\}')
+AUTHN_ANSWER = re.compile(r'\s*\[\s*(?:' + AUTHN_ROW + r'(?:\s*,\s*' + AUTHN_ROW + r')*)?\s*\]\s*(?:ok\s*)?')
+
+
 def parse_authz(text):
     """AUTHZ_EXPR's answer as [{'type', 'enable'}] in order; None when it is not that shape."""
     body = (text or '').strip()
@@ -735,9 +739,14 @@ def ha_broker(work, tmp, target, src, node, *, out_dir=None):
     readings = {'default_admin': 'default' in evaluate(tmp, 'emqx-ha', DEFAULT_ADMIN_EXPR).split(),
                 'counts': parse_counts(evaluate(tmp, 'emqx-ha', COUNT_EXPR)),
                 'roots': set(re.findall(r'<<"([a-z_]+)">>', evaluate(tmp, 'emqx-ha', ROOTS_EXPR))),
-                'authn': parse_authn(evaluate(tmp, 'emqx-ha', AUTHN_EXPR)),
+                'authn': evaluate(tmp, 'emqx-ha', AUTHN_EXPR),
                 'authz': parse_authz(evaluate(tmp, 'emqx-ha', AUTHZ_EXPR)),
                 'strict': parse_strict(evaluate(tmp, 'emqx-ha', STRICT_EXPR))}
+    # S2: an empty list IS an answer (HA's broker asks nobody to log in) and makes this device's authenticators go; an
+    # answer that is not exactly the list is not that answer and is never guessed (the same as authorization below).
+    if not AUTHN_ANSWER.fullmatch(readings['authn']):
+        raise BackupError('incompatible', '無法讀取 HA 的 EMQX 帳號驗證設定。' + hint)
+    readings['authn'] = parse_authn(readings['authn'])
     if len(readings['counts']) != len(TABLES):
         raise BackupError('incompatible', '無法讀取 HA 的 EMQX 資料筆數。' + hint)
     if readings['authz'] is None or readings['strict'] is None:   # D0 makes them this device's: never guessed

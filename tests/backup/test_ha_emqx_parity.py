@@ -521,6 +521,41 @@ class NoticeLinesTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps([i.view('emqx') for i in found.values()]))
 
 
+class HaReadingTests(base.EmqxCase):
+    """S2, D0: what HA's broker says about who may log in and who may do what is read exactly or not at all. An empty list is
+    an answer (nobody has to log in: HA's own choice, restored as it is); an answer that is not the list must never be taken
+    for it, or this device's own authenticators would go on a misreading. Stops only this app, before anything is imported."""
+
+    def stopped(self, field, text, words):
+        setattr(self.world, field, text)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'], text)
+        self.assertIn(words, result['blockers'][0], text)
+        self.assertEqual([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import']], [], 'nothing was imported')
+
+    def test_an_authenticator_list_that_cannot_be_read_stops_the_app(self):
+        for garbage in ('{badrpc,nodedown}', '', '[{password_based,built_in_database,true}]',
+                        '[{password_based,built_in_database,true,sha256,suffix},{broken}]', 'error: nope',
+                        '[{password_based,built_in_database,maybe,sha256,suffix}]'):
+            with self.subTest(garbage):
+                self.stopped('ha_authn', garbage, '無法讀取 HA 的 EMQX 帳號驗證設定')
+
+    def test_an_authorization_list_that_cannot_be_read_stops_the_app(self):
+        for garbage in ('{badrpc,nodedown}', '[{file,true},{broken}]', ''):
+            with self.subTest(garbage):
+                self.stopped('ha_authz', garbage, '無法讀取 HA 的 EMQX 授權設定')
+
+    def test_the_lists_as_the_shell_prints_them_are_read(self):
+        """Whitespace, line breaks and the trailing ok of `emqx eval` are not a reason to stop; an empty list is an answer."""
+        for text in ('[{password_based,built_in_database,true,sha256,suffix}]\nok\n',
+                     '[{password_based,built_in_database,true,\n   sha256,suffix},\n {jwt,none,true,none,none}]\n', '[]', ' [ ]\nok'):
+            with self.subTest(text):
+                self.world.ha_authn = text
+                result = self.check(self.upload_emqx(), ['emqx'])[0]
+                self.assertTrue(result['importable'], text)
+                self.assertNotIn('無法讀取 HA 的 EMQX 帳號驗證設定', ' '.join(result['blockers']))
+
+
 class ImportTextsTests(unittest.TestCase):
     """D0 (4), DESIGN H-c: HA's add-on options (env_vars) are never read, so the customer is told once, after the import, that
     they did not move -- whatever else the conversion found, and without a value of any kind."""
