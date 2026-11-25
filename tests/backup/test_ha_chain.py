@@ -1318,6 +1318,28 @@ class RecoveryTests(ChainCase):
         self.assertEqual(changed, [job['id']])
         self.assertEqual(self.store.get(job['id'])['state'], 'interrupted')
 
+    def test_the_key_file_a_killed_restore_chain_left_goes_in_the_pass_that_ends_it(self):
+        """The age key of a split restore stays a file for the whole run. A SIGKILL leaves it (a BaseException here runs the
+        finally that would remove it, so the file is put back): the pass that marks the running job interrupted removes it, not
+        the one after (the first job is finished long ago: only the import's other jobs say whether it is alive)."""
+        from .test_flows import TEST_SECRET
+        self.group = hachain.new_group_id()
+        params = hachain.restore_params(backup_id(90), 'odoo', key_provided=True)
+        params['group'] = hachain.group_params(self.group, 'ha-restore', 'restore', 'odoo', 0, 3)
+        params['chain'] = hachain.new_chain(APPS, key_provided=True)
+        self.first = jobs.start_job(self.paths, 'restore', params, 'req-keykill-0001', key_text=TEST_SECRET, key_kind='age',
+                                    launcher=self.launcher, unit_active=self.unit_active)['job_id']
+        self.kill_in('restore', 'n8n')
+        self.run_until_killed()
+        key_file = self.store.key_path(self.first)
+        key_file.write_text(TEST_SECRET)
+        os.chmod(key_file, 0o600)
+        self.assertEqual(self.shape(), [('restore', 'odoo', 'succeeded'), ('restore', 'n8n', 'running')])
+        self.recover(unit_active=lambda unit: unit in self.active_units)
+        self.assertEqual(self.shape()[-1], ('restore', 'n8n', 'interrupted'))
+        self.assertFalse(key_file.exists(), 'no job of the import is alive any more: its key goes in this pass')
+        self.assertNotIn(TEST_SECRET, self.files_text())
+
     def test_while_the_unit_lives_neither_job_is_touched(self):
         """Every job of the import carries the unit of the first one: it keeps the queued job from being judged dead."""
         self.killed_between()

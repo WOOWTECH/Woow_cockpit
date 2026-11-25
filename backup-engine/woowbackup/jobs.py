@@ -1384,7 +1384,8 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
                 os.close(engine_fd)
     _sweep_staging(paths, store)
     _sweep_pending(paths, store)
-    _sweep_key_files(paths, store, now, _live_groups(records))
+    # Which imports are still alive is read again once this pass marked dead jobs: the key file of one that ended now goes now.
+    _sweep_key_files(paths, store, now, _live_groups(store.list(limit=None) if changed else records))
     try:
         _retain(store, records, now)
     except Exception:  # noqa: BLE001 - housekeeping never breaks status/jobs/job-status; retried next pass
