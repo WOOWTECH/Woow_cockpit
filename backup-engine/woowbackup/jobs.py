@@ -1600,9 +1600,15 @@ class _Run:
         """Run `job_id` and what follows it; returns the record of `job_id` (the job this process was started for)."""
         record, next_id = self.execute(job_id, first=True)
         first = record
-        while next_id is not None:
+        from . import hachain
+        for _step in range(2 * hachain.MAX_APPS):  # a chain has at most two jobs per app: a bug never makes it run forever
+            if next_id is None:
+                break
             gc.collect()  # one process for the whole import: what the job before left behind goes before the next one starts
             record, next_id = self.execute(next_id, first=False)
+        else:
+            if next_id is not None:
+                self.store.append_log(record['id'], '匯入的作業數超過上限，不再接著做下一個作業。')
         return first
 
     def execute(self, job_id, *, first):

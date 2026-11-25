@@ -483,6 +483,25 @@ class RunTests(ChainCase):
             self.run_chain()
         self.assertEqual(collect.call_count, 3, 'between the four jobs of one process (DESIGN H-c)')
 
+    def test_a_chain_that_never_ends_is_cut_at_two_jobs_per_app(self):
+        """A bug of the chain's own must not make one process run jobs for ever."""
+        real = hachain.conclude
+
+        def conclude(ctx, record, outcome):
+            final, created = real(ctx, record, outcome)
+            if created is None:
+                params = json.loads(json.dumps(record['params']))
+                created = ctx.reporter.store.create(record['type'], params, unit=record.get('unit'),
+                                                    now=time.time() + 1000 * len(self.script.events))
+            return final, created
+
+        self.start_chain(['odoo'])
+        with mock.patch.object(hachain, 'conclude', conclude):
+            self.run_chain()
+        self.assertEqual(len(self.script.events), 2 * hachain.MAX_APPS + 1, 'the first job and then at most two per possible app')
+        self.assertIn('超過上限', '\n'.join(self.store.read_log(self.records()[-2]['id'])))
+        self.assertTrue(jobs.lock_is_free(self.paths))
+
     def test_a_job_that_is_no_import_is_run_as_before(self):
         result = self.start(job_type='backup', params={'apps': ['a']}, request_id='req-plain-0001')
         record = jobs.run_job(self.paths, result['job_id'], deps=object(), handlers={'backup': lambda ctx, p: {'ok': 1}})
