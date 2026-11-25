@@ -10,7 +10,7 @@ from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
 
 class ServerVolumeTests(unittest.TestCase):
-    def run_volume(self, root_entry):
+    def run_volume(self, root_entry, log=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             live = root / 'live.tar'
@@ -32,7 +32,7 @@ class ServerVolumeTests(unittest.TestCase):
                 entry(tar, 'artifacts', mode=0o755)
                 entry(tar, 'artifacts/accounts-cookie-secret', b'synthetic-cookie')
             (root / 'out/volumes').mkdir(parents=True)
-            work = SimpleNamespace(guard=SimpleNamespace(wrote=lambda n: None))
+            work = SimpleNamespace(guard=SimpleNamespace(wrote=lambda n: None), **({'log': log} if log else {}))
             with patch.object(omni.hacommon, 'live_export', return_value=live), \
                  patch.object(omni.ha_n8n, 'volume_root', return_value=(37, 41, 0o710)) as metadata:
                 output = omni.server_volume(work, SimpleNamespace(id='omnigent'),
@@ -46,6 +46,7 @@ class ServerVolumeTests(unittest.TestCase):
                 self.assertEqual(tar.extractfile('sharing_mode').read(), b'off')
                 self.assertEqual(tar.extractfile('artifacts/accounts-cookie-secret').read(), b'synthetic-cookie')
                 self.assertEqual(members['artifacts/accounts-cookie-secret'].mode, 0o600)
+                return members['.'].mode
 
     def test_podman_export_without_root_preserves_actual_root(self):
         self.run_volume(None)
@@ -53,6 +54,10 @@ class ServerVolumeTests(unittest.TestCase):
     def test_matching_export_root_is_not_duplicated(self):
         self.run_volume(0o710)
 
-    def test_root_metadata_change_refused(self):
-        with self.assertRaises(BackupError):
-            self.run_volume(0o777)
+    def test_root_metadata_change_is_no_reason_to_stop(self):
+        """O-57: the top folder's owner and mode were read twice (the folder, the export) and differ: only that folder's
+        permissions are meant, and the last reading is what the volume gets -- the import goes on and says so."""
+        logged = []
+        output = self.run_volume(0o777, log=logged.append)
+        self.assertEqual(output, 0o710, 'the root entry of the volume is the one read last (a stat of the folder)')
+        self.assertTrue(any('以最後讀到的為準' in line for line in logged))

@@ -146,6 +146,7 @@ ISSUES = {
 }
 ACTION_REBACKUP = '請在 HA 重新備份後再匯入 Omnigent；這台的 Omnigent 不會有任何變更。'
 ACTION_SAME_VERSION = '請先讓兩邊的 Omnigent 版本一致後再匯入；這台的 Omnigent 不會有任何變更。'
+ACTION_UNCHANGED = '這台的 Omnigent 不會有任何變更。'
 SNAPSHOT_ATTEMPTS = 3      # O-32, O-33, O-58, O-59: this device's structure snapshot, tried this many times
 STEADY_ATTEMPTS = 3        # O-42, O-43: waits for this device's database structure to stop changing, this many times
 READ_ATTEMPTS = 3          # O-09, O-40, O-41: a read of this device's own database
@@ -598,7 +599,7 @@ def judge(sink, src, found, *, live_alembic_value, ha_major, target_major, diffe
                   f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or "未知"}，這台是 '
                   f'{hacommon.names(live_alembic_value, 5) or "未知"}。', action=ACTION_SAME_VERSION)
     if differ:
-        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_SAME_VERSION)
+        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_UNCHANGED)
     names, counts = skipped_names(src, found)
     if names.count:
         what = '、'.join(f'{kind} {n} 個' for kind, n in counts.items())
@@ -764,7 +765,8 @@ def check(work, app):
     ha_schema = read_schema(cluster, found['alembic'])
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
-    differ = schema_differences(ha_schema, live_schema(work, app, target), ignore=unknown_tables(found))
+    differ = (schema_differences(ha_schema, live_schema(work, app, target), ignore=unknown_tables(found))
+              if alembic is not None else None)   # no structure version of this device: judge says so
     conflicts = account_conflicts(found, target)
     judge(sink, src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
           target_major=pg_major(work, app, target), differ=differ)
@@ -1490,7 +1492,7 @@ def convert(work, app, test_mode, out_dir):
     trusted = trusted_schema(work, app, target, schema_dump, alembic)
     differ = schema_differences(ha_schema, trusted, ignore=ignored)
     if differ:
-        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_SAME_VERSION)
+        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_UNCHANGED)
     work.log('用這台的資料庫結構建立資料表，只把 HA 的資料（資料列與序號）以沒有任何管理權限的暫用角色載入')
     entries = haissues.Names()
     restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=moved_columns(ha_schema.columns, ignored),

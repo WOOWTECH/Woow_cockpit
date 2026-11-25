@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from woowbackup import ha_omnigent as omni
 from woowbackup.errors import BackupError
+from woowbackup.haissues import Names
 from woowbackup.podman import CommandError, Result
 
 from . import hafakes
@@ -36,13 +37,19 @@ class TrustedDataTests(unittest.TestCase):
                '3; 0 0 DEFAULT public users x owner\n')
         self.assertEqual(omni.data_only_toc(toc, tables=['users'], sequences=['users_id_seq']),
                          '1; 0 0 TABLE DATA public users owner\n2; 0 0 SEQUENCE SET public users_id_seq owner\n')
-        # A name with a line break in HA's database could add any entry id: an unknown or repeated name is refused.
-        for extra in ('4; 0 0 TABLE DATA public users other\n', '4; 0 0 TABLE DATA public evil owner\n',
-                      '4; 0 0 SEQUENCE SET public other_seq owner\n', '4; 0 0 TABLE DATA other users owner\n',
-                      '4; 0 0 TABLE DATA public users two owners\n'):
+        # A name with a line break in HA's database could add any entry id: a trusted name once more is refused; an entry that
+        # names anything else is not selected and counted (O-28), whatever it looks like.
+        for extra in ('4; 0 0 TABLE DATA public users other\n', '4; 0 0 SEQUENCE SET public users_id_seq other\n'):
             with self.subTest(extra=extra), self.assertRaises(BackupError) as caught:
                 omni.data_only_toc(toc + extra, tables=['users'], sequences=['users_id_seq'])
-            self.assertIn('不屬於這台 Omnigent 資料庫結構', caught.exception.message)
+            self.assertIn('出現兩次', caught.exception.message)
+        for extra in ('4; 0 0 TABLE DATA public evil owner\n', '4; 0 0 SEQUENCE SET public other_seq owner\n',
+                      '4; 0 0 TABLE DATA other users owner\n', '4; 0 0 TABLE DATA public users two owners\n'):
+            with self.subTest(extra=extra):
+                left = Names()
+                self.assertEqual(omni.data_only_toc(toc + extra, tables=['users'], sequences=['users_id_seq'], skipped=left),
+                                 '1; 0 0 TABLE DATA public users owner\n2; 0 0 SEQUENCE SET public users_id_seq owner\n')
+                self.assertEqual((left.count, left.first), (1, [extra.split('; 0 0 ', 1)[1].strip()]))
 
     def test_the_old_public_guards_are_replaced_by_the_product_checks(self):
         self.assertFalse(hasattr(omni, 'SECURITY_BLOCKER'))
