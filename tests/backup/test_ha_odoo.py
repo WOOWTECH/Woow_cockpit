@@ -259,6 +259,21 @@ class VerdictTests(unittest.TestCase):
                 self.assertEqual(self.found(issues), {'odoo.extension-unsupported': ('stop', [ext])})
                 self.assertTrue(issues[0].action)
 
+    def test_an_extension_name_of_a_hostile_backup_never_reaches_a_statement(self):
+        """OD-39: a name is created only when this device's own catalog lists it (and it is trusted); the identifier is
+        quoted by a strict rule on top."""
+        offered = {'pg_trgm': True, 'pgcrypto': True}
+        for name in ('x"; DROP SCHEMA public; --', "pgcrypto'; --", 'pgcrypto' + ' ' * 56 + 'x', 'PGCRYPTO', '../x', ''):
+            for known in (offered, None):
+                with self.subTest(name=name[:20], known=known is not None):
+                    issues, _c, _u = self.verdict(details([], extensions=['plpgsql', name]),
+                                                  target({}) | ({'extensions': known} if known is not None else {}))
+                    self.assertEqual([i.id for i in issues], ['odoo.extension-unsupported'])
+        self.assertEqual(ha_odoo.ext_ident('uuid-ossp'), '"uuid-ossp"')
+        for bad in ('a"b', 'a b', "a'b", '1abc', 'a;b', 'a' * 64):
+            with self.subTest(bad=bad), self.assertRaises(BackupError):
+                ha_odoo.ext_ident(bad)
+
     def test_when_the_device_cannot_be_asked_the_fixed_list_is_used(self):
         det = details([], extensions=['plpgsql', 'pgcrypto'])
         issues, _c, _u = self.verdict(det, target({}))
