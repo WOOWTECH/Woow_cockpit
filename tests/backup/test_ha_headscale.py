@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, haissues, ha_headscale, hacommon, hasqlite, hatarget, jobs
+from woowbackup import habackup, ha_headscale, hacommon, hasqlite, hatarget, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
