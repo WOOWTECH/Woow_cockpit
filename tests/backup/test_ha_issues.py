@@ -11,9 +11,11 @@ import random
 import unittest
 from pathlib import Path
 
-from woowbackup import cli, errors, flows, haapps, haimport, haissues, hacommon, jobs
+from woowbackup import cli, errors, flows, habackup, haapps, haimport, haissues, hacommon, jobs
 from woowbackup.errors import BackupError
-from woowbackup.haissues import Issue, Names, Sink
+from woowbackup.haissues import Issue, MergedNames, Names, Sink
+
+from . import hafixtures as hx
 
 ENGINE = Path(haissues.__file__).resolve().parent
 APP = 'emqx'
@@ -357,6 +359,84 @@ class SinkTests(unittest.TestCase):
             sink.stop('emqx.broken', '不能')
         found = haissues.combine(sink.found, haissues.from_error(caught.exception))
         self.assertEqual([i.id for i in found], ['emqx.version', 'emqx.broken'])
+
+
+class SkippedTests(unittest.TestCase):
+    """IN-19, IN-27, IN-28, IN-35, IN-38, IN-39: what the reader left out of an add-on is ONE confirmation line (lane READ)."""
+
+    def report(self, extra=(), names=Names):
+        entries = [{'name': 'data/a', 'data': b'a'}, {'name': 'data/dev', 'type': 'chr'}, {'name': 'data/pipe', 'type': 'fifo'},
+                   {'name': 'data/bad\nname', 'data': b'x'}, {'name': 'data/gone', 'type': 'hardlink', 'linkname': '../x'},
+                   {'name': 'data/out', 'type': 'symlink', 'linkname': '/etc'}, *extra]
+        report = habackup.Report(names=names)
+        select = habackup.Select(include=('data',), symlinks=('data',))
+        for entry in habackup.iter_entries(io.BytesIO(hx.tar_bytes(entries)), select, report, addon=False):
+            entry.read_all(1 << 20) if entry.kind == 'file' else None
+        self.assertTrue(report.complete)
+        return report
+
+    def test_one_line_for_every_kind(self):
+        sink = Sink('odoo')
+        issue = sink.skipped(self.report())
+        self.assertEqual((issue.id, issue.level, issue.count), ('files.skipped', 'confirm', 5))
+        for text in ('5 個項目', '裝置檔 1 個', '特殊檔案（FIFO） 1 個', '指到資料以外的符號連結 1 個'):
+            self.assertIn(text, issue.message)
+        view = issue.view('odoo')
+        self.assertEqual((view['more'], sorted(view['items'])),
+                         (0, ['data/bad name', 'data/dev', 'data/gone', 'data/out', 'data/pipe']))
+        self.assertEqual(sink.found, [issue])
+        self.assertTrue(view['key'].startswith('files.skipped:'))
+
+    def test_nothing_skipped_nothing_asked(self):
+        sink = Sink('odoo', [])
+        self.assertIsNone(sink.skipped(habackup.Report(names=Names)))
+        self.assertEqual(sink.found, [])
+
+    def test_the_key_covers_every_name_of_every_kind(self):
+        key = Sink('odoo').skipped(self.report()).key('odoo')
+        self.assertEqual(Sink('odoo').skipped(self.report()).key('odoo'), key, 'the same walk, the same key')
+        self.assertNotEqual(Sink('app').skipped(self.report()).key('app'), key, 'it belongs to the app')
+        for extra in ({'name': 'data/dev2', 'type': 'blk'}, {'name': 'data/pipe2', 'type': 'fifo'},
+                      {'name': 'data/gone2', 'type': 'hardlink', 'linkname': 'nothing'},
+                      {'name': 'data/out2', 'type': 'symlink', 'linkname': '../..'}):
+            with self.subTest(extra=extra['name']):
+                self.assertNotEqual(Sink('odoo').skipped(self.report([extra])).key('odoo'), key)
+
+    def test_a_conversion_needs_the_confirmation(self):
+        key = Sink('odoo').skipped(self.report()).key('odoo')
+        with self.assertRaises(BackupError) as caught:
+            Sink('odoo', []).skipped(self.report())
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(Sink('odoo', [key]).skipped(self.report()).level, 'confirm', 'confirmed: it goes on')
+        with self.assertRaises(BackupError) as caught:  # one more name: ask again
+            Sink('odoo', [key]).skipped(self.report([{'name': 'data/dev2', 'type': 'blk'}]))
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_a_long_list_is_counted_and_keyed_whole(self):
+        def many(odd):
+            report = habackup.Report(names=Names)
+            for i in range(Names.MAX_EXACT + 5):
+                report.skip('device', f'data/dev{i}' if i != 7 or not odd else 'data/other')
+            return report
+        issue = Sink('odoo').skipped(many(False))
+        view = issue.view('odoo')
+        self.assertEqual((issue.count, len(view['items']), view['more']), (Names.MAX_EXACT + 5, 20, Names.MAX_EXACT - 15))
+        self.assertEqual(Sink('odoo').skipped(many(False)).key('odoo'), view['key'])
+        self.assertNotEqual(Sink('odoo').skipped(many(True)).key('odoo'), view['key'], 'one name of a long list changes the key')
+
+    def test_only_the_kinds_asked_for(self):
+        report = self.report()
+        issue = Sink('odoo').skipped(report, 'symlink', 'fifo')
+        self.assertEqual((issue.count, sorted(issue.view('odoo')['items'])), (2, ['data/out', 'data/pipe']))
+        self.assertIsNone(Sink('odoo').skipped(report, 'large'))
+
+    def test_the_readers_own_lists_work_too(self):
+        issue = Sink('odoo').skipped(self.report(names=habackup.SkipList))
+        self.assertEqual((issue.count, issue.level), (5, 'confirm'))
+
+    def test_a_merged_list_is_read_only(self):
+        with self.assertRaises(TypeError):
+            MergedNames([]).add('x')
 
 
 class FailureTests(unittest.TestCase):

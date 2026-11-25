@@ -172,8 +172,8 @@ def v_key_id(value, field):
 
 
 def v_filename(value, field):
-    if (not isinstance(value, str) or not 1 <= len(value) <= 255 or CONTROL_RE.search(value)
-            or '/' in value or '\\' in value):
+    """The name of an uploaded file is only shown (storage.display_filename cleans it): any text that is no path (X-UP-01)."""
+    if not isinstance(value, str) or '/' in value or '\\' in value:
         raise _bad(field, '不是有效的檔名。')
     return value
 

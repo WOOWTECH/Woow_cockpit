@@ -1,0 +1,14 @@
+ERROR: test_begin_validation_space_and_limits
+FAIL: test_a_broken_ha_upload_is_refused_and_kept_for_abort
+FAIL: test_addon_json_fields
+FAIL: test_backup_json_schema
+FAIL: test_begin_validation_space_and_limits
+FAIL: test_gzip_layer
+FAIL: test_hardlink_policy
+FAIL: test_hostile_names_and_types
+FAIL: test_hostile_outer_tars
+FAIL: test_member_heads_decide_encryption
+FAIL: test_members_backup_json_implies
+FAIL: test_metadata_files
+FAIL: test_structure_errors_in_the_tar_itself
+FAILED (failures=45, errors=1, skipped=1)

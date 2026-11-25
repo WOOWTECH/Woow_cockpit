@@ -1,0 +1,11 @@
+{
+ "results": [
+  {
+   "label": "link targets limit",
+   "file": "habackup.py",
+   "result": "SURVIVED",
+   "why": "OK"
+  }
+ ],
+ "seconds": 16
+}

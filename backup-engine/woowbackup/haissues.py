@@ -61,6 +61,7 @@ ISSUES = {
     'legacy.blocker': 'stop',            # a sentence of an importer that still returns `blockers`
     'legacy.warning': 'notice',          # ... and `warnings`
     'shared.more-lines': 'notice',       # the list was too long: how many lines were left out
+    'files.skipped': 'confirm',          # IN-19, 27, 28, 35, 38, 39, X-NS-08: entries of an add-on the reader left out (Sink.skipped)
     'version.addon-unknown': 'notice',   # CM-01: the version table does not know the add-on's version
     'version.target-unknown': 'notice',  # CM-02, CM-06: this device's version cannot be read
     'version.different': 'stop',         # both are known and differ (installing HA's version is a later phase)
@@ -132,6 +133,24 @@ class Names:
         if self.count <= self.MAX_EXACT:
             return tuple(self._exact)
         return (f'count={self.count}', f'sum={self._sum:064x}')
+
+
+class MergedNames(Names):
+    """The names of several lists -- `parts`: [(kind, a list with `count`, `first` and `key_items()`)], like the skipped entries
+    of a habackup.Report -- as one list: the count of all, the first MAX_ITEMS in the lists' order and a key in which every
+    name of every list stands with its kind, so a name added to any of them is another key. Read only."""
+
+    def __init__(self, parts):
+        super().__init__()
+        self._parts = [(str(kind), names) for kind, names in parts]
+        self.count = sum(names.count for _kind, names in self._parts)
+        self.first = [str(name) for _kind, names in self._parts for name in names.first][:MAX_ITEMS]
+
+    def add(self, name):
+        raise TypeError('a merged list is read only')
+
+    def key_items(self):
+        return tuple(f'{kind}:{item}' for kind, names in self._parts for item in names.key_items())
 
 
 def confirm_key(app_id, issue_id, items, database=None):
@@ -400,6 +419,18 @@ class Sink:
         """Stop the app here, also in the check (nothing more can be found out about it). The raised error carries the
         issue."""
         raise stopped(Issue(issue_id, 'stop', message, items, action=action), code)
+
+    def skipped(self, report, *kinds, database=None):
+        """The one confirmation line about what the reader left out of an add-on (DESIGN B12 「略過的項目」): the entries of a
+        habackup.Report's `skips` (of these kinds; all when none is named), their number in the message and every name of
+        every kind in the key. Nothing is added, and None returned, when nothing was left out. Make the report with
+        `habackup.Report(names=haissues.Names)` and call this in the check and again in the conversion."""
+        count = report.skip_count(*kinds)
+        if not count:
+            return None
+        parts = [(kind, names) for kind, names in report.skips.items() if not kinds or kind in kinds]
+        return self.confirm('files.skipped', f'備份裡有 {count} 個項目這台搬不過來，只會略過它們：{report.skip_text(*kinds)}。',
+                            MergedNames(parts), database=database)
 
     def confirmed(self):
         """What the customer confirmed, for `ha-imports.json`: [{app_id, id, items}] (conversion only)."""

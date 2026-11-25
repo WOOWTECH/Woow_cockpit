@@ -57,6 +57,18 @@ class UploadFinishTests(HaCliCase):
         self.assertEqual(again, reply, 'a retry after a page timeout returns the same record')
         self.assertEqual(self.call(['list'])['backups'], [])
 
+    def test_a_file_name_is_only_shown(self):
+        """X-UP-01: blank, long or with control characters, the upload begins and the record's name is clean."""
+        data = hx.simple_backup()
+        for filename, shown in (('', None), ('\n', None), ('a\nb\u202e.tar', 'a b .tar'), ('x' * 300, None)):
+            with self.subTest(filename=filename[:10]):
+                _begin, reply = self.upload(data + bytes(len(filename)), filename)
+                name = reply['ha_backup']['filename']
+                self.assertEqual(name, shown or name)
+                self.assertTrue(name.isprintable() and 1 <= len(name) <= 255)
+        for bad in (5, None, ['x'], 'a/b.tar', 'a\\b.tar'):
+            self.assertEqual(self.call(['upload-begin'], {'filename': bad, 'size': 1000})['error']['code'], 'invalid-request')
+
     def test_a_cockpit_file_still_answers_backup(self):
         _begin, reply = self.upload(fake_archive_bytes(backup_id='20261101T080000Z-0123abcd'), 'x.woowbackup')
         self.assertEqual(set(reply), {'ok', 'backup'})

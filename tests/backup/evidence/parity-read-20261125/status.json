@@ -1,0 +1,108 @@
+{
+ "lane": "READ",
+ "owner_instance": "READ-OWNER-1005",
+ "branch": "parity/read-20261125",
+ "commercial_acceptance": "not-complete",
+ "tip": "411fefe dirty=0 10:51",
+ "steps": {
+  "b1": {
+   "exit": "",
+   "summary": "tests=1969 failures=4 errors=4 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=246",
+   "not_ok": [
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line",
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_text_cannot_reorder_a_message_or_a_log_line",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "ERROR tests.backup.test_ha_cli.UploadFinishTests.test_a_broken_ha_file",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ],
+   "tag": "it2c"
+  },
+  "ha118": {
+   "exit": "",
+   "summary": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=6",
+   "not_ok": [],
+   "tag": "it2c"
+  },
+  "merge-b1": {
+   "exit": "1",
+   "summary": "tests=2155 failures=3 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=287",
+   "not_ok": [
+    "FAIL tests.backup.test_ha_litellm.SingleProtectionTests.test_n14_a_second_salt_file_refuses",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ],
+   "tag": "it2b"
+  },
+  "b1-first": {
+   "exit": "1",
+   "summary": "tests=1968 failures=4 errors=4 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=239",
+   "not_ok": [
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line",
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_text_cannot_reorder_a_message_or_a_log_line",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "ERROR tests.backup.test_ha_cli.UploadFinishTests.test_a_broken_ha_file",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ],
+   "tag": "it2b"
+  },
+  "mutations": {
+   "tally": {
+    "caught": 229,
+    "NOT-APPLIED": 7,
+    "SURVIVED": 1
+   },
+   "survivors": [
+    "bytes limit",
+    "bytes limit of copies",
+    "link copies limit",
+    "global header moves",
+    "below a file",
+    "tail of a plain tar",
+    "inner truncated",
+    "CONTROL (must survive)"
+   ],
+   "seconds": 1398
+  },
+  "realfiles": {
+   "exit": "0",
+   "last_line": "37 of 37"
+  },
+  "fuzz": {
+   "exit": "0",
+   "last_line": "{\"rounds_per_kind\": 4000, \"kinds\": [\"gzip\", \"plain\", \"v3\", \"v2\"], \"outcomes\": {\"gzip\": {\"corrupt-archive\": 2307, \"read\": 1693}, \"plain\": {\"corrupt-archive\": 2515, \"read\": 1485}, \"v3\": {\"corrupt-archive\": 3261, \"read\": 733, \"wrong-key\": 4, \"unsupported-format\": 2}, \"v2\": {\"corrupt-archive\": 3257, \"re"
+  },
+  "mem4m": {
+   "exit": "0",
+   "last_line": "{\"entries\": 4000000, \"result\": \"complete\", \"base_mib\": 23, \"peak_mib\": 132, \"per_entry_bytes\": 28.6, \"cpu_seconds\": 173}"
+  },
+  "mem4m1": {
+   "exit": "0",
+   "last_line": "{\"entries\": 4000001, \"result\": \"limit-exceeded: too many entries in an inner tar\", \"base_mib\": 23, \"peak_mib\": 132, \"per_entry_bytes\": 28.6, \"cpu_seconds\": 173}"
+  },
+  "check_schema": {
+   "exit": "",
+   "last_line": "documents 349 agree 349 []"
+  },
+  "diff_tarfile": {
+   "exit": "",
+   "last_line": "rounds 1500, differences 0"
+  },
+  "struct_fuzz": {
+   "exit": "",
+   "last_line": "{'refused': 55590, 'ok': 4410} violations 0"
+  },
+  "struct_fuzz2": {
+   "exit": "",
+   "last_line": "{'refused': 49070, 'ok': 10930} violations 0"
+  }
+ }
+}

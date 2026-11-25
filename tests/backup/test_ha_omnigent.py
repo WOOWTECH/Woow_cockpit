@@ -308,8 +308,8 @@ class OmnigentCase(fk.ConversionCase):
 class CheckTests(OmnigentCase):
     def test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line(self):
         """secreview SR-6 (real in the lab: attack v7): HA's PG_VERSION (PostgreSQL reads only the number of its first
-        token, '16.') and the HA backup's name (hastore refuses only C0 control characters) reach the job log as HA
-        wrote them. Through the real JobStore every message stays one line without control characters: no forged
+        token, '16.') reaches the job log as HA wrote it; the HA backup's name is cleaned when the file is read
+        (habackup.clean_text, HAOS parity lane READ). Through the real JobStore every message stays one line without control characters: no forged
         line reaches the page."""
         from types import SimpleNamespace
         ha_id = self.upload(hx.outer_bytes([(f'{SLUG}.tar.gz', addon_tar(pg_version=b'16.\x0bFORGED OK\n'))],
@@ -317,7 +317,7 @@ class CheckTests(OmnigentCase):
         self.check(ha_id, ['omnigent'])
         logged = [str(message) for message in self.reporter.logs]
         self.assertTrue(any('PostgreSQL 16.\x0bFORGED' in m for m in logged), 'the source: HA text as it is')
-        self.assertTrue(any('WOOW FORGED' in m for m in logged), 'the source: HA text as it is')
+        self.assertTrue(any('WOOW FORGED' in m for m in logged), 'the name: cleaned when the file is read (habackup)')
         (self.root / 'joblog').mkdir()
         store = jobs.JobStore(SimpleNamespace(jobs=str(self.root / 'joblog')))
         job = jobs.new_job_id()
@@ -329,8 +329,7 @@ class CheckTests(OmnigentCase):
         self.assertFalse([line for line in read if re.search(r'[\x00-\x1f\x7f-\x9f  ]', line)])
 
     def test_has_text_cannot_reorder_a_message_or_a_log_line(self):
-        """The verifier's SR-6 gap: HA's backup name (hastore refuses only C0 control characters) and a table name of
-        HA's database can carry a Unicode bidirectional control; U+202E reverses how the rest of the line reads on the
+        """The verifier's SR-6 gap: a table name of HA's database (HA's backup name too, until habackup.clean_text) can carry a Unicode bidirectional control; U+202E reverses how the rest of the line reads on the
         page. The check's blockers show it as '?' (hacommon.names) and, through the real JobStore, no job log line
         keeps one (jobs.LOG_CONTROL_RE)."""
         from types import SimpleNamespace
@@ -343,7 +342,7 @@ class CheckTests(OmnigentCase):
         self.assertTrue(any('evil?LIAF' in blocker for blocker in result['blockers']), result['blockers'])
         self.assertFalse([blocker for blocker in result['blockers'] if set(blocker) & bidi])
         logged = [str(message) for message in self.reporter.logs]
-        self.assertTrue(any('WOOW\u202e\u2066 LIAF' in m for m in logged), 'the source: HA text as it is')
+        self.assertTrue(any('WOOW   LIAF' in m for m in logged), 'the name: cleaned when the file is read (habackup)')
         (self.root / 'joblog').mkdir()
         store = jobs.JobStore(SimpleNamespace(jobs=str(self.root / 'joblog')))
         job = jobs.new_job_id()

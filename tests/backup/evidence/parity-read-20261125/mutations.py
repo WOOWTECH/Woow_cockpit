@@ -1,0 +1,299 @@
+"""Mutation sweep of lane READ: each entry removes or weakens one limit or protection (or undoes one tolerance) in a copy of
+the tree; the lane's tests must notice. usage: mutations.py TREE OUT.json [label-substring]
+TREE is a throwaway copy (git archive) of the commit; nothing outside it is written."""
+import json, os, subprocess, sys, time
+TREE, OUT = sys.argv[1], sys.argv[2]
+ONLY = sys.argv[3] if len(sys.argv) > 3 else ''
+B, S, H, T = ('backup-engine/woowbackup/%s.py' % n for n in ('habackup', 'hasecuretar', 'hastore', 'storage'))
+BK = 'tests.backup.test_ha_backup'
+TESTS = {B: [BK + '.RecognitionTests', BK + '.DescribeTests', BK + '.OuterTarTests', BK + '.MemberProblemTests', BK + '.MemberStreamTests',
+             BK + '.EntryTests', BK + '.SkippedEntryTests', BK + '.HardLinkTests', BK + '.NamesTests', BK + '.HaosParityTests',
+             'tests.backup.test_ha_links'],
+         S: ['tests.backup.test_ha_securetar', BK + '.MemberProblemTests'],
+         H: ['tests.backup.test_ha_store'], T: ['tests.backup.test_storage', 'tests.backup.test_ha_store']}
+M = []
+def m(label, path, old, new, count=1):
+    M.append((label, path, old, new, count))
+
+# ---- limits: removed
+m('outer members limit', B, "            if count > limit:\n                raise _limit('too many members", "            if False:\n                raise _limit('too many members")
+m('outer members limit counts skipped ones', B, "            count += 1\n            if count > limit:", "            count += head.typeflag in OUTER_FILES\n            if count > limit:")
+m('add-ons limit', B, "    if len(addons) > MAX_ADDONS:", "    if False:")
+m('folders limit', B, "    if len(folders) > MAX_FOLDERS:", "    if False:")
+m('extended header limit', B, "            if size > (MAX_LONG_NAME if typeflag in (b'L', b'K') else MAX_PAX):", "            if False:")
+m('long name limit', B, "(MAX_LONG_NAME if typeflag in (b'L', b'K') else MAX_PAX)", "MAX_PAX")
+m('name length', B, "        return joined, 'long'", "        pass")
+m('addon.json limit (walk)', B, "                if header.size > MAX_ADDON_JSON:", "                if False:")
+m('entries limit', B, "            if report.entries > select.max_members:", "            if False:")
+m('bytes limit', B, "                if report.bytes + header.size > select.max_bytes:\n                    raise _too_much('the selected files are too large', limit=select.max_bytes)\n                report.bytes += header.size\n                names", "                report.bytes += header.size\n                names")
+m('bytes limit of copies', B, "            if report.bytes + header.size > select.max_bytes:\n                raise _too_much('the selected files are too large', limit=select.max_bytes)\n            report.bytes += header.size\n            report.files", "            report.bytes += header.size\n            report.files")
+m('copies are not counted', B, "            report.bytes += header.size\n            report.files += 1", "            report.files += 1")
+m('inflate budget', B, "            if self.max_bytes is not None and self.consumed > self.max_bytes:", "            if False:")
+m('inflate ratio', B, "return max(INFLATE_FLOOR, INFLATE_RATIO * size)", "return max(INFLATE_FLOOR, 1000 * size)")
+m('gzip field limit', B, "            if total > MAX_GZIP_FIELD:", "            if False:")
+m('gzip member limit', B, "        if self._members > MAX_GZIP_MEMBERS:", "        if False:")
+m('names limit', B, "        if self.used >= self.limit:", "        if False:")
+m('names limit in the walk', B, "names = _Names(2 * select.max_members)", "names = _Names(10 ** 9)")
+m('link copies limit', B, "        if len(self.waiting) < MAX_LINK_COPIES and chars <= MAX_LINK_CHARS:", "        if chars <= MAX_LINK_CHARS:")
+m('link passes', B, "    for _ in range(MAX_LINK_PASSES):", "    for _ in range(50):")
+m('link memory', B, "not select.hardlinks and header.size <= LINK_MEMORY:", "not select.hardlinks:")
+m('kept names limit', B, "        if self.count <= MAX_KEPT_NAMES:\n            self._names.append(name)", "        self._names.append(name)")
+m('list digest', B, "        self._sum = (self._sum + int.from_bytes(digest, 'big')) % (1 << 256)", "        pass")
+m('list count in the key', B, "return (f'count={self.count}', f'sum={self._sum:064x}')", "return (f'sum={self._sum:064x}'[:10],)")
+m('names for a page are cleaned', B, "        self.skips[kind].add(shown_name(name))", "        self.skips[kind].add(name)")
+m('collector of the caller', B, "            self.skips[kind] = self._new_names()", "            self.skips[kind] = SkipList()")
+m('a cut-off file is job wide', B, "            error.job_wide = True\n", "")
+m('gzip feed', B, "GZIP_FEED = 64 * 1024 ", "GZIP_FEED = 1 << 30 ")
+# ---- limits: back to the old values
+for name, new, old in (('MAX_OUTER_MEMBERS', '4096', '512'), ('MAX_BACKUP_JSON', '16 * 1024 * 1024', '1024 * 1024'), ('MAX_ADDONS', '1000', '100'),
+                       ('MAX_FOLDERS', '256', '32'), ('MAX_PAX', '1024 * 1024', '64 * 1024'), ('MAX_LONG_NAME', '64 * 1024', '8 * 1024'),
+                       ('MAX_ADDON_JSON', '32 * 1024 * 1024', '4 * 1024 * 1024'), ('DEFAULT_MAX_MEMBERS', '4_000_000', '2_000_000'),
+                       ('DEFAULT_MAX_BYTES', '16 * 1024 ** 4', '2 * 1024 ** 4'), ('INFLATE_FLOOR', '256 * 1024 ** 3', '32 * 1024 ** 3'),
+                       ('MAX_GZIP_FIELD', '1024 * 1024', '64 * 1024'), ('INFLATE_RATIO', '100', '1000')):
+    m('value of ' + name, B, '%s = %s' % (name, new), '%s = %s' % (name, old))
+# ---- outer tar and backup.json: protections
+m('checksum', B, "        if not _checksum_ok(block):\n            raise bad(", "        if False:\n            raise bad(")
+m('octal', B, "    if text.strip(b'01234567'):\n        raise bad('tar number field is not octal')\n    return int(text, 8)", "    return int(text.strip(b'89abcdefghijklmnopqrstuvwxyz') or b'0', 8)")
+m('negative number', B, "    if field[:1] and field[0] & 0x80:\n        raise bad(", "    if False:\n        raise bad(")
+m('pax padding', B, "            if data[pos:].strip(b'\\0'):", "            if False:")
+m('pax record', B, "        if length < 5 or end > len(data) or data[end - 1:end] != b'\\n':\n            raise bad('malformed pax record')", "        if length < 5:\n            raise bad('malformed pax record')")
+m('pax key twice', B, "if not eq or not key or key in records:", "if not eq or not key:")
+m('pax sparse', B, "        if key.startswith('GNU.sparse.'):", "        if False:")
+m('pax number', B, "    if not PAX_INT_RE.fullmatch(text):\n        raise bad(f'pax {key} is not a number')\n    return int(text)", "    return int(text) if text.isdigit() else default")
+m('pax time', B, "    if not PAX_TIME_RE.fullmatch(text):\n        raise bad(f'pax {key} is not a time')\n    return float(text)", "    return default")
+m('extended header alone', B, "            if pax is not None or long_name is not None or long_link is not None:\n                raise bad('extended", "            if False:\n                raise bad('extended")
+m('two pax headers', B, "                if pax is not None:\n                    raise bad('consecutive pax headers')", "                if False:\n                    raise bad('consecutive pax headers')")
+m('two long names', B, "                if long_name is not None:\n                    raise bad(", "                if False:\n                    raise bad(")
+m('two long links', B, "                if long_link is not None:\n                    raise bad(", "                if False:\n                    raise bad(")
+m('magic', B, "        if not posix and magic not in (GNU_MAGIC, V7_MAGIC):", "        if False:")
+m('global header inside', B, "            if typeflag == b'g' and (not outer or pax is not None", "            if typeflag == b'g' and (pax is not None")
+m('global header after pax', B, "(not outer or pax is not None or long_name is not None or long_link is not None)", "not outer")
+m('global header moves', B, "                if not GLOBAL_UNSAFE.isdisjoint(_pax_records(src, data, bad, outer)):", "                if False:")
+m('prefix of GNU headers', B, "prefix = _cbytes(block[345:500]) if posix else b''", "prefix = _cbytes(block[345:500])")
+m('outer sparse', B, "            if head.typeflag == b'S':", "            if False:")
+m('outer truncated', B, "    def skip(self, n):\n        if self.pos + n > self.size:\n            raise _Truncated()\n        self.pos += n\n\n\ndef _pread_exact", "    def skip(self, n):\n        self.pos += n\n\n\ndef _pread_exact")
+m('outer names with a path', B, "name in ('.', '..') or '/' in name or len(name) > 255", "name in ('.', '..') or len(name) > 255")
+m('outer links are members', B, "OUTER_FILES = (b'0', b'\\0', b'7')", "OUTER_FILES = (b'0', b'\\0', b'7', b'1', b'2')")
+m('outer folders have data', B, "OUTER_NO_DATA = (b'1', b'2', b'3', b'4', b'5', b'6', b'g')", "OUTER_NO_DATA = (b'1', b'2', b'3', b'4', b'6', b'g')")
+m('compressed outer', B, "        if os.pread(fd, 2, 0) == b'\\x1f\\x8b':\n            raise _corrupt(", "        if False:\n            raise _corrupt(")
+m('regular file', B, "    if not stat.S_ISREG(st.st_mode):\n        raise _corrupt('not a regular file')", "    if False:\n        raise _corrupt('not a regular file')")
+m('backup.json twice', B, "        if len(docs) > 1:", "        if False:")
+m('cockpit doc', B, "('backup_id' not in doc and {'slug', 'name', 'date', 'type'} <= set(doc))", "{'slug', 'name', 'date', 'type'} <= set(doc)")
+m('recognise any object', B, "    return 'supervisor_version' in doc or (", "    return True or (")
+m('version', B, "    _need(version in (1, 2), ", "    _need(version is not None, ")
+m('type', B, "    _need(doc.get('type') in ('full', 'partial'), 'backup.json type is invalid')\n", "")
+m('addon twice', B, "            _need(slug not in slugs, 'backup.json lists an add-on twice', slug=slug)\n", "")
+m('folder names', B, "_need(isinstance(folder, str) and FOLDER_RE.fullmatch(folder), ", "_need(isinstance(folder, str), ")
+m('folder twice', B, "        _need(folder not in normal_folders, 'backup.json lists a folder twice', folder=folder)\n", "")
+m('extra', B, "    _need(isinstance(doc.get('extra', {}), dict), 'backup.json extra must be an object')\n", "")
+m('slug charset', B, "if isinstance(slug, str) and ADDON_SLUG_RE.fullmatch(slug):", "if isinstance(slug, str):")
+m('made-up slug collides', B, "            if f'invalid-{number}' not in slugs:", "            if True:")
+m('reserved names', B, "            listed.setdefault(addon['slug'] + ext, ('addon', addon['slug']))", "            listed[addon['slug'] + ext] = ('addon', addon['slug'])")
+m('bad slug is listed', B, "        if 'problem' not in addon:\n            listed", "        if True:\n            listed")
+m('duplicate member', B, "            if len(found) == 1:", "            if True:")
+m('encryption version', B, "    if kind == 'unsupported':\n        return 'none', 'encryption-unsupported'", "    if kind == 'unsupported':\n        return 'none', None")
+m('size mismatch', B, "return (kind, None) if hasecuretar.ciphertext_ok(kind, raw.size, head) else ('none', 'size-mismatch')", "return kind, None")
+m('cipher blocks', B, "return ('v1', None) if hasecuretar.ciphertext_ok('v1', raw.size, head) else ('none', 'partial-ciphertext')", "return 'v1', None")
+m('not an archive', B, "    return 'none', 'not-an-archive'", "    return 'none', None")
+m('protected decides', B, "    if kind == 'unknown' and protected:", "    if kind == 'unknown':")
+m('problem member opens', B, "            if member.problem is not None:\n                raise problem_error", "            if False:\n                raise problem_error")
+m('missing is no problem', B, "problem = addon.get('problem') or (member.problem if member else 'missing')", "problem = addon.get('problem') or (member.problem if member else None)")
+m('second folder', B, "                if slug in folders:", "                if False:")
+m('hidden characters', B, "HIDDEN_CATEGORIES = frozenset({'Cc', 'Cf', 'Cs', 'Cn', 'Zl', 'Zp'})", "HIDDEN_CATEGORIES = frozenset({'Cc', 'Cs'})")
+m('text cut', B, "        .strip()[:max_len].rstrip()", "        .strip().rstrip()")
+# ---- gzip
+m('gzip crc', B, "        if int.from_bytes(crc, 'little') != self._crc or ", "        if ")
+m('gzip size', B, " or int.from_bytes(size, 'little') != self._size & 0xffffffff:", ":")
+m('gzip crc of later members', B, "        self._crc = 0\n        self._size = 0\n        self._header()", "        self._crc = getattr(self, '_crc', 0)\n        self._size = 0\n        self._header()")
+m('gzip verify', B, "        self._verify(trailer[:4], trailer[4:])\n", "")
+m('gzip reserved flags', B, "        if flags & 0xe0:", "        if False:")
+m('gzip header crc', B, "            if int.from_bytes(check, 'little') != zlib.crc32(header) & 0xffff:", "            if False:")
+m('gzip rubbish', B, "        if not self._buf.startswith(hasecuretar.GZIP_MAGIC, self._off):\n            raise _broken('data after the gzip stream')\n", "        if not self._buf.startswith(hasecuretar.GZIP_MAGIC, self._off):\n            self._eof = True\n            return\n")
+m('gzip one member only', B, "            raise _broken('data after the gzip stream')\n        self._begin()", "            raise _broken('data after the gzip stream')\n        self._eof = True")
+m('legacy trailer', B, "        elif 0 <= pad <= 15 and rest[:pad]", "        elif 0 <= pad <= 99 and True or rest[:pad]")
+# ---- inner tar: protections
+m('entry types', B, "            if kind is None:\n                code", "            if False:\n                code")
+m('data of non-files', B, "            if kind != 'file' and header.size:", "            if False:")
+m('root', B, "            if name == '.' and kind != 'dir':", "            if False:")
+m('absolute name', B, "    if name.startswith('/'):\n        raise _broken('absolute", "    if False:\n        raise _broken('absolute")
+m('dotdot', B, "    if any(part in ('', '.', '..') for part in parts):\n        raise _broken('entry name", "    if any(part in ('', '.') for part in parts):\n        raise _broken('entry name")
+m('empty component', B, "    if any(part in ('', '.', '..') for part in parts):\n        raise _broken('entry name", "    if any(part in ('.', '..') for part in parts):\n        raise _broken('entry name")
+m('control names pass', B, "    return joined, 'control' if CONTROL_RE.search(joined) else None", "    return joined, None")
+m('flawed names not admitted', B, "key = names.admit(name, kind) if flaw in (None, 'control') else None", "key = names.admit(name, kind) if flaw is None else None")
+m('flawed names not listed', B, "                if wanted:\n                    report.skip('name', name)\n", "")
+m('blank names in a walk for nothing', B, "wanted = select.wants(name) if flaw != 'blank' else select.include != ()", "wanted = select.wants(name) if flaw != 'blank' else True")
+m('duplicates', B, "        if state and state != self.IMPLIED:\n            raise", "        if False:\n            raise")
+m('replaces a directory', B, "        if state and kind != 'dir':\n            raise", "        if False:\n            raise")
+m('parent cache', B, "        if parent and parent != self.parent:", "        if parent and self.parent is None:")
+m('table growth', B, "                    self.keys[slot], self.states[slot] = keys[at], old", "                    self.keys[slot], self.states[slot] = keys[at], old & 0x0f")
+m('device nodes pass', B, "            if kind in ('fifo', 'device'):", "            if kind in ('fifo',):")
+m('never read', B, "    if name in NEVER_READ:\n        return True\n    at =", "    at =")
+m('never read below', B, "        if name[:at] in NEVER_READ:\n            return True\n", "")
+m('never read depth', B, "    for _ in range(NEVER_READ_DEPTH + 1):", "    for _ in range(NEVER_READ_DEPTH):")
+m('secret place listed', B, "                elif name in NEVER_READ and select.wants(name):\n                    report.skip('secret', name)\n", "")
+m('addon.json kind', B, "                if kind != 'file':\n                    raise _broken('unexpected", "                if False:\n                    raise _broken('unexpected")
+m('symlink stays inside', B, "    return resolved == root or resolved.startswith(root + '/')", "    return True")
+m('symlink climbs after a name', B, "        elif named:\n            return False", "        elif False:\n            return False")
+m('absolute symlink', B, "    return any(target == prefix or target.startswith(prefix.rstrip('/') + '/') for prefix in prefixes)", "    return True")
+m('symlink samples per area', B, "        if self._areas.setdefault(area, 0) < SAMPLES:", "        if len(self.skipped_symlink_samples) < SAMPLES:")
+m('tail of a plain tar', B, "    if not _checked(stream, reader) and reader.another_header():", "    if not _checked(stream, reader) and False:")
+m('tail alignment', B, "(head - self.off) % BLOCK == 0 and _checksum_ok", "_checksum_ok")
+m('tail checksum', B, " % BLOCK == 0 and _checksum_ok(self.buf[head:head + BLOCK]):", " % BLOCK == 0:")
+m('member finish', B, "        if self._gunzip is not None:\n            self._gunzip.finish()\n        if self._decrypt is not None:\n            self._decrypt.finish()", "        pass")
+m('checked to the end', B, "        return self._gunzip is not None or self._decrypt is not None", "        return False")
+m('inner truncated', B, "    except _Truncated:\n        raise _broken('the inner tar is truncated') from None\n    if not _checked(stream, reader)", "    except _Truncated:\n        pass\n    if not _checked(stream, reader)")
+# ---- hard links
+m('copy a secret', B, "    return never_read(name) or addon and name == ADDON_JSON or select.excludes(name)", "    return addon and name == ADDON_JSON or select.excludes(name)")
+m('copy addon.json', B, "    return never_read(name) or addon and name == ADDON_JSON or select.excludes(name)", "    return never_read(name) or select.excludes(name)")
+m('copy an excluded file', B, "    return never_read(name) or addon and name == ADDON_JSON or select.excludes(name)", "    return never_read(name) or addon and name == ADDON_JSON")
+m('copy addon.json of a folder', B, "    return never_read(name) or addon and name == ADDON_JSON or select.excludes(name)", "    return never_read(name) or name == ADDON_JSON or select.excludes(name)")
+m('withheld names', B, "                if target is not None and _withheld(target, select, addon):", "                if False:")
+m('withheld links in a chain', B, "                if key is not None:\n                    links.note(key, target_key)", "                if key is not None and target is not None:\n                    links.note(key, target_key)")
+m('copy other kinds', B, "waiting = wanted.pop(key, None) if KINDS.get(header.typeflag) == 'file' else None", "waiting = wanted.pop(key, None)")
+m('link to a file not handed out', B, "if not select.hardlinks or not names.handed_out(target_key):", "if not select.hardlinks:")
+m('links without asking', B, "if not select.hardlinks or not names.handed_out(target_key):", "if not names.handed_out(target_key):")
+m('handed out flag', B, "return self.states[self._find(key)] == self.FILE | self.HANDED_OUT", "return bool(self.states[self._find(key)])")
+m('hostile link target', B, "    except BackupError:\n        return None\n\n\ndef never_read", "    except BackupError:\n        return name.rpartition('/')[2]\n\n\ndef never_read")
+m('links to nothing not listed', B, "        for link in waiting:\n            report.skip('hardlink', link.name)", "        for link in waiting:\n            pass")
+m('link chains', B, "            if key not in self.targets:\n                return key\n            key = self.targets[key]\n        return None", "            return key")
+m('link circles', B, "            key = self.targets[key]\n        return None", "            key = self.targets[key]\n        return key")
+m('copy before the checks', B, "    if links.waiting:\n        yield from _copy_links(", "    if False:\n        yield from _copy_links(")
+m('mode of the link', B, "entry = Entry(link.name, 'file', link.mode, link.uid, link.gid, header.size, link.mtime", "entry = Entry(link.name, 'file', header.mode, header.uid, header.gid, header.size, link.mtime")
+m('copy_later', B, "        self._copy = self.kind == 'hardlink'", "        self._copy = False")
+m('read_or_skip', B, "            if self._report is not None:\n                self._report.skip('large', self.name)\n            return None", "            return None")
+m('read_or_skip limit', B, "        if self.size > max_bytes:\n            if self._report", "        if False:\n            if self._report")
+# ---- addon.json
+m('addon slug', B, "    if not isinstance(slug, str) or not SYSTEM_SLUG_RE.fullmatch(slug):", "    if not isinstance(slug, str):")
+m('addon system', B, "    if not isinstance(doc, dict) or not isinstance(doc.get('system'), dict):\n        raise _broken('addon.json has no system section')\n    system = doc['system']", "    doc = doc if isinstance(doc, dict) else {}\n    system = doc.get('system') if isinstance(doc.get('system'), dict) else {'slug': 'x'}")
+m('addon version', B, "version = version if isinstance(version, str) and VERSION_RE.fullmatch(version) else ''", "version = version if isinstance(version, str) else ''")
+m('addon image', B, "image = image if isinstance(image, str) and IMAGE_RE.fullmatch(image) else None", "image = image if isinstance(image, str) else None")
+m('member error scope', S, "reason=reason, scope='member', **details)", "reason=reason, **details)")
+# ---- securetar
+m('v2/v3 shorter than announced (describe)', S, "    return member_size >= HEADER_SIZE[2 if kind == 'v2' else 3] + _ciphertext_size(kind, plaintext)", "    return True")
+m('v2/v3 shorter than announced (open)', S, "    if member_size < HEADER_SIZE[int(kind[1])] + _ciphertext_size(kind, plaintext):", "    if False:")
+m('tail is content', S, "        if self.kind != 'v1':\n            self._src.left = _ciphertext_size(self.kind, self.plaintext_size)\n", "")
+m('v1 blocks', S, "        if member_size <= HEADER_SIZE[1] or (member_size - HEADER_SIZE[1]) % AES_BLOCK:", "        if False:")
+m('v1 blocks (describe)', S, "return member_size > HEADER_SIZE[1] and (member_size - HEADER_SIZE[1]) % AES_BLOCK == 0", "return True")
+m('v2 padding', S, "            if not valid:\n                raise", "            if False:\n                raise")
+m('v2 plaintext size', S, "        if self.kind == 'v2' and produced != self.plaintext_size:", "        if False:")
+m('v2 truncated', S, "        if self._src.left:\n            raise broken('truncated ciphertext')", "        if False:\n            raise broken('truncated ciphertext')")
+m('v3 truncated', S, "            if len(data) != want + V3_ABYTES:\n                raise broken('truncated ciphertext')", "            if not data:\n                return")
+m('v3 authentication', S, "            except (nacl_exceptions.CryptoError, ValueError, RuntimeError):\n                raise broken('secretstream authentication failed (corrupt or tampered)') from None", "            except (nacl_exceptions.CryptoError, ValueError, RuntimeError):\n                return")
+m('v3 tags', S, "            if tag != (V3_TAG_FINAL if last else V3_TAG_MESSAGE) or len(message) != want:", "            if len(message) != want:")
+m('reserved bytes', S, "        if version in (2, 3) and reserved == bytes(6):", "        if version in (2, 3):")
+m('wrong key v1/v2', S, "        if not _looks_like_gzip_or_tar(pending):", "        if False:")
+m('wrong key v3', S, "        if not hmac.compare_digest(_blake2b_subkey(root, validation_salt), validation_key):", "        if False:")
+# ---- store
+m('sidecar problem', H, "        if 'problem' in addon and not (isinstance(addon['problem'], str) and PROBLEM_RE.fullmatch(addon['problem'])):\n            return False\n", "")
+m('sidecar unknown addon key', H, "set(addon) - set(ADDON_OPTIONAL) != set(ADDON_KEYS)", "not set(ADDON_KEYS) <= set(addon)")
+m('sidecar addons limit', H, "    if not isinstance(addons, list) or len(addons) > habackup.MAX_ADDONS:", "    if not isinstance(addons, list):")
+m('sidecar folders limit', H, "    if (not isinstance(folders, list) or len(folders) > habackup.MAX_FOLDERS", "    if (not isinstance(folders, list)")
+m('sidecar size limit', H, "MAX_SIDECAR = 4 * 1024 * 1024", "MAX_SIDECAR = 256 * 1024")
+m('sidecar date', H, "    if not (rec['date'] is None or util.is_iso_utc(rec['date'])) or ", "    if ")
+m('sidecar no date', H, "    if not (rec['date'] is None or util.is_iso_utc(rec['date'])) or ", "    if not util.is_iso_utc(rec['date']) or ")
+m('sidecar text', H, "    if not _text(rec['ha_slug'], 64) or not _text(rec['name'], 200) or not _text(rec['supervisor_version'], 64):\n        return False\n", "")
+m('problem not stored', H, "        if addon.get('problem'):\n            item['problem'] = addon['problem']\n", "")
+m('problem not shown', H, "extra = {'problem': problem, 'problem_text': habackup.problem_text(problem)} if problem else {}", "extra = {}")
+m('order without a date', H, "(r['date'] or r['uploaded_at'], r['uploaded_at'], r['id'])", "(r['date'] or '', r['uploaded_at'], r['id'])")
+# ---- storage
+m('stale age', T, "            if last is not None and now - last >= STALE_UPLOAD_AGE:\n                idle", "            if last is not None:\n                idle")
+m('stale age under the lock', T, "                if last is not None and now - last >= STALE_UPLOAD_AGE and self.abort_upload(upload_id):", "                if last is not None and self.abort_upload(upload_id):")
+m('stale lock', T, "                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n", "")
+m('stale order', T, "        for _last, upload_id in sorted(idle):", "        for _last, upload_id in sorted(idle, reverse=True):")
+m('stale temp files', T, "        return max(times, default=None)", "        return min(times, default=None)")
+m('stale temp files 2', T, "                if match and match.group(1) == upload_id:\n                    files.append(Path(self.paths.uploads) / name)", "                if match and match.group(1) == upload_id and False:\n                    files.append(Path(self.paths.uploads) / name)")
+m('stale once', T, "        while len(self._pending_uploads()) >= MAX_PENDING_UPLOADS:", "        for _ in range(len(self._pending_uploads()) >= MAX_PENDING_UPLOADS):")
+m('busy', T, "                raise BackupError('busy', '同時進行中的上傳過多，請稍後再試。')", "                break")
+m('file name clean', T, "    return habackup.clean_text(filename, 255)", "    return filename")
+m('file name type', T, "        if not isinstance(filename, str):\n            raise", "        if False:\n            raise")
+
+# ---- second round (after db1cd94): the code that moved, and what was added
+m('backup.json limit', B, "    if raw.size > MAX_BACKUP_JSON:\n        raise _limit('backup.json too large', size=raw.size)\n", "")
+m('json size', B, "    if len(data) > max_bytes or sum(", "    if sum(")
+m('json pieces', B, "    if len(data) > max_bytes or sum(data.count(mark) for mark in (b',', b'[', b'{')) > MAX_JSON_ITEMS:", "    if len(data) > max_bytes:")
+for mark, rest in ((',', "(b'[', b'{')"), ('[', "(b',', b'{')"), ('{', "(b',', b'[')")):
+    m('json pieces without ' + mark, B, "for mark in (b',', b'[', b'{')", "for mark in " + rest)
+m('value of MAX_JSON_ITEMS', B, 'MAX_JSON_ITEMS = 500_000', 'MAX_JSON_ITEMS = 50_000_000')
+m('a plain v7 member', B, "    if kind == 'unknown' and not compressed and _v7_header(head):\n        return 'none', None\n", "")
+m('v7 checksum', B, "head[TAR_MAGIC_AT:TAR_MAGIC_AT + 8] == V7_MAGIC and _checksum_ok(head)", "head[TAR_MAGIC_AT:TAR_MAGIC_AT + 8] == V7_MAGIC")
+m('v7 block', B, "    return len(head) == BLOCK and head[TAR_MAGIC_AT", "    return head[TAR_MAGIC_AT")
+m('v7 in a gzip backup', B, "kind == 'unknown' and not compressed and _v7_header(head)", "kind == 'unknown' and _v7_header(head)")
+m('finish without drain', B, "    reader.drain()\n    stream.finish()\n    return True", "    stream.finish()\n    return True")
+m('drain without finish', B, "    reader.drain()\n    stream.finish()\n    return True", "    reader.drain()\n    return True")
+m('no final checks', B, "    reader.drain()\n    stream.finish()\n    return True", "    return True")
+m('no final checks of the second pass', B, "        reader.skip(pad)\n    _checked(stream, reader)\n", "        reader.skip(pad)\n")
+m('the second pass ends early', B, "        if header is None:\n            break\n        count += 1", "        if header is None:\n            return\n        count += 1")
+m('link names limit', B, " and chars <= MAX_LINK_CHARS:", ":")
+m('link names are counted', B, "            self.chars = chars\n", "")
+m('value of MAX_LINK_CHARS', B, 'MAX_LINK_CHARS = 32 * 1024 * 1024', 'MAX_LINK_CHARS = 1024 * 1024')
+
+# ---- third round (iteration 2): the text and scope of a limit -- one member, or the whole file
+m('limit text: inner extended header', B, "raise (_limit if outer else _too_much)('extended header too large', size=size)", "raise _limit('extended header too large', size=size)")
+m('limit text: outer extended header', B, "raise (_limit if outer else _too_much)('extended header too large', size=size)", "raise _too_much('extended header too large', size=size)")
+m('limit text: gzip members', B, "raise _too_much('too many gzip members'", "raise _limit('too many gzip members'")
+m('limit text: addon.json (parse)', B, "_strict_json(data, MAX_ADDON_JSON, _too_much, 'addon.json too large')", "_strict_json(data, MAX_ADDON_JSON, _limit, 'addon.json too large')")
+m('limit text: file read whole', B, "raise _too_much('file too large to read'", "raise _limit('file too large to read'")
+m('limit text: inflate budget', B, "raise _too_much('the add-on archive inflates too much'", "raise _limit('the add-on archive inflates too much'")
+m('limit text: names', B, "raise _too_much('too many names in an inner tar'", "raise _limit('too many names in an inner tar'")
+m('limit text: entries', B, "raise _too_much('too many entries in an inner tar'", "raise _limit('too many entries in an inner tar'")
+m('limit text: addon.json (walk)', B, "raise _too_much('addon.json too large', size=header.size)", "raise _limit('addon.json too large', size=header.size)")
+m('limit text: bytes (walk)', B, "                    raise _too_much('the selected files are too large', limit=select.max_bytes)\n                report.bytes += header.size\n                names", "                    raise _limit('the selected files are too large', limit=select.max_bytes)\n                report.bytes += header.size\n                names")
+m('limit text: bytes (copies)', B, "                raise _too_much('the selected files are too large', limit=select.max_bytes)\n            report.bytes += header.size\n            report.files", "                raise _limit('the selected files are too large', limit=select.max_bytes)\n            report.bytes += header.size\n            report.files")
+m('limit text: outer members', B, "raise _limit('too many members in the outer tar'", "raise _too_much('too many members in the outer tar'")
+m('limit text: backup.json (size)', B, "        raise _limit('backup.json too large', size=raw.size)", "        raise _too_much('backup.json too large', size=raw.size)")
+m('limit text: backup.json (pieces)', B, "MAX_BACKUP_JSON, _limit, 'backup.json too large')", "MAX_BACKUP_JSON, _too_much, 'backup.json too large')")
+m('limit text: add-ons', B, "raise _limit('too many add-ons in backup.json'", "raise _too_much('too many add-ons in backup.json'")
+m('limit text: folders', B, "raise _limit('too many folders in backup.json'", "raise _too_much('too many folders in backup.json'")
+m('a member limit ends the job', B, "    return BackupError('limit-exceeded', MEMBER_LIMIT_MESSAGE, reason=reason, scope='member', **details)", "    error = BackupError('limit-exceeded', MEMBER_LIMIT_MESSAGE, reason=reason, scope='member', **details)\n    error.job_wide = True\n    return error")
+
+# ---- fourth round (iteration 2): the folder walk of the names table (looked at from the bottom)
+OLD_FOLDERS = "        parts = parent.split('/')\n        for depth in range(1, len(parts) + 1):\n            key = self.digest('/'.join(parts[:depth]))\n            state = self.states[self._find(key)]\n            if not state:\n                self._put(key, self.IMPLIED)\n            elif state not in (self.DIR, self.IMPLIED):\n                raise _broken('entry below a file or link', member=shown_name(parent))\n"
+NEW_FOLDERS_HEAD = "        missing, name = [], parent\n        while name:\n            key = self.digest(name)\n            state = self.states[self._find(key)]\n            if state in (self.DIR, self.IMPLIED):\n                break\n            if state:\n                raise _broken('entry below a file or link', member=shown_name(parent))\n            missing.append(key)\n            name = name.rpartition('/')[0]\n        for key in reversed(missing):\n            self._put(key, self.IMPLIED)\n"
+m('folders from the top', B, NEW_FOLDERS_HEAD, OLD_FOLDERS)
+m('folders: no stop at a known folder', B, "            if state in (self.DIR, self.IMPLIED):\n                break\n            if state:", "            if state in (self.DIR, self.IMPLIED):\n                pass\n            elif state:")
+m('folders: below a file', B, "            if state:\n                raise _broken('entry below a file or link', member=shown_name(parent))\n            missing.append(key)", "            if False:\n                raise _broken('entry below a file or link', member=shown_name(parent))\n            missing.append(key)")
+m('folders: not implied', B, "        for key in reversed(missing):\n            self._put(key, self.IMPLIED)\n", "")
+m('folders: a file is a folder', B, "            if state in (self.DIR, self.IMPLIED):\n                break\n            if state:", "            if state:\n                break\n            if state:")
+
+# ---- fifth round (iteration 2): the records of the extended headers of a tar are counted
+m('pax records limit', B, "    if src.records > MAX_PAX_RECORDS:\n", "    if False:\n")
+m('pax records are not counted', B, "    src.records += len(records)\n", "")
+m('pax records of global headers', B, "if not GLOBAL_UNSAFE.isdisjoint(_pax_records(src, data, bad, outer)):", "if not GLOBAL_UNSAFE.isdisjoint(_parse_pax(data, bad)):")
+m('pax records of a header', B, "                pax = _pax_records(src, data, bad, outer)\n", "                pax = _parse_pax(data, bad)\n")
+m('limit text: pax records (inner)', B, "raise (_limit if outer else _too_much)('too many extended header records'", "raise _limit('too many extended header records'")
+m('limit text: pax records (outer)', B, "raise (_limit if outer else _too_much)('too many extended header records'", "raise _too_much('too many extended header records'")
+m('value of MAX_PAX_RECORDS', B, "MAX_PAX_RECORDS = 50_000_000 ", "MAX_PAX_RECORDS = 500_000_000")
+
+m('link targets limit', B, "        if len(self.targets) < MAX_LINK_COPIES:", "        if True:")
+
+# a control that nobody can notice
+m('CONTROL (must survive)', B, "SAMPLES = 20                     # names", "SAMPLES = 20                     # Names")
+
+results, t0 = [], time.time()
+env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONPATH='backup-engine:tests/e2e/lab')
+for label, path, old, new, count in M:
+    if ONLY and not any(part in label for part in ONLY.split('|')):
+        continue
+    full = os.path.join(TREE, path)
+    source = open(full, encoding='utf-8').read()
+    if source.count(old) != count:
+        results.append({'label': label, 'result': 'NOT-APPLIED', 'found': source.count(old)})
+        print('NOT-APPLIED', label, source.count(old), flush=True)
+        continue
+    open(full, 'w', encoding='utf-8').write(source.replace(old, new))
+    try:
+        try:
+            run = subprocess.run([sys.executable, '-m', 'unittest', '-f', *TESTS[path]], cwd=TREE, env=env, capture_output=True, timeout=240)
+            noticed, why = run.returncode != 0, (run.stderr.decode('utf-8', 'replace').strip().splitlines() or [''])[-1]
+        except subprocess.TimeoutExpired:
+            noticed, why = True, 'timeout'
+    finally:
+        open(full, 'w', encoding='utf-8').write(source)
+    results.append({'label': label, 'file': os.path.basename(path), 'result': 'caught' if noticed else 'SURVIVED', 'why': why[:60]})
+    if not noticed:
+        print('SURVIVED', label, flush=True)
+    json.dump({'results': results, 'seconds': round(time.time() - t0)}, open(OUT, 'w'), indent=1, ensure_ascii=False)
+tally = {}
+for r in results:
+    tally[r['result']] = tally.get(r['result'], 0) + 1
+print(json.dumps(tally), 'of', len(results), 'seconds', round(time.time() - t0))
