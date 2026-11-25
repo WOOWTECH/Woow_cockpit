@@ -498,7 +498,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 
 **只是提醒（匯入後請留意）**：資料庫有尚未完成的模組安裝或升級（照 HA 的狀態搬過來，請到「應用程式」套用或取消）、自訂模組標示不可安裝、需要這台沒有的程式、含有別種處理器的程式、啟用中的寄信伺服器與排程、網站網域會改成這台的網址、網址沒有換成這台的、這台 PostgreSQL 調整過但新叢集不接受的設定（回到預設值，資料不受影響）。
 
-**仍然會停下的情形（只有 Odoo 或那一個資料庫）**：不是 Odoo 的資料庫、模組清單或內容讀不出來、模組版本和這台不同、HA 的 PostgreSQL 比這台新、HA 的擴充功能這台沒有、HA 沒有任何資料庫、這台的 Odoo 資料沒有掛在 /var/lib/odoo 、應用設定缺少它的資料卷，或這台資料庫的超級使用者密碼放在環境檔或環境變數裡（標準做法是 podman secret，請改用 POSTGRES_PASSWORD_FILE）。
+**仍然會停下的情形（只有 Odoo 或那一個資料庫）**：不是 Odoo 的資料庫、模組清單或內容讀不出來、模組版本和這台不同、HA 的 PostgreSQL 比這台新、HA 的擴充功能這台沒有、HA 沒有任何資料庫、這台的 Odoo 資料沒有掛在 /var/lib/odoo 、應用設定缺少它的資料卷，或這台資料庫的超級使用者密碼直接寫在 Quadlet 的 Environment= 裡（請改用 podman secret 的 POSTGRES_PASSWORD_FILE，或環境檔 EnvironmentFile=）；環境檔裡 POSTGRES_USER、PGDATA 等設定的寫法如果有引號、跳脫字元或變數，也會停下並指出檔案和設定名稱。
 
 ### Nextcloud 匯入：哪些會自動處理、哪些要你確認
 

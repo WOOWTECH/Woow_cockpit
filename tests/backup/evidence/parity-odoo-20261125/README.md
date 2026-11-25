@@ -1,6 +1,7 @@
 # Evidence of lane ODOO (HAOS parity, parity-odoo OWNER OD-OWNER-1735), 2026-11-25
 
-Branch parity/odoo-20261125 (local, never pushed), 25 commits on 3db6988 (= F1 + PKG + READ + F3, the integrator's trial tip); tip 3e77cf2. Iteration 1 = 17 commits (tip 5644712),
+Branch parity/odoo-20261125 (local, never pushed), 32 commits on 3db6988 (= F1 + PKG + READ + F3, the integrator's trial tip); tip 413d5f3 (iteration 4). Iteration 1 = 17 commits (tip 5644712),
+iteration 3 = 2 more (6f35b77 the real pg_restore -l header, be07df7), iteration 4 = 5 more (6d913d6 e3d652c a07b7ad 8599ae8 413d5f3: see the last section),
 iteration 2 = 8 more (line-coverage pass, real-package cross-checks, real-backup tests; the three small product fixes are 68aa336 and 4e74d57). Product file:
 backup-engine/woowbackup/ha_odoo.py (1845 -> about 2520 lines). Tests: tests/backup/test_ha_odoo.py, test_ha_flows.py, test_ha_pg_stdin.py, hafixtures.py (one helper).
 **Unit level only**: no device, no real podman, psql, pg_restore, systemd or loginctl was run; every container step is a test double (hafakes.FakeTmp/Psql and the
@@ -9,7 +10,8 @@ fake owner of test_ha_flows). commercial_acceptance stays not-complete.
 ## Counts (non-heavy runs, this host, hash seed random)
 | set | tests | result |
 |---|---|---|
-| the lane's three modules at the iteration-2 tip: test_ha_odoo + test_ha_pg_stdin (32) + test_ha_flows | 213 (iteration 1: 168; the base had 68) | OK: 210 run + 3 skipped without WOOWBK_HA_FIXTURES; all 213 with it (hash seed 77) |
+| the lane's three modules at the iteration-3 tip be07df7: test_ha_odoo + test_ha_pg_stdin (34) + test_ha_flows | 215 (iteration 2: 213; iteration 1: 168; the base had 68) | OK: 212 run + 3 skipped without WOOWBK_HA_FIXTURES (iteration 2: all 213 with them, hash seed 77; the two changed tests do not touch the fixtures) |
+| the 21-module neighbour set at be07df7 (iteration 3, after the list-check fix 6f35b77) | 857 | OK, 3 skipped (430 s at nice 15, host load 25-30) |
 | the 21-module neighbour set (importers n8n/nextcloud/omnigent/litellm/hermes/headscale/opendesign/codeserver, import, cli, registry, common, tempctr, issues, links, sqlite, space, parity rows + the lane's 3), iteration 2 | 851 (iteration 1: 810) | OK, 3 skipped (run at 4e74d57; the last commit only adds 4 tests) |
 | line coverage of ha_odoo.py by the lane's three modules (stdlib sys.monitoring, evidence/iteration2/cov.py) | 1793 executable lines | 98.5% (iteration 1: 93.8% of 1779); 27 lines never run: trivial or defensive |
 | tests/e2e/lab test_arm54_final + test_litellm_negative_flow (they mention ha_odoo) | 112 | OK |
@@ -17,7 +19,7 @@ fake owner of test_ha_flows). commercial_acceptance stays not-complete.
 | test_ha_parity_rows + test_ha_issues with this lane's rows merged (scratchpad/parity/snippets/parity-odoo/ha_parity_rows.json) | 65 | OK; `--report`: ODOO done 39, part 3 |
 | scripts/check_source.py | - | OK |
 | hand mutants of iteration 2 (evidence/iteration2/hm.py + muts_*.py: a COPY of the tree, one at a time, each against the few test classes that pin the line) | 68 | all caught (the first try of 3 survived: fixed by a stronger test) |
-HEAVY (through team/heavy.sh, detached; run m4, see the lane file): tests/backup --b1 full suite, ha118, the mutation sweep (now 107 mutants + 2 controls: 15 were added for the iteration-2 product changes): RESULTS BELOW WHEN FINISHED (none yet: the host's heavy queue was long and loaded; the verify worktree was moved to the iteration-2 tip while m4 still waited).
+HEAVY (through team/heavy.sh, detached; run m6 = watch.sh m6 mut real ha118 b1 on the verify worktree, queued 20:18 at be07df7; it starts only when <= 6 heavy.sh wait and the 5-minute load is < 20): the mutation sweep (113 mutants + 2 controls: M109-M113 are new in iteration 3), the lane's two real-HA-backup test classes (group `real`), ha118 and tests/backup --b1: RESULTS BELOW WHEN FINISHED (none yet: the host is overloaded; m4 and m5 were cancelled before any step ran because the product code moved on).
 
 ## Rows
 42 rows (41 + UI-20): done 39, part 3 -- OD-23 (the PostgreSQL 16 image is downloaded when missing; bundling it in the installer is the owner's decision), OD-57 (vector part
@@ -67,4 +69,27 @@ is never a database's fault (restore, vector image, extension list, release date
 folder's modules (also a too large manifest there), the package's own Quadlet files, a real x86 add-on and a real ARM add-on with a native module (OD-46 on real bytes).
 Corrected: OD-57's reason (see its row note): an EnvironmentFile could be handed over with podman --env-file; it is a non-standard target and stays a clear stop of Odoo only.
 Not run by me through heavy.sh (disclosed): the hand mutants (68 single-class runs of 1-30 s in a scratch copy, one at a time), the 21-module neighbour set (two runs, ~7 min each) and the coverage runs;
-none of them is a full tests/backup suite, a UI test or the lane's sweep (those are in run m4).
+none of them is a full tests/backup suite, a UI test or the lane's sweep (those are in run m6).
+
+## Iteration 4 (OD-OWNER-1735, 2026-11-25 evening): 5 commits on be07df7, tip 413d5f3 (unit level + a hostile-value fuzz, doubles only; no device)
+| what | numbers | result |
+|---|---|---|
+| the lane's three modules at 413d5f3 | 228 tests (iteration 3: 215) | OK, 3 skipped without WOOWBK_HA_FIXTURES |
+| the 21-module neighbour set at e3d652c | 869 | OK, 3 skipped (109 s at nice 15) |
+| line coverage of ha_odoo.py by the lane's three modules (evidence/iteration2/cov.py, run without -I) | 1848 executable lines | 99.1% (17 lines never run: defensive) |
+| hostile-value fuzz of the CHECK flow (iteration4/fuzz_flows.py: random module rows, versions, states, extensions, settings, addresses, markers, role rows, custom modules with oddly typed manifests) | 3000 + 1500 + 400 cases after the two fixes (the first run of 200 on the old code found the manifest TypeError at once) | 0 findings (an exception that is no BackupError ends as failure.internal-error: none) |
+| hostile-value fuzz of the CONVERSION (same harness, convert mode; the confirmations of the check are passed on) | 1200 + 5000 + 300 + 2000 cases (776 of the last 2000 ran through to the end) | 1 finding in 8500: a control character in this device's own web.base.url (fixed, 8599ae8); the other flagged cases are an artifact of the fake world (a NUL in the configured database name makes the fake's tar duplicate) |
+| hand mutants of iteration 4 (iteration4/muts_it4.py: M88 M93 M114-M137, a COPY of the tree, one at a time against the few classes that pin the line) | 26 | all caught (M93, M124, M132 survived first: three tests strengthened; M136 is pinned by SqlTests) |
+| the sweep (mutations.py) now has 137 mutants + 2 controls; `--check-text`: all found once | 137 + 2 | NOT RUN YET as a whole (run m7 = watch.sh m7 mut real waits for a quiet host) |
+Found and fixed (product, each with tests that fail on the old code):
+* 6d913d6 parse_manifest raised TypeError for "external_dependencies": {"python": 5} (True, 3.5, a bare string, a dict): such a manifest is unreadable now; version_key raised ValueError for a
+  superscript two (str.isdigit() accepts it) or thousands of digits: only ASCII digits, at most 18 per part. Both ended the whole Odoo app in the generic "unexpected error" stop.
+* 8599ae8 web.base.url and the freeze flag of this device's own database were checked for type and length only: a control character passed the check and was refused by sql_literal AFTER the dump,
+  the new cluster and the restore (a late internal-error stop). SQL_UNSAFE_RE is looked for when the values are read now (the default address and the existing reminder).
+Built (row OD-57 is done now): a07b7ad + e3d652c + 413d5f3 an EnvironmentFile of the database container is read for its non-secret keys and handed to the new cluster by podman (--env-file), the password
+is never read; unsafe forms stop only Odoo naming file and key; the job log names the files; a password written plainly in Environment= stays a stop (EnvironmentFileTests 9, two flow tests).
+Registry: ODOO done 40, part 2 (OD-23: the installer image is the owner's; UI-20: the engine part is done, the wording is PAGE's).
+Not done (honest): the sweep m7, the real runs (FOR-REAL.txt 1-12), the aborted member pass leaves its tar stream to the garbage collector, which prints 'Exception ignored in _Stream.__del__' to the
+journal (cosmetic: nothing is written anywhere; seen in 26-95% of the hostile fuzz cases, in none of a normal check or conversion).
+DENIED by auto mode (rule 4): pip install --target + import of the downloaded pglast wheel (to parse the lane's SQL with the real PostgreSQL grammar): not retried, not worked around.
+Not run through heavy.sh (disclosed): the fuzz runs, the hand mutants, the lane's modules and the 21-module set (all nice 15 + idle I/O, one process at a time; none is a full tests/backup suite, a UI test or the sweep).
