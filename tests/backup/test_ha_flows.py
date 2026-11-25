@@ -87,18 +87,32 @@ class FakeOwner:
                 i += 2 if args[i] in SKIP else 1
             return self.world.run(name, args[i], list(args[i + 1:]), args, data)
         if verb == 'exec':
-            i = 1
+            i, env = 1, {}
             while args[i].startswith('--'):
+                if args[i] == '--env':
+                    key, _eq, value = args[i + 1].partition('=')
+                    env[key] = value
                 i += 2 if args[i] in ('--user', '--workdir', '--env') else 1
             container, command = args[i], list(args[i + 1:])
+            self.world.exec_env.append((container, command, env))
             if command[0] == 'psql':
-                return self._psql(container)(command, data)
+                # the double reads the database from `-d`; the real command carries it in PGDATABASE (OD-31)
+                return self._psql(container)(command + (['-d', env['PGDATABASE']] if 'PGDATABASE' in env else []), data)
             answer = self.container_files.read_back(container, command)
             if answer is not None:
                 return answer
             return self.container_files.wrote(container, command, data, self.world.exec(container, command, data, stdout))
         if verb == 'image' and args[1] == 'exists':
             return Result(0 if args[2] in self.world.images else 1, b'', b'')
+        if verb == 'image' and args[1] == 'inspect':
+            present = args[-1] in self.world.images
+            return Result(0 if present else 1, b'sha256:' + b'c' * 64 + b'\n' if present else b'', b'' if present else b'no such image')
+        if verb == 'pull':
+            self.world.pulls.append(args[-1])
+            if self.world.pull_works:
+                self.world.images.add(args[-1])
+                return Result(0, b'', b'')
+            return Result(125, b'', b'Error: unable to pull: connection refused')
         if verb == 'container' and args[1] == 'inspect':
             fmt = args[3]
             return Result(0, b'0\n' if 'ExitCode' in fmt else b'true\n', b'')
@@ -138,7 +152,7 @@ class FakeAdapter:
 
     def image_inspect(self, image):
         if image == self.world.web_image:
-            return {'id': WEB_ID, 'env': []}
+            return {'id': WEB_ID, 'env': ['ODOO_RELEASE=18.0.20260926']}
         return {'id': 'sha256:' + 'c' * 64, 'env': ['PG_MAJOR=17' if 'paas-postgres' in image else 'PG_MAJOR=16']}
 
     def read_quadlets(self):
@@ -165,7 +179,8 @@ class World(HaWorld):
         super().__init__()
         self.owner = FakeOwner(self)
         self.web_image = 'localhost/woow-odoo-tenant-ha:20261101.1152-51856b0@sha256:b128'
-        self.images = {'docker.io/library/postgres:16.15-alpine'}
+        self.db_image = 'jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:7a47'
+        self.images = {'docker.io/library/postgres:16.15-alpine', self.web_image, self.db_image}
         self.quadlets = {'odoo': QUADLETS, 'n8n': N8N_QUADLETS}
         self.imported, self.manifests, self.runs, self.execs = {}, {}, [], []
         self.live_settings = [['work_mem', '8192', 'configuration file', 'user'],
@@ -173,6 +188,17 @@ class World(HaWorld):
         self.ha_modules = [['base', '18.0.1.3', 'installed'], ['woow_import_probe', '18.0.1.0.0', 'installed']]
         self.domains_cleared = False
         self.toc_extra = b''
+        self.exec_env, self.pulls, self.pull_works = [], [], True
+        self.conf = {'db_name': 'odoo', 'db_user': 'odoo', 'db_password': 'conf-secret-Pw-0123456789'}
+        self.live_table = True
+        self.live_marker = MARKER
+        self.live_role = {'password': VERIFIER, 'super': False, 'login': True, 'createdb': False, 'createrole': False,
+                          'replication': False, 'bypassrls': False, 'connlimit': -1}
+        self.live_extensions = [['plpgsql', True], ['pg_trgm', True], ['unaccent', True], ['vector', True],
+                                ['pgcrypto', True], ['dblink', False]]
+        self.ha_extensions = [['plpgsql', '1.0'], ['pg_trgm', '1.6']]
+        self.ha_databases = [['woowtest', 9000000, 'C', 'C']]
+        self.scan_broken = []
         self.n8n_tables = {}
         self.unpublished = False
 
@@ -186,11 +212,13 @@ class World(HaWorld):
         if args[:1] == ['-c'] and 'id -u' in args[1]:
             user = args[1].split()[2]
             return Result(0, {'postgres': b'70\n70\n', 'odoo': b'100\n101\n', 'node': b'1000\n1000\n'}[user], b'')
+        if role == 'conf':
+            return Result(0, json.dumps(self.conf).encode(), b'')
         if role == 'scan':
             modules = [['base', '18.0.1.3', True, '/usr/lib/python3/dist-packages/odoo/addons'],
                        ['live_mod', '18.0.1.0.0', True, '/mnt/extra-addons']]
             doc = {'version': '18.0-20260926', 'paths': [], 'modules': modules, 'python': {'lxml': True},
-                   'bin': {'wkhtmltopdf': True}}
+                   'bin': {'wkhtmltopdf': True}, 'broken': self.scan_broken}
             return Result(0, json.dumps(doc).encode(), b'')
         if role == 'controldata':
             return Result(0, b'Database cluster state:               shut down\n', b'')
@@ -209,10 +237,9 @@ class World(HaWorld):
             stdout.write(b'PGDMP-' + role.encode())
             return Result(0, None, b'')
         if command[:2] == ['pg_restore', '-l']:
-            toc = (b';\n; Archive created\n;\n2; 3079 16385 EXTENSION - pg_trgm \n'
-                   b'3456; 1259 16400 TABLE public res_partner odoo\n'
-                   b'3457; 0 16400 TABLE DATA public res_partner odoo\n') + self.toc_extra
-            return Result(0, toc, b'')
+            lines = [b'2; 3079 16385 EXTENSION - pg_trgm ', b'3456; 1259 16400 TABLE public res_partner odoo',
+                     b'3457; 0 16400 TABLE DATA public res_partner odoo', *self.toc_extra.splitlines()]
+            return Result(0, hx.toc_listing(lines), b'')
         return Result(0, b'', b'')
 
     def export(self, volume):
@@ -232,22 +259,25 @@ class World(HaWorld):
     def answer(self, container, sql, database):
         role = re.sub(r'^woowbk-j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}-', '', container)
         if role == 'odoo18-db':  # the live database, read only
+            if sql == ha_odoo.LIVE_TABLE_SQL:
+                return self.live_table
             if sql == ha_odoo.LIVE_SQL:
-                return {'base_url': 'https://cockpit.example', 'freeze': 'True', 'marker': MARKER}
+                return {'base_url': 'https://cockpit.example', 'freeze': 'True', 'marker': self.live_marker}
             if sql == ha_odoo.LIVE_ROLE_SQL:
-                return {'password': VERIFIER, 'super': False, 'login': True, 'createdb': False, 'createrole': False,
-                        'replication': False, 'bypassrls': False, 'connlimit': -1}
+                return self.live_role
+            if sql == ha_odoo.AVAILABLE_EXTENSIONS_SQL:
+                return self.live_extensions
             if sql == ha_odoo.SETTINGS_SQL:
                 return self.live_settings
         if role == 'hapg':
             if sql == ha_odoo.DATABASES_SQL:
-                return [['woowtest', 9000000, 'C', 'C']]
+                return self.ha_databases
             if sql == ha_odoo.IS_ODOO_SQL:
                 return [True] * 7
             if sql == ha_odoo.DETAIL_SQL:
                 return {'modules': self.ha_modules, 'partners': 5, 'users': 2, 'attachments': 1,
                         'attachment_bytes': 10, 'crons_active': 1, 'mail_servers_active': 0, 'size': 9000000,
-                        'extensions': [['plpgsql', '1.0'], ['pg_trgm', '1.6']], 'base_url': 'https://ha.local'}
+                        'extensions': self.ha_extensions, 'base_url': 'https://ha.local'}
             if sql == ha_odoo.SUPERUSER_SQL:
                 return []
             if sql == ha_odoo.HAS_WEBSITE_SQL:
