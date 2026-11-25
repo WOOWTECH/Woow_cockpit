@@ -591,15 +591,17 @@ class Live:
         db_skipped = []
         db_mounts = quadlet_mounts(quadlets, self.db_file, home, skipped=db_skipped)
         self.skipped_mounts += db_skipped
-        if not db_mounts:
+        if not db_mounts and not db_skipped:
             raise BackupError('incompatible', f'{self.db_file} 沒有資料卷設定。')
         # The data volume is the mount that holds the cluster (PGDATA, else the image's own folder); the first mount when
         # nothing says so -- but never another one when the mount that held the cluster was left out.
         wanted = self.db_env.get('PGDATA') or '/var/lib/postgresql/data'
         holder = next((m for m in db_mounts if wanted == m[1] or wanted.startswith(m[1].rstrip('/') + '/')), None)
         if holder is None:
-            if db_skipped:
-                raise BackupError('incompatible', f'{self.db_file} 的資料庫資料夾掛在這個匯入不支援的位置。')
+            if db_skipped:   # (also when nothing else is mounted)
+                raise haissues.stopped(Issue('odoo.layout-unsupported', 'stop',
+                                             f'{self.db_file} 的資料庫資料夾掛在這個匯入不支援的位置（不是資料卷，也不在家目錄下）。',
+                                             action='請把這台 Odoo 資料庫的資料夾改放在資料卷裡，再重新檢查。'), 'incompatible')
             holder = db_mounts[0]
         self.db_volume, self.db_target = holder[0], holder[1]
         self.db_user = self.db_env.get('POSTGRES_USER', 'postgres')
