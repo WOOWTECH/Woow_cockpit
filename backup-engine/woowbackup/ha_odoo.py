@@ -2420,7 +2420,9 @@ def check_listing(text):
     cannot be checked and is refused. Returns the number of entries."""
     entries, declared, shown = toc_entries(text)
     if declared is None or declared != entries + len(ARCHIVE_SETTINGS) - shown:
-        raise BackupError('job-failed', INCOMPLETE_LIST)
+        # the numbers (no content) go with the error: what a real run shows decides whether the relation is right (R5)
+        raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, shown=shown,
+                          **({} if declared is None else {'declared': declared}))
     return entries
 
 

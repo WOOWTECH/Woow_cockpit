@@ -420,6 +420,8 @@ class ListingTests(unittest.TestCase):
             with self.subTest(name), self.assertRaises(BackupError) as caught:
                 ha_odoo.check_listing('\n'.join(kept) + '\n')
             self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_odoo.INCOMPLETE_LIST))
+            self.assertEqual(caught.exception.details['declared'], len(LISTING) + 3, 'the numbers say what was counted')
+            self.assertLess(caught.exception.details['listed'], len(LISTING))
         shown = hx.toc_listing(['1; 0 0 ENCODING - ENCODING', '2; 0 0 STDSTRINGS - STDSTRINGS',
                                 '3; 0 0 SEARCHPATH - SEARCHPATH', *LISTING], hidden=0).decode().splitlines()
         with self.assertRaises(BackupError):
