@@ -1813,12 +1813,13 @@ class RowTests(OmnigentCase):
         revision = 'SELECT coalesce(json_agg(version_num)'
         for name, wanted, odd, ident, message in (
                 ('the structure version', revision, {}, 'omnigent.target-unreadable', '無法讀取這台 Omnigent 的資料庫結構版本。'),
-                ('the columns', ha_omnigent.SCHEMA_COLUMNS_SQL, [], 'failure.incompatible', '無法確認這台 Omnigent 的資料表結構。'),
-                ('the signature', ha_omnigent.SCHEMA_SIGNATURE_SQL, None, 'failure.incompatible', '無法確認 Omnigent 的資料庫結構。')):
+                ('the columns', ha_omnigent.SCHEMA_COLUMNS_SQL, [], 'omnigent.target-unreadable', '無法確認這台 Omnigent 的資料表結構。'),
+                ('the signature', ha_omnigent.SCHEMA_SIGNATURE_SQL, None, 'omnigent.target-unreadable', '無法確認 Omnigent 的資料庫結構。')):
             with self.subTest(name=name), self.answering('omnigent-postgres', wanted, odd):
                 result = self.check_one()
-                self.assertEqual([(i['id'], i['message']) for i in self.issues(result, level='stop')][0][0], ident)
+                self.assertEqual([i['id'] for i in self.issues(result, level='stop')], [ident])
                 self.assertIn(message, '\n'.join(result['blockers']))
+                self.assertIn('啟動過一次', '\n'.join(result['blockers']), 'what to do')
                 self.assertFalse(result['importable'])
                 self.stopped_with('incompatible', message)
 

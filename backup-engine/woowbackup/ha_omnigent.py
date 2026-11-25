@@ -127,7 +127,7 @@ ISSUES = {
     'omnigent.pg-newer': 'stop',             # O-18: HA's PostgreSQL major is newer than the image that must open it
     'omnigent.alembic-different': 'stop',    # O-19 (wave 2): the structure version of the two databases differs
     'omnigent.schema-different': 'stop',     # O-26 (wave 2): tables or columns differ
-    'omnigent.target-unreadable': 'stop',    # O-41: this device's structure version cannot be read (also after trying again)
+    'omnigent.target-unreadable': 'stop',    # O-40, O-41: this device's structure or its version cannot be read (also after trying again)
     'omnigent.version-different': 'notice',  # O-25, O-49: the two versions differ; the data decides
     'omnigent.skipped': 'confirm',           # O-03, O-12, O-14, O-15, O-16, O-21, O-28: what is left out, in ONE line
     'omnigent.files-missing': 'confirm',     # O-22: agent bundles or files the database names that the backup does not hold
@@ -148,6 +148,7 @@ ISSUES = {
 ACTION_REBACKUP = '請在 HA 重新備份後再匯入 Omnigent；這台的 Omnigent 不會有任何變更。'
 ACTION_SAME_VERSION = '請先讓兩邊的 Omnigent 版本一致後再匯入；這台的 Omnigent 不會有任何變更。'
 ACTION_UNCHANGED = '這台的 Omnigent 不會有任何變更。'
+ACTION_UNREADABLE = '請先確認這台的 Omnigent 資料庫正常執行（啟動過一次），再匯入；這台的 Omnigent 不會有任何變更。'
 SNAPSHOT_ATTEMPTS = 3      # O-32, O-33, O-58, O-59: this device's structure snapshot, tried this many times
 STEADY_ATTEMPTS = 3        # O-42, O-43: waits for this device's database structure to stop changing, this many times
 READ_ATTEMPTS = 3          # O-09, O-40, O-41: a read of this device's own database
@@ -313,6 +314,12 @@ def _log(work):
 def _again(work, action, what, **kwargs):
     """`action()` tried READ_ATTEMPTS times when a read of this device fails for a moment (hatarget.retry)."""
     return hatarget.retry(action, attempts=READ_ATTEMPTS, abort=_abort(work), log=_log(work), what=what, **kwargs)
+
+
+def _unreadable(app, message):
+    """The stop of this app when this device's own database structure cannot be read (O-40, O-41), with what to do."""
+    issue = haissues.Issue('omnigent.target-unreadable', 'stop', message, action=ACTION_UNREADABLE)
+    return haissues.stopped(issue, 'incompatible', app=app.id)
 
 
 class _Odd(BackupError):
@@ -593,8 +600,7 @@ def judge(sink, src, found, *, live_alembic_value, ha_major, target_major, diffe
         sink.stop('omnigent.encoding', 'HA 的 Omnigent 資料庫不是 UTF8 編碼。', action=ACTION_REBACKUP)
     ha_alembic = found['alembic']
     if live_alembic_value is None:
-        sink.stop('omnigent.target-unreadable', '無法讀取這台 Omnigent 的資料庫結構版本。',
-                  action='請先確認這台的 Omnigent 資料庫正常執行（啟動過一次），再匯入。')
+        sink.stop('omnigent.target-unreadable', '無法讀取這台 Omnigent 的資料庫結構版本。', action=ACTION_UNREADABLE)
     elif not ha_alembic or sorted(ha_alembic) != sorted(live_alembic_value):
         sink.stop('omnigent.alembic-different',
                   f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or "未知"}，這台是 '
@@ -1311,14 +1317,14 @@ def live_schema(work, app, target):
     try:
         columns = _again(work, read_columns, '讀取這台 Omnigent 的資料表結構')
     except _Odd:
-        raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id) from None
+        raise _unreadable(app, '無法確認這台 Omnigent 的資料表結構。') from None
     try:
         signature = _again(work, read_signature, '讀取這台 Omnigent 的資料庫結構')
     except _Odd:
-        raise BackupError('incompatible', '無法確認 Omnigent 的資料庫結構。') from None
+        raise _unreadable(app, '無法確認 Omnigent 的資料庫結構。') from None
     alembic = live_alembic(work, app, target)
     if alembic is None:
-        raise BackupError('incompatible', '無法讀取這台 Omnigent 的資料庫結構版本。', app=app.id)
+        raise _unreadable(app, '無法讀取這台 Omnigent 的資料庫結構版本。')
     return Schema(columns, signature, alembic)
 
 
