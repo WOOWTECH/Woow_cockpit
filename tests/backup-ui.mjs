@@ -6603,6 +6603,11 @@ try {
       await page.locator('#ha-ack').check();
       const checkJob = (await calls(page, 'ha-check-start')).length;
       await v2Import(page).click();
+      // The app that cannot go is a row of the import from its start (not only of its result), with its reason.
+      await page.locator('.ha-group-list').waitFor({ timeout: 30000 });
+      assert.equal(await page.locator('[data-result="group"]').count(), 0, 'the import is still running');
+      assert.equal(await page.locator('.ha-group-row[data-ha-app="emqx"]').getAttribute('data-status'), 'excluded');
+      assert.match(await page.locator('.ha-group-row[data-ha-app="emqx"]').textContent(), /這份備份是在 EMQX 執行中做的/);
       await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
       // The request: the whole import, the one confirmation by its keys, the database; the HA backup is not touched twice.
       const starts = (await calls(page, 'ha-import-start')).map(requestOf);
@@ -6789,6 +6794,9 @@ try {
       assert.equal(await v2Import(page).isDisabled(), false, 'no device key is no reason to stop');
       assert.match(await page.locator('#key-banner').textContent(), /需要設定加密金鑰/);
       await v2Import(page).click();
+      // While the import runs (not only at its end) the page says that the key was made and asks for the emergency key.
+      await page.locator('.ha-group-list').waitFor({ timeout: 30000 });
+      assert.equal(await page.locator('[data-result="group"]').count(), 0, 'the import is still running');
       await page.locator('.notice-warn').filter({ hasText: '這次匯入已經自動建立一把' }).waitFor({ timeout: 30000 });
       await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
       assert.match(await page.locator('#key-banner').textContent(), /請保存緊急金鑰。/);
