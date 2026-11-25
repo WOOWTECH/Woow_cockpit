@@ -2803,7 +2803,11 @@ def convert(work, app, test_mode, out_dir):
     device, unreadable = read_device(work, app, target)   # SR-5: the check's read, again
     built = _build_candidate(work, app, tmp, target, staging, version=version, sink=sink, device=device,
                              unreadable=unreadable)
-    work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；未符合規則的主題的處理改成 HA 的「{built.strict[0]}」')
+    # HA's rule (the real run on dev-d, 2026-11-25, printed this device's own, read before the import): what the restored broker
+    # does with a topic no rule matches is what HA's did.
+    rule = (built.readings.get('strict') or built.strict)[0]
+    work.log(f'EMQX 資料匯入完成：{len(TABLES)} 個資料表的筆數都符合 HA；「沒有符合規則的主題時」的處理已改成 HA 的「'
+             f'{"允許" if rule == "allow" else "拒絕"}」')
     work.log('EMQX 的帳號驗證與授權來源（含 ACL 檔案）已改成 HA 的，這台的位址、連接埠與其他設定已核對保留')
     volumes = _package_candidate(work, tmp, target, staging, out_dir, built.export, ids=ids,
                                  log_root=ha_n8n.volume_root(work, app, target.log_volume))
