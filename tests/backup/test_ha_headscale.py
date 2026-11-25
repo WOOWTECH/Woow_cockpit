@@ -910,6 +910,20 @@ class ConfigChangeTests(HeadscaleCase):
         self.assertEqual([c for c in self.world.owner.calls if c[0] == 'dir_pack'], [('dir_pack', CONFIG_DIR)] * 2)
         self.assertTrue(any('重做一次' in line for line in self.reporter.logs))
 
+    def test_a_config_whose_records_path_changed_meanwhile_stops_only_headscale(self):
+        moved = LIVE_CONFIG.replace(b'extra_records.json', b'moved.json')
+        self.world.dirs[CONFIG_DIR] = config_dir_tar(moved)
+        real = ha_headscale.live_config
+        calls = []
+
+        def live_config(work, app, target):
+            calls.append(1)
+            return real(work, app, target) if len(calls) == 1 else hacommon.scalars(moved.decode())
+
+        with mock.patch.object(ha_headscale, 'live_config', live_config):
+            error = self.refused(self.upload_headscale(), 'job-failed')
+        self.assertIn('DNS 記錄的路徑在轉換期間改變了', error.message)
+
     def test_a_config_that_keeps_changing_stops_only_headscale(self):
         for tar in (config_dir_tar(LIVE_CONFIG.replace(b'ts.local', b'other.local')),
                     fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'sub', 'type': 'dir'},

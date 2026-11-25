@@ -946,12 +946,12 @@ def live_config_dir(work, app, target, out_dir, ids, config, edits=None):
 
 
 def _reread_config(work, app, target, old):
-    """This device's configuration again (HS-36): what the conversion goes on with when it changed meanwhile; its database and
-    key paths must still be the ones the database was converted for."""
+    """This device's configuration again (HS-36): what the conversion goes on with when it changed meanwhile; its database, key and
+    DNS records paths must still be the ones the volume was built for."""
     config = live_config(work, app, target)
-    if data_paths(config) != data_paths(old):
+    if (data_paths(config), records_rel(config)) != (data_paths(old), records_rel(old)):
         raise haissues.stopped(Issue('headscale.config-changed', 'stop',
-                                     '這台 Headscale 設定檔裡的資料庫或身分金鑰路徑在轉換期間改變了，已停止；這台沒有任何變更。',
+                                     '這台 Headscale 設定檔裡的資料庫、身分金鑰或 DNS 記錄的路徑在轉換期間改變了，已停止；這台沒有任何變更。',
                                      action='請等設定穩定後再試一次。'), 'job-failed', app=app.id)
     return config
 

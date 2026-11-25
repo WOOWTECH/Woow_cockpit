@@ -11,14 +11,16 @@ database structure, a version both known and different) stops Hermes, and then o
 import gzip
 import io
 import json
+import os
 import sqlite3
+import tarfile
 import tempfile
 import types
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, hacommon, haimport, haissues, ha_hermes, hatarget, jobs, nested
+from woowbackup import habackup, hacommon, hasecuretar, haimport, haissues, ha_hermes, ha_odoo, hatarget, jobs, nested
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -243,6 +245,16 @@ class VersionTests(HermesCase):
         self.assertIn('version.target-unknown', self.issues(result, 'notice'))
         self.convert(ha_id, ['hermes'])
         self.assertIn('state.db', self.volume('hermes-data'))
+
+    def test_labels_that_cannot_be_read_are_the_same_notice_and_the_data_moves(self):   # H-07
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(hacommon, 'image_labels', side_effect=BackupError('job-failed', '無法讀取映像 x 的標籤。')):
+            result = self.checked(ha_id)
+            self.assertEqual((result['importable'], result['ok']), (True, True))
+            self.assertIn('version.target-unknown', self.issues(result, 'notice'))
+            self.convert(ha_id, ['hermes'])
+        with mock.patch.object(hacommon, 'image_labels', side_effect=BackupError('incompatible', '找不到這台使用的映像。')):
+            self.assertFalse(self.checked(ha_id)['importable'], 'an image that is not here is the app\'s stop')
 
     def test_a_version_record_that_differs_from_the_addon_is_a_notice_and_the_data_moves(self):   # H-09
         ha_id = self.upload_hermes(image_version='0.1.13', evil=False)
@@ -727,6 +739,57 @@ class ConvertTests(HermesCase):
         self.assertIn('指到資料以外的符號連結', caught.exception.message)
         self.assertEqual(self.storage.list_backups(), [])
         self.assertEqual(self.world.manifests, {})
+
+
+REAL_ROOT = os.environ.get('WOOWBK_HA_B1_FIXTURES')
+REAL_KEY = os.environ.get('WOOWBK_HA_B1_KEY')
+
+
+@unittest.skipUnless(REAL_ROOT and REAL_KEY, 'set WOOWBK_HA_B1_FIXTURES and WOOWBK_HA_B1_KEY (guard.py --b1): the real lab backup of the x86 HA')
+class RealHermesTests(unittest.TestCase):
+    """The real Hermes add-on of the lab's x86 backup (made 2026-11-19, never committed) through the whole conversion of this
+    lane -- the walk into a real TreeTar, the sandboxed SQLite checks, the judgement and the databases written last -- and the
+    tree it makes passes the restore's own checks. Nothing of it is printed (a secret is never in a message)."""
+
+    def test_the_real_add_on_converts_into_a_tree_the_restore_accepts(self):
+        before = dict(jobs._MASK_COUNTS)
+        name = 'woow-b1-x86-enc'
+        path = Path(REAL_ROOT) / 'x86' / name / f'{name}.tar'
+        try:
+            with tempfile.TemporaryDirectory() as tmp, habackup.open_backup(path) as backup:
+                tmp = Path(tmp)
+                member = next(m for m in backup.layout.members if m.role == 'addon' and m.slug.split('_', 1)[-1] == 'woow-hermes')
+                report = habackup.Report(names=haissues.Names)
+                out = hacommon.TreeTar(tmp / 'data.tar', 1000, 1000, None, report=report)
+                staging = tmp / 'stage'
+                staging.mkdir()
+                out.root(0o755, 0, 0)
+                with backup.open_member(member.name, hasecuretar.Keys(REAL_KEY)) as stream:
+                    src = ha_hermes.scan_member(stream, report, staging, out, machine=0x3E)
+                self.assertTrue(report.complete)
+                answers = ha_hermes._inspect(types.SimpleNamespace(checkpoint=None), src, staging)
+                sink = haissues.Sink('hermes')
+                details = ha_hermes.judge(sink, src, answers, addon_version='0.1.14', release='0.22.5',
+                                          digest=ha_hermes.BASE_DIGESTS['0.22.5'])
+                self.assertEqual([i.id for i in sink.found if i.level == 'stop'], [])
+                self.assertLessEqual({i.id for i in sink.found if i.level == 'confirm'},
+                                     {'files.skipped', 'hermes.entries-skipped', 'hermes.databases-skipped'})
+                self.assertEqual((details['sessions'], details['messages'], details['schema_version']), (5, 15, 32))
+                ha_hermes.add_databases(out, src)
+                out.close()
+                ha_odoo.check_volume_tar(out.path, fk.IDS)   # what the restore will ask of it
+                with tarfile.open(out.path) as tar:
+                    members = {m.name: m for m in tar.getmembers()}
+                    self.assertEqual(members['state.db'].size, src.dbs['state.db'].stat().st_size, 'the database moved whole')
+                    self.assertEqual({(m.uid, m.gid) for n, m in members.items() if n != '.'}, {(1000, 1000)})
+                    self.assertFalse([n for n, m in members.items() if n.endswith('-shm') or n.split('/')[-1] in ha_hermes.RUNTIME_FILES])
+                    env = tar.extractfile(members['.env']).read()
+                    self.assertFalse([line for line in env.splitlines() if ha_hermes.MANAGED_ENV_RE.match(line)],
+                                     'no line this device owns is left in the moved .env')
+        finally:
+            for value, count in list(jobs._MASK_COUNTS.items()):
+                for _ in range(count - before.get(value, 0)):
+                    jobs.unmask_secret(value)
 
 
 class EnvTests(unittest.TestCase):
