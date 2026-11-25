@@ -444,11 +444,12 @@ class DatabaseTests(HeadscaleCase):
         self.assertEqual(line['items'], ['foreign_table'])
         self.assertTrue(line['action'])
 
-    def test_a_backup_that_does_not_fit_stops_only_headscale(self):   # HS-02: no size cap, the free space is still the limit
+    def test_a_backup_that_does_not_fit_stops_the_whole_job(self):   # HS-02: no size cap, the free space is still the limit
         ha_id = self.upload_headscale()
         with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024), self.assertRaises(BackupError) as caught:
             self.checked(ha_id)
-        self.assertEqual(caught.exception.code, 'insufficient-space')   # the job stops with what it has: no app is imported
+        # a disk is shared by every app: the JOB stops with what it has (job-wide), no app is imported, Headscale is marked not importable
+        self.assertEqual(caught.exception.code, 'insufficient-space')
         self.assertFalse(caught.exception.result['ha_check']['apps'][0]['importable'])
         self.assertTrue(self.checked(ha_id)['importable'], 'with the space back it is importable')
 

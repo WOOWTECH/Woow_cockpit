@@ -211,11 +211,12 @@ class CheckTests(HermesCase):
         self.convert(ha_id, ['hermes'])
         self.assertEqual(self.volume('hermes-data')['arm.so'][1], ARM_ELF, 'moved as it is')
 
-    def test_a_backup_that_does_not_fit_stops_only_hermes(self):   # H-18..H-21: no size cap, the free space is still the limit
+    def test_a_backup_that_does_not_fit_stops_the_whole_job(self):   # H-18..H-21: no size cap, the free space is still the limit
         ha_id = self.upload_hermes(evil=False)
         with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024), self.assertRaises(BackupError) as caught:
             self.checked(ha_id)
-        self.assertEqual(caught.exception.code, 'insufficient-space')   # the job stops with what it has: no app is imported
+        # a disk is shared by every app: the JOB stops with what it has (job-wide), no app is imported, Hermes is marked not importable
+        self.assertEqual(caught.exception.code, 'insufficient-space')
         self.assertFalse(caught.exception.result['ha_check']['apps'][0]['importable'])
         self.assertTrue(self.checked(ha_id)['importable'], 'with the space back it is importable')
 
@@ -504,6 +505,169 @@ class LinkTests(HermesCase):
         self.assertEqual((count.copied, src.copied, count.counts['files']), (1, 1, 1))
 
 
+class AliasTests(HermesCase):
+    """H-01, H-19, H-02, H-11: a hard link follows the file it names, never more. The second name of a file that stays out (an
+    `.env` too large to filter, a damaged database, what lies below a folder where a file must be) stays out too and is listed:
+    what such a file holds is in the converted tree under no name. A link to a database moves with the database. The check and
+    the conversion list the same names (the conversion is only allowed with the check's own confirmation)."""
+    OVER = ENV + b'# ' + b'x' * 5000 + b'\n'     # an `.env` above the limit the tests set (SMALL)
+    SMALL = 4096
+    WAL = {'name': 'config/kanban.db-wal', 'data': b'wal-bytes', **OWN}
+
+    @staticmethod
+    def link(name, target):
+        return {'name': f'config/{name}', 'type': 'hardlink', 'linkname': f'config/{target}', **OWN}
+
+    @staticmethod
+    def content_of(data, name):
+        """The content of a member of `self.volume`: a hard link has the content of the file it names."""
+        member, body = data[name]
+        for _ in range(8):
+            if not member.islnk():
+                break
+            member, body = data[member.linkname]
+        return body or b''
+
+    def holders(self, needle):
+        """The names in the converted data volume that hold `needle`, links included."""
+        data = self.volume('hermes-data')
+        return sorted(name for name in data if needle in self.content_of(data, name))
+
+    def listed(self, result):
+        """The names of the reader's own line (the entries it left out), as the customer confirms them."""
+        return sorted(self.issues(result, 'confirm')['files.skipped']['items'])
+
+    def test_a_link_to_an_env_too_large_to_filter_stays_out_with_it(self):   # H-19, H-01
+        ha_id = self.upload_hermes(env=self.OVER, extra=[self.link('env-copy', '.env')], evil=False)
+        with mock.patch.object(ha_hermes, 'MAX_ENV', self.SMALL):
+            result = self.checked(ha_id)
+            self.assertTrue(result['importable'])
+            self.assertEqual(self.listed(result), ['config/.env', 'env-copy'])   # the reader names the .env by its member name
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['hermes'])
+            self.assertEqual(caught.exception.code, 'confirmation-required')
+            self.convert_confirmed(ha_id)
+        data = self.volume('hermes-data')
+        self.assertFalse({'.env', 'env-copy'} & set(data))
+        self.assertEqual(self.holders(b'ha-api-key'), [], 'what HA\'s .env holds is moved under no name')
+        self.assertEqual(self.holders(b'ha-openrouter'), [])
+
+    def test_a_link_to_an_env_that_is_filtered_is_a_link_to_the_filtered_file(self):   # H-19, H-01
+        ha_id = self.upload_hermes(extra=[self.link('env-copy', '.env')], evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual((result['ok'], result['hermes']['hardlinks']), (True, 2))   # the venv's link and this one
+        self.convert(ha_id, ['hermes'])
+        data = self.volume('hermes-data')
+        self.assertEqual((data['env-copy'][0].islnk(), data['env-copy'][0].linkname), (True, '.env'))
+        self.assertIn(b'ha-openrouter', self.content_of(data, 'env-copy'))
+        self.assertEqual(self.holders(b'ha-api-key'), [], 'the lines this device owns are in no name')
+
+    def test_a_link_to_a_database_moves_with_the_database(self):   # H-01
+        extra = [{'name': 'config/kanban.db', 'data': sqlite_bytes(sessions=7), **OWN},
+                 self.link('state-copy.db', 'state.db'), self.link('kanban-copy', 'kanban.db')]
+        ha_id = self.upload_hermes(extra=extra, evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok'], result['hermes']['hardlinks']), (True, True, 3))
+        self.convert(ha_id, ['hermes'])
+        data = self.volume('hermes-data')
+        for alias, target in (('state-copy.db', 'state.db'), ('kanban-copy', 'kanban.db')):
+            self.assertEqual((data[alias][0].islnk(), data[alias][0].linkname), (True, target))
+            self.assertEqual(self.content_of(data, alias), data[target][1])
+            self.assertLess(list(data).index(target), list(data).index(alias), 'a tar extracts a link after its file')
+        self.assertEqual(sum(member.islnk() for member, _body in data.values()), result['hermes']['hardlinks'],
+                         'the check counts the links the conversion writes')
+
+    def test_a_link_to_a_damaged_secondary_database_stays_out_with_it(self):   # H-11, H-01
+        extra = [{'name': 'config/kanban.db', 'data': BAD_DB, **OWN}, self.WAL,
+                 self.link('kanban-copy', 'kanban.db'), self.link('wal-copy', 'kanban.db-wal')]
+        ha_id = self.upload_hermes(extra=extra, evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual(self.issues(result, 'confirm')['hermes.databases-skipped']['items'], ['kanban.db'])
+        self.assertEqual(self.listed(result), ['kanban-copy', 'wal-copy'])
+        self.convert_confirmed(ha_id)   # the conversion judges the same names: the check's confirmation is enough
+        data = self.volume('hermes-data')
+        self.assertFalse({'kanban.db', 'kanban.db-wal', 'kanban-copy', 'wal-copy'} & set(data))
+        self.assertEqual(self.holders(BAD_DB[:64]), [], 'the damaged bytes are in the tree under no name')
+        self.assertEqual(self.holders(b'wal-bytes'), [])
+
+    def test_a_link_to_a_database_whose_group_has_a_member_that_is_no_file_stays_out(self):   # H-02, H-01
+        good = sqlite_bytes(sessions=7)
+        wal = {'name': 'config/kanban.db-wal', 'type': 'symlink', 'linkname': '/opt/data/other', **OWN}
+        extra = [{'name': 'config/kanban.db', 'data': good, **OWN}, wal, self.link('kanban-copy', 'kanban.db')]
+        ha_id = self.upload_hermes(extra=extra, evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual(self.issues(result, 'confirm')['hermes.databases-skipped']['items'], ['kanban.db'])
+        self.assertEqual(self.listed(result), ['kanban-copy'])
+        self.convert_confirmed(ha_id)
+        data = self.volume('hermes-data')
+        self.assertFalse({'kanban.db', 'kanban.db-wal', 'kanban-copy'} & set(data))
+        self.assertEqual([name for name in data if self.content_of(data, name) == good], [])
+
+    def test_a_link_to_a_file_below_a_folder_where_a_file_must_be_stays_out(self):   # H-02, H-01
+        entries = [{'name': 'config/.env', 'type': 'dir', **OWN}, {'name': 'config/.env/inner', 'data': b'inner-bytes', **OWN},
+                   self.link('inner-copy', '.env/inner')]
+        ha_id = self.upload_hermes(without=('config/.env',), extra=entries, evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual(self.issues(result, 'confirm')['hermes.entries-skipped']['items'], ['.env'])
+        self.assertEqual(self.listed(result), ['inner-copy'])
+        self.convert_confirmed(ha_id)
+        self.assertNotIn('inner-copy', self.volume('hermes-data'))
+        self.assertEqual(self.holders(b'inner-bytes'), [])
+
+    def test_a_chain_of_links_to_a_file_that_stays_out_stays_out(self):   # H-19, H-01: the reader follows a chain to its end
+        chain = [self.link('env-copy', '.env'), self.link('env-copy-2', 'env-copy')]
+        ha_id = self.upload_hermes(env=self.OVER, extra=chain, evil=False)
+        with mock.patch.object(ha_hermes, 'MAX_ENV', self.SMALL):
+            result = self.checked(ha_id)
+            self.assertEqual(self.listed(result), ['config/.env', 'env-copy', 'env-copy-2'])
+            self.convert_confirmed(ha_id)
+        data = self.volume('hermes-data')
+        self.assertFalse({'.env', 'env-copy', 'env-copy-2'} & set(data))
+        self.assertEqual(self.holders(b'ha-api-key'), [], 'not under the second name of a chain either')
+
+    def test_a_chain_of_links_is_judged_by_what_its_first_link_became(self):   # H-01
+        ha_id = self.upload_hermes(extra=[self.link('pid-copy', 'gateway.pid'), self.link('pid-copy-2', 'pid-copy'),
+                                          self.link('state-copy.db', 'state.db'), self.link('state-copy-2', 'state-copy.db')],
+                                   evil=False)
+        result = self.checked(ha_id)
+        # the reader hands a second link of a runtime file out as a link to the first one's copy; a regular file it hands out for
+        # a chain it followed to a database says nothing about what it holds: left out and listed
+        self.assertEqual(self.listed(result), ['state-copy-2'])
+        self.convert_confirmed(ha_id)
+        data = self.volume('hermes-data')
+        self.assertEqual((data['pid-copy'][0].isreg(), data['pid-copy'][1]), (True, b'123'), 'a copy of a runtime file')
+        self.assertEqual((data['pid-copy-2'][0].islnk(), data['pid-copy-2'][0].linkname), (True, 'pid-copy'))
+        self.assertEqual((data['state-copy.db'][0].islnk(), data['state-copy.db'][0].linkname), (True, 'state.db'))
+        self.assertNotIn('state-copy-2', data)
+
+    def test_a_chain_that_ends_in_a_special_name_is_left_out_like_a_link_there(self):   # H-02, H-01
+        extra = [self.link('config-copy', 'config.yaml'), self.link('.env', 'config-copy')]
+        ha_id = self.upload_hermes(without=('config/.env',), extra=extra, evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual(self.issues(result, 'confirm')['hermes.entries-skipped']['items'], ['.env'])
+        self.convert_confirmed(ha_id)
+        self.assertNotIn('.env', self.volume('hermes-data'))
+
+    def test_a_link_to_a_name_outside_the_tree_is_left_out_and_listed(self):   # H-01: never a guess at its target
+        counted = ha_hermes._Count(habackup.Report(names=haissues.Names))
+        entry = types.SimpleNamespace(linkname='data/elsewhere', mtime=0, copy_later=lambda: self.fail('copied'))
+        src = ha_hermes.Source()
+        src.report = counted.report
+        ha_hermes._hard_link(src, counted, 'outside', entry)
+        self.assertEqual((counted.copied, counted.report.skips['hardlink'].count), (0, 1))
+
+    def test_settling_twice_lists_a_link_once(self):   # H-01: judge may run for the same walk again
+        member = hx.tar_bytes([{'name': 'config', 'type': 'dir', **OWN}, {'name': 'config/kanban.db', 'data': BAD_DB, **OWN},
+                               self.link('kanban-copy', 'kanban.db')])
+        report = habackup.Report(names=haissues.Names)
+        with tempfile.TemporaryDirectory() as tmp:
+            src = ha_hermes.scan_member(io.BytesIO(member), report, Path(tmp), ha_hermes._Count(report))
+        src.db_skip.add('kanban.db')
+        ha_hermes.settle_links(src)
+        ha_hermes.settle_links(src)
+        self.assertEqual((report.skips['hardlink'].count, src.kept_links), (1, []))
+
+
 class SizeTests(HermesCase):
     """H-18, H-19, H-20, H-21: no size refuses Hermes. A file that does not move is only read at its start, a `.env` is filtered up
     to MAX_ENV (a larger one is left out and listed: it cannot be filtered in memory), a settings file, a job list and a skill are
@@ -542,7 +706,10 @@ class SizeTests(HermesCase):
                 self.convert(ha_id, ['hermes'])
             self.assertEqual(caught.exception.code, 'confirmation-required')
             self.convert_confirmed(ha_id)
-        self.assertNotIn('.env', self.volume('hermes-data'), 'never moved unfiltered')
+        data = self.volume('hermes-data')
+        self.assertNotIn('.env', data)
+        self.assertEqual([name for name, (_m, body) in data.items() if body and b'ha-api-key' in body], [],
+                         'what the .env holds is moved under no name (AliasTests: not under a hard link either)')
 
     def test_a_settings_file_and_a_job_list_over_the_old_limit_move_and_are_read(self):   # H-20
         config = CONFIG + b'# ' + b'y' * (9 * self.MIB) + b'\n'
