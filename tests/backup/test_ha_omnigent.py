@@ -680,7 +680,8 @@ class ConvertTests(OmnigentCase):
     def test_a_listing_that_came_back_short_stops_before_anything_is_loaded(self):
         """pg-stdin follow-up F4: the entries of `pg_restore -l` are counted against the `TOC Entries:` of its own header; a
         listing that is short (a stdin transfer that arrived short under load) would restore only the part it names."""
-        for declared in (40, 15):                  # 11 entries come back: short by 29 and by 4 (more than the 3 settings)
+        slack = len(ha_omnigent.ARCHIVE_SETTINGS) + ha_omnigent.LISTING_SLACK       # what a plain listing may keep back
+        for declared in (40, 11 + slack + 1):      # 11 entries come back: short by 29 and by one more than the most a plain listing keeps back
             with self.subTest(declared=declared):
                 self.world.toc_declared = declared
                 self.world.forget()
@@ -689,7 +690,7 @@ class ConvertTests(OmnigentCase):
                 self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_omnigent.INCOMPLETE_LIST))
                 self.assertEqual(caught.exception.details, {'listed': 11, 'declared': declared})
                 self.assert_nothing_loaded()
-        for declared in (11, 12, 13, 14):          # the header counts the settings a plain listing may leave out: 0 to 3
+        for declared in (11, 12, 14, 16, 11 + slack):   # the header counts the settings and a few more a plain listing leaves out (a real one: 5)
             with self.subTest(declared=declared):
                 self.world.toc_declared = declared
                 self.world.forget()

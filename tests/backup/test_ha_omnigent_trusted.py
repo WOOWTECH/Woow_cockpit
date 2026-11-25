@@ -58,13 +58,20 @@ class TrustedDataTests(unittest.TestCase):
         lines = ''.join(f'{n}; 0 0 TABLE DATA public t{n} owner\n' for n in range(1, 11))
         head = lambda n: f';\n; Archive created at 2026-11-25\n;     TOC Entries: {n}\n;\n'   # noqa: E731
         self.assertEqual(omni.toc_entries(head(10) + lines), (10, 10))
-        for declared in (10, 11, 12, 13):          # up to the three settings a plain listing may leave out
+        top = 10 + len(omni.ARCHIVE_SETTINGS) + omni.LISTING_SLACK      # the most a plain listing may keep back
+        for declared in (10, 11, 13, 15, top):    # the three settings a plain listing leaves out, and a few more (a real one: 5)
             self.assertEqual(omni.check_listing(head(declared) + lines), 10)
-        for declared in (9, 14, 100):
+        for declared in (9, top + 1, 100):         # more lines than the header says, or too many lost
             with self.subTest(declared=declared), self.assertRaises(BackupError) as caught:
                 omni.check_listing(head(declared) + lines)
             self.assertEqual((caught.exception.code, caught.exception.message, caught.exception.details),
                              ('job-failed', omni.INCOMPLETE_LIST, {'listed': 10, 'declared': declared}))
+        # the REAL numbers of a PostgreSQL 16.15 listing: 1131 entry lines under `TOC Entries: 1136` (the Odoo lane's probe)
+        real = ''.join(f'{n}; 1259 {16000 + n} TABLE public t{n} owner\n' for n in range(1, 1132))
+        self.assertEqual(omni.check_listing(head(1136) + real), 1131, 'the real numbers pass')
+        twenty_lost = ''.join(real.splitlines(True)[:-20])
+        with self.assertRaises(BackupError):
+            omni.check_listing(head(1136) + twenty_lost)
         self.assertEqual(omni.check_listing(lines), 10, 'no header (a double): nothing to compare')
         self.assertEqual(omni.toc_entries(';     TOC Entries: 5x\n' + lines)[1], None)
 

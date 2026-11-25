@@ -800,7 +800,8 @@ def toc_kinds(text):
     return found
 
 
-ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump archive of 11 and later begins with
+LISTING_SLACK = 9      # entries beyond the three settings a plain listing may keep back (a real PostgreSQL 16.15 listing: 2)
 INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
 
 
@@ -818,12 +819,17 @@ def toc_entries(text):
 
 
 def check_listing(text):
-    """pg-stdin follow-up F4: the listing of the dump is whole when the number of its entries is what its own header says the
-    archive has, short by at most the three archive settings (ENCODING, STDSTRINGS, SEARCHPATH) that a plain listing may leave
-    out. A listing that came back short would restore only the part it names, and nothing would notice. pg_restore always
-    prints the header; a listing without one (a double) cannot be compared and is let through. Returns the entries."""
+    """pg-stdin follow-up F4: the listing of the dump is whole when its entries are the ones its own header says the archive
+    has, less the few a plain listing keeps back. A listing that came back short would restore only the part it names, and
+    nothing would notice. What a plain listing keeps back is no exact number: a REAL listing (PostgreSQL 16.15, a Nextcloud
+    database, found by the Odoo lane's probe of 2026-11-24) has 1131 entry lines under `TOC Entries: 1136`, so it keeps back
+    five: the three archive settings ENCODING, STDSTRINGS and SEARCHPATH (none of them is listed) and two more of a kind nobody
+    looked at. The lines may be short of the header by the three settings plus LISTING_SLACK, and never more than the header
+    (the same tolerance as Odoo's and Nextcloud's; integrator fix of 2026-11-25). A gap inside the slack goes unnoticed (a
+    listing that was cut short loses a stretch of its end). pg_restore always prints the header; a listing without one (a
+    double) cannot be compared and is let through. Returns the entries."""
     entries, declared = toc_entries(text)
-    if declared is not None and not declared - len(ARCHIVE_SETTINGS) <= entries <= declared:
+    if declared is not None and not declared - len(ARCHIVE_SETTINGS) - LISTING_SLACK <= entries <= declared:
         raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, declared=declared)   # numbers only, no content
     return entries
 
