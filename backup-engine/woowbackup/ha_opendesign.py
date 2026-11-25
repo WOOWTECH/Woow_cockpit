@@ -766,6 +766,20 @@ def read_live(work, app, sink, attempts, *, sources, what, issue_id=PAUSE_ID):
     return results
 
 
+def check_tar_end(path, what):
+    """A tar that a command wrote ends with two blocks of zeros (tarfile itself does not need them, so a tar cut at a header
+    reads as a whole one): one that does not was cut short while it was made."""
+    try:
+        with open(path, 'rb') as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, size - 1024))
+            tail = handle.read(1024)
+    except OSError:
+        raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
+    if len(tail) < 1024 or tail.count(0) != 1024:
+        raise BackupError('job-failed', f'{what}的匯出內容沒有完整結束（讀取到一半被中斷）。')
+
+
 def validate_live_tar(path, what):
     """A live export is read to its end before it is used: a tar that is cut or torn (files changed while it was made) is a
     read that failed, not a conversion that stops half way."""
@@ -777,6 +791,7 @@ def validate_live_tar(path, what):
                 tar.members.clear()
     except tarfile.TarError:
         raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
+    check_tar_end(path, what)
 
 
 def live_volume(work, app, sink, volume, path, *, what, issue_id=PAUSE_ID):

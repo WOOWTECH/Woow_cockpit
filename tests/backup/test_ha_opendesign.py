@@ -1016,6 +1016,23 @@ class ParityLiveTests(ParityCase):
             self.convert(self.upload_od(), ['open-design'])
         self.assertEqual(self.world.owner.stopped(), set())
 
+    def test_op15_a_tar_cut_at_a_header_is_no_whole_read(self):
+        # tarfile itself reads a tar that is cut between two members as one that ended: the end marker tells the difference
+        whole = fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'a', 'data': b'x' * 700}, {'name': 'b', 'data': b'y' * 10}])
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = {'whole': (whole, True), 'cut-at-a-header': (whole[:512 * 3 + 5], False), 'cut-at-a-member': (whole[:512 * 4], False),
+                     'cut-in-data': (whole[:700], False), 'empty': (b'', False), 'no-end-blocks': (whole[:-1024 - 9216 + 512], False)}
+            for name, (data, ok) in cases.items():
+                with self.subTest(name=name):
+                    path = Path(tmp) / name
+                    path.write_bytes(data)
+                    if ok:
+                        od.validate_live_tar(path, '測試')
+                    else:
+                        with self.assertRaises(BackupError) as caught:
+                            od.validate_live_tar(path, '測試')
+                        self.assertEqual(caught.exception.code, 'job-failed')
+
     def test_op15_nothing_of_the_check_reads_this_devices_volumes_so_nothing_is_paused(self):
         self.world.needs_stopped = {DATA: self.UNITS}
         self.assertTrue(self.row(self.upload_od())['importable'])

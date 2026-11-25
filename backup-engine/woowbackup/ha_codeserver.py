@@ -59,7 +59,7 @@ import time
 from . import habackup, haissues, hacommon, hasqlite, hatarget, ha_n8n, ha_odoo, nested, tempctr, util
 from .errors import BackupError
 from . import ha_opendesign as od
-from .ha_opendesign import links_as_files, read_live, reader_failed, skip_line
+from .ha_opendesign import check_tar_end, links_as_files, read_live, reader_failed, skip_line
 from .haissues import Issue
 
 SLUG = 'woow_ha_code_server'
@@ -517,6 +517,7 @@ class Volume:
         self.live = live
         self.what = what
         self.report = report      # the walk's habackup.Report: what cannot be written is listed there (CS-10)
+        self.closed = False
         self.written = {}         # name -> kind, of HA's entries written
         self.files = set()        # names of regular files written (hard link targets)
         self.skipped = set()      # HA folders whose subtree is skipped (the live one stays)
@@ -673,7 +674,9 @@ class Volume:
         return links_as_files(live_path, self.tar, pending, self.what, report=self.report, label='這台：') if pending else 0
 
     def close(self):
-        if self.tar is not None:
+        """Close the tar (more than once is no harm: the conversion closes every volume in its `finally`)."""
+        if self.tar is not None and not self.closed:
+            self.closed = True
             self.tar.close()
 
 
@@ -1211,10 +1214,13 @@ def collect(sink, src, ws, target, db_problems):
     if 'extensions.json' in src.large:
         sink.notice('codeserver.extensions-skipped',
                     'HA 的延伸模組清單（extensions.json）太大，這次沒有讀它，HA 自己安裝的延伸模組不會搬過來；需要時請在這台重新安裝。')
-    links = src.links_copied + (ws.links_copied if ws is not None else 0)
-    if links:
+
+
+def links_line(sink, count):
+    """The `auto` line about hard links that got the content (CS-10, CS-13): the reader's count, in both walks."""
+    if count:
         sink.auto('codeserver.links-copied',
-                  f'HA 的 code-server 資料有 {links} 個硬連結的檔案，這台不能把它們連在一起，已改成各自複製檔案內容'
+                  f'HA 的 code-server 資料有 {count} 個硬連結的檔案，這台不能把它們連在一起，已改成各自複製檔案內容'
                   '（磁碟用量會比 HA 大一些）。')
 
 
@@ -1287,6 +1293,7 @@ def check(work, app):
     work.phase('check')
     db_problems = check_dbs(work, src, staging) if src.dbs else {}
     collect(sink, src, ws, target, db_problems)
+    links_line(sink, report.copied_links + ws_report.copied_links)
     ext = extension_entries(src.extensions)
     _move, skipped = choose_extensions(ext, {}, src.ext_foreign, hacommon.host_elf_machine())
     other = sorted(rel for rel, why in skipped.items() if why in ('platform', 'foreign'))
@@ -1311,6 +1318,7 @@ def _volume_reader(work, app, volume, path, what, read):
             os.unlink(path)
         hacommon.live_export(work, app, volume, path)
         index, contents = live_index(path, what, read=read)
+        check_tar_end(path, what)
         return path, index, contents
 
     return attempt
@@ -1352,30 +1360,29 @@ def convert(work, app, test_mode, out_dir):
     outs = {'pi': Volume(ha_odoo.FileTar(paths['pi'], work.guard), _root(work, app, target.pi), pi_index, what['pi'], report),
             'ide': Volume(ha_odoo.FileTar(paths['ide'], work.guard), _root(work, app, target.ide), ide_index, what['ide'], report),
             'ext': Volume(ha_odoo.FileTar(staging / 'ha-ext.tar', work.guard), (0, 0), {}, 'HA 的延伸模組', report)}
+    ext_out = None
     try:
-        src = _pass(work, app, staging, outs, report)
-    finally:
-        outs['ext'].close()
-    work.phase('convert')
-    db_problems = check_dbs(work, src, staging) if src.dbs else {}
-    collect(sink, src, None, None, db_problems)      # a stop raises here: nothing of this device was copied yet
-    seen = skip_line(sink, report)                    # ... and so does a line that was not confirmed
-    details, kept_links = {}, 0
-    try:
+        try:
+            src = _pass(work, app, staging, outs, report)
+        finally:
+            outs['ext'].close()          # HA's extension folders are staged: they are read back below
+        work.phase('convert')
+        db_problems = check_dbs(work, src, staging) if src.dbs else {}
+        collect(sink, src, None, None, db_problems)      # a stop raises here: nothing of this device was copied yet
+        seen = skip_line(sink, report)                    # ... and so does a line that was not confirmed
+        details, kept_links = {}, 0
         for part in (_finish_pi(src, outs['pi'], pi_files, db_problems, live['pi']),
                      _finish_ide(src, outs['ide'], ide_files, db_problems, live['ide'])):
             kept_links += part.pop('kept_links', 0)
             details.update(part)
-    finally:
-        outs['pi'].close()
-        outs['ide'].close()
-    ext_out = Volume(ha_odoo.FileTar(paths['ext'], work.guard), _root(work, app, target.ext), ext_index, what['ext'], report)
-    try:
+        ext_out = Volume(ha_odoo.FileTar(paths['ext'], work.guard), _root(work, app, target.ext), ext_index, what['ext'], report)
         part = _finish_ext(src, ext_out, ext_files, staging / 'ha-ext.tar', live['ext'])
         kept_links += part.pop('kept_links', 0)
         details.update(part)
     finally:
-        ext_out.close()
+        for volume in (outs['pi'], outs['ide'], outs['ext'], ext_out):
+            if volume is not None:
+                volume.close()
     for key in live:
         os.unlink(live[key])
     result = {'volumes': {target.pi: paths['pi'], target.ide: paths['ide'], target.ext: paths['ext']}}
@@ -1385,6 +1392,7 @@ def convert(work, app, test_mode, out_dir):
         result['dirs'] = {target.workspace: dir_path}
         details['workspace_folder'] = folder if ws.projects else ''
         skip_line(sink, ws_report)
+    links_line(sink, report.copied_links + ws_report.copied_links)
     if target.extra_volumes or target.extra_dirs:          # CS-04: what this device has beyond them stays as it is
         carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs, report=report,
                                  size=sum(sizes.values()))
@@ -1572,6 +1580,7 @@ def _workspace(work, app, runner, target, staging, out_dir, sink, report):
             raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
         if root is None:
             raise BackupError('job-failed', f'{what}的匯出內容格式不正確。', app=app.id)
+        check_tar_end(live_dir, what)
         return root, top_names
 
     root, top_names = read_live(work, app, sink, [attempt], sources=(target.workspace_path,), what=what,
