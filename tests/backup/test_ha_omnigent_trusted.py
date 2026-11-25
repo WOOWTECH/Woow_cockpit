@@ -178,7 +178,6 @@ class SnapshotScriptTests(unittest.TestCase):
     PSQL = r"""#!/bin/sh
 printf '%s\n' "$@" > "$STUB/psql.argv"
 n=$(cat "$STUB/psql.runs" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" > "$STUB/psql.runs"
-[ "$n" -gt "${STUB_FAIL_FIRST:-0}" ] || exit 3
 folder=$(dirname "$(readlink /proc/self/fd/0)")
 printf '%s\n' "$folder" "$(stat -c %a "$folder")" "$(stat -c %a "$folder/in")" > "$STUB/psql.folder"
 out=/dev/null
@@ -188,7 +187,7 @@ while IFS= read -r line; do
         '\o '*) out=${line#* } ;;
         '\o') out=/dev/null ;;
         'SELECT pg_export_snapshot();') printf '%s\n' "$STUB_SNAPSHOT" > "$out" ;;
-        'LOCK TABLE '*) [ "$STUB_LOCKED" = no ] || exit 3 ;;
+        'LOCK TABLE '*) if [ "$STUB_LOCKED" != no ] || [ "$n" -le "${STUB_FAIL_FIRST:-0}" ]; then exit 3; fi ;;
         'SELECT CASE WHEN '*) if [ "$n" -le "${STUB_MISMATCH_FIRST:-0}" ]; then printf '%s\n' mismatch > "$out"; else printf '%s\n' "$STUB_REVISION" > "$out"; fi ;;
         'SELECT coalesce(json_agg(json_build_array(c.relname, '*) if [ "$n" -le "${STUB_BAD_FIRST:-0}" ]; then printf '%s\n' "$STUB_BAD_TEXT" > "$out"; else printf '%s\n' "$STUB_COLUMNS" > "$out"; fi ;;
         '\q') exit 0 ;;
@@ -319,8 +318,7 @@ printf 'PGDMP-schema-only'
                     self.capture(**answers)
                 self.assertEqual((caught.exception.returncode, len(self.scripts)), (code, 3))
                 self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
-                if self.recorded('psql.folder'):    # (a psql that ends at once never saw the folder)
-                    self.assert_private_folder_removed()
+                self.assert_private_folder_removed()
 
     def test_a_damaged_columns_line_is_read_again_and_then_refused(self):
         """O-32, O-33: the first line of the snapshot is no JSON (or no list of columns): another try; still damaged after
