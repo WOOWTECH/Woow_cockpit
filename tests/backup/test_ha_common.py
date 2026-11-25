@@ -692,6 +692,24 @@ class LiveJsonTests(Case):
         self.read(size=1 << 50)
         self.assertEqual(seen['max_output'], hacommon.LIVE_JSON_CEILING)
 
+    def test_without_a_size_the_wait_follows_the_open_ha_backup_the_room_does_not(self):
+        seen = {}
+        real = self.owner.podman
+
+        def spy(*args, **kwargs):
+            seen.update(timeout=kwargs.get('timeout'), max_output=kwargs.get('max_output'))
+            return real(*args, **kwargs)
+
+        self.owner.podman = spy
+        self.world.exec_results = [self.ok()]
+        self.work.ha = types.SimpleNamespace(layout=types.SimpleNamespace(size=100 * 1024 ** 3))
+        self.read()
+        self.assertEqual(seen['timeout'], podman.scaled_timeout(120, 400 * 1024 ** 3))
+        self.assertGreater(seen['timeout'], 120)
+        self.assertEqual(seen['max_output'], hacommon.LIVE_JSON_OUTPUT, 'an HA file says nothing about this answer')
+        self.read(size=5)
+        self.assertEqual(seen['timeout'], 120, 'a size the caller names is the one that counts')
+
     def test_a_big_catalog_that_the_old_limit_refused_is_read(self):
         rows = [{'table': f'public.t{i}', 'columns': ['id', 'name', 'created_at', 'owner_id']} for i in range(60000)]
         big = json.dumps(rows).encode() + b'\n'
@@ -1005,6 +1023,12 @@ class ScaleWaitsTests(unittest.TestCase):
         hatarget.scale_waits(tmp, ha)
         self.assertEqual(tmp.size, 100 * 1024 ** 3, 'four times the stored size: what it may be unpacked')
         self.assertGreater(tmp._wait(600), 600)
+
+    def test_the_size_hint(self):
+        self.assertEqual(hatarget.size_hint(types.SimpleNamespace(layout=types.SimpleNamespace(size=10))), 40)
+        for ha in (None, types.SimpleNamespace(), types.SimpleNamespace(layout=types.SimpleNamespace(size=0)),
+                   types.SimpleNamespace(layout=types.SimpleNamespace(size=True))):
+            self.assertIsNone(hatarget.size_hint(ha))
 
     def test_what_does_not_know_a_size_changes_nothing(self):
         tmp = tempctr.TempObjects(types.SimpleNamespace(uid=None), JOB, cpus=None)

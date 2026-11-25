@@ -287,14 +287,20 @@ def ensure_user_manager(work, app, runner=None):
 UNPACKED_PER_STORED = 4    # what an app's data may be unpacked, against the HA file it comes from (a guess: only a floor-raiser)
 
 
-def scale_waits(tmp, ha):
-    """The waits of the app's throwaway containers (TempObjects.scale_to) grow with the open HA backup: its size, four times
-    (a guess of what it is unpacked; no wait gets shorter, X-PD-05). A `tmp` or `ha` that does not know a size (a test
-    double): nothing changes."""
-    scale = getattr(tmp, 'scale_to', None)
+def size_hint(ha):
+    """About how many bytes the apps of this open HA backup are: its size, four times (a guess of what it is unpacked; it
+    only raises waits, never lowers one). None when `ha` (a test double, a closed backup) does not know."""
     size = getattr(getattr(ha, 'layout', None), 'size', None)
-    if scale is not None and isinstance(size, int) and not isinstance(size, bool) and size > 0:
-        scale(size * UNPACKED_PER_STORED)
+    return size * UNPACKED_PER_STORED if isinstance(size, int) and not isinstance(size, bool) and size > 0 else None
+
+
+def scale_waits(tmp, ha):
+    """The waits of the app's throwaway containers (TempObjects.scale_to) grow with the open HA backup (`size_hint`; X-PD-05).
+    A `tmp` or `ha` that does not know a size (a test double): nothing changes."""
+    scale = getattr(tmp, 'scale_to', None)
+    size = size_hint(ha)
+    if scale is not None and size is not None:
+        scale(size)
 
 
 # ====================================================================== a stopped service, read while it runs (CM-07)

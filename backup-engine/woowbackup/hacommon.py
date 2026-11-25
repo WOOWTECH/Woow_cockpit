@@ -156,14 +156,17 @@ def live_json(work, app, container, user, database, sql, *, size=None):
     only; never a statement that writes). A database that is not running (or still starting up) is started first and put
     back when the app's throwaway objects are cleaned (`hatarget.ensure_running`, CM-07); only when that fails, or the
     account or database name does not fit this device's settings, this app stops, and the message says which. `size`:
-    the bytes of data the cell is about (a bigger one gets more time and room: X-PD-05, X-PD-04)."""
+    the bytes of data the cell is about (a bigger one gets more time and room: X-PD-05, X-PD-04); without it the wait
+    follows the size of the open HA backup (`hatarget.size_hint`), the room stays what it is."""
     runner = work.runner(app)
     limit = podman.scaled_limit(LIVE_JSON_OUTPUT, size, ratio=2, ceiling=LIVE_JSON_CEILING)
+    from . import hatarget
+    wait = podman.scaled_timeout(120, size if size is not None else hatarget.size_hint(getattr(work, 'ha', None)))
     started = False
     while True:
         try:
             out = runner.podman('exec', container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user,
-                                '-d', database, '-c', sql, timeout=podman.scaled_timeout(120, size),
+                                '-d', database, '-c', sql, timeout=wait,
                                 max_output=limit).stdout or b''
             break
         except BackupError as error:
