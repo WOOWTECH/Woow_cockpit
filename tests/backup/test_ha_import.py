@@ -864,6 +864,7 @@ class IsolationTests(FlowCase):
         self.assertTrue(check['apps'][0]['importable'], 'what was found is handed over')
         self.assertFalse(check['apps'][1]['importable'] or check['apps'][2]['importable'])
         self.assertEqual(self.ids(check['apps'][2]), ['ha.not-checked'])
+        self.assertEqual(check['apps'][2]['issues'][0]['action'], haimport.NOT_CHECKED_ACTION)
         return caught.exception, check['apps'][1]
 
     def test_what_ends_the_whole_job_hands_over_what_it_found(self):
