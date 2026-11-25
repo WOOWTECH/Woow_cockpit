@@ -373,6 +373,24 @@ class ScanTests(unittest.TestCase):
         self.assertIn('data/addons/woow_import_probe/__manifest__.py', mods)
         self.assertFalse(any('__pycache__' in name for name in mods))
 
+    def test_the_filestore_of_the_chosen_database_goes_where_the_configured_database_looks(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for name, wanted in ((None, 'filestore/odoo'), ('prod', 'filestore/prod'), ('my_db-1.x', 'filestore/my_db-1.x')):
+            web = ha_odoo.FileTar(root / f'web-{wanted.split("/")[1]}.tar')
+            web.ids = (100, 101)
+            kwargs = {} if name is None else {'filestore_name': name}
+            ha_odoo.scan_member(io.BytesIO(odoo_tar()), habackup.Report(), filestore_db='woowtest', filestore=web, **kwargs)
+            web.close()
+            with self.subTest(name):
+                fs = members_of((root / f'web-{wanted.split("/")[1]}.tar').read_bytes())
+                self.assertEqual(set(fs), {wanted, f'{wanted}/ab', f'{wanted}/ab/' + 'c' * 40})
+        for bad in ('', 'a/b', '..', 'x' * 64, 'a b'):
+            with self.subTest(bad=bad), self.assertRaises(BackupError) as caught:
+                ha_odoo.scan_member(io.BytesIO(odoo_tar()), habackup.Report(), filestore_name=bad)
+            self.assertEqual(caught.exception.code, 'internal-error')
+
     def test_tablespaces_are_refused(self):
         extra = [{'name': 'data/postgres/pg_tblspc', 'type': 'dir'},
                  {'name': 'data/postgres/pg_tblspc/16400', 'type': 'symlink', 'linkname': '/mnt/space'}]
@@ -411,6 +429,27 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual(set(names), {'.', 'addons', 'addons/18.0', 'filestore', 'sessions'})
         self.assertEqual((names['sessions'][0].uid, names['sessions'][0].gid, names['sessions'][0].mode),
                          (100, 101, 0o700))
+
+    def test_the_filestore_that_is_replaced_is_the_one_of_the_configured_database_and_no_other(self):
+        """OD-15: this device's Odoo may be configured with another database name; its filestore folder is named like it."""
+        live = self.write('live.tar', [
+            {'name': './', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/odoo', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/odoo/aa', 'data': b'another database of this device', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/prod', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/prod/aa', 'data': b'old', 'uid': 100, 'gid': 101}])
+        out = ha_odoo.FileTar(self.root / 'out.tar')
+        ha_odoo.web_data_tar(live, out, sessions_ids=(1, 1), database='prod')
+        out.close()
+        names = set(members_of((self.root / 'out.tar').read_bytes()))
+        self.assertEqual(names, {'.', 'filestore', 'filestore/odoo', 'filestore/odoo/aa', 'sessions'})
+        for number, bad in enumerate(('', 'a/b', '..', '.x', 'x' * 64, 'a\nb')):
+            unused = ha_odoo.FileTar(self.root / f'unused-{number}.tar')
+            self.addCleanup(unused.close)
+            with self.subTest(bad=bad), self.assertRaises(BackupError) as caught:
+                ha_odoo.web_data_tar(live, unused, sessions_ids=(1, 1), database=bad)
+            self.assertEqual(caught.exception.code, 'internal-error')
 
     def test_an_unreadable_live_export_fails_the_job(self):
         garbage = self.root / 'garbage.tar'

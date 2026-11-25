@@ -298,8 +298,8 @@ class World(HaWorld):
                 if self.web_link else []
             return tar_of([*link, {'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
-                           {'name': 'filestore/odoo', 'type': 'dir', 'uid': 100, 'gid': 101},
-                           {'name': 'filestore/odoo/old', 'data': b'old', 'uid': 100, 'gid': 101},
+                           {'name': f'filestore/{self.conf.get("db_name", "odoo")}', 'type': 'dir', 'uid': 100, 'gid': 101},
+                           {'name': f'filestore/{self.conf.get("db_name", "odoo")}/old', 'data': b'old', 'uid': 100, 'gid': 101},
                            {'name': 'sessions', 'type': 'dir', 'uid': 100, 'gid': 101, 'mode': 0o700},
                            {'name': 'sessions/s1', 'data': b's', 'uid': 100, 'gid': 101},
                            {'name': 'addons', 'type': 'dir', 'uid': 100, 'gid': 101}])
@@ -656,6 +656,12 @@ class OdooTargetTests(OdooCase):
         self.assertEqual((restore[restore.index('-U') + 1], restore[restore.index('-d') + 1]), ('odoo18', 'prod'))
         self.assertTrue(any(db == 'prod' for psql in self.world.owner.psql.values() for db, _s, _t in psql.executed))
         self.assertEqual(result['apps'], ['odoo'])
+        # the filestore of the chosen HA database lives in the folder Odoo looks in: named like its configured database
+        with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo18-web-data'])) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith('filestore/prod/') for name in names), names)
+        self.assertFalse(any(name.startswith('filestore/odoo') for name in names), 'no folder of a database that is not there')
+        self.assertNotIn('filestore/prod/old', names, 'what this device had of that database is replaced, as before')
 
     def test_a_role_password_that_is_no_verifier_is_set_again_from_the_configuration(self):
         """OD-21: only a SCRAM or md5 verifier is taken over; anything else (a plain text, nothing) is not."""
@@ -689,7 +695,7 @@ class OdooTargetTests(OdooCase):
 
     def test_a_superuser_role_becomes_an_ordinary_one(self):
         """OD-22: HA's content never runs as a superuser: the new role has none of the live role's powers."""
-        self.world.live_role = {**self.world.live_role, 'super': True, 'createrole': True, 'replication': True,
+        self.world.live_role = {**self.world.live_role, 'super': True, 'createdb': True, 'createrole': True, 'replication': True,
                                 'bypassrls': True}
         ha_id = self.upload_odoo()
         row = self.check(ha_id)
@@ -697,7 +703,7 @@ class OdooTargetTests(OdooCase):
         self.assertEqual(self.ids(row)['odoo.role-normalised'], 'auto')
         self.convert(ha_id, ['odoo'])
         (create,) = [s for s in self.executed() if s.startswith('CREATE ROLE odoo')]
-        self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION '
+        self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION '
                                           'NOBYPASSRLS'), create)
 
     def test_the_release_of_the_marker_is_the_version_of_the_odoo_package_else_the_variables_of_the_image(self):

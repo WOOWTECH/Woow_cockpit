@@ -132,9 +132,10 @@ DEFAULT_DB_NAME = 'odoo'     # the tenant's database and role when its configura
 DEFAULT_DB_ROLE = 'odoo'
 MAX_NAME_BYTES = 63          # PostgreSQL's NAMEDATALEN - 1
 BAD_NAME_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
-# The role of the tenant install (package smoke: `CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE`); what a role
-# that has to be made again (OD-20, OD-21) or normalised (OD-22) gets.
-STANDARD_ROLE = {'login': True, 'createdb': True, 'createrole': False, 'replication': False, 'bypassrls': False,
+# The role of the tenant install (Woow_podman_odoo c578b8a: odoo-helpers.sh `CREATE ROLE odoo LOGIN NOSUPERUSER NOCREATEDB
+# NOCREATEROLE`, and its smoke test T0 wants the flags false,false,false: "Odoo role cannot create a database"); what a role that
+# has to be made again (OD-20, OD-21) or normalised (OD-22) gets.
+STANDARD_ROLE = {'login': True, 'createdb': False, 'createrole': False, 'replication': False, 'bypassrls': False,
                  'connlimit': -1}
 # What the customer is told (zh-TW, plain; names go into the issue's items, never a value).
 MSG_MISSING_MODULES = ('這台的 Odoo 缺少 HA 資料庫已安裝的模組，用到它們的畫面、排程和報表會出錯，資料還在資料庫裡；'
@@ -396,11 +397,14 @@ def _module_of(name):
 
 
 def scan_member(stream, report, *, pg=None, filestore_db=None, filestore=None, modules=None, guard=None,
-                checkpoint=None):
+                checkpoint=None, filestore_name=DEFAULT_DB_NAME):
     """One strict pass over the add-on's inner tar (habackup.iter_entries). `pg`: a PgSink fed with the cluster;
-    `filestore`: a FileTar receiving `filestore_db`'s filestore as `filestore/odoo/**` (owner ids and modes from the
-    caller via `filestore.ids`); `modules`: a FileTar receiving every custom module candidate as
-    `<source>/<module>/**` (original modes). Returns a Source."""
+    `filestore`: a FileTar receiving `filestore_db`'s filestore as `filestore/<filestore_name>/**` (the name of the database
+    this device's Odoo is configured with: its filestore folder is named like it; owner ids and modes from the caller via
+    `filestore.ids`); `modules`: a FileTar receiving every custom module candidate as `<source>/<module>/**` (original
+    modes). Returns a Source."""
+    if not isinstance(filestore_name, str) or not DB_NAME_RE.fullmatch(filestore_name):
+        raise BackupError('internal-error', '附件資料夾名稱格式不正確。')
     select = habackup.Select(include=(PG_PREFIX, FILESTORE_PREFIX) + MODULE_SOURCES,
                              exclude=tuple(f'{prefix}/{name}' for prefix in MODULE_SOURCES
                                            for name in ('__pycache__',)), symlinks=(), hardlinks=False)
@@ -433,7 +437,7 @@ def scan_member(stream, report, *, pg=None, filestore_db=None, filestore=None, m
                 counts[0] += 1
                 counts[1] += entry.size
             if filestore is not None and db == filestore_db:
-                target = 'filestore/odoo' + (f'/{tail}' if tail else '')
+                target = f'filestore/{filestore_name}' + (f'/{tail}' if tail else '')
                 uid, gid = filestore.ids
                 filestore.add_entry(target, entry, mode=0o700 if entry.kind == 'dir' else 0o600, uid=uid, gid=gid)
             continue
@@ -1472,17 +1476,21 @@ def _left_out_link(member, name, kept, report, label):
     return False
 
 
-def web_data_tar(live_tar, out, *, sessions_ids, sessions_mode=0o700, report=None):
-    """Copy the live data dir export (`podman volume export`) into the FileTar `out` without `filestore/odoo/**` and
-    `sessions/**`; adds an empty `sessions/` owned like the live one (or `sessions_ids`). Returns the owner of the live
-    root entry. `report` (a habackup.Report): see `_left_out_link`."""
+def web_data_tar(live_tar, out, *, sessions_ids, sessions_mode=0o700, report=None, database=DEFAULT_DB_NAME):
+    """Copy the live data dir export (`podman volume export`) into the FileTar `out` without the filestore of `database` (the
+    name this device's Odoo is configured with: `filestore/<database>/**`) and `sessions/**`; adds an empty `sessions/` owned
+    like the live one (or `sessions_ids`). Returns the owner of the live root entry. `report` (a habackup.Report): see
+    `_left_out_link`."""
+    if not isinstance(database, str) or not DB_NAME_RE.fullmatch(database):
+        raise BackupError('internal-error', '附件資料夾名稱格式不正確。')
     try:
-        return _web_data_tar(live_tar, out, sessions_ids=sessions_ids, sessions_mode=sessions_mode, report=report)
+        return _web_data_tar(live_tar, out, sessions_ids=sessions_ids, sessions_mode=sessions_mode, report=report,
+                             database=database)
     except tarfile.TarError:
         raise BackupError('job-failed', '這台 Odoo 資料卷的匯出內容無法讀取。') from None
 
 
-def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode, report=None):
+def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode, report=None, database=DEFAULT_DB_NAME):
     root_ids = None
     kept = set()
     with _live_tar(live_tar, '這台 Odoo 資料卷') as tar:
@@ -1490,7 +1498,7 @@ def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode, report=None):
             name = _norm(member.name)
             if name is None:
                 raise BackupError('job-failed', '這台 Odoo 資料卷的匯出內容格式不正確。')
-            if _under(name, 'filestore/odoo') or _under(name, 'sessions'):
+            if _under(name, f'filestore/{database}') or _under(name, 'sessions'):
                 if name == 'sessions' and member.isdir():
                     sessions_ids = (member.uid, member.gid)
                     sessions_mode = member.mode & 0o7777
@@ -1690,7 +1698,7 @@ def _ha_major(src):
         return None
 
 
-def member_pass(work, app, tmp, pg_ids, *, filestore_db=None, filestore=None, modules=None):
+def member_pass(work, app, tmp, pg_ids, *, filestore_db=None, filestore=None, modules=None, filestore_name=DEFAULT_DB_NAME):
     """Stream the add-on's cluster into the throwaway volume `hapg` (and, for a conversion, the filestore and the
     custom module candidates into staging); then HA's share folder modules. Returns (Source, candidates)."""
     member = work.addon_member(SLUG)
@@ -1701,7 +1709,8 @@ def member_pass(work, app, tmp, pg_ids, *, filestore_db=None, filestore=None, mo
         sink = PgSink(out, *pg_ids, guard=work.guard)
         with work.open(member) as stream:
             holder['src'] = scan_member(stream, report, pg=sink, filestore_db=filestore_db, filestore=filestore,
-                                        modules=modules, guard=work.guard, checkpoint=work.checkpoint)
+                                        modules=modules, guard=work.guard, checkpoint=work.checkpoint,
+                                        filestore_name=filestore_name)
         sink.close()
 
     tmp.volume('hapg')
@@ -2264,7 +2273,7 @@ def convert(work, app, database, test_mode, out_dir):
     web = FileTar(web_path, work.guard)
     web.ids = odoo_ids
     live_report = habackup.Report(names=haissues.Names)   # a link of this device's own data that the restore would refuse
-    web_data_tar(live_web, web, sessions_ids=odoo_ids, report=live_report)
+    web_data_tar(live_web, web, sessions_ids=odoo_ids, report=live_report, database=live.db_name)
     os.unlink(live_web)
     live_dir = None
     if items.addons_rel is not None:
@@ -2276,7 +2285,7 @@ def convert(work, app, database, test_mode, out_dir):
     modules_tar = FileTar(staging / 'ha-modules.tar', work.guard)
     try:
         src, candidates = member_pass(work, app, tmp, pg_ids, filestore_db=database, filestore=web,
-                                      modules=modules_tar)
+                                      modules=modules_tar, filestore_name=live.db_name)
     finally:
         modules_tar.close()
     web.close()
