@@ -1084,6 +1084,12 @@ class RestoreSplitTests(HaCliCase):
         self.assertNotIn('group', response)
         self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
 
+    def test_a_registry_that_raises_never_splits_and_never_breaks_a_restore(self):
+        with mock.patch.object(haimport, 'load_registry', side_effect=OSError('x')), contextlib.redirect_stderr(io.StringIO()):
+            response = self.call(['restore-start'], self.request)
+        self.assertNotIn('group', response)
+        self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
+
     def test_the_confirmed_lines_of_each_app_go_to_its_own_job(self):
         keys = {'odoo': ['odoo.modules:1f0c52ab9d3e4f60'], 'n8n': ['n8n.credentials:1f0c52ab9d3e4f60'], 'hermes': ['x.yy:1f0c52ab9d3e4f60']}
         response = self.call(['restore-start'], {**self.request, 'acknowledged': keys})

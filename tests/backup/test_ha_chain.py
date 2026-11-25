@@ -503,6 +503,19 @@ class RunTests(ChainCase):
         self.assertIn('超過上限', '\n'.join(self.store.read_log(self.records()[-2]['id'])))
         self.assertTrue(jobs.lock_is_free(self.paths))
 
+    def test_a_job_with_a_group_but_no_valid_chain_is_run_as_any_job(self):
+        """Only a record whose group AND chain make sense is followed by more jobs; the chain code is not even asked."""
+        group = hachain.group_params(hachain.new_group_id(), 'ha-import', 'convert', 'odoo', 0, 2)
+        for label, extra in (('no chain', {}), ('a chain of other apps', {'chain': hachain.new_chain(['n8n', 'emqx'])})):
+            with self.subTest(label):
+                self.fresh()
+                started = self.start(job_type='backup', params={'apps': ['odoo'], 'group': group, **extra},
+                                     request_id=f'req-nochain-{len(label):04d}')
+                with mock.patch.object(hachain, 'conclude', side_effect=AssertionError('not a chain')) as conclude:
+                    record = jobs.run_job(self.paths, started['job_id'], deps=object(),
+                                          handlers={'backup': lambda ctx, params: {'ok': 1}})
+                self.assertEqual((record['state'], record['result'], conclude.call_count), ('succeeded', {'ok': 1}, 0))
+
     def test_a_job_that_is_no_import_is_run_as_before(self):
         result = self.start(job_type='backup', params={'apps': ['a']}, request_id='req-plain-0001')
         record = jobs.run_job(self.paths, result['job_id'], deps=object(), handlers={'backup': lambda ctx, p: {'ok': 1}})
