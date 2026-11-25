@@ -3504,6 +3504,8 @@
           h("li", { text: replaces }),
           // What the engine says about this import, e.g. the custom modules that come along (UI-3).
           info.notes.map(note => h("li", { text: note })),
+          // What stays behind (HAOS parity): the Odoo databases that stay on HA, a full copy kept before the import.
+          haStayedLines(info, info.apps).map(line => h("li", { text: line })),
           h("li", { text: "開始前會先自動保存一份這台目前的資料（還原前備份）；還原失敗會自動回復。" }),
           h("li", { text: info.testMode ? haTestText(info.apps)
             : `還原完成後，請把 HA 那邊的${addons || "對應"}附加元件停掉，避免同一件事兩邊各做一次。` }))));
