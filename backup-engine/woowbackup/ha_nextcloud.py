@@ -2061,6 +2061,14 @@ def _rows(rows):
     return sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in rows or [])
 
 
+def _same(found, expected):
+    """Two lists of names are the same names whatever their order (the database sorts them by its own collation, `_` and `-`
+    do not count there: Python's order is another one); anything else is compared as it is."""
+    if isinstance(found, list) and isinstance(expected, list):
+        return sorted(found) == sorted(expected)
+    return found == expected
+
+
 def verify_converted(doc, *, expected, db, role, dbname, moves):
     """zh-TW problems of the converted database against what it must be."""
     if not isinstance(doc, dict):
@@ -2089,7 +2097,7 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
         problems.append('使用者檔案資料夾的儲存空間記錄沒有改成這台的路徑')
     for key, label in (('roles', '資料庫角色'), ('extensions', '擴充功能'), ('datacl', '資料庫權限'),
                        ('nspacl', 'public schema 權限')):
-        if doc.get(key) != db.get(key):
+        if not _same(doc.get(key), db.get(key)):
             problems.append(f'{label}和這台的不同')
     if db.get('appconfig') is not None and _rows(doc.get('appconfig')) != _rows(db.get('appconfig')):
         problems.append('Office 或背景工作設定和這台的不同')

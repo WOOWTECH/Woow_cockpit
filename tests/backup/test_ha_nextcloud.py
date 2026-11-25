@@ -1483,6 +1483,28 @@ class CheckTests(NextcloudCase):
         sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
         self.assertNotIn('UPDATE public.oc_storages', sql)
 
+    def test_lists_of_names_are_compared_whatever_their_order(self):
+        # the database sorts the names by its own collation (en_US: `_` and `-` do not count, pgcrypto comes before pg_trgm), Python's
+        # order is another: the verification compares the names, not the order they came in
+        self.world.live_db = dict(LIVE_DB, extensions=['pgcrypto', 'plpgsql', 'vector'],
+                                  available=['btree_gin', 'pg_trgm', 'pgcrypto', 'plpgsql', 'uuid-ossp', 'vector'])
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm'])
+        catalog = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                   'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                   'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                   'datacl': LIVE_DB['datacl'], 'nspacl': LIVE_DB['nspacl'], 'roles': LIVE_DB['roles'],
+                   'extensions': ['pgcrypto', 'pg_trgm', 'plpgsql', 'vector']}
+        self.world.catalog = dict(catalog, roles=['oc_admin', 'nextcloud'])
+        self.assertEqual(self.convert(self.upload_nextcloud(), ['nextcloud'])['results'][0]['status'], 'converted')
+        for change, label in (({'extensions': ['pgcrypto', 'plpgsql', 'vector']}, '擴充功能和這台的不同'),
+                              ({'roles': ['nextcloud']}, '資料庫角色和這台的不同'),
+                              ({'roles': ['nextcloud', 'oc_admin', 'oc_admin']}, '資料庫角色和這台的不同')):
+            with self.subTest(change=change):
+                self.world.catalog = dict(catalog, **change)
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertIn(label, caught.exception.message)
+
     def test_an_extension_this_devices_image_has_is_enabled_first(self):
         # NC-39
         self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm', 'uuid-ossp'])
