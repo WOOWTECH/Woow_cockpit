@@ -650,11 +650,23 @@ class AliasTests(HermesCase):
 
     def test_a_link_to_a_name_outside_the_tree_is_left_out_and_listed(self):   # H-01: never a guess at its target
         counted = ha_hermes._Count(habackup.Report(names=haissues.Names))
-        entry = types.SimpleNamespace(linkname='data/elsewhere', mtime=0, copy_later=lambda: self.fail('copied'))
         src = ha_hermes.Source()
         src.report = counted.report
+        src.runtime.add('gateway.pid')
+        # a name that ends like a runtime file of the tree, in a folder that is not the tree: not that file
+        entry = types.SimpleNamespace(linkname='x' * len(ha_hermes.TREE) + '/gateway.pid', mtime=0,
+                                      copy_later=lambda: self.fail('a copy was asked for'))
         ha_hermes._hard_link(src, counted, 'outside', entry)
         self.assertEqual((counted.copied, counted.report.skips['hardlink'].count), (0, 1))
+
+    def test_a_link_to_a_runtime_file_that_is_a_wal_index_is_copied(self):   # H-01
+        ha_id = self.upload_hermes(extra=[self.link('shm-copy', 'state.db-shm')], evil=False)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.convert(ha_id, ['hermes'])
+        data = self.volume('hermes-data')
+        self.assertEqual((data['shm-copy'][0].isreg(), data['shm-copy'][1]), (True, b'shm'))
+        self.assertNotIn('state.db-shm', data, 'the wal-index itself is still left out')
 
     def test_settling_twice_lists_a_link_once(self):   # H-01: judge may run for the same walk again
         member = hx.tar_bytes([{'name': 'config', 'type': 'dir', **OWN}, {'name': 'config/kanban.db', 'data': BAD_DB, **OWN},
