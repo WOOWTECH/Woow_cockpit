@@ -793,6 +793,34 @@ def toc_kinds(text):
     return found
 
 
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
+
+
+def toc_entries(text):
+    """(entries, declared) of a `pg_restore -l` listing: how many lines are entries (`<id>; <oid> <oid> <kind> ...`) and the
+    `TOC Entries:` its header says the archive has (None when the header is not there)."""
+    declared, entries = None, 0
+    for line in text.splitlines():
+        header = re.match(r';\s+TOC Entries:\s+([0-9]{1,9})\s*\Z', line)
+        if header:
+            declared = int(header.group(1))
+        elif re.match(r'\s*\d+;\s+\d+\s+\d+\s', line):
+            entries += 1
+    return entries, declared
+
+
+def check_listing(text):
+    """pg-stdin follow-up F4: the listing of the dump is whole when the number of its entries is what its own header says the
+    archive has, short by at most the three archive settings (ENCODING, STDSTRINGS, SEARCHPATH) that a plain listing may leave
+    out. A listing that came back short would restore only the part it names, and nothing would notice. pg_restore always
+    prints the header; a listing without one (a double) cannot be compared and is let through. Returns the entries."""
+    entries, declared = toc_entries(text)
+    if declared is not None and not declared - len(ARCHIVE_SETTINGS) <= entries <= declared:
+        raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, declared=declared)   # numbers only, no content
+    return entries
+
+
 def data_only_toc(text, *, tables=None, sequences=None, skipped=None):
     """Only the table data and sequence values of a locally generated custom archive (its `pg_restore -l` list), as
     the `-L` list of the data restore. pg_restore reads nothing of a selected line but the dump id at its start, so a
@@ -1053,6 +1081,7 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
         listing = tmp.exec(role, ['pg_restore', '-l'], user='postgres', input=handle,
                            timeout=DUMP_TIMEOUT, max_output=ha_odoo.TOC_OUTPUT).stdout or b''
     text = listing.decode('utf-8', 'surrogateescape')
+    check_listing(text)
     selection = data_only_toc(text, tables=tables, sequences=sequences, skipped=skipped)
     sets = sequence_set_lines(selection)
     if sets:

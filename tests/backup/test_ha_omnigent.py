@@ -171,6 +171,7 @@ class World(fk.World):
         self.extra_members = {}               # volume (or throwaway role) -> members its export holds besides the usual
         self.live_major = 16                  # what this device's database answers to server_version_num / 10000 (O-18)
         self.superuser = []                   # the kinds of object only a database superuser can make that HA's database holds
+        self.toc_declared = None              # what the header of `pg_restore -l` says (None: the number of entries)
 
     def podman(self, args, data, stdout):
         if self.db_stopped and args[:2] == ['container', 'inspect'] and args[-1] == 'omnigent-postgres':
@@ -204,7 +205,9 @@ class World(fk.World):
             stdout.write(b'PGDMP-' + role.encode())
             return Result(0, None, b'')
         if command[:2] == ['pg_restore', '-l']:
-            return Result(0, self.toc, b'')
+            count = len(re.findall(rb'(?m)^\s*\d+;\s+\d+\s+\d+\s', self.toc))
+            declared = count if self.toc_declared is None else self.toc_declared
+            return Result(0, b';\n;     TOC Entries: %d\n;\n' % declared + self.toc, b'')   # the header pg_restore prints
         if command[:3] == ['pg_restore', '-f', '-']:   # the selected SEQUENCE SET entries as pg_restore prints them
             return Result(0, self.seq_script.encode(), b'')
         if command[:2] == ['sh', '-c']:
@@ -673,6 +676,29 @@ class ConvertTests(OmnigentCase):
         keys = self.confirmed(self.check(ha_id, ['omnigent'])[0])
         self.convert(self.upload_omnigent(), ['omnigent'], acknowledged=keys)
         self.assertEqual(self.world.written['/tmp/woowbk-omnigent.toc'].decode().splitlines(), DATA_LINES)
+
+    def test_a_listing_that_came_back_short_stops_before_anything_is_loaded(self):
+        """pg-stdin follow-up F4: the entries of `pg_restore -l` are counted against the `TOC Entries:` of its own header; a
+        listing that is short (a stdin transfer that arrived short under load) would restore only the part it names."""
+        for declared in (40, 15):                  # 11 entries come back: short by 29 and by 4 (more than the 3 settings)
+            with self.subTest(declared=declared):
+                self.world.toc_declared = declared
+                self.world.forget()
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_omnigent.INCOMPLETE_LIST))
+                self.assertEqual(caught.exception.details, {'listed': 11, 'declared': declared, 'app': 'omnigent'}
+                                 if 'app' in caught.exception.details else {'listed': 11, 'declared': declared})
+                self.assert_nothing_loaded()
+        for declared in (11, 12, 13, 14):          # the header counts the settings a plain listing may leave out: 0 to 3
+            with self.subTest(declared=declared):
+                self.world.toc_declared = declared
+                self.world.forget()
+                self.convert(self.upload_omnigent(), ['omnigent'])
+        self.world.toc_declared = 10               # more entries than the header says: not a listing of this archive
+        self.world.forget()
+        with self.assertRaises(BackupError):
+            self.convert(self.upload_omnigent(), ['omnigent'])
 
     def test_a_name_with_a_line_break_cannot_add_an_entry(self):
         """pg_restore -L reads only the id at the start of a line: a second "users" line (or the same sequence twice) would
@@ -1546,6 +1572,35 @@ class SkippedLineTests(OmnigentCase):
 
     def test_extensions_one_more(self):
         self.assert_one_more_asks('extensions')
+
+    def test_a_table_both_have_that_this_module_does_not_know_stops_instead_of_loading_unverified_data(self):
+        """The one way the left-out list and the trusted schema could disagree (an Omnigent newer than this module's list of
+        19 tables adds a table that HA's database has too): the table is not compared (it is not Omnigent's as far as this
+        module knows), but its data would be selected -- the conversion compares the columns of the tables that are moved with
+        the new cluster's first, and stops: nothing of HA is ever loaded into a table whose shape was not compared."""
+        future = [['future', 'id', 'integer', True, '', '']]
+        self.world.objects = dict(self.world.objects, tables=self.world.objects['tables'] + ['future'])
+        self.world.ha_columns = COLUMNS + future
+        self.world.live_columns = COLUMNS + future
+        self.world.restored_signature = None
+        self.world.toc = TOC + b'3990; 0 0 TABLE DATA public future x\n'
+        real = self.world.answer
+
+        def answer(role, sql, database):
+            if sql == ha_omnigent.SCHEMA_SIGNATURE_SQL and role != 'hapg':
+                found = dict(real(role, sql, database))
+                found['relations'] = found['relations'] + [['future', 'r', 'p', False, False, '', False]]
+                return found
+            return real(role, sql, database)
+        self.world.answer = answer
+        ha_id = self.upload_omnigent()
+        result = self.check(ha_id, ['omnigent'])[0]
+        self.assertEqual([i['items'] for i in self.issues(result, 'omnigent.skipped')], [['資料表 future']])
+        self.world.forget()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(result))
+        self.assertEqual((caught.exception.code, caught.exception.message), ('incompatible', 'HA 與目標 Omnigent 的資料表欄位結構不同。'))
+        self.assert_nothing_loaded()
 
     def test_nothing_of_the_superuser_kinds_is_ever_selected(self):
         """O-15 (security re-review, DESIGN H-c): the objects only a database superuser can make stay in HA's cluster, which
