@@ -679,6 +679,13 @@ def config_issues(sink, ha, live, image_version, *, found=True, addon_version=No
                       action='請在 HA 讓 Nextcloud 正常啟動並完成升級後，重新備份再匯入。')
 
 
+def config_blockers(ha, live, image_version, *, found=True, addon_version=None):
+    """The sentences of the stops `config_issues` finds, as the list the lab scripts of earlier runs read."""
+    sink = haissues.Sink('nextcloud')
+    config_issues(sink, ha, live, image_version, found=found, addon_version=addon_version)
+    return [issue.message for issue in sink.found if issue.level == 'stop']
+
+
 def merge_config(ha, live):
     """(merged config, carried policy keys, HA keys not carried): the live config.php is the base (facts section
     4.2); HA's identity keys replace the live ones; HA's policy keys (D1) are carried. The two-factor keys are one

@@ -532,6 +532,13 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.issues(None, found=True), [('nextcloud.config-unreadable', 'stop')])
         self.assertEqual(self.issues(None, found=False), [('nextcloud.config-missing', 'stop')])
 
+    def test_the_old_list_form_still_serves_the_lab_scripts(self):
+        live, ha = nc.parse_config(LIVE_CONFIG), nc.parse_config(HA_CONFIG)
+        self.assertEqual(nc.config_blockers(ha, live, '35.0.1'), [])
+        self.assertIn('版本不同', nc.config_blockers(dict(ha, version='35.0.3.1'), live, '35.0.1')[0])
+        self.assertIn('無法解讀', nc.config_blockers(None, live, '35.0.1')[0])
+        self.assertIn('找不到', nc.config_blockers(None, live, '35.0.1', found=False)[0])
+
     def test_a_conversion_never_goes_on_past_a_stop_even_with_a_sink_that_only_collects(self):
         sink = haissues.Sink('nextcloud')       # a check's sink: nothing raises by itself
         nc.config_issues(sink, nc.parse_config(HA_CONFIG), nc.parse_config(LIVE_CONFIG), '35.0.1')
