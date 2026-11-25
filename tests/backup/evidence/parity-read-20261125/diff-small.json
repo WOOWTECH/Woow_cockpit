@@ -13,7 +13,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 6.3
+   "seconds": 8.8
   },
   {
    "file": "woow-import-test-plain.tar",
@@ -28,7 +28,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 3.9
+   "seconds": 6.9
   },
   {
    "file": "woow-arm-crash.tar",
@@ -43,7 +43,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 2.7
+   "seconds": 3.6
   },
   {
    "file": "woow-arm-downloaded.tar",
@@ -58,7 +58,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 5.2
+   "seconds": 3.9
   },
   {
    "file": "woow-arm-enc.tar",
@@ -73,7 +73,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 7.8
+   "seconds": 7.6
   },
   {
    "file": "woow-arm-native.tar",
@@ -88,7 +88,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 4.7
+   "seconds": 4.6
   },
   {
    "file": "woow-arm-plain.tar",
@@ -103,7 +103,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 3.7
+   "seconds": 7.6
   },
   {
    "file": "woow-litellm-x86-enc-20261123.tar",
@@ -118,8 +118,8 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 2.6
+   "seconds": 6.4
   }
  ],
- "maxrss_mib": 41
+ "maxrss_mib": 40
 }

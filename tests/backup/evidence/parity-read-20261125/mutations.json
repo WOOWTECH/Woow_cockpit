@@ -56,13 +56,15 @@
   },
   {
    "label": "bytes limit",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "bytes limit of copies",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "copies are not counted",
@@ -108,8 +110,9 @@
   },
   {
    "label": "link copies limit",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "link passes",
@@ -335,8 +338,9 @@
   },
   {
    "label": "global header moves",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "prefix of GNU headers",
@@ -657,11 +661,6 @@
    "why": "FAILED (failures=1)"
   },
   {
-   "label": "below a file",
-   "result": "NOT-APPLIED",
-   "found": 0
-  },
-  {
    "label": "parent cache",
    "file": "habackup.py",
    "result": "caught",
@@ -735,20 +734,21 @@
   },
   {
    "label": "tail of a plain tar",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "tail alignment",
    "file": "habackup.py",
    "result": "caught",
-   "why": "FAILED (errors=1)"
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "tail checksum",
    "file": "habackup.py",
    "result": "caught",
-   "why": "FAILED (errors=1)"
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "member finish",
@@ -764,8 +764,9 @@
   },
   {
    "label": "inner truncated",
-   "result": "NOT-APPLIED",
-   "found": 0
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
   },
   {
    "label": "copy a secret",
@@ -1410,11 +1411,203 @@
    "why": "FAILED (failures=1)"
   },
   {
+   "label": "link targets limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes call is gone",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes count never moves on",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes count is too long",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes threshold is strict",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the first bytes call is late",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the reader of the walk has none",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries call is gone (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries count is off (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the walk does not hand it to the copies",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the copies do not hand it to the pass",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the reader of the second pass has none",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries call is gone (second pass)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries count is off (second pass)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of CHECK_BYTES",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of CHECK_ENTRIES",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: no budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: budget is not handed on",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: the floor is the budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: constant",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: short",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: one for all tables",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: not in the digest",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale upload: the record is followed",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail: every word is looked at",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail: a block is skipped",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum is not looked at",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum counts the first part only",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum counts the second part only",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum is counted in Python",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: 127 is a high byte",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: a byte counts 255 less",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
    "label": "CONTROL (must survive)",
    "file": "habackup.py",
    "result": "SURVIVED",
    "why": "OK"
   }
  ],
- "seconds": 1398
+ "seconds": 3877
 }

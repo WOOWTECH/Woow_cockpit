@@ -13,7 +13,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 3.8
+   "seconds": 11.3
   },
   {
    "file": "woow-b1-x86-emqx-stopped-bcrypt.tar",
@@ -28,7 +28,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 7.2
+   "seconds": 13.4
   },
   {
    "file": "woow-b1-x86-emqx-stopped-fileonly.tar",
@@ -43,7 +43,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 6.6
+   "seconds": 15.8
   },
   {
    "file": "woow-b1-x86-emqx-stopped-noacl.tar",
@@ -58,7 +58,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 6.4
+   "seconds": 12.8
   },
   {
    "file": "woow-b1-x86-emqx-stopped-plain.tar",
@@ -73,7 +73,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 8.9
+   "seconds": 10.3
   },
   {
    "file": "woow-b1-x86-emqx-stopped-enc.tar",
@@ -88,7 +88,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 8.1
+   "seconds": 26.3
   },
   {
    "file": "woow-arm-enc-uncompressed.tar",
@@ -103,7 +103,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 5.5
+   "seconds": 12.6
   },
   {
    "file": "woow-import-test-enc-uncompressed.tar",
@@ -118,7 +118,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 11.0
+   "seconds": 9.3
   },
   {
    "file": "woow-b2-nextcloud-x86-enc-noshare-20261123.tar",
@@ -133,7 +133,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 12.5
+   "seconds": 24.8
   },
   {
    "file": "woow-b1-arm-enc.tar",
@@ -148,7 +148,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 10.0
+   "seconds": 43.5
   },
   {
    "file": "woow-b1-arm-plain.tar",
@@ -163,7 +163,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 6.4
+   "seconds": 22.3
   },
   {
    "file": "woow-b1-x86-enc.tar",
@@ -178,7 +178,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 27.4
+   "seconds": 50.8
   },
   {
    "file": "woow-b1-x86-plain-active-task.tar",
@@ -193,7 +193,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 19.9
+   "seconds": 44.7
   },
   {
    "file": "woow-b1-x86-plain.tar",
@@ -208,7 +208,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 19.6
+   "seconds": 42.0
   },
   {
    "file": "woow-b1-arm-enc-uncompressed.tar",
@@ -223,7 +223,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 8.0
+   "seconds": 18.3
   },
   {
    "file": "woow-b2-codeserver-x86-enc-20261123.tar",
@@ -238,7 +238,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 52.9
+   "seconds": 175.5
   },
   {
    "file": "woow-b1-x86-enc-uncompressed.tar",
@@ -253,7 +253,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 24.7
+   "seconds": 69.9
   },
   {
    "file": "woow-b2-opendesign-x86-enc-20261123.tar",
@@ -268,7 +268,7 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 54.3
+   "seconds": 182.5
   },
   {
    "file": "woow-b2-nextcloud-x86-enc-share-20261123.tar",
@@ -283,8 +283,8 @@
    "members_equal": true,
    "problems": [],
    "ignored": 0,
-   "seconds": 207.4
+   "seconds": 561.7
   }
  ],
- "maxrss_mib": 43
+ "maxrss_mib": 42
 }

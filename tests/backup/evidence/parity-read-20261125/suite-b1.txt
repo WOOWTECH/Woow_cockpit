@@ -1,4 +1,4 @@
-tests=1969 failures=4 errors=4 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=246
+tests=1978 failures=4 errors=4 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=445
 FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line
 FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_text_cannot_reorder_a_message_or_a_log_line
 FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded

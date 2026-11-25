@@ -1,26 +1,65 @@
 # parity-read-20261125 (proposed place: tests/backup/evidence/parity-read-20261125/README.md; raw files: evidence/ next to this snippet)
 
 Lane READ (DESIGN section D, 83 rows): read HA backups as tolerantly as HAOS, keep every protection against hostile and damaged files. Branch
-parity/read-20261125 on e7d687b (tip: 691d39e; the verification chain it2b ran on 411fefe, the product files are the same at both); product files
+parity/read-20261125 on e7d687b (tip: ecfb022; iteration 3; the verification chain it3b ran on ecfb022, the product files are the same at both); product files
 backup-engine/woowbackup/{habackup,hasecuretar,hastore,storage}.py, tests tests/backup/{test_ha_backup,test_ha_securetar,test_ha_store,
 test_ha_links,test_storage,hafixtures}.py. No other file. Nothing was deployed, no service, device or network was touched; the real HA backups were
 only read. commercial_acceptance: not-complete. Everything below was made by the scripts next to this file (evidence/), counts and equality only.
 
+Words used in the "kind" column, so that nothing reads wider than it is: "unit tests" = synthetic files and the committed securetar fixtures, in this
+repository's test modules; "real HA files, read only" = the real HA backup files of the lab read by the reader (opened, walked, compared) -- no device, no
+import, no restore, no importer; "fakes" = the importers' own checks are replaced by test doubles. Nothing in this lane ran on a device (R1 of DESIGN G4).
+
 | what | result | kind |
 | --- | --- | --- |
-| the lane's five test modules | 185 tests OK, 1 skipped (RealBackupTests without its key) | unit tests (synthetic files, the committed securetar fixtures; GNU tar 1.35 and busybox of the host repack them) |
-| full tests/backup --b1 through integration-3 guard.py, this branch alone | tests=1969 failures=4 errors=4 skipped=1 blocked=6; not ok: 5 of the 5 known test_litellm_lab_runner guard refusals (the guard blocks what they run) and 3 tests of other lanes' files (test_ha_omnigent.Check.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line, test_ha_omnigent.Check.test_has_text_cannot_reorder_a_message_or_a_log_line, test_ha_cli.UploadFinish.test_a_broken_ha_file) | unit tests |
-| the same on a throw-away merge of F1 (0f6e4d4) + READ (691d39e) + READ's snippets (CONTRACT, cli, test_ha_cli, test_ha_omnigent, haissues, test_ha_issues, rows) | tests=2155 failures=3 errors=3 skipped=1 blocked=6; not ok: 5 of the 5 known test_litellm_lab_runner guard refusals (the guard blocks what they run) and 1 test of other lanes' files (test_ha_litellm.SingleProtection.test_n14_a_second_salt_file_refuses) | unit tests |
-| RealBackupTests (--ha118) | tests=1 failures=0 errors=0 skipped=0 blocked=0; all ok | real HA backups, read only |
-| old reader (e7d687b) against the new one, entry by entry and byte by byte | 27 real HA backups (10.7 GB, x86 and ARM, encrypted v2/v3, plain, uncompressed, downloaded, crash): 71 of 71 members equal (126,217 entries, modes, owners, content, add-on info), summaries and layouts equal, 0 wrong key, 0 skipped entries, 0 differences, peak 43 MiB | real HA backups, read only (differential.py, diff-*.json) |
-| changed copies of two real HA backups | 37 of 37: repacked by GNU tar in 5 formats, busybox; rubbish behind; bit flips; cut; twice; gone; gzip in parts: only the add-on concerned is affected | real files, changed copies (real_files.py) |
+| the lane's five test modules | 194 tests OK, 1 skipped (RealBackupTests without its key) | unit tests (synthetic files, the committed securetar fixtures; GNU tar 1.35 and busybox of the host repack them for real; bsdtar and macOS repacks are hand-built imitations of what those tools write, labelled so in test_bsdtar_and_macos: there is no bsdtar on the host) |
+| full tests/backup --b1 through integration-3 guard.py, this branch alone | tests=1978 failures=4 errors=4 skipped=1 blocked=6; not ok: 5 of the 5 known test_litellm_lab_runner guard refusals (the guard blocks what they run) and 3 tests of other lanes' files (test_ha_omnigent.Check.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line, test_ha_omnigent.Check.test_has_text_cannot_reorder_a_message_or_a_log_line, test_ha_cli.UploadFinish.test_a_broken_ha_file) | unit tests |
+| the same on a throw-away merge of the integrated BASE 1dc9108 (F1 + PKG + READ 691d39e + their snippets applied) and this branch | tests=2164 failures=2 errors=3 skipped=1 blocked=6; not ok: 5 of the 5 known test_litellm_lab_runner guard refusals (the guard blocks what they run) and nothing else | unit tests |
+| RealBackupTests (--ha118) | tests=1 failures=0 errors=0 skipped=0 blocked=0; all ok | real HA files, read only |
+| job level, twelve ways one add-on member can be broken (job_level.py, job_level.out), F1's check with the importers' checks mocked | 11 of 12 damaged members stop only their own app at check time (fakes, not real); not stopped at check time: ['cut gzip'] (the one that is not stopped at check time: a gzip member cut 20 bytes before its end, a few KiB long: the fake check never reads to its end; read to its end the reader stops it as corrupt-archive of that member, tested in the lane modules) | fakes (F1's flows.run_verify, small synthetic members): not real, not a device |
+| old reader (e7d687b) against the new one, entry by entry and byte by byte | 27 real HA backups (10.7 GB, x86 and ARM; plain, uncompressed, downloaded, crash; members counted from the layouts: 40 v3, 31 unencrypted, no v1 or v2 member among them: v1 and v2 are covered by the committed fixtures that the real securetar library wrote): 71 of 71 members equal (126,217 entries, modes, owners, content, add-on info), summaries and layouts equal, 0 wrong key, 0 skipped entries, 0 differences, peak 42 MiB | real HA files, read only (differential.py, diff-*.json) |
+| changed copies of two real HA backups | 37 of 37: repacked by GNU tar in 5 formats, busybox; rubbish behind; bit flips; cut; twice; gone; gzip in parts: only the add-on concerned is affected | changed copies of real HA files, read only (real_files.py) |
 | HAOS parity table | documents 349 agree 349 [] (the mirror in the test against Supervisor validate.py e610ca81 executed with stubs, voluptuous 0.16) | unit test + check_schema.py |
 | inner tars against Python's tarfile | rounds 1500, differences 0 (1500 random valid trees, PAX/GNU/USTAR, unicode, long names, big uid, float mtime, symlinks: names, kinds, modes, owners, sizes, times, links, content) | one-off (diff_tarfile.py) |
 | structure fuzz | 120,000 walks over random hostile structures: 0 violations and 0 violations (two mixes of names and types) | one-off (struct_fuzz*.py) |
 | byte-level fuzz (fixed seeds) | 16,000 damaged files (gzip, plain, v3, v2): only BackupError of a known code, or exactly the content as written (checked kinds) | one-off (long_fuzz.py); a short form is in the unit tests |
-| 4,000,000 entries | 4,000,000 entries: 132 MiB peak (23 MiB of it Python itself), 173 s CPU; the next entry: limit-exceeded: too many entries in an inner tar | measurement (mem4m.py) |
-| the old tests on the new engine | 46 expectations of the old tests changed (45 failures, 1 error of 92), listed in old-tests.txt; every other old test, hostile samples included, holds | unit tests (old-tests.txt) |
-| mutation sweep | 237 mutants of the four product files: {'caught': 236, 'SURVIVED': 1}; the one that survives is the control (a change nobody can notice). The sweep it2b ran 237 on 411fefe; 7 of its definitions no longer matched the code (renamed limit errors, the rewritten names table) and were corrected and run again (it2b-mutB: 7 of 7 caught), one new mutant was added for the limit of the notes about chains | mutations of the four product files (mutations.json) |
+| 4,000,000 entries | 4,000,000 entries: 132 MiB peak (23 MiB of it Python itself), 173 s CPU; the next entry: limit-exceeded: too many entries in an inner tar (record of it2b (tip 411fefe/691d39e; the walk and the names table are unchanged in iteration 3, so the run was not repeated, to spare the host)) | measurement (mem4m.py) |
+| cost of the probe behind a plain tar on crafted fillers, same machine, before and after | ustar words: 89.3 -> 4.5 s per GiB; a word in every block, bad sum: 68.4 -> 18.5 s per GiB; zeros: 1.7 -> 2.3 s per GiB; random: 1.7 -> 2.3 s per GiB (CPU seconds per GiB measured on 64 MiB of each filler on this machine, the code of iteration 2 (691d39e) and of this iteration; zeros and random bytes did not change, the difference is the load of the machine) | measurement (probe_cost.py, probe_cost.out) |
+| the probe behind a plain tar against the probe of iteration 2 (same answers) | 60,000 random rounds (headers good and damaged, words, zeros, wrong sums, readers that had read bytes, 9 buffer sizes): 26,367 times 'a header follows', 33,633 times not, 0 different answers | one-off (probe_diff.py), besides the 600 rounds of the unit test |
+| the tests of this iteration (four classes) against the engine of iteration 2 (691d39e) | fails: test_a_filler_of_words_costs_a_few_steps_per_block (filler='words') fails: test_a_filler_of_words_costs_a_few_steps_per_block (filler='a word in every block') fails: test_a_filler_of_words_costs_a_few_steps_per_block (filler='a word in half of the blocks') Ran 66 tests in 16.163s FAILED (failures=3) | unit tests (tests-on-engine-iteration2.out): the five blind spots were right in the code, only the tests were blind; the cost of the probe is what changed |
+| the old tests on the new engine | 46 expectations of the old tests changed (45 failures, 1 error of 92), listed in old-tests.txt; every other old test, hostile samples included, holds | unit tests (old-tests.txt; run at iteration 2; iteration 3 changed only the probe behind a plain tar and the way the signed header sum is counted, which gives the same sums) |
+| mutation sweep (ONE run of one list on the tip of this iteration) | 268 mutants in one run on ecfb022: {'caught': 267, 'SURVIVED': 1}; survivors: ['CONTROL (must survive)']; the one that survives is the control (a change nobody can notice); one list, one run: the definitions of iteration 2 (corrected where the code had moved) and the mutants added in iteration 3 for the checkpoints, the budget of the second pass, the stale-upload link, the key of the names table, the probe and the header sum | mutations of the four product files (mutations.json) |
+
+## Found in iteration 3 (the verifier's findings, with tests and mutants)
+
+1. Five protections that were in the code and that no test noticed (the verifier removed each one and every test passed). Each has a test now and a
+   mutant in the sweep: (a) the checkpoint of the reading in _Reader._fill every CHECK_BYTES (64 MiB): a cancel or the watchdog reaches a walk that skips
+   data nobody selected; the old test said "at least 2 calls" and the entry count alone gave them; now every call is checked by its stream position, a
+   cancel at the first and at the third, and the entry count apart from the bytes (EntryTests); (b) the entry and byte checkpoints of the second (hard link
+   copy) pass, and (c) the inflate budget of the member for that pass: a stream that is opened again and holds more than the first time is
+   limit-exceeded of one member, the ratio of the stored size counts and not only the floor (HardLinkTests.test_the_second_pass_...); (d) O_NOFOLLOW where
+   the stale-upload drop opens the record of an upload: a link put there is neither locked nor removed (test_storage); (e) the key of the names table:
+   16 bytes, new for every table and every walk, part of every digest (NamesTests). The sweep of iteration 2 had no checkpoint mutant at all. The sweep of this iteration catches every one of the new mutants; and for 16 of them (the lines of the five
+   blind spots) each is caught by the one test written for it when only that test is run (mutants-vs-their-own-test.out; quickmut.py).
+2. The probe behind a plain, unencrypted tar (IN-41; the tar must not go on behind its end marker): it asked for every word 'ustar' in the tail and ran
+   its loop once per word, so a crafted tail cost 89 s of CPU per GiB on this machine (the verifier measured 139 s). It now asks for the next word only
+   from the magic place of the next block, and gives the same answers (differential test against the old probe: 600 random rounds in 6 buffer sizes, headers
+   good and damaged, words and zeros at any offset, a reader that had read some bytes, tails that are no whole block). The signed byte sum of the header
+   checksum (the fallback tarfile accepts) was a Python generator over the block, 33 us per block, and a crafted tail with the magic in every block paid it
+   2 million times per GiB; it is counted in C now (proven equal to the sums written out byte by byte on 4000 random blocks). A cost test counts the lines
+   of the probe and of the header sum (at most 40 per block over 2048 blocks of any filler; the probe needs 8 to 13, the one of iteration 2 needed 409 to 517), not
+   seconds; a mutant that counts the sum byte by byte in Python again is caught by it. The refusals are exactly the ones of
+   before (every case of test_what_follows_the_end; the differential test).
+   Measured worst cases (probe_cost.out; this machine, CPU seconds per GiB): 'ustar' words 89 -> 4.5; the magic in every block with a wrong checksum
+   68 -> 18.5; zeros and random bytes 1.7-2.3 (unchanged). Bounded by the size of the member and cancellable (every 64 MiB).
+3. Wording of the earlier evidence (iteration 2), corrected: (a) the job level result is 11 of 12, not 12 (the cut gzip is not seen at check time with a small fake
+   member; the reader itself stops it when it is read to its end; the job level part is fakes, not real); (b) the 27 real HA backups hold v3 members (40) and
+   unencrypted ones (31) only, no v1 or v2 member: v1 and v2 are read from the committed fixtures that the real securetar library wrote; (c) bsdtar and macOS
+   repacks are hand-built imitations (GNU tar and busybox are the real tools of the host); (d) "237 mutants, 236 caught" of iteration 2 added three runs together
+   (229 in the sweep, 6 corrected definitions run again, 1 added later); the number of this iteration is ONE run of one list; (e) "only the 5 known not ok" of the
+   full suite left out the 3 tests of other lanes' files that fail on this branch alone (see below; they pass on the integrated BASE); (f) "real" (the "real"
+   flag of the hand-off items) means real HA backup files read by the reader, never a device, an import or a restore; (g) "one mutant for each check" was too
+   wide: the five protections of point 1 had none.
 
 ## Found in iteration 2 (fixed, with tests and mutants)
 
@@ -49,8 +88,8 @@ area gives nothing, at any step of a chain (checked once, by name, when the link
 nothing; copies count into the byte budget; at most 100,000 waiting links and 4 passes; files with several links are kept in memory up to 1 MiB only; every
 pass has its own checks, also when it ends at the end of the archive (a test). What an importer itself decides not to keep (copy_later) is its own
 responsibility (FOR-APP-LANES.txt point 3). The writes of the copies go through each importer's SpaceGuard (every 64 MiB) and the watchdog.
-Limits: they grow, none is gone (the mutation sweep has one mutant for the value of each and one for each check). New: the records count above.
-Algorithmic cost: every loop of the reader is linear in the bytes it reads except the names table, which is now linear in the names it creates.
+Limits: they grow, none is gone (the sweep has a mutant for the value of each limit and for most of the checks; five protections that it did not cover are listed under iteration 3). New: the records count above.
+Algorithmic cost: every loop of the reader is linear in the bytes it reads (the probe behind a plain tar since iteration 3: a few steps per block) except the names table, which is linear in the names it creates.
 
 ## Decisions a reviewer should look at
 
@@ -61,10 +100,10 @@ ignored. (3) IN-07: zero padding behind a gzip stream is accepted like gzip(1) d
 about names and sizes. (5) UP-16 (kept): an outer tar that lacks only its end marker is refused as cut off (Python's tarfile reads it; HaosParityTests lists it
 with its reason). (6) the new limit of 50 million extended header records is not in DESIGN D; it is the price of raising the size of one header.
 
-Tests of other lanes that fail on this branch alone: test_ha_cli.UploadFinishTests.test_a_broken_ha_file (protected='yes' is taken now; F1 already changed it)
-and two of test_ha_omnigent.CheckTests (HA's backup name is cleaned when the file is read; test_ha_omnigent.py.patch). All pass in the merge with the patches
-of NOTES.txt. In the throw-away merge with F1 the full suite shows, besides the 5 guard refusals, test_ha_litellm SingleProtectionTests.test_n14_a_second_salt_file_refuses:
-F1's own test_ha_litellm.py.patch (its INTEGRATION.txt step d) changes it and it passes with that patch applied (run by hand on the same tree).
+Tests of other lanes that fail on this branch ALONE (so "only the 5 known" is not the whole truth for the branch by itself): test_ha_cli.UploadFinishTests.test_a_broken_ha_file
+(protected='yes' is taken now; F1 already changed it) and two of test_ha_omnigent.CheckTests (HA's backup name is cleaned when the file is read;
+test_ha_omnigent.py.patch). They are the 3 beside the 5 test_litellm_lab_runner guard refusals in the line "this branch alone" of the table. On the integrated
+BASE 1dc9108 (where those snippets are applied) plus this branch: the full suite has exactly the 5 known guard refusals not ok and nothing else (tests=2164 failures=2 errors=3 skipped=1 blocked=6; not ok: 5 of the 5 known test_litellm_lab_runner guard refusals (the guard blocks what they run) and nothing else).
 
 Not done here: any real import on a device (R1 of DESIGN G4), the page, and the customer's confirmation for skipped items (every importer must hand
 Report.skips on: haissues.py.patch gives them `sink.skipped(report)`; until it is used a skipped entry is only a line in the job log).

@@ -1,0 +1,6 @@
+# the lane tests of iteration 3 (EntryTests, HardLinkTests, NamesTests, test_storage.UploadTests) against the engine of iteration 2 (691d39e): only the cost test of the probe fails
+FAIL: test_a_filler_of_words_costs_a_few_steps_per_block (filler='words')
+FAIL: test_a_filler_of_words_costs_a_few_steps_per_block (filler='a word in every block')
+FAIL: test_a_filler_of_words_costs_a_few_steps_per_block (filler='a word in half of the blocks')
+Ran 66 tests in 16.163s
+FAILED (failures=3)
