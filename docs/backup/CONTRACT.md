@@ -2077,7 +2077,7 @@ stopped database or service is started for the reading and put back; the owner's
 copy; a link out of a volume that the customer made is left out and listed, the rest of the volume goes on; waits and the room for
 an answer grow with the data (the old values are the floor); a command that fails says why in one fixed sentence; an object that
 cannot be removed is a log line. Every one of these that cannot be done stops that app only, with its reason, and the app on this
-device is unchanged. What an importer has to do to use them is in the `hatarget` bullet of §6.
+device is unchanged. What an importer has to do to use them is in the `hatarget` bullet of §6. The helpers are in place; each importer starts to call them in its own lane (rows CM-11, FL-11, X-PD-04, X-PD-05, X-AD-01, X-AD-60 and X-NS-08 stay `part` in `ha_parity_rows.json` until then), so an importer that does not call one yet behaves as before.
 
 **Odoo** (add-on `odoo18ce` → app `odoo`, cold PostgreSQL mode: volumes `odoo18-db-data-isolated` (a whole cluster)
 and `odoo18-web-data`, host directory `.local/share/odoo18/addons`). The live Quadlet files describe the target (the
