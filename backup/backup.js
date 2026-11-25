@@ -3475,7 +3475,9 @@
   // Large add-ons take longer to check and convert (HA_LARGE).
   function haSlowText(ids) {
     const large = ids.filter(id => HA_LARGE.has(id)).map(haShort);
-    return large.length ? `${large.join("、")} 的附加元件檔案比較大，檢查和轉換會花比較久的時間。` : null;
+    // EMQX's check builds a whole throwaway EMQX to try the import: measured at 4.5 to 9 minutes (EMQX-A, H7), not one or two.
+    const emqx = ids.includes("emqx") ? "EMQX 的檢查要先做出一個暫用的 EMQX 來試，約需 5～10 分鐘。" : "";
+    return large.length ? `${large.join("、")} 的附加元件檔案比較大，檢查和轉換會花比較久的時間。${emqx}` : null;
   }
 
   // After an import (DESIGN §0): stop the HA add-on so nothing runs twice (a test import already turned that off), log
@@ -4796,7 +4798,8 @@
   // The one confirmation (B12): everything with a consequence in one list and one tick.
   function haConfirmBox(wizard, ids, lines) {
     const odoo = list(wizard.check).find(app => app.app_id === "odoo" && ids.includes("odoo"));
-    const left = odoo ? haLeftDatabases(wizard, odoo) : null;
+    // An engine that says it itself (odoo.databases-left, with the names of the other databases) is not told twice.
+    const left = odoo && !lines.some(({ issue }) => issue.id === "odoo.databases-left") ? haLeftDatabases(wizard, odoo) : null;
     const signature = haConfirmSignature(lines);
     const input = h("input", {
       type: "checkbox", id: "ha-ack", checked: wizard.ackSignature === signature, disabled: wizard.busy, "aria-describedby": "ha-confirm-list",

@@ -6128,7 +6128,7 @@ try {
         '會搬過來的有：資料、資料本身的金鑰，以及大多數應用的登入帳號；每個應用搬什麼、留什麼，檢查結果和還原前都會寫出來。這台的網址、連接埠、資料庫密碼和應用機密保持不變。',
         '兩邊的版本必須相同：Odoo 的每個模組，以及 n8n、Omnigent、Hermes、EMQX、Headscale 本身都要同一個版本。']);
       // The large members take longer (HA's own image in every EMQX and Headscale member, a Hermes home of several GB).
-      assert.equal(await page.locator('.ha-slow').textContent(), 'Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      assert.equal(await page.locator('.ha-slow').textContent(), 'Hermes、EMQX、Headscale 的附加元件檔案比較大，檢查和轉換會花比較久的時間。EMQX 的檢查要先做出一個暫用的 EMQX 來試，約需 5～10 分鐘。');
       for (const id of ['hermes', 'emqx', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
       assert.equal(await page.locator('.ha-slow').count(), 0, 'Omnigent alone is quick');
       for (const id of ['hermes', 'emqx', 'headscale']) await page.locator(`#ha-app-${id}`).check();
@@ -6402,7 +6402,7 @@ try {
       await ready(page);
       await openB1(page);
       for (const id of ['omnigent', 'hermes', 'headscale']) await page.locator(`#ha-app-${id}`).uncheck();
-      assert.equal(await page.locator('.ha-slow').textContent(), 'EMQX 的附加元件檔案比較大，檢查和轉換會花比較久的時間。');
+      assert.equal(await page.locator('.ha-slow').textContent(), 'EMQX 的附加元件檔案比較大，檢查和轉換會花比較久的時間。EMQX 的檢查要先做出一個暫用的 EMQX 來試，約需 5～10 分鐘。');
       await page.locator('[data-focus="ha-apps-next"]').click();
       const emqx = page.locator('[data-ha-app="emqx"]');
       await emqx.waitFor();
@@ -7106,6 +7106,11 @@ try {
       await ready(page);
       await openHa(page, HA_V2);
       assert.equal(await page.locator('.wizard-card .ha-check-starts').textContent(), HC_SENTENCE);
+      // EMQX's check builds a whole throwaway EMQX: the page says it takes minutes (EMQX-A measured 4.5 to 9), only while EMQX is selected.
+      assert.match(await page.locator('.ha-slow').textContent(), /EMQX 的檢查要先做出一個暫用的 EMQX 來試，約需 5～10 分鐘。$/);
+      await page.locator('#ha-app-emqx').uncheck();
+      assert.doesNotMatch(await page.locator('.ha-slow').textContent(), /5～10 分鐘/);
+      await page.locator('#ha-app-emqx').check();
       // The side card no longer says that nothing of this device is ever started: it says what stays true.
       assert.doesNotMatch(await page.locator('.side-card').textContent(), /不會停止或變更這台的應用/);
       assert.match(await page.locator('.side-card').textContent(), /檢查和轉換都不會停止這台正在運作的應用，也不會變更它們的資料/);
@@ -7262,6 +7267,29 @@ try {
       await page.locator('[data-nav="backups"]').click();
       await page.locator('[data-focus="filter-all"]').waitFor();
       assert.equal(await page.locator('[data-focus="filter-kept"]').count(), 0);
+    });
+
+  const V2_LEFT = (database, others) => v2Issue('odoo', 'confirm', 'odoo.databases-left',
+    `這次只搬資料庫「${database}」；HA 的其他資料庫不會搬，會留在 HA（HA 停用後就看不到了）。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。`, { items: others, database });
+  await check('HAOS 一次確認: when the engine says which databases stay on HA the page does not say it a second time, and the line follows the chosen database (UI-20, S6)',
+    v2Fixture({ check: v2Check({ apps: ['odoo'], odoo: { issues: [V2_ODOO_MODULES, V2_ODOO_TEST_MODULES, V2_ODOO_DEMO, V2_ODOO_AUTO,
+      V2_LEFT('prod', ['demo-old', 'test']), V2_LEFT('test', ['demo-old', 'prod'])] } }) }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['odoo'] });
+      await page.locator('#ha-db-0').check();
+      const said = async () => (await v2Lines(page)).filter(line => line.text.startsWith('這次只搬資料庫'));
+      assert.deepEqual(await said(), [{ label: 'Odoo', text: V2_LEFT('prod', []).message, names: ['demo-old', 'test'] }]);
+      assert.equal((await v2Lines(page)).some(line => line.text.includes('HA 有 3 個資料庫')), false, 'the page does not say it again');
+      await page.locator('#ha-ack').check();
+      await page.locator('#ha-db-1').check();
+      assert.equal(await page.locator('#ha-ack').isChecked(), false, 'another database: other lines, the tick is gone');
+      assert.deepEqual(await said(), [{ label: 'Odoo', text: V2_LEFT('test', []).message, names: ['demo-old', 'prod'] }]);
+      await page.locator('#ha-db-0').check();
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const [start] = (await calls(page, 'ha-import-start')).map(requestOf);
+      assert.deepEqual(start.acknowledged.odoo, [V2_ODOO_MODULES.key, V2_LEFT('prod', ['demo-old', 'test']).key], 'the line of the chosen database only');
     });
 
   await check('HAOS 一次確認: the kept copy is found from the converted backup alone, and from the restore result alone (the page has two sources)',
