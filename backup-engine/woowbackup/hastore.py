@@ -167,7 +167,7 @@ def view(rec, catalog=None):
     for addon in rec['addons']:
         problem = addon.get('problem')
         extra = {'problem': problem, 'problem_text': habackup.problem_text(problem)} if problem else {}
-        target = importable_app(addon['slug']) if problem != 'bad-slug' else None
+        target = importable_app(addon['slug'])
         if target is None:
             other.append({'slug': addon['slug'], 'name': addon['name'], 'version': addon['version'], **extra})
             continue

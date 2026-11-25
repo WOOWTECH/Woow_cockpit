@@ -103,6 +103,7 @@ MAX_PAX = 1024 * 1024
 MAX_LONG_NAME = 64 * 1024
 MAX_NAME = 4096
 MAX_ADDON_JSON = 32 * 1024 * 1024
+MAX_JSON_ITEMS = 500_000         # commas and opening brackets: the pieces that take memory (the largest real file: 400)
 DEFAULT_MAX_MEMBERS = 4_000_000  # _Names keeps about 18 bytes per entry
 DEFAULT_MAX_BYTES = 16 * 1024 ** 4
 # A member's tar may inflate to at most INFLATE_RATIO times its stored size (at least INFLATE_FLOOR): deflate's
@@ -120,9 +121,10 @@ GZIP_FEED = 64 * 1024            # inflated at a time (what is left over of a pi
 SAMPLES = 20                     # names listed per area or kind
 MAX_KEPT_NAMES = 1000            # names of skipped entries kept per kind (above that their digest stands for them)
 MAX_SHOWN_NAME = 120
-# Hard links handed out as files: links that may wait for the second pass, passes over the member, and the size up to
-# which a file with several waiting links is kept in memory for them.
+# Hard links handed out as files: links that may wait for the second pass and the characters of their names in all,
+# passes over the member, and the size up to which a file with several waiting links is kept in memory for them.
 MAX_LINK_COPIES = 100_000
+MAX_LINK_CHARS = 32 * 1024 * 1024
 MAX_LINK_PASSES = 4
 LINK_MEMORY = 1024 * 1024
 ENCODING, ERRORS = 'utf-8', 'surrogateescape'
@@ -479,11 +481,19 @@ def _is_ha_doc(doc):
     return 'supervisor_version' in doc or ('backup_id' not in doc and {'slug', 'name', 'date', 'type'} <= set(doc))
 
 
+def _strict_json(data, max_bytes, reason):
+    """The strict JSON in `data`; ValueError when it is not one, limit-exceeded (`reason`) when it would take too much
+    memory: over `max_bytes` long or of more than MAX_JSON_ITEMS pieces (one of 3 bytes takes 70 once it is read)."""
+    if len(data) > max_bytes or sum(data.count(mark) for mark in (b',', b'[', b'{')) > MAX_JSON_ITEMS:
+        raise _limit(reason, size=len(data))
+    return util.loads_strict(data, max_bytes=max_bytes)
+
+
 def _load_doc(fd, raw):
     """The strict JSON of a member (read only up to MAX_BACKUP_JSON: limit-exceeded); ValueError when it is not one."""
     if raw.size > MAX_BACKUP_JSON:
         raise _limit('backup.json too large', size=raw.size)
-    return util.loads_strict(_pread_exact(fd, raw.offset, raw.size), max_bytes=MAX_BACKUP_JSON)
+    return _strict_json(_pread_exact(fd, raw.offset, raw.size), MAX_BACKUP_JSON, 'backup.json too large')
 
 
 def looks_like_ha(fd):
@@ -720,6 +730,11 @@ def _listed_members(doc):
     return listed
 
 
+def _v7_header(head):
+    """True for the first header of a tar from before POSIX (IN-23): no magic, but its checksum."""
+    return len(head) == BLOCK and head[TAR_MAGIC_AT:TAR_MAGIC_AT + 8] == V7_MAGIC and _checksum_ok(head)
+
+
 def _member_state(fd, raw, protected, compressed):
     """(encryption, problem) of a member from its first bytes: it must be a whole encrypted file of a known kind or an
     inner tar of the declared kind."""
@@ -730,6 +745,8 @@ def _member_state(fd, raw, protected, compressed):
     if kind in ('v2', 'v3'):
         return (kind, None) if hasecuretar.ciphertext_ok(kind, raw.size, head) else ('none', 'size-mismatch')
     if kind == ('gzip' if compressed else 'tar'):
+        return 'none', None
+    if kind == 'unknown' and not compressed and _v7_header(head):
         return 'none', None
     if kind == 'unknown' and protected:
         return ('v1', None) if hasecuretar.ciphertext_ok('v1', raw.size, head) else ('none', 'partial-ciphertext')
@@ -1107,10 +1124,8 @@ def parse_addon_json(data):
     """AddonInfo of addon.json bytes (strict JSON <= 32 MiB); corrupt-archive when it is not an add-on's metadata. A
     version that is not one is '' (the importers then read it from the data, CM-01), an image name that is not one None
     (an unknown processor), a name that cannot be shown ''."""
-    if len(data) > MAX_ADDON_JSON:
-        raise _limit('addon.json too large', size=len(data))
     try:
-        doc = util.loads_strict(data, max_bytes=MAX_ADDON_JSON)
+        doc = _strict_json(data, MAX_ADDON_JSON, 'addon.json too large')
     except ValueError:
         raise _broken('addon.json is not strict JSON') from None
     if not isinstance(doc, dict) or not isinstance(doc.get('system'), dict):
@@ -1179,7 +1194,7 @@ SKIP_KINDS = {
     'fifo': '特殊檔案（FIFO）',
     'secret': '佔用機密檔位置的連結或資料夾',
     'symlink': '指到資料以外的符號連結',
-    'hardlink': '找不到內容的硬連結',
+    'hardlink': '取不到內容的硬連結',
     'large': '大小超出上限的設定檔',
 }
 
@@ -1687,7 +1702,7 @@ class _Names:
         return self.states[self._find(key)] == self.FILE | self.HANDED_OUT
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class _Link:
     """A hard link that waits for the end of the walk (its name is admitted; `key`: its target's digest; `copy`: the
     caller wants the content, not the link)."""
@@ -1707,6 +1722,7 @@ class _Links:
 
     def __init__(self):
         self.waiting = []
+        self.chars = 0              # of the names of the waiting links and their targets
         self.targets = {}
 
     def note(self, key, target):
@@ -1714,8 +1730,10 @@ class _Links:
             self.targets[key] = target
 
     def wait(self, link, report):
-        if len(self.waiting) < MAX_LINK_COPIES:
+        chars = self.chars + len(link.name) + len(link.target)
+        if len(self.waiting) < MAX_LINK_COPIES and chars <= MAX_LINK_CHARS:
             self.waiting.append(link)
+            self.chars = chars
         else:
             report.skip('hardlink', link.name)
 
@@ -1879,23 +1897,31 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
                 links.wait(link, report)
     except _Truncated:
         raise _broken('the inner tar is truncated') from None
-    if getattr(stream, 'checked_to_the_end', hasattr(stream, 'finish')):
-        reader.drain()
-        stream.finish()
-    elif reader.another_header():  # no checksum covers this stream: zeros in its middle must not pass for its end
+    if not _checked(stream, reader) and reader.another_header():
+        # no checksum covers this stream: zeros in its middle must not pass for its end
         raise _broken('the inner tar goes on after its end-of-archive marker')
     if links.waiting:
         yield from _copy_links(stream, start, links, names, select, report, checkpoint)
     report.complete = True
 
 
+def _checked(stream, reader):
+    """The final checks of a stream that has any (then True): the rest of it is read (within the budget) and dropped."""
+    if not getattr(stream, 'checked_to_the_end', hasattr(stream, 'finish')):
+        return False
+    reader.drain()
+    stream.finish()
+    return True
+
+
 def _copy_links(stream, start, links, names, select, report, checkpoint):
     """The hard links that wait, after a complete first pass (every check of the stream passed): one whose file was
     handed out only later in the tar is still a link for a caller that takes links; every other one is a regular file
-    with the content of the file it names (through other links too), read in further passes over the same member. A
-    file with several waiting links is handed out once and the others as links to it, or -- a caller that takes no links
-    -- from memory when it is small, else in the next pass. What is not a regular file of this member gives no content:
-    such links are skipped and listed (like those that name something withheld, which never came here)."""
+    with the content of the file it names (through other links too), read in further passes over the same member, each
+    with the same final checks. A file with several waiting links is handed out once and the others as links to it, or
+    -- a caller that takes no links -- from memory when it is small, else in the next pass. What is not a regular file
+    of this member gives no content: such links are skipped and listed (like those that name something withheld, which
+    never came here)."""
     wanted = {}
     for link in links.waiting:
         if select.hardlinks and not link.copy and names.handed_out(link.key):
@@ -1935,14 +1961,14 @@ def _skip_links(links, report):
 
 def _copy_pass(stream, budget, wanted, later, names, select, report, checkpoint):
     """One pass for `_copy_links`: takes out of `wanted` ({digest of a file's name: [_Link]}) what it finds; `later`
-    gets what needs another pass. It stops once nothing is wanted any more: the first pass has checked the whole
-    stream."""
+    gets what needs another pass. Once nothing is wanted any more, the rest of the stream is read for its final checks
+    only: what was handed out is as good as in the first pass."""
     reader = _Reader(stream, checkpoint=checkpoint, max_bytes=budget)
     count = 0
     while wanted:
         header = _inner_header(reader)
         if header is None:
-            return
+            break
         count += 1
         if checkpoint is not None and count % CHECK_ENTRIES == 0:
             checkpoint()
@@ -1982,6 +2008,7 @@ def _copy_pass(stream, budget, wanted, later, names, select, report, checkpoint)
                 raise
             entry._release()
         reader.skip(pad)
+    _checked(stream, reader)
 
 
 def _link_entry(link, target, report):

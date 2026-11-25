@@ -237,6 +237,54 @@ class RealLibraryFixtureTests(unittest.TestCase):
         self.assertEqual(code, 'corrupt-archive')
         self.assertIn(error.details['reason'], ('invalid PKCS7 padding', 'plaintext size differs from the SecureTar header'))
 
+    def test_what_cannot_be_whole_is_refused_when_it_is_opened(self):
+        """KEY-06, KEY-07: before the key is used, not after most of it was handed out."""
+        cases = []
+        for name in ('v2_gzip.tar', 'v3_gzip.tar'):
+            data, _tarinfo = hx.member_bytes(hx.fixture(name), f'{hx.ODOO}.tar.gz')
+            cases += [(name, data[:-cut], 'member size does not match the SecureTar header') for cut in (1, 16, 17)]
+        legacy, _tarinfo = hx.member_bytes(hx.fixture('v1_gzip.tar'), f'{hx.ODOO}.tar.gz')
+        cases += [('v1', legacy[:-cut], 'legacy ciphertext is not a whole number of blocks') for cut in (1, 15)]
+        cases += [('v1 salt', legacy[:16], 'legacy ciphertext is not a whole number of blocks')]
+        for label, raw, reason in cases:
+            keys = hasecuretar.Keys(hx.WRONG_PASSWORD)
+            with self.subTest(case=label, size=len(raw)):
+                code, error = code_of(hasecuretar.DecryptReader, io.BytesIO(raw), len(raw), keys)
+                self.assertEqual((code, error.details['reason']), ('corrupt-archive', reason))
+
+    def test_a_source_that_ends_early(self):
+        """KEY-08: cut off between two whole blocks, where nothing else shows it (v1 has no size and no padding)."""
+        for name, member in (('v1_plain.tar', f'{hx.ODOO}.tar'), ('v1_gzip.tar', f'{hx.ODOO}.tar.gz'),
+                             ('v2_gzip.tar', f'{hx.ODOO}.tar.gz')):
+            data, _tarinfo = hx.member_bytes(hx.fixture(name), member)
+            for cut in (16, 512):
+                with self.subTest(fixture=name, cut=cut):
+                    code, error = code_of(decrypt, data[:-cut], size=len(data))
+                    self.assertEqual((code, error.details['reason']), ('corrupt-archive', 'truncated ciphertext'))
+
+    def test_every_rule_of_v2_padding(self):
+        """KEY-09, KEY-10: the padding is what PKCS7 says, whole, and leaves exactly what the header announces."""
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        salt, body = b's' * 16, hasecuretar.GZIP_MAGIC + bytes(1021)
+        key = hasecuretar._sha256_rounds(hx.PASSWORD.encode())[:16]
+
+        def member(last, size):
+            encryptor = Cipher(algorithms.AES(key), modes.CBC(hasecuretar._sha256_rounds(key + salt)[:16])).encryptor()
+            head = b'SecureTar\x02' + bytes(6) + size.to_bytes(8, 'big') + bytes(8) + salt
+            return head + encryptor.update(body + last) + encryptor.finalize()
+        self.assertEqual(decrypt(member(b'x' * 11 + b'\x05' * 5, 1035)), body + b'x' * 11)
+        self.assertEqual(decrypt(member(b'\x10' * 16, 1024)), body)
+        for label, last, size in (('one byte of five', b'x' * 15 + b'\x05', 1035), ('four of five', b'x' * 12 + b'\x05' * 4, 1035),
+                                  ('zero', b'x' * 15 + b'\x00', 1039), ('seventeen', b'\x11' * 16, 1024)):
+            with self.subTest(padding=label):
+                code, error = code_of(decrypt, member(last, size))
+                self.assertEqual((code, error.details['reason']), ('corrupt-archive', 'invalid PKCS7 padding'))
+        for size in (1034, 1036, 1024):
+            with self.subTest(size=size):
+                code, error = code_of(decrypt, member(b'x' * 11 + b'\x05' * 5, size))
+                self.assertEqual((code, error.details['reason']),
+                                 ('corrupt-archive', 'plaintext size differs from the SecureTar header'))
+
     def test_unsupported_version(self):
         data, _tarinfo = hx.member_bytes(hx.fixture('v3_gzip.tar'), 'supervisor.tar.gz')
         code, error = code_of(decrypt, data[:9] + b'\x04' + data[10:])
@@ -282,6 +330,15 @@ class V3StreamRuleTests(unittest.TestCase):
         self.assertEqual(decrypt(good, keys=self.keys), payload)
         reordered = good[:136] + good[136 + MiB + 17:] + good[136:136 + MiB + 17]
         self.assertEqual(code_of(decrypt, reordered, keys=self.keys)[0], 'corrupt-archive')
+
+    def test_a_source_that_ends_between_two_chunks(self):
+        """KEY-08, KEY-12: what came so far is authentic, but it is not everything."""
+        payload = b'z' * (2 * MiB + 10)
+        data = self.make(payload)
+        for chunks in (0, 1, 2):
+            with self.subTest(chunks=chunks):
+                code, error = code_of(decrypt, data[:136 + chunks * (MiB + 17)], size=len(data), keys=self.keys)
+                self.assertEqual((code, error.details['reason']), ('corrupt-archive', 'truncated ciphertext'))
 
     def test_reads_are_bounded(self):
         reader = hasecuretar.DecryptReader(io.BytesIO(self.make(b'y' * (3 * MiB))), 3 * MiB + 3 * 17 + 136, self.keys)

@@ -563,6 +563,26 @@ class UploadTests(StorageTestCase):
                             {begun[0]['upload_id'], begun[3]['upload_id']})
         self.assertTrue(temps[1].exists())
 
+    def test_a_write_at_the_last_moment_saves_an_upload(self):
+        """X-UP-03: looked at again under its lock; and the lock of one that is not idle is never touched."""
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        for item, hours in zip(begun, (5, 4, 3, 2)):
+            self.idle(item, hours * 3600)
+        oldest, real, seen = begun[0]['upload_id'], self.storage._last_write, []
+
+        def last_write(upload_id):
+            seen.append(upload_id)
+            return time.time() if upload_id == oldest and seen.count(oldest) > 1 else real(upload_id)
+        with mock.patch.object(self.storage, '_last_write', last_write):
+            fresh = self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(self.pending(), {begun[i]['upload_id'] for i in (0, 2, 3)} | {fresh['upload_id']})
+        for item in (begun[0], begun[2], begun[3]):
+            self.idle(item, 3500)
+        with mock.patch('fcntl.flock', side_effect=AssertionError('a lock was taken')):
+            with self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload('sixth.tar', 100)
+        self.assertEqual(ctx.exception.code, 'busy')
+
     def test_more_stale_uploads_than_there_may_be(self):
         """However many are left over, as many go as must."""
         begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]

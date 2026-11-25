@@ -159,6 +159,24 @@ class RecognitionTests(TempFiles):
                 self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'backup.json too large'))
                 self.assertLess(sum(reads), 10_000)
 
+    def test_a_description_of_too_many_pieces_is_never_parsed(self):
+        """UP-21: a few bytes of JSON take many times as much memory; commas and brackets are counted first."""
+        doc = json.dumps(dict(hx.ha_doc([]), extra={'x': [[], {}] * 50})).encode()
+        items = doc.count(b',') + doc.count(b'[') + doc.count(b'{')
+        fd = self.fd(hx.outer_bytes([], json_raw=doc))
+        with mock.patch.object(habackup, 'MAX_JSON_ITEMS', items):
+            self.assertTrue(habackup.looks_like_ha(fd))
+            self.assertEqual(habackup.describe(fd).doc['name'], 'crafted')
+        with mock.patch.object(habackup, 'MAX_JSON_ITEMS', items - 1), \
+                mock.patch.object(habackup.util, 'loads_strict', side_effect=AssertionError('parsed')):
+            self.assertFalse(habackup.looks_like_ha(fd))
+            code, error = code_of(habackup.describe, fd)
+            self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'backup.json too large'))
+            addon = b'{"system":{"slug":"x"},"version":"1"}'
+            code, error = code_of(habackup.parse_addon_json, addon[:-1] + b',"y":[' + b','.join([b'[]'] * items) + b']}')
+            self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'addon.json too large'))
+        self.assertTrue(1000 * 400 < habackup.MAX_JSON_ITEMS <= 10 ** 6, 'the largest real one has 400')
+
     def test_positions_beyond_the_file(self):
         fd = self.fd(b'x' * 1000)
         for call in (lambda o: o.skip(1001), lambda o: o.read_exact(1001), lambda o: (o.skip(1000), o.skip(1))):
@@ -722,6 +740,26 @@ class MemberProblemTests(TempFiles):
         zeros = hx.outer_bytes([(f'{hx.ODOO}.tar', bytes(10240))], hx.ha_doc(compressed=False))
         self.assertEqual(self.problems(zeros), {hx.ODOO: None}, 'an empty tar')
 
+    def test_a_plain_v7_member(self):
+        """IN-23: no magic tells an uncompressed tar from before POSIX; its first header's checksum does."""
+        info = json.dumps({'system': {'slug': 'odoo18ce'}, 'version': '0.4.12'}).encode()
+        v7 = (hx.raw_member('./addon.json', info, magic=hx.V7, typeflag=b'\0')
+              + hx.raw_member('data/hello.txt', b'hello', magic=hx.V7, typeflag=b'\0') + hx.END)
+        for protected in (False, True):
+            doc = hx.ha_doc(compressed=False, protected=protected)
+            data = hx.outer_bytes([(f'{hx.ODOO}.tar', v7)], doc)
+            with self.subTest(protected=protected):
+                self.assertEqual(self.problems(data), {hx.ODOO: None})
+                with habackup.open_backup(self.write(data)) as ha, ha.open_addon(hx.ODOO) as stream:
+                    report = habackup.Report()
+                    self.assertEqual([e.name for e in habackup.iter_entries(stream, None, report)], ['data/hello.txt'])
+                    self.assertEqual((report.addon.slug, report.complete), ('odoo18ce', True))
+        for label, member, compressed in (('checksum', b'X' + v7[1:], False), ('short', v7[:500], False),
+                                          ('said to be gzip', v7, True)):
+            with self.subTest(case=label):
+                data = hx.outer_bytes([(f'{hx.ODOO}.tar' + '.gz' * compressed, member)], hx.ha_doc(compressed=compressed))
+                self.assertEqual(self.problems(data), {hx.ODOO: 'not-an-archive'})
+
     def test_other_members_have_no_say(self):
         """UP-44 to UP-47 for Home Assistant, a folder or supervisor: the add-ons are read as ever."""
         doc = hx.ha_doc([hx.ODOO, hx.N8N], folders=['share', 'media'], homeassistant={'version': '1'})
@@ -1028,6 +1066,46 @@ class MemberStreamTests(TempFiles):
             with self.subTest(case=label, floor='as it is'):
                 self.assertTrue(self.read_addon(data, hx.ODOO)[1].complete, 'below the floor it is only large')
 
+    @hx.needs_crypto
+    def test_the_end_of_real_members(self):
+        """IN-09, IN-41: what a checksum or authentication covers may go on behind the tar's end (it is dropped); a
+        stream that nothing covers may not, because zeros in its middle would look like its end."""
+        tar = hx.addon_member(compress=False)
+        more = tar + hx.tar_bytes([{'name': 'late', 'data': b'x'}])
+        for label, member, compressed, protected, checked in (
+                ('gzip', gzip.compress(more, mtime=0), True, False, True),
+                ('v3', hx.v3_encrypt(more), False, True, True), ('v3 gzip', hx.v3_encrypt(gzip.compress(more)), True, True, True),
+                ('plain', more, False, False, False)):
+            data = hx.outer_bytes([(f'{hx.ODOO}.tar' + '.gz' * compressed, member)],
+                                  hx.ha_doc(compressed=compressed, protected=protected))
+            with self.subTest(member=label), habackup.open_backup(self.write(data)) as ha, \
+                    ha.open_addon(hx.ODOO, hasecuretar.Keys(hx.PASSWORD)) as stream:
+                self.assertIs(stream.checked_to_the_end, checked)
+                report = habackup.Report()
+                walk = habackup.iter_entries(stream, None, report)
+                if checked:
+                    self.assertEqual([e.name for e in walk][-1], 'config')
+                else:
+                    code, error = code_of(list, walk)
+                    self.assertEqual(error.details['reason'], 'the inner tar goes on after its end-of-archive marker')
+                self.assertIs(report.complete, checked)
+
+    @hx.needs_crypto
+    def test_finish_alone_runs_every_check(self):
+        tar = hx.addon_member(compress=False)
+        packed = gzip.compress(tar, mtime=0)
+        for label, member, compressed, protected, reason in (
+                ('gzip trailer', packed[:-8] + bytes(8), True, False, 'gzip checksum mismatch'),
+                ('gzip cut', packed[:-30], True, False, 'gzip stream is truncated'),
+                ('v3 tag', hx.v3_encrypt(tar, tags=[0]), False, True, 'unexpected secretstream tag or chunk size'),
+                ('v3 gzip trailer', hx.v3_encrypt(packed[:-4] + bytes(4)), True, True, 'gzip checksum mismatch')):
+            data = hx.outer_bytes([(f'{hx.ODOO}.tar' + '.gz' * compressed, member)],
+                                  hx.ha_doc(compressed=compressed, protected=protected))
+            with self.subTest(case=label), habackup.open_backup(self.write(data)) as ha, \
+                    ha.open_addon(hx.ODOO, hasecuretar.Keys(hx.PASSWORD)) as stream:
+                code, error = code_of(stream.finish)
+                self.assertEqual((code, error.details['reason'], error.details['scope']), ('corrupt-archive', reason, 'member'))
+
     def test_a_stream_can_be_opened_again(self):
         data = hx.two_addons()
         with habackup.open_backup(self.write(data)) as ha, ha.open_addon(hx.ODOO) as first:
@@ -1228,6 +1306,24 @@ class EntryTests(WalkCase):
                         self.assertEqual([row[0] for row in self.walk([], stream=stream, addon=True)[0]][-1], 'config')
                     else:
                         self.assertEqual(self.refused([], stream=stream, addon=True)[0], 'corrupt-archive')
+
+    def test_the_checks_of_any_stream(self):
+        """A stream with a `finish` is read to its end and finished, once, before the walk is complete."""
+        calls = []
+
+        class Stream(io.BytesIO):
+            good = True
+
+            def finish(self):
+                calls.append(len(self.read()))
+                if not self.good:
+                    raise hasecuretar.broken('the check failed')
+        data = hx.tar_bytes([{'name': 'a', 'data': b'x'}]) + bytes(3 << 20)
+        self.assertEqual([row[0] for row in self.walk([], stream=Stream(data))[0]], ['a'])
+        self.assertEqual(calls, [0], 'once, and nothing was left to read')
+        Stream.good, report = False, habackup.Report()
+        self.assertEqual(self.refused([], stream=Stream(data), report=report), ('corrupt-archive', 'the check failed'))
+        self.assertEqual((calls, report.complete), ([0, 0], False))
 
     def test_v7_and_mixed_headers(self):
         """IN-23: a tar from before POSIX (no magic)."""
@@ -1648,7 +1744,7 @@ class HardLinkTests(WalkCase):
                     files, report = self.files(entries, habackup.Select(hardlinks=hardlinks, symlinks=('.',)))
                     self.assertEqual(set(files), {'a', 's', 'z'})
                     self.assertEqual((report.skip_names('hardlink'), report.hardlinks), (['b'], 0))
-                    self.assertIn('找不到內容的硬連結 1 個', report.skip_text())
+                    self.assertIn('取不到內容的硬連結 1 個', report.skip_text())
         circle = [{'name': 'a', 'type': 'hardlink', 'linkname': 'b'}, {'name': 'b', 'type': 'hardlink', 'linkname': 'a'}]
         self.assertEqual(self.files(circle)[1].skip_names(), ['a', 'b'])
 
@@ -1805,6 +1901,77 @@ class HardLinkTests(WalkCase):
         stream = habackup._Gunzip(io.BytesIO(packed[:-8] + bytes(8)))
         stream.reopen = lambda: self.fail('the first pass was not complete')
         self.assertEqual(self.refused([], habackup.Select(include=('y',)), stream=stream, addon=False)[0], 'corrupt-archive')
+
+
+    def second(self, entries, again, select=None):
+        """Walk a gzip member of `entries` whose second pass reads the bytes `again` instead; what was handed out, the
+        error's reason, the passes and how many of them were closed."""
+        passes, closed = [], []
+
+        def stream(data):
+            result = habackup._Gunzip(io.BytesIO(data))
+
+            def reopen():
+                passes.append(1)
+                return stream(again)
+            result.reopen, result.close = reopen, lambda: closed.append(1)
+            return result
+        report, got, reason = habackup.Report(), {}, None
+        try:
+            for entry in habackup.iter_entries(stream(gzip.compress(hx.tar_bytes(entries), mtime=0)), select, report, addon=False):
+                got[entry.name] = entry.read_all(1 << 22) if entry.kind == 'file' else entry.linkname
+        except BackupError as error:
+            reason = error.details['reason']
+        return got, reason, len(passes), len(closed), report
+
+    def test_the_second_pass_is_checked_like_the_first(self):
+        """What a copy is made of was read again: the member's checksum must hold for that reading too, to its end."""
+        entries = [{'name': 'x/a', 'data': b'first'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/a'},
+                   {'name': 'z', 'data': os.urandom(3 << 20)}]
+        packed = gzip.compress(hx.tar_bytes(entries), mtime=0)
+        select = habackup.Select(include=('y',))
+        got, reason, passes, closed, report = self.second(entries, packed, select)
+        self.assertEqual((got, reason, passes, closed, report.complete), ({'y/b': b'first'}, None, 1, 1, True))
+        for label, again, reason in (('trailer', packed[:-8] + bytes(8), 'gzip checksum mismatch'),
+                                     ('cut', packed[:-2000], 'gzip stream is truncated'),
+                                     ('cut early', packed[:len(packed) // 2], 'gzip stream is truncated')):
+            with self.subTest(again=label):
+                result = self.second(entries, again, select)
+                self.assertEqual((result[1:4], result[4].complete), ((reason, 1, 1), False))
+
+    def test_no_second_pass_for_nothing(self):
+        """Links that are known to have no content are listed at once: the member is not read again for them."""
+        secret = [{'name': 'data/options.json', 'data': b'{}'}, {'name': 'x', 'type': 'hardlink', 'linkname': 'data/options.json'},
+                  {'name': 'y', 'type': 'hardlink', 'linkname': 'x'}, {'name': 'z', 'type': 'hardlink', 'linkname': 'y'}]
+        circle = [{'name': 'a', 'type': 'hardlink', 'linkname': 'b'}, {'name': 'b', 'type': 'hardlink', 'linkname': 'c'},
+                  {'name': 'c', 'type': 'hardlink', 'linkname': 'a'}]
+        for label, entries, listed in (('withheld', secret, ['x', 'y', 'z']), ('circle', circle, ['a', 'b', 'c']),
+                                       ('hostile', [{'name': 'a', 'type': 'hardlink', 'linkname': '../b'}], ['a'])):
+            with self.subTest(case=label):
+                _got, reason, passes, _closed, report = self.second(entries, b'')
+                self.assertEqual((reason, passes, sorted(report.skip_names('hardlink'))), (None, 0, listed))
+        chain = [{'name': 'f', 'data': b'1'}] + [{'name': f'l{i}', 'type': 'hardlink', 'linkname': f'l{i - 1}' if i else 'f'}
+                                                 for i in range(8)]
+        files, report = self.files(chain, habackup.Select(include=('l6', 'l7')))
+        self.assertEqual(files, {'l6': b'1', 'l7': b'1'}, 'links through links, up to eight')
+        chain.append({'name': 'l8', 'type': 'hardlink', 'linkname': 'l7'})
+        chain.append({'name': 'l9', 'type': 'hardlink', 'linkname': 'l8'})
+        _files, report = self.files(chain, habackup.Select(include=('l9',)))
+        self.assertEqual(report.skip_names(), ['l9'])
+
+    def test_the_names_of_waiting_links_are_bounded(self):
+        """A few MiB of compressed headers must not hold gigabytes of names in memory."""
+        entries = [{'name': 'x/a', 'data': b'1'}]
+        entries += [{'name': f'y/{i:03d}', 'type': 'hardlink', 'linkname': 'x/a'} for i in range(5)]
+        each = len('y/000') + len('x/a')
+        with mock.patch.object(habackup, 'MAX_LINK_CHARS', 3 * each):
+            files, report = self.files(entries, habackup.Select(include=('y',)))
+        self.assertEqual((sorted(files), report.skip_names()), (['y/000', 'y/001', 'y/002'], ['y/003', 'y/004']))
+        with mock.patch.object(habackup, 'MAX_LINK_CHARS', 3 * each - 1):
+            files, report = self.files(entries, habackup.Select(include=('y',)))
+        self.assertEqual((sorted(files), report.skip_count()), (['y/000', 'y/001'], 3))
+        self.assertGreaterEqual(habackup.MAX_LINK_CHARS, 300 * habackup.MAX_LINK_COPIES, 'names of 150 characters')
+        self.assertFalse(hasattr(habackup._Link('a', 'b', 1, 0, 0, 0, 0.0), '__dict__'))
 
 
 class NamesTests(unittest.TestCase):
