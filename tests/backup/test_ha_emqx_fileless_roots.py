@@ -6,8 +6,10 @@ the import proves it), and every setting is scanned for the files it names (ha_e
 carried wherever it is, one in the image or on a mount needs nothing, one nobody can place is only said."""
 import copy
 import io
+import random
 import tarfile
 import unittest
+from woowbackup import ha_emqx, ha_emqx_settings
 from woowbackup.errors import BackupError
 from . import test_ha_emqx_candidate_flow as flow
 
@@ -168,6 +170,51 @@ class FilelessRootsTests(unittest.TestCase):
                 self.invoke(transport)
                 self.assertIn('export', transport.events)
                 self.assertEqual(transport.running_config[root], {'file': '/outside/unreviewed'})
+
+
+class ScanNeverCrashesTests(unittest.TestCase):
+    """E-32, E-50: whatever shape a root has, the scan and the names of this device's own settings answer (the configuration is
+    what the broker said, but one odd value must never end the whole job with an internal error). Fixed seed, fixed count."""
+    KEYS = ['certfile', 'keyfile', 'cacertfile', 'dhfile', 'bootstrap_file', 'init_file', 'path', 'file', 'filename', 'config_files',
+            'crash_dump_file', 'type', 'enable', 'name', 'url', 'data_dir', 'x', 'authentication', 'sources', 'log', 'node', 'rules',
+            'topic', 'servers', 'states', 'install_dir', 'connectors', 'actions', 'gateway', 'rule_engine', 'rewrite',
+            'topic_metrics', 'auto_subscribe', 'exhook', 'psk_authentication', 'plugins', 'durable_sessions', 'listeners']
+    STRS = ['', '/opt/emqx/data/a/b', 'data/x', '${EMQX_ETC_DIR}/y', '$NOPE/z', '/proc/1', '/tmp/q', '..', '/a/../b', 'file://data/s',
+            'file:///opt/emqx/data/t', '-----BEGIN CERTIFICATE-----\nAAA', 'a\x00b', 'x' * 5000, '/var/log/emqx/e.log',
+            '/opt/emqx/etc/acl.conf', 'mnesia/x', '/opt/emqx/data/mnesia/y', 'data/../../etc', '\u202e/x', 'ä/文件']
+
+    def value(self, rnd, depth):
+        chance = rnd.random()
+        if depth > 7 or chance < 0.35:
+            kind = rnd.random()
+            if kind < 0.5:
+                return rnd.choice(self.STRS)
+            if kind < 0.6:
+                return [ord(char) for char in rnd.choice(self.STRS)[:30]]
+            if kind < 0.7:
+                return rnd.randint(-5, 70000)
+            if kind < 0.8:
+                return rnd.choice([True, False, None])
+            return [rnd.randint(0, 300) for _ in range(rnd.randint(0, 5))]
+        if chance < 0.7:
+            return {(rnd.choice(self.KEYS) if rnd.random() < 0.8 else rnd.choice(self.STRS)): self.value(rnd, depth + 1)
+                    for _ in range(rnd.randint(0, 5))}
+        return [self.value(rnd, depth + 1) for _ in range(rnd.randint(0, 4))]
+
+    def test_odd_values_everywhere_never_crash_the_scan_or_the_names(self):
+        rnd = random.Random(20261125)
+        for _ in range(1200):
+            config = {rnd.choice(self.KEYS): self.value(rnd, 1) for _ in range(rnd.randint(1, 7))}
+            found = ha_emqx.file_scan(config, mounts=[('/h/a', '/opt/emqx/etc/acl.conf', 'ro')],
+                                      secrets=['s,type=mount,target=/x/y'])
+            self.assertEqual(set(found), {'data', 'outputs', 'not_carried'})
+            self.assertTrue(all(ha_emqx.snapshot_name_ok(name) for name in found['data']))
+            self.assertTrue(all(path.startswith('/') and '..' not in path.split('/') for path in found['outputs']))
+            self.assertTrue(all(isinstance(name, str) and len(name) <= 120 for name in found['not_carried']))
+            own = ha_emqx_settings.own_items(config, rnd.choice([config, {'connectors': {'http': {'q': 1}}}, None]))
+            self.assertEqual(set(own), {'integrations', 'routing', 'psk', 'plugins', 'durable', 'replaced', 'mixed'})
+            extra, give_way, bad = ha_emqx.scratch_plan(found['outputs'], '/opt/emqx/log', [('/h/l', '/var/log/emqx', 'ro')])
+            self.assertTrue(set(give_way) <= set(extra) and not set(extra) & set(bad))
 
 
 if __name__ == '__main__':
