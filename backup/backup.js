@@ -131,6 +131,9 @@
   const HA_UPLOAD_HINT = "如果這是 Home Assistant 的備份檔：這台設備的備份元件版本還不能匯入 HA 備份，請先更新備份元件，再上傳一次。";
   const HA_KEY_WHERE = "HA 備份金鑰是 Home Assistant 的「備份加密金鑰」，在 HA 的「設定 → 系統 → 備份」的備份設定裡可以看到，格式像 ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12。"
     + "較舊的 HA 備份如果是用自己設定的密碼加密，請輸入當時設定的密碼。";
+  // H-c (DESIGN): the check reads this device's own services too (hatarget.ensure_running): a stopped one is started for it and
+  // put back when the check is over, whatever way it ends.
+  const HA_CHECK_STARTS = "檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子。";
   // Where a custom module of an HA Odoo database comes from, in words (ha_odoo.py MODULE_SOURCES, share/odoo_addons).
   const HA_MODULE_FROM = { "data/addons": "HA 附加元件的模組資料夾", "data/odoo/addons/18.0": "HA 附加元件的模組資料夾",
     "share/odoo_addons": "HA 的 /share/odoo_addons 資料夾" };
@@ -1260,7 +1263,8 @@
   }
 
   // A backup's kind, and 「由 HA 轉換」 for one converted from an HA backup (BackupMeta.from_ha).
-  const kindChips = backup => [typeChip(backupKind(backup)), fromHaOf(backup) ? chip("由 HA 轉換", "info", "home-outline") : null];
+  const kindChips = backup => [typeChip(backupKind(backup)), fromHaOf(backup) ? chip("由 HA 轉換", "info", "home-outline") : null,
+    isKept(backup) ? chip("保留的複本", "warn", "database-outline") : null];
   const haChip = () => chip("HA 備份", "info", "home-outline");
   const haEncryptionChip = ha => (haEncrypted(ha) ? chip("已加密", "ok", "lock-outline") : chip("未加密", "warn", "lock-open-variant-outline"));
 
@@ -3522,7 +3526,7 @@
     return [
       apps.includes("odoo") && info.leftDatabases.length
         ? `HA 的 Odoo 還有 ${quoted(info.leftDatabases)} 沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。` : null,
-      info.kept ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${info.kept}），不會自動刪除；確定用不到時再請工程人員清掉。` : null
+      info.kept ? `匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${info.kept}），不會自動刪除；可以下載它，確定用不到時再自己刪除（刪除後裡面的其他資料就沒有了）。` : null
     ].filter(Boolean);
   }
 
@@ -3851,7 +3855,7 @@
     const side = h("aside", { class: "card side-card", "aria-labelledby": "ha-side" },
       h("h3", { id: "ha-side", text: "匯入怎麼進行" }),
       h("ul", { class: "bullet-list" }, [
-        "檢查和轉換都不會停止或變更這台的應用，HA 備份檔本身也不會被改動。",
+        "檢查和轉換都不會停止這台正在運作的應用，也不會變更它們的資料，HA 備份檔本身也不會被改動。",
         ...haRules(haApps(ha).map(app => app.id)),
         "HA 備份金鑰只留在這個頁面，交給檢查和轉換作業使用，用完就刪除，不會存到這台設備。",
         wizard.v2 || wizard.step === "import"
@@ -3876,6 +3880,10 @@
   // the banner on top then asks for the emergency key until it is saved.
   const haKeyAutoNotice = () => infoNotice("這台還沒有加密金鑰。匯入開始時會自動建立一把，完成後請下載並保存緊急金鑰（沒有它，換機或重灌後就解不開加密的備份）。",
     "info", "key-outline", link("加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
+  // Before the check the page cannot tell whether this engine makes the key itself (one that does not know the one confirmation
+  // does not, and keeps the conversion off until the key is set up): it promises nothing and says where the answer will be.
+  const haKeyLaterNotice = () => infoNotice("這台還沒有加密金鑰，轉換好的備份要用它加密。檢查完成後，這一頁會說明匯入時會自動建立一把，還是要先到「加密金鑰」設定。",
+    "info", "key-outline", link("加密金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys" } }));
 
   const haActiveNotice = active => infoNotice(`目前有作業正在進行（${jobLabel(active)}），要等它完成後才能開始。`, "info", "progress-clock",
     link("查看進度", ["jobs", active.id], { class: "button small", dataset: { focus: "ha-active-job" } }));
@@ -3895,6 +3903,7 @@
     return [
       h("h3", { class: "step-title", text: "選擇要匯入的應用" }),
       h("p", { class: "muted", text: "勾選要搬到這台的應用。下一步會先檢查內容和版本，不會變更任何資料。" }),
+      h("p", { class: "hint ha-check-starts", text: HA_CHECK_STARTS }),
       wizard.notice ? infoNotice(wizard.notice) : null,
       apps.length ? h("div", { class: "choices" }, apps.map(app => {
         const id = `ha-app-${app.id}`;
@@ -3917,7 +3926,7 @@
       others.length ? h("p", { class: "muted", text: `其他附加元件（${others.map(item => str(item.name) || str(item.slug)).join("、")}）這台沒有對應的應用，不會匯入。` }) : null,
       haNotMoved(ha).length ? h("ul", { class: "bullet-list ha-not-moved" }, haNotMoved(ha).map(line => h("li", { text: line }))) : null,
       slow ? h("p", { class: "hint ha-slow", text: slow }) : null,
-      haNoDeviceKey() ? haKeyAutoNotice() : null,
+      haNoDeviceKey() ? haKeyLaterNotice() : null,
       active && !wizard.keyNeeded ? haActiveNotice(active) : null,
       wizardError(wizard),
       h("div", { class: "form-footer button-group" },
@@ -4067,6 +4076,7 @@
       h("p", { class: "muted", text: convert
         ? "正在把 HA 的資料轉成這台的備份格式，完成並驗證後會帶你到還原步驟。這台的應用照常運作。"
         : "正在解開 HA 備份，檢查內容、設備架構和版本是否和這台相符。這台的應用照常運作。" }),
+      convert ? null : h("p", { class: "hint ha-check-starts", text: HA_CHECK_STARTS }),
       wizard.jobId ? haJobBlock(wizard) : null,
       entry?.error && !job ? stableNotice(`ha-job-${wizard.jobId}`, entry.error, { live: false }) : null,
       wizardError(wizard),
@@ -4997,10 +5007,16 @@
     }));
   }
 
+  // The warnings of an app's restore job (e.g. a service that was paused and did not start again): from the job record the page
+  // followed; a page that was reloaded has only the job view of that job for them.
+  const haRestoreNotes = result => list(result?.restore_job_id ? state.jobCache.get(result.restore_job_id)?.job?.result?.warnings : [])
+    .filter(isString).map(line => line.trim()).filter(Boolean).slice(0, 5);
+
   function haGroupRows(info, { actions = true, excluded = [] } = {}) {
     return h("ol", { class: "ha-group-list", "aria-label": "各應用的匯入結果" }, [...info.apps.map(appId => {
       const row = haGroupRowState(info, appId);
       const result = row.result;
+      const notes = ["imported", "rolled-back", "failed"].includes(result?.status) ? haRestoreNotes(result) : [];
       const safety = result?.safety_backup_id;
       const converted = result?.backup_id;
       const message = result?.message || row.doing || "";
@@ -5010,6 +5026,7 @@
         h("div", { class: "ha-group-head" }, h("strong", { class: "ha-group-name", text: haAppName(appId) }),
           h("span", { class: "chips" }, chip(row.label[0], row.label[1], row.label[2]))),
         message ? h("p", { class: manual ? "ha-group-message strong" : "ha-group-message", text: message }) : null,
+        notes.length ? h("ul", { class: "bullet-list ha-group-notes", "aria-label": `${haAppName(appId)} 匯入時的注意事項` }, notes.map(line => h("li", { text: line }))) : null,
         safety || converted ? h("p", { class: "secondary" },
           safety ? ["匯入前備份：", link(safety, ["backups", safety], { class: "mono", dataset: { focus: `group-safety-${appId}` } })] : null,
           safety && converted ? "　" : null,
@@ -5122,6 +5139,82 @@
     ];
   }
 
+  // ------------------------------------------------------------------ kept copies (S4: a whole database service kept before an import)
+
+  // BackupMeta.kept (CONTRACT section 7): a full copy of a database service, or a pinned pre-restore backup, nothing prunes.
+  function isKept(backup) { return isObject(backup) && backup.kept === true; }
+  const KEPT_DELETE_WARNING = "這是匯入前保留的完整複本：裡面有那時這台資料庫服務的全部資料，包含這次匯入沒有搬走的其他資料庫。"
+    + "刪除後，這些資料就沒有了，也無法再用它回復到匯入之前；要保留，請先按「下載」。";
+
+  // RestoreResult.kept of a restore job (section 8): per app the copy, the databases in it, what was put back and what was not.
+  function keptOf(result) {
+    const value = isObject(result?.kept) ? result.kept : {};
+    const lines = items => list(items).filter(item => isString(item) && item.trim()).map(item => item.trim());
+    return Object.entries(value).filter(([id, item]) => APP_ID_RE.test(id) && isObject(item) && isString(item.backup_id) && BACKUP_ID_RE.test(item.backup_id))
+      .map(([id, item]) => ({ appId: id, backupId: item.backup_id, databases: lines(item.databases), more: isNumber(item.more) && item.more > 0 ? Math.floor(item.more) : 0,
+        putBack: lines(item.put_back), notes: lines(item.notes),
+        notPutBack: list(item.not_put_back).filter(row => isObject(row) && isString(row.name) && row.name.trim()).map(row => ({ name: row.name.trim(), reason: str(row.reason).trim() })) }));
+  }
+
+  // The copies an import or a restore left: what the restore jobs said (with the databases), and what the converted backups
+  // point to (`from_ha.kept`; null again after the copy was deleted). One entry per copy.
+  function keptEntries({ jobs = [], backups = [] }) {
+    const entries = new Map();
+    const entry = id => {
+      if (!entries.has(id)) entries.set(id, { backupId: id, apps: [], databases: [], more: 0, putBack: [], notPutBack: [], notes: [] });
+      return entries.get(id);
+    };
+    const merge = (into, key, items) => { for (const item of items) if (!into[key].some(other => JSON.stringify(other) === JSON.stringify(item))) into[key].push(item); };
+    for (const id of jobs) {
+      for (const item of keptOf(state.jobCache.get(id)?.job?.result)) {
+        const into = entry(item.backupId);
+        merge(into, "apps", [item.appId]);
+        merge(into, "databases", item.databases);
+        merge(into, "putBack", item.putBack);
+        merge(into, "notPutBack", item.notPutBack);
+        merge(into, "notes", item.notes);
+        into.more = Math.max(into.more, item.more);
+      }
+    }
+    for (const id of backups) {
+      const backup = state.backups?.find(item => item.id === id);
+      const kept = fromHaOf(backup)?.kept;
+      if (kept && BACKUP_ID_RE.test(kept)) merge(entry(kept), "apps", list(backup.apps).map(app => str(app?.id)).filter(Boolean));
+    }
+    return [...entries.values()];
+  }
+
+  // 保留的複本: what the customer can do with each copy: read what is in it, download it, delete it after a confirmation.
+  function keptSection(entries) {
+    if (!entries.length) return null;
+    const loaded = Array.isArray(state.backups);
+    const busy = Boolean(activeJob());
+    return h("section", { class: "ha-kept", "aria-labelledby": "ha-kept-title", dataset: { section: "kept" } },
+      h("h4", { id: "ha-kept-title", class: "subheading", text: "保留的複本" }),
+      h("p", { class: "muted", text: "匯入前，這台的資料庫服務裡有這次沒有搬走的其他資料，所以系統先把整個資料庫服務存成完整複本。複本不會自動刪除；"
+        + "確定用不到時可以下載保存，再刪除它。刪除後，複本裡的資料就沒有了。" }),
+      h("ul", { class: "ha-group-list ha-kept-list", "aria-label": "保留的複本" }, entries.map(item => {
+        const backup = state.backups?.find(other => other.id === item.backupId) || null;
+        const names = quoted(item.databases);
+        const apps = item.apps.map(id => haAppName(id)).join("、");
+        return h("li", { class: "ha-group-row ha-kept-item", dataset: { kept: item.backupId, state: backup ? "present" : loaded ? "deleted" : "loading" } },
+          h("div", { class: "ha-group-head" }, h("strong", { class: "ha-group-name", text: backup ? `保留的複本 · ${date(backup.created)}` : "保留的複本" }),
+            backup ? h("span", { class: "chips" }, backupChips(backup)) : null),
+          h("p", { class: "secondary" }, apps ? `屬於：${apps}　` : "", "備份 ID：",
+            backup ? link(backup.id, ["backups", backup.id], { class: "mono", dataset: { focus: `kept-open-${backup.id}` } }) : h("span", { class: "mono", text: item.backupId }),
+            backup ? `　${bytes(backup.size)}` : ""),
+          item.databases.length ? h("p", { class: "ha-group-message", text: `複本裡的資料庫：${names}${item.more ? `，另有 ${num(item.more)} 個沒有列出` : ""}。` }) : null,
+          item.putBack.length ? h("p", { class: "ha-group-message", text: `匯入後已經放回這台的資料庫：${quoted(item.putBack)}。` }) : null,
+          item.notPutBack.length ? h("div", { class: "ha-group-message strong" }, h("p", { text: "下列資料庫沒有放回這台，資料仍在這份複本裡：" }),
+            h("ul", { class: "bullet-list", "aria-label": "沒有放回的資料庫" }, item.notPutBack.map(row => h("li", { text: row.reason ? `${row.name}：${row.reason}` : row.name })))) : null,
+          item.notes.length ? h("ul", { class: "bullet-list", "aria-label": "複本的說明" }, item.notes.map(line => h("li", { text: line }))) : null,
+          backup ? h("div", { class: "button-group" }, downloadControl(backup, true),
+            button("刪除複本…", () => deleteBackup(backup), { small: true, icon: "delete-outline", danger: true, disabled: busy, focus: `kept-delete-${backup.id}`,
+              label: `刪除保留的複本 ${backup.id}`, title: busy ? "有作業進行中，請等它完成後再刪除。" : undefined }))
+            : h("p", { class: "secondary", text: loaded ? "這份複本已經刪除。" : "正在載入備份列表…" }));
+      })));
+  }
+
   // D11: the key this import created. The banner at the top stays until the emergency key is saved.
   const haKeyCreatedNotice = () => infoNotice("這台原本沒有加密金鑰，這次匯入已經自動建立一把。請下載並保存緊急金鑰：換機或重灌後，沒有它就解不開加密的備份。",
     "warn", "key-outline", link("保存緊急金鑰", ["keys"], { class: "button small", dataset: { focus: "ha-keys-saved" } }));
@@ -5152,6 +5245,8 @@
           ? "這份備份裡的應用一個接著一個還原：每個應用有自己的還原前備份，失敗只退回它自己。"
           : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查；失敗只退回它自己，其他應用照常。" }),
         haGroupRows(info, { actions: info.over }),
+        info.over ? keptSection(keptEntries({ jobs: info.results.map(item => item.restore_job_id).filter(Boolean),
+          backups: info.results.map(item => item.backup_id).filter(Boolean) })) : null,
         info.next ? h("p", null, link(next ? `接著：${jobLabel(next)}` : "查看下一個作業", ["jobs", info.next], { class: "button small", dataset: { focus: "job-group-next" } })) : null))];
   }
 
@@ -5173,6 +5268,8 @@
         info ? h("p", { class: "muted", text: haGroupSummary(info) }) : null),
       wizard.keyCreated || state.status?.key?.kit_confirmed === false ? haKeyCreatedNotice() : null,
       info ? haGroupRows(info, { excluded: haExcludedRows(wizard) }) : null,
+      info ? keptSection(keptEntries({ jobs: [...list(wizard.groupJobs), ...info.results.map(item => item.restore_job_id).filter(Boolean)],
+        backups: info.results.map(item => item.backup_id).filter(Boolean) })) : null,
       info && done.length && !converted ? haAfterGroup(wizard, info, done) : null,
       h("div", { class: "form-footer button-group" },
         button("回到這份 HA 備份", () => closeHaWizard({ rerender: true }), { focus: "result-ha" }),
@@ -5464,6 +5561,8 @@
       // 從 HA 匯入: what to do next comes first (DESIGN §0: stop the HA add-on, MCP logins, workflows to fix).
       const fromHa = restoreFromHa(job);
       if (fromHa) body.push(...haAfterImport(fromHa, list(params.apps).filter(isString)));
+      const keptCopies = keptSection(keptEntries({ jobs: [job.id], backups: backupId ? [backupId] : [] }));
+      if (keptCopies) body.push(keptCopies);
       if (result?.safety_skipped) {
         body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
       }
@@ -7945,14 +8044,16 @@
 
   function deleteBackup(backup) {
     const warnings = [];
-    if (backup.type === "safety") warnings.push(h("p", { class: "notice-inline", text: "這是還原前自動備份。刪除後，就無法用它回復到那次還原之前的狀態。" }));
+    const kept = isKept(backup);
+    if (kept) warnings.push(h("p", { class: "notice-inline", text: KEPT_DELETE_WARNING }));
+    else if (backup.type === "safety") warnings.push(h("p", { class: "notice-inline", text: "這是還原前自動備份。刪除後，就無法用它回復到那次還原之前的狀態。" }));
     if (!backup.key_available) warnings.push(h("p", { class: "muted", text: "這份備份的金鑰不在這台設備上。" }));
     confirmDialog({
-      title: "刪除備份？",
+      title: kept ? "刪除保留的複本？" : "刪除備份？",
       body: [h("p", { text: "刪除後無法復原。若需要保留，請先下載備份檔。" }), metadata([
         ["備份", backupTitle(backup)], ["備份 ID", backup.id, "mono"], ["應用", appsText(backup)], ["大小", bytes(backup.size)],
         backup.note ? ["備註", backup.note] : null]), ...warnings],
-      confirmLabel: "刪除備份", danger: true,
+      confirmLabel: kept ? "刪除複本" : "刪除備份", danger: true,
       action: async () => {
         await call("delete", { backup_id: backup.id });
         if (state.backups) state.backups = state.backups.filter(item => item.id !== backup.id);
