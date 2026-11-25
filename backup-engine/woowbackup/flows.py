@@ -191,6 +191,7 @@ class FlowContext:
         # list it in the confirmation. Other restores keep their checks (owner decision H6, 2026-11-25).
         self.ha_import = False
         self.acknowledged = {}  # {app id: frozenset of confirmation keys} the restore request carried (params.acknowledged)
+        self.planned_pauses = {}  # {app id: the services the confirmation lists as paused for the restore} (D10; set after the check)
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
@@ -303,6 +304,7 @@ class FlowContext:
         adapter.job_id = self.job_id  # names the restore's host-directory siblings
         adapter.ha_import = self.ha_import
         adapter.acknowledged = self.acknowledged.get(app.id, frozenset())
+        adapter.planned_pauses = frozenset(self.planned_pauses.get(app.id, ()))
         return adapter
 
     def identities(self):
@@ -1275,6 +1277,9 @@ def run_restore(ctx, params):
         plans = _preflight(ctx, apps, manifest, extract_dir)
         _require_confirmed(ctx, plans, ctx.acknowledged)
         if ctx.ha_import:
+            # D10: what the customer confirmed to be paused is all that is paused (a service that starts using the data later
+            # stops this app and asks again); every adapter this job makes later (the pre-restore copy, a rollback) gets the list
+            ctx.planned_pauses = {plan.app.id: frozenset(getattr(plan.adapter, 'planned_pauses', None) or ()) for plan in plans}
             kept_copies.check_space(ctx, plans)  # S4: before anything stops, there must be room for the kept copy of a database service
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']

@@ -486,7 +486,10 @@ class QuadletPostgresAdapter(Adapter):
         self._data_bytes = 0      # size of the data the running restore put in place (the patient waits scale with it)
         self.restore_issues = []  # haissues.Issue lines of the last preflight() (see the class attribute)
         self.paused = []          # other services this restore paused (D10): started again by resume_paused()
-        self._planned_pauses = []  # the services the last preflight() listed for the confirmation
+        # The services the customer confirmed to be paused (D10): the last preflight()'s list; flows hands the job's list to the
+        # adapters it makes later (the pre-restore copy, a rollback). A service that uses the data and is not in it stops this
+        # app and asks again (confirmation-required) instead of being paused without the customer having seen it.
+        self.planned_pauses = frozenset()
         self.kept_wanted = []     # ids of the databases whose whole service the restore keeps a copy of first (S4)
         self.kept_estimate = 0    # bytes the kept copy takes (the volumes' export size)
         self.kept_done = False    # keep_cluster() made the copy: other databases cannot be lost any more
@@ -1224,14 +1227,29 @@ class QuadletPostgresAdapter(Adapter):
                 units.append(unit)
         return units, blocked
 
-    def pause_foreign(self, *, when='備份'):
+    def require_planned(self, units):
+        """D10: only the services the customer confirmed are paused. A service that uses the data now and was not in the
+        confirmation (it started since) is not paused behind the customer's back: this app stops, before anything has changed,
+        with `confirmation-required` and the whole list as the new line to confirm (the page asks again; the other apps go on).
+        The services this restore paused already are part of that list."""
+        unplanned = [unit for unit in units if unit not in self.planned_pauses]
+        if not unplanned:
+            return
+        names = sorted({self.service_name(unit) for unit in [*self.paused, *units]})
+        issue = Issue('restore.pauses', 'confirm', PAUSES_TEXT, names)
+        raise haissues.confirmation_required({self.app.id: [issue]}, f'還原「{self.app.name}」前還有事情要確認。')
+
+    def pause_foreign(self, *, when='備份', strict=True):
         """Pause the other services `pause_plan` names, once (D10; the restore of a converted HA backup does this where an
         ordinary one refuses). They are listed in the job's record first, so a crash or a signal still starts them again.
+        `strict` (everything but a rollback, which has to finish): only services of the confirmation (`require_planned`).
         Returns the units paused now."""
         units, blocked = self.pause_plan()
         if blocked:
             raise BackupError('incompatible', f'{"；".join(blocked[:4])}；為避免資料不一致或遺失，已停止{when}。請先停止它。',
                               app=self.app.id)
+        if strict:
+            self.require_planned(units)
         fresh = [unit for unit in units if unit not in self.paused]
         if not fresh:
             return []
@@ -1861,7 +1879,8 @@ class QuadletPostgresAdapter(Adapter):
         foreign = []
         if self.ha_import:
             # D10 (X-AD-14, X-AD-50): the restore of a converted HA backup pauses the other services that use the app's data
-            # (they are in the confirmation) instead of refusing; what cannot be paused is refused here by name.
+            # (they are in the confirmation) instead of refusing; what cannot be paused is refused here by name, and a service
+            # that is not in the confirmation stops this app (`pause_foreign` asks again) before anything is stopped.
             foreign, blocked = self.pause_plan()
             if blocked:
                 raise BackupError('incompatible', f'{"；".join(blocked[:4])}；為避免資料不一致或遺失，已停止備份。請先停止它。',
@@ -2797,7 +2816,7 @@ class QuadletPostgresAdapter(Adapter):
             return
         for problem in blocked:
             add('dir-in-use', 'fail', f'{problem}；請先停止它。')
-        self._planned_pauses = list(units)
+        self.planned_pauses = frozenset(units)
         if units:
             names = [self.service_name(unit) for unit in units]
             add('dir-in-use', 'warn', f'服務 {"、".join(names[:6])}{"…" if len(names) > 6 else ""} 使用這個應用的資料；'
@@ -3067,6 +3086,10 @@ class QuadletPostgresAdapter(Adapter):
         if mode == 'inplace' and not rollback:
             # A rollback rebuilds the volume the failed restore itself created from the archive: nothing else is in it.
             self._refuse_undeclared_databases(unchecked_ok=unchecked_databases_ok)  # (not for a service whose copy was kept)
+        if self.ha_import and mode == 'inplace' and not rollback:
+            # D10: a service that started using the data since the confirmation (and was not paused by the pre-restore copy: that
+            # one is stopped) is not paused behind the customer's back -- this app stops here, before anything has changed
+            self.require_planned(self.pause_plan()[0])
         self._remember_tags(needed)
         try:
             self._prepare_images(app_manifest, root, needed, loads, allow_pull=not rollback)
@@ -3121,14 +3144,9 @@ class QuadletPostgresAdapter(Adapter):
                     self.runner.podman('volume', 'rm', '-f', pg['data_volume'], timeout=STOP_TIMEOUT)
             if app.data_dirs:
                 if self.ha_import:
-                    # D10 (X-AD-14): a service that started since the pre-restore copy is paused too (it is in the
-                    # confirmation; one the check did not know stops this app, as an ordinary restore does).
-                    late = [unit for unit in self.pause_foreign(when='還原') if unit not in self._planned_pauses]
-                    if late:
-                        note = ('匯入期間有新的服務開始使用這個應用的資料，已一併暫停（完成後自動啟動）：'
-                                + '、'.join(self.service_name(unit) for unit in late[:6]) + '。')
-                        self.warnings.append(note)
-                        self.log(f'注意：{note}')
+                    # D10 (X-AD-14): the confirmed services that the pre-restore copy did not pause (there was none) are paused now;
+                    # one that is not in the confirmation is refused (a rollback has to finish and pauses what it finds)
+                    self.pause_foreign(when='還原', strict=not rollback)
                 # Right before the swap: a container still running with a directory mounted would keep using (and
                 # writing into) the replaced copy, which is deleted once the job succeeded (review M5).
                 self._require_unused_dirs(exclude=(), writable_only=False, when='還原')

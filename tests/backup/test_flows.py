@@ -403,6 +403,7 @@ class World:
         self.no_snapshot = set()  # app ids whose backups carry no http-json snapshot (a converted HA backup has none)
         self.restore_issues = {}  # app id -> the haissues.Issue lines its preflight() leaves in adapter.restore_issues
         self.pauses = {}          # app id -> other services its pre-restore copy / restore pauses (D10)
+        self.planned_seen = {}    # 'backup'|'restore'|'rollback' -> {app id: the confirmed list (planned_pauses) its adapter held}
         self.resume_fail = set()  # services resume_paused() cannot start again
         self.paused_started = []  # units start_paused() was asked for (the recovery of a dead job)
         self.kept_wanted = {}     # app id -> pg ids whose whole database service the restore keeps a copy of first (S4)
@@ -448,6 +449,7 @@ class FakeAdapter:
         self.kept_wanted = []
         self.kept_estimate = 0
         self.acknowledged = frozenset()
+        self.planned_pauses = frozenset()
 
     def probe(self):
         deployed = self.world.deployed[self.app.id]
@@ -478,6 +480,7 @@ class FakeAdapter:
 
     def backup(self, staging_dir, *, include_images, keep_stopped=False):
         self.world.events.append(('backup', self.app.id))
+        self.world.planned_seen.setdefault('backup', {})[self.app.id] = self.planned_pauses
         if self.app.id in self.world.backup_error:
             raise self.world.backup_error[self.app.id]
         self.phase('stop')
@@ -525,6 +528,7 @@ class FakeAdapter:
     def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
         self.world.preflight_dirs.append(extracted_dir)
         self.restore_issues = list(self.world.restore_issues.get(self.app.id, []))
+        self.planned_pauses = frozenset(self.world.pauses.get(self.app.id, ())) if self.ha_import else frozenset()
         self.kept_wanted = list(self.world.kept_wanted.get(self.app.id, []))
         self.kept_estimate = self.world.kept_estimate if self.kept_wanted else 0
         if self.app.id in self.world.preflight_fail:
@@ -536,6 +540,7 @@ class FakeAdapter:
                 replaced_dirs=(), kept_volumes=None):
         assert rollback == (self.phase is noop), 'rollbacks (and only they) use rollback=True and no phases'
         self.world.events.append(('restore', self.app.id, mode, 'rollback' if rollback else 'restore'))
+        self.world.planned_seen.setdefault('rollback' if rollback else 'restore', {})[self.app.id] = self.planned_pauses
         if kept_volumes:
             self.world.events.append(('kept-volumes', self.app.id, tuple(sorted(kept_volumes))))
         if rollback:
@@ -2774,6 +2779,19 @@ class ConfirmedPausesTests(ConvertedRestoreCase):
                                   ('resume', 'woowbk-demo', (self.UNIT,))], 'paused, restored, then started again')
         self.assertEqual(self.reporter.partial.get('stopped_writers', {}), {})
         self.assertTrue(any('已重新啟動匯入時暫停的服務' in line and self.UNIT in line for line in self.reporter.logs))
+
+    def test_the_adapters_the_job_makes_later_get_the_list_the_customer_confirmed(self):
+        """D10: the pre-restore copy and a rollback make their own adapters; what they may pause is that list and nothing else."""
+        self.converted()
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        with self.assertRaises(flows.RolledBack):
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files')]})
+        for kind in ('backup', 'restore', 'rollback'):
+            self.assertEqual(self.world.planned_seen[kind]['woowbk-demo'], frozenset({self.UNIT}), kind)
+
+    def test_an_ordinary_restore_hands_no_list_to_anyone(self):
+        self.restore()
+        self.assertEqual(self.world.planned_seen['backup']['woowbk-demo'], frozenset())
 
     def test_one_more_name_needs_the_confirmation_again(self):
         self.converted()

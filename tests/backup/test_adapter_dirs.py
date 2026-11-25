@@ -905,9 +905,12 @@ class PauseOtherServicesTests(DirRestoreCase):
         self.owner.units['woowbk-files.service'] = 'active'
         self.owner.bind_mounts = [dict(BROWSER)]
 
-    def converted(self, owner=None):
+    def converted(self, owner=None, planned=('woowbk-files.service',)):
+        """An adapter of the restore of a converted HA backup; `planned` is the list the confirmation held (flows hands the job's
+        list to every adapter it makes; the adapter of the check sets its own)."""
         adapter = self.make_adapter(owner or self.owner)
         adapter.ha_import = True
+        adapter.planned_pauses = frozenset(planned)
         return adapter
 
     def stops(self, owner=None):
@@ -1025,16 +1028,92 @@ class PauseOtherServicesTests(DirRestoreCase):
         self.assertFalse(any('匯入期間有新的服務' in note for note in adapter.warnings),
                          'it was in the confirmation: nothing unexpected to say')
 
-    def test_a_service_that_started_after_the_check_is_paused_too_and_the_result_says_so(self):
-        adapter = self.converted()
-        adapter.preflight(self.manifest, mode='inplace')  # nobody uses the data yet ...
+    def test_a_service_that_started_after_the_confirmation_stops_this_app_and_asks_again(self):
+        """D10 (X-AD-14): a service the customer never saw is not paused behind their back. The restore stops here, before
+        anything has changed, with the new list as the line to confirm."""
         self.owner.bind_mounts = []
-        adapter.preflight(self.manifest, mode='inplace')
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')  # nobody uses the data yet: the confirmation holds no service ...
+        self.assertEqual(adapter.planned_pauses, frozenset())
         self.owner.bind_mounts = [dict(BROWSER)]  # ... and now a service does
-        adapter.restore(self.manifest, self.extract, mode='inplace')
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (issue,) = caught.exception.issues
+        self.assertEqual((issue.id, issue.level, issue.names), ('restore.pauses', 'confirm', ('woowbk-files',)))
+        self.assertEqual(caught.exception.details['apps']['woowbk-demo'][0]['items'], ['woowbk-files'])
+        self.assertFalse(adapter.destructive_started)
+        self.assertEqual(self.stops(), [], 'nothing was stopped, the service runs on')
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+
+    def test_the_new_line_is_the_one_the_next_check_will_list(self):
+        """So that confirming it once is enough: the key of the refusal's line is the key of the next check's line."""
+        self.owner.bind_mounts = []
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')
+        self.owner.bind_mounts = [dict(BROWSER)]
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        again = self.converted()
+        again.preflight(self.manifest, mode='inplace')
+        self.assertEqual(caught.exception.issues[0].key('woowbk-demo'), again.restore_issues[0].key('woowbk-demo'))
+
+    def test_the_pre_restore_copy_does_not_pause_a_service_that_is_not_in_the_confirmation(self):
+        adapter = self.converted(planned=())
+        with self.assertRaises(BackupError) as caught:
+            adapter.backup(self.staging / 'unconfirmed', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.issues[0].names, ('woowbk-files',))
+        self.assertEqual(self.stops(), [], 'nothing was stopped, not even the app')
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_a_service_of_the_confirmation_that_stopped_meanwhile_is_no_reason_to_ask_again(self):
+        self.owner.bind_mounts = [dict(BROWSER)]
+        adapter = self.converted(planned=('woowbk-files.service', 'woowbk-sync.service'))  # woowbk-sync is not running any more
+        adapter.backup(self.staging / 'subset', include_images=False, keep_stopped=True)
         self.assertEqual(adapter.paused, ['woowbk-files.service'])
-        self.assertTrue(any('匯入期間有新的服務開始使用' in note and 'woowbk-files' in note for note in adapter.warnings),
-                        adapter.warnings)
+
+    def test_one_more_service_than_the_confirmation_lists_the_whole_new_list(self):
+        self.owner.units['woowbk-sync.service'] = 'active'
+        self.owner.bind_mounts.append({'id': 'b' * 12, 'name': 'woowbk-sync', 'unit': 'woowbk-sync.service',
+                                       'source': f'{HOME}/{DATA}', 'rw': True})
+        adapter = self.converted()  # the confirmation holds woowbk-files only
+        with self.assertRaises(BackupError) as caught:
+            adapter.backup(self.staging / 'more', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.issues[0].names, ('woowbk-files', 'woowbk-sync'))
+        self.assertEqual(self.stops(), [])
+
+    def test_a_service_that_starts_in_the_middle_of_the_restore_is_refused_not_paused(self):
+        """After the first destructive step the restore cannot ask the customer: the service is not paused behind their back, the
+        restore of this app fails and rolls back (as an ordinary restore does for a container that uses a replaced folder)."""
+        self.owner.bind_mounts = []
+        adapter = self.converted(planned=())
+        adapter.preflight(self.manifest, mode='inplace')
+
+        def appears(op, _args):
+            if op == 'unpack':
+                self.owner.bind_mounts = [dict(BROWSER)]
+        self.owner.dir_hook = appears
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertTrue(adapter.destructive_started, 'the restore had begun: the job rolls this app back')
+        self.assertTrue(self.stops(), 'the app itself was stopped')
+        self.assertNotIn('woowbk-files.service', [unit for call in self.stops() for unit in call])
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+
+    def test_a_rollback_pauses_what_uses_the_data_without_asking(self):
+        """A rollback has to finish: it pauses what it finds, the job starts it again afterwards (`strict` False)."""
+        strict = self.converted(planned=())
+        with self.assertRaises(BackupError) as caught:
+            strict.pause_foreign(when='還原')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.stops(), [])
+        rollback = self.converted(planned=())
+        self.assertEqual(rollback.pause_foreign(when='還原', strict=False), ['woowbk-files.service'])
+        self.assertEqual(rollback.paused, ['woowbk-files.service'])
 
     def test_a_service_that_cannot_be_paused_stops_this_app_and_runs_on(self):
         self.owner.fail.append(('stop -- woowbk-files.service', 1))
