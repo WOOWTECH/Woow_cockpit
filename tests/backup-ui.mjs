@@ -886,9 +886,10 @@ function installCockpitFixture() {
         const copy = structuredClone(spec.backup);
         if (!data.backups.some(item => item.id === copy.id)) data.backups.unshift(copy);
         data.downloads[copy.id] = { path: `/var/lib/woowtech-backup/archives/${copy.id}.tar`, filename: copy.filename, size: copy.size };
+        // `pointer: false`: the converted backup does not name the copy; `told: false`: the restore result does not (the page has two sources).
         const converted = backup(chain.backups[app].id);
-        if (converted?.from_ha) converted.from_ha.kept = copy.id;
-        told.kept = { [app]: { backup_id: copy.id, ...structuredClone(spec.detail) } };
+        if (converted?.from_ha && spec.pointer !== false) converted.from_ha.kept = copy.id;
+        if (spec.told !== false) told.kept = { [app]: { backup_id: copy.id, ...structuredClone(spec.detail) } };
       }
       record.job.result = told;
     }
@@ -7222,6 +7223,14 @@ try {
       assert.match(after, /HA 的 Odoo 還有「test」、「demo-old」沒有搬過來，它們留在 HA；HA 的 Odoo 停用後就看不到了。這台 Odoo 一次只放一個資料庫，以後再匯入另一個會取代這次的。/);
       assert.match(after, new RegExp(`匯入前，這台的資料庫服務裡其他資料已經先存成完整複本（${KEPT_ID}），不會自動刪除；可以下載它，確定用不到時再自己刪除（刪除後裡面的其他資料就沒有了）。`));
       await allWidths(page, 'HAOS kept copies');
+      // A job running anywhere: nothing is deleted meanwhile (the engine would refuse it too); the download stays.
+      await page.evaluate(job => { window.__fixture.status.active_job = job; }, haJob('j20261125T040000Z-7a7a7a7a', 'ha-check', 'running', '2026-11-25T04:00:00Z'));
+      await page.locator('#refresh').click();
+      await page.locator(`[data-focus="kept-delete-${KEPT_ID}"]:disabled`).waitFor();
+      assert.equal(await copy.locator(`[data-focus="download-${KEPT_ID}"]`).isDisabled(), false);
+      await page.evaluate(() => { window.__fixture.status.active_job = null; });
+      await page.locator('#refresh').click();
+      await page.locator(`[data-focus="kept-delete-${KEPT_ID}"]:enabled`).waitFor();
       // Download: the stored file as it is, like in the backup list.
       const before = downloadRequests.length;
       const [download] = await Promise.all([page.waitForEvent('download'), copy.locator(`[data-focus="download-${KEPT_ID}"]`).click()]);
@@ -7244,6 +7253,35 @@ try {
       assert.match(await copy.textContent(), /這份複本已經刪除。/);
       assert.equal(await copy.locator('button').count(), 0, 'nothing left to press on a deleted copy');
       await page.waitForFunction(() => !document.querySelector('.ha-reminders')?.textContent.includes('完整複本（'));
+    });
+
+  await check('HAOS 一次確認: the kept copy is found from the converted backup alone, and from the restore result alone (the page has two sources)',
+    v2Fixture({ chain: { kept: { n8n: { backup: v2Kept('n8n'), detail: V2_KEPT_DETAIL, told: false } } } }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['n8n'] });
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const copy = page.locator(`[data-section="kept"] [data-kept="${KEPT_ID}"][data-state="present"]`);
+      await copy.waitFor();
+      // Named only by `from_ha.kept` of the converted backup: no databases, no put-back lines, but the copy and what can be done with it.
+      assert.match(await copy.textContent(), /屬於：n8n 工作流程/);
+      assert.doesNotMatch(await copy.textContent(), /複本裡的資料庫：|匯入後已經放回/);
+      assert.equal(await copy.locator(`[data-focus="download-${KEPT_ID}"]`).count(), 1);
+      assert.equal(await copy.locator(`[data-focus="kept-delete-${KEPT_ID}"]`).count(), 1);
+    });
+
+  await check('HAOS 一次確認: the kept copy is found from the restore result alone when the converted backup does not name it',
+    v2Fixture({ chain: { kept: { n8n: { backup: v2Kept('n8n'), detail: V2_KEPT_DETAIL, pointer: false } } } }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['n8n'] });
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const copy = page.locator(`[data-section="kept"] [data-kept="${KEPT_ID}"][data-state="present"]`);
+      await copy.waitFor();
+      assert.match(await copy.textContent(), /複本裡的資料庫：「analytics」、「crm_old」/);
+      assert.doesNotMatch(await page.locator('.ha-reminders').textContent(), /完整複本（/, 'the to-dos name a copy only when the converted backup does');
     });
 
   await check('HAOS 一次確認 in the dark theme: the kept copies and their delete dialog keep WCAG AA contrast and fit every width',
