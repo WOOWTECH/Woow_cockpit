@@ -69,7 +69,8 @@ def semver(text):
 
 class VersionTable:
     """The upstream product version each released add-on version ships (kept here, from the add-ons' CHANGELOG and
-    Dockerfile; an add-on version the table does not know is refused until it does)."""
+    Dockerfile). `issues` only informs about a version the table does not know or that cannot be read here (CM-01,
+    CM-02: the data's own structure decides); `blocker` is the gate the importers are still changing over from."""
 
     def __init__(self, product, table):
         self.product = product
@@ -77,6 +78,11 @@ class VersionTable:
 
     def upstream(self, addon_version):
         return self.table.get(addon_version)
+
+    def issues(self, addon_version, target):
+        """[haissues.Issue] (haissues.version_issues) of HA's add-on version and this device's version `target`."""
+        from .haissues import version_issues
+        return version_issues(self.product, addon_version, self.upstream(addon_version), target)
 
     def blocker(self, addon_version, target):
         """A zh-TW blocker unless the add-on's product version is known and equals `target` (x.y.z)."""

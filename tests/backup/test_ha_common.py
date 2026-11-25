@@ -43,6 +43,9 @@ class ScanTests(unittest.TestCase):
         self.assertIn('HA 的 Headscale 是 0.29.3', table.blocker('0.1.0', '0.29.4'))
         self.assertIn('還不認得', table.blocker('0.2.0', '0.29.4'))
         self.assertIn('無法讀取這台', table.blocker('0.1.3', None))
+        self.assertEqual([[i.id for i in table.issues(*args)] for args in (('0.1.3', '0.29.4'), ('0.2.0', '0.29.4'),
+                                                                           ('0.1.3', None), ('0.1.0', '0.29.4'))],
+                         [[], ['version.addon-unknown'], ['version.target-unknown'], ['version.different']])
         self.assertEqual((hacommon.semver('v5.8.9'), hacommon.semver('5.8.9-rc1'), hacommon.semver(None)),
                          ('5.8.9', None, None))
 
