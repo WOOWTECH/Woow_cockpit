@@ -12,10 +12,22 @@ groups, its own network namespace -- os.unshare, or libc's unshare on Python < 3
 network stops with NO_NETNS and the check stops: no unisolated fallback --, CPU, memory, file size and process limits)
 on a copy of its own, with `SQLITE_DBCONFIG_DEFENSIVE`, `trusted_schema=OFF`
 and only ordinary tables (no virtual table or its shadow tables; explicit columns): the owner account (email and
-password set, else nothing can be moved), counts, and the workflows one per line, whose reasons (shell commands, SSH,
-local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process works out row by row within a
-size budget (review HA-SEC-02, HA-SEC-05); community packages (native `.node` files must be for this device's
-processor and for musl, like the n8n image); the version must equal `n8n --version` of the live image.
+password set, else nothing can be moved), counts, the names of the credentials, and the workflows one per line, whose
+reasons (shell commands, SSH, local files, Home Assistant, HA-internal addresses, Redis/MQTT, webhooks) this process
+works out row by row within a size budget (review HA-SEC-02, HA-SEC-05); community packages (native `.node` files must
+be for this device's processor and for musl, like the n8n image); the version must equal `n8n --version` of the live
+image (a version that cannot be read here is no gate: N8-10).
+
+HAOS parity (2026-11-25, DESIGN F-a lane N8N). What this device's n8n looks like decides what is carried, never whether
+the import may start: this device's own other volumes and folders go along as they are (N8-02, N8-27: `hatarget.carry`),
+the queue (Valkey / Redis) volumes are the only ones that are emptied, and a data volume whose owner cannot be read gets
+the owner of the image (N8-11, N8-12). The SQLite reader grows its time with the size of the file and, when it was killed
+or timed out, is run once more with more time and memory (N8-06, N8-07, N8-09); a database that is broken stops only n8n.
+No key in HA's backup is no gate either: the workflows and everything else move, the credentials cannot be opened and are
+entered again, which is ONE line the customer confirms (N8-15; a key of any shape that n8n takes is used as it is). A
+large community node or `package.json` is copied as a stream and never read whole into memory (N8-28). Findings go to
+`work.sink(app)` (haissues) in the check and, by the same code, in the conversion (N8-18): a stop stops n8n, a line to
+confirm that was not confirmed stops n8n (`confirmation-required`), nothing else.
 
 convert: a throwaway volume holds the SQLite copy and HA's key; a throwaway n8n (live image, network none) runs
 `export:entities --includeExecutionHistoryDataTables=true`; a throwaway PostgreSQL (the live n8n-postgres image, user
@@ -43,9 +55,11 @@ import time
 
 from pathlib import Path
 
-from . import habackup, tempctr, util
+from . import habackup, haissues, hatarget, podman, tempctr, util
 from .errors import BackupError
-from .ha_odoo import EM_X86_64, FileTar, _info, _int, check_volume_tar, host_elf_machine, quadlet_mounts
+from .ha_odoo import (EM_X86_64, PG_READY_TIMEOUT, FileTar, _Exact, _info, _int, check_volume_tar, host_elf_machine,
+                      quadlet_container_name, quadlet_mounts)
+from .haissues import Issue
 
 SLUG = 'woow-n8n'
 APP_ID = 'n8n'
@@ -54,21 +68,31 @@ N8N_DIR = 'config/.n8n'
 SQLITE_FILES = ('database.sqlite', 'database.sqlite-wal')
 KEY_FILE = 'config'
 MOVED_DIRS = ('nodes', 'storage')
-MAX_KEY_FILE = 64 * 1024
-MAX_PACKAGE_JSON = 1024 * 1024
+MAX_KEY_FILE = 1024 * 1024              # was 64 KiB; a larger file is no key file: it is listed as skipped (N8-28)
+MAX_PACKAGE_JSON = 1024 * 1024          # what is parsed for the list of community packages; a larger one is copied unread (N8-28)
+NATIVE_HEAD = 64 * 1024 * 1024          # of a native `.node` file only this much is looked at (what was read whole before); the file is copied as a stream (N8-28)
 MAX_NODES_JSON = 16 * 1024 * 1024       # one workflow's nodes; a larger one is "too large to analyse"
 MAX_NODES_TOTAL = 256 * 1024 * 1024     # all workflows' nodes read; the rest are "too large to analyse"
 MAX_WORKFLOWS = 5000
-SQLITE_TIMEOUT = 1800
+MAX_CREDENTIALS = 20000                 # names of credentials the SQLite child hands over (only names, never a value)
+MAX_NAME = 200
+SQLITE_TIMEOUT = 1800                   # the floor; the time of one read grows with the size of the file (N8-06)
 SQLITE_MEMORY = 2 * 1024 * 1024 * 1024
+SQLITE_MEMORY_CEILING = 8 * 1024 * 1024 * 1024
+SQLITE_ATTEMPTS = 2                     # a read that was killed or timed out is run once more with more time and memory
 MAX_LINE = 2 * MAX_NODES_JSON + 1024 * 1024  # one line of the SQLite child (bytes)
 TOO_LARGE = '這個工作流程太大，無法自動分析，匯入後請自行確認它的節點設定。'
 COUNT_CHUNK = 40  # tables per json_build_object call: 2 arguments each, PostgreSQL allows 100 (review C-11)
-MAX_NATIVE = 64 * 1024 * 1024
 TABLE_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,62}\Z')
 VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}(?:[-+][A-Za-z0-9.-]{1,40})?\Z')
 PACKAGE_RE = re.compile(r'(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,213}\Z')
-KEY_RE = re.compile(r'[\x21-\x7e]{8,1024}\Z')
+# Any text n8n takes for its encryption key: not only 8..1024 printable ASCII characters (N8-15). Control characters are
+# no key; the text is only ever written into a JSON file (json.dumps), never into a command line.
+KEY_RE = re.compile(r'[^\x00-\x1f\x7f-\x9f]{1,1024}\Z')
+MASK_MIN = 4                            # a key shorter than this cannot be hidden from a log without hiding ordinary text
+# A container whose image is one of these keeps n8n's queue: its volume is emptied by the import (HA's queued jobs never run
+# here), every other volume of the app is this device's own data and goes along as it is (N8-02).
+QUEUE_IMAGE_RE = re.compile(r'(?:^|[/_-])(?:valkey|redis)(?:$|[/_:@-])', re.I)
 NO_OWNER = 'HA 的 n8n 還沒建立管理者帳號，沒有可搬的資料。'
 # Tables a fresh PostgreSQL schema fills during its migrations or that are not entities of the export; their rows are
 # not compared (the rest must match exactly: import:entities exits 0 even when it skipped a table).
@@ -87,25 +111,57 @@ URL_NODES = {'n8n-nodes-base.webhook', 'n8n-nodes-base.formTrigger', 'n8n-nodes-
              '@n8n/n8n-nodes-langchain.chatTrigger', '@n8n/n8n-nodes-langchain.mcpTrigger'}
 PATH_KEYS = ('fileSelector', 'filePath', 'fileName', 'path', 'filePathOrName')
 
+# What the customer is told (zh-TW, plain; names go into the issue's items, never a value). Every id of this module is here.
+ISSUES = {
+    'n8n.layout-unsupported': 'stop',       # N8-01 (the whole instance), N8-02: this device's n8n is not set up as the import knows
+    'n8n.extras-carried': 'auto',           # N8-02, N8-27: this device's own other volumes and folders go along as they are
+    'n8n.mount-skipped': 'notice',          # the n8n side of OD-08, OD-09: a mount that is no data of n8n is left out
+    'n8n.no-database': 'stop',              # N8-14: HA's backup holds no SQLite database of n8n
+    'n8n.no-owner': 'stop',                 # N8-16: HA's n8n has no owner account
+    'n8n.database-unreadable': 'stop',      # N8-07, N8-09: the database cannot be opened or read
+    'n8n.database-slow': 'stop',            # N8-06, N8-07, N8-09: it was not read in time, also the second time
+    'n8n.no-key': 'confirm',                # N8-15: no usable key in HA's backup: the credentials are entered again
+    'n8n.key-created': 'auto',              # N8-15: ... and HA's n8n has no credentials: nothing to enter again
+    'n8n.fixed-key': 'stop',                # N8-13 (the second wave lifts it): this device's n8n has a key of its own
+    'n8n.community-packages': 'notice',     # HA's community nodes move along
+    'n8n.native-code': 'notice',            # ... some with code that does not run here
+    'n8n.volume-root-default': 'auto',      # N8-11, N8-12: the owner and mode of a data volume could not be read
+}
+SETTINGS_ACTION = '請到「應用設定」修正這台 n8n 的設定，再重新檢查；這台的 n8n 不會有任何變更。'
+NO_DATABASE = ('這份 HA 備份裡沒有 n8n 的資料庫檔（database.sqlite），沒有資料可以搬；HA 的 n8n 可能改用了別的資料庫。')
+NO_DATABASE_ACTION = ('這次請不要匯入 n8n（其他應用不受影響）；若 HA 的 n8n 用的是內建資料庫，請在 HA 重新備份後再上傳。'
+                      '這台的 n8n 不會有任何變更。')
+NO_OWNER_ACTION = ('請先在 HA 的 n8n 建立管理者帳號並重新備份，或這次不匯入 n8n；這台的 n8n 不會有任何變更。'
+                   '（匯入一個沒有管理者的 n8n，會讓第一個打開網頁的人自己當管理者。）')
+UNREADABLE = 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取（檔案可能不完整，或是在 n8n 執行中複製下來的）。'
+UNREADABLE_ACTION = '請在 HA 重新備份後再上傳匯入 n8n（其他應用不受影響）；這台的 n8n 不會有任何變更。'
+SLOW = ('HA 備份中 n8n 的資料庫在 {minutes} 分鐘內沒有讀完（讀取中途被終止或逾時）；已自動加長時間、放寬記憶體再讀一次，仍然沒有完成。')
+SLOW_ACTION = '請等這台比較不忙時再試一次；仍然不行時，請把作業紀錄交給工程人員。這台的 n8n 不會有任何變更。'
+
 
 # ====================================================================== the add-on member
 
 class Source:
     """What a pass over the n8n add-on's inner tar staged and learned: the SQLite copy, the key (never logged), the
-    community packages and native files."""
+    community packages and native files, and what the reader left out (`report`: a habackup.Report whose names are
+    haissues.Names; the one line to confirm, `Sink.skipped`)."""
 
     def __init__(self):
         self.addon = None
         self.sqlite = {}          # file name -> staged path
         self.key = None           # HA's encryptionKey (masked in every log of this process)
         self.packages = []        # [{name, version}]
+        self.packages_unlisted = False   # nodes/package.json was too large to read: copied, the packages are not listed (N8-28)
         self.native_bad = []      # package names with native code that does not fit here
         self.native = 0
         self.files_tar = None     # staged nodes/ + storage/ (conversion only)
         self.files_bytes = 0
+        self.report = None        # the walk's habackup.Report (member_pass)
 
 
 def _key_from(data):
+    """HA's encryptionKey out of the `config` file (None: no file content that holds one n8n can use). Any text n8n takes
+    is a key (KEY_RE): the shape of the one n8n makes itself is not a rule (N8-15)."""
     try:
         doc = util.loads_strict(data, max_bytes=MAX_KEY_FILE)
     except ValueError:
@@ -182,11 +238,15 @@ def _needs_glibc(data):
 def scan_member(stream, report, staging, *, files=None, guard=None, checkpoint=None):
     """One strict pass over the add-on's inner tar: the SQLite files and the key into `staging` (root 0600),
     package.json and native files of nodes/ checked; with `files` (a FileTar) nodes/** and storage/** are staged as
-    `nodes/…` and `storage/…` (original modes). Returns a Source."""
+    `nodes/…` and `storage/…` (original modes). Nothing is stopped for its size (N8-28): a `config` file that is far too
+    large to be one is listed as skipped (`report`, kind `large`) and no key; a `package.json` too large to read is copied
+    as a stream and its packages are not listed; of a native `.node` file only its first NATIVE_HEAD bytes are looked at
+    and the file is copied as a stream. Returns a Source."""
     select = habackup.Select(include=tuple(f'{N8N_DIR}/{name}' for name in SQLITE_FILES + (KEY_FILE,) + MOVED_DIRS),
                              exclude=(f'{N8N_DIR}/database.sqlite-shm',), symlinks=(f'{N8N_DIR}/nodes',),
                              hardlinks=False)
     src = Source()
+    src.report = report
     count = 0
     for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
@@ -206,29 +266,37 @@ def scan_member(stream, report, staging, *, files=None, guard=None, checkpoint=N
             continue
         if rel == KEY_FILE:
             if entry.kind == 'file':
-                src.key = _key_from(entry.read_all(MAX_KEY_FILE))
-                if src.key is not None:
+                data = entry.read_or_skip(MAX_KEY_FILE)   # N8-28: too large for a settings file = no key (and listed)
+                src.key = _key_from(data) if data is not None else None
+                if src.key is not None and len(src.key.strip()) >= MASK_MIN:
                     from . import jobs
                     jobs.mask_secret(src.key)
             continue
         top, _, tail = rel.partition('/')
         if top == 'nodes' and tail == 'package.json' and entry.kind == 'file':
-            data = entry.read_all(MAX_PACKAGE_JSON)
-            src.packages = packages_of(data)
-            if files is not None:
-                files.add_member(_info(rel, 'file', mode=entry.mode & 0o755 | 0o644, uid=0, gid=0, mtime=entry.mtime,
-                                       size=len(data)), io.BytesIO(data))
+            if entry.size <= MAX_PACKAGE_JSON:
+                data = entry.read_all(MAX_PACKAGE_JSON)
+                src.packages = packages_of(data)
+                if files is not None:
+                    files.add_member(_info(rel, 'file', mode=entry.mode & 0o755 | 0o644, uid=0, gid=0, mtime=entry.mtime,
+                                           size=len(data)), io.BytesIO(data))
+            else:   # N8-28: never read whole; the file moves as it is
+                src.packages_unlisted = True
+                if files is not None:
+                    files.add_entry(rel, entry, mode=(entry.mode & 0o755) | 0o644, uid=0, gid=0)
+            src.files_bytes += entry.size
             continue
         if top == 'nodes' and entry.kind == 'file' and tail.endswith('.node'):
             src.native += 1
-            data = entry.read_all(MAX_NATIVE)
-            if elf_fits(data) is False:
+            head = _head(entry, NATIVE_HEAD)
+            if elf_fits(head) is False:
                 package = _package_of(tail)
                 if package and package not in src.native_bad:
                     src.native_bad.append(package)
             if files is not None:
                 files.add_member(_info(rel, 'file', mode=entry.mode & 0o755 | 0o644, uid=0, gid=0, mtime=entry.mtime,
-                                       size=len(data)), io.BytesIO(data))
+                                       size=entry.size), _Exact(_Replay(head, entry), None))
+            src.files_bytes += entry.size
             continue
         if files is not None:
             if entry.kind == 'file':
@@ -241,6 +309,39 @@ def scan_member(stream, report, staging, *, files=None, guard=None, checkpoint=N
                                 uid=0, gid=0)
     src.addon = report.addon
     return src
+
+
+def _head(entry, limit):
+    """The first `limit` bytes of a file entry (all of it when it is shorter); the entry goes on from there."""
+    parts, have = [], 0
+    while have < limit:
+        data = entry.read(min(habackup.CHUNK, limit - have))
+        if not data:
+            break
+        parts.append(data)
+        have += len(data)
+    return b''.join(parts)
+
+
+class _Replay:
+    """What was read of an entry already (`head`), then the rest of it: for a file that is copied after its beginning was
+    looked at. An offset into the head, never a slice of it (a head of megabytes read in small pieces would copy itself
+    again for every piece)."""
+
+    def __init__(self, head, entry):
+        self.head, self.entry, self.at = memoryview(head), entry, 0
+
+    def read(self, n=-1):
+        if self.at < len(self.head):
+            end = len(self.head) if n is None or n < 0 else min(len(self.head), self.at + n)
+            data = bytes(self.head[self.at:end])
+            self.at = end
+            if self.at >= len(self.head):
+                self.head.release()
+                self.head = memoryview(b'')
+                self.at = 0
+            return data
+        return self.entry.read(n)
 
 
 def _package_of(tail):
@@ -289,7 +390,8 @@ if os.geteuid() == 0:
     os.setgroups([])
     os.setgid(gid)
     os.setuid(uid)
-for limit, value in ((resource.RLIMIT_AS, %(memory)d), (resource.RLIMIT_CPU, %(cpu)d), (resource.RLIMIT_NOFILE, 64),
+for limit, value in ((resource.RLIMIT_AS, int(sys.argv[9]) if len(sys.argv) > 9 else %(memory)d),
+                     (resource.RLIMIT_CPU, int(sys.argv[8]) if len(sys.argv) > 8 else %(cpu)d), (resource.RLIMIT_NOFILE, 64),
                      (resource.RLIMIT_FSIZE, fsize), (resource.RLIMIT_CORE, 0), (resource.RLIMIT_NPROC, 0)):
     try:
         resource.setrlimit(limit, (value, value))
@@ -303,67 +405,81 @@ def emit(doc):
         line = json.dumps({"n": doc.get("n", ""), "a": doc.get("a", False), "big": True}, ensure_ascii=False)
     out.write(line + "\n")
 name_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
-conn = sqlite3.connect("file:database.sqlite?mode=rw", uri=True, isolation_level=None)
-conn.text_factory = lambda data: data.decode("utf-8", "replace")
-try:
-    if hasattr(conn, "setconfig"):
-        conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
-    conn.execute("PRAGMA trusted_schema=OFF")
-    conn.execute("PRAGMA cell_size_check=ON")
-    conn.execute("PRAGMA mmap_size=0")
-    schema = conn.execute("SELECT name, type, sql FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
-    conn.execute("PRAGMA query_only=ON")
-    virtual = [n for n, k, q in schema if k == "table" and isinstance(q, str) and q.lstrip()[:20].upper().replace(" ", "").startswith("CREATEVIRTUAL")]
-    kinds = {}
-    for n, k, q in schema:
-        if not isinstance(n, str) or n in virtual or any(n.startswith(v + "_") for v in virtual):
-            continue
-        kinds[n] = k
-    def table(n):
-        return kinds.get(n) == "table"
-    def columns(n):
-        return {r[1] for r in conn.execute('PRAGMA table_info("%%s")' %% n)} if table(n) and name_re.match(n) else set()
-    tables = {}
-    for n, k in sorted(kinds.items()):
-        if k == "table" and name_re.match(n):
-            tables[n] = conn.execute('SELECT count(*) FROM "%%s"' %% n).fetchone()[0]
-    user_cols = columns("user")
-    role_col = "roleSlug" if "roleSlug" in user_cols else "role" if "role" in user_cols else None
-    owner = None
-    if role_col and {"email", "password"} <= user_cols:
-        row = conn.execute('SELECT email, password FROM "user" WHERE "%%s" = ? ORDER BY createdAt LIMIT 1' %% role_col,
-                           ("global:owner",)).fetchone()
-        if row is not None:
-            owner = [row[0] if isinstance(row[0], str) else None, isinstance(row[1], str) and len(row[1]) > 0]
-    migration = None
-    if {"name", "timestamp"} <= columns("migrations"):
-        row = conn.execute("SELECT name FROM migrations ORDER BY timestamp DESC LIMIT 1").fetchone()
-        migration = str(row[0])[:200] if row else None
-    wf_cols = columns("workflow_entity")
-    readable = {"name", "active", "nodes"} <= wf_cols
-    emit({"tables": tables, "owner": owner, "migration": migration, "workflows": readable})
-    if readable:
-        archived = "isArchived" in wf_cols
-        sql = ("SELECT name, active, length(CAST(nodes AS BLOB))" + (", isArchived" if archived else "") +
-               ", rowid FROM workflow_entity ORDER BY name LIMIT ?")
-        total = 0
-        for row in conn.execute(sql, (max_rows,)).fetchall():
-            if archived and row[3]:
+def main():
+    conn = sqlite3.connect("file:database.sqlite?mode=rw", uri=True, isolation_level=None)
+    conn.text_factory = lambda data: data.decode("utf-8", "replace")
+    try:
+        if hasattr(conn, "setconfig"):
+            conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
+        conn.execute("PRAGMA trusted_schema=OFF")
+        conn.execute("PRAGMA cell_size_check=ON")
+        conn.execute("PRAGMA mmap_size=0")
+        schema = conn.execute("SELECT name, type, sql FROM sqlite_master WHERE type IN ('table', 'view')").fetchall()
+        conn.execute("PRAGMA query_only=ON")
+        virtual = [n for n, k, q in schema if k == "table" and isinstance(q, str) and q.lstrip()[:20].upper().replace(" ", "").startswith("CREATEVIRTUAL")]
+        kinds = {}
+        for n, k, q in schema:
+            if not isinstance(n, str) or n in virtual or any(n.startswith(v + "_") for v in virtual):
                 continue
-            name = row[0] if isinstance(row[0], str) else ""
-            size = row[2] if isinstance(row[2], int) else 0
-            doc = {"n": name[:200], "a": bool(row[1])}
-            if size > max_row or total + size > max_total:
-                doc["big"] = True
-            else:
-                total += size
-                nodes = conn.execute("SELECT nodes FROM workflow_entity WHERE rowid = ?", (row[-1],)).fetchone()
-                doc["j"] = nodes[0] if nodes and isinstance(nodes[0], str) else "[]"
-            emit(doc)
-    emit({"end": True})
-finally:
-    conn.close()
-""" % {'memory': SQLITE_MEMORY, 'cpu': SQLITE_TIMEOUT}
+            kinds[n] = k
+        def table(n):
+            return kinds.get(n) == "table"
+        def columns(n):
+            return {r[1] for r in conn.execute('PRAGMA table_info("%%s")' %% n)} if table(n) and name_re.match(n) else set()
+        tables = {}
+        for n, k in sorted(kinds.items()):
+            if k == "table" and name_re.match(n):
+                tables[n] = conn.execute('SELECT count(*) FROM "%%s"' %% n).fetchone()[0]
+        user_cols = columns("user")
+        role_col = "roleSlug" if "roleSlug" in user_cols else "role" if "role" in user_cols else None
+        owner = None
+        if role_col and {"email", "password"} <= user_cols:
+            row = conn.execute('SELECT email, password FROM "user" WHERE "%%s" = ? ORDER BY createdAt LIMIT 1' %% role_col,
+                               ("global:owner",)).fetchone()
+            if row is not None:
+                owner = [row[0] if isinstance(row[0], str) else None, isinstance(row[1], str) and len(row[1]) > 0]
+        migration = None
+        if {"name", "timestamp"} <= columns("migrations"):
+            row = conn.execute("SELECT name FROM migrations ORDER BY timestamp DESC LIMIT 1").fetchone()
+            migration = str(row[0])[:200] if row else None
+        wf_cols = columns("workflow_entity")
+        readable = {"name", "active", "nodes"} <= wf_cols
+        cred_cols = columns("credentials_entity")
+        credentials = []
+        if "name" in cred_cols:
+            for row in conn.execute('SELECT name FROM credentials_entity ORDER BY name LIMIT %(creds)d').fetchall():
+                credentials.append((row[0] if isinstance(row[0], str) else "")[:%(name)d])
+        emit({"tables": tables, "owner": owner, "migration": migration, "workflows": readable, "credentials": credentials})
+        if readable:
+            archived = "isArchived" in wf_cols
+            sql = ("SELECT name, active, length(CAST(nodes AS BLOB))" + (", isArchived" if archived else "") +
+                   ", rowid FROM workflow_entity ORDER BY name LIMIT ?")
+            total = 0
+            for row in conn.execute(sql, (max_rows,)).fetchall():
+                if archived and row[3]:
+                    continue
+                name = row[0] if isinstance(row[0], str) else ""
+                size = row[2] if isinstance(row[2], int) else 0
+                doc = {"n": name[:200], "a": bool(row[1])}
+                if size > max_row or total + size > max_total:
+                    doc["big"] = True
+                else:
+                    total += size
+                    nodes = conn.execute("SELECT nodes FROM workflow_entity WHERE rowid = ?", (row[-1],)).fetchone()
+                    doc["j"] = nodes[0] if nodes and isinstance(nodes[0], str) else "[]"
+                emit(doc)
+        emit({"end": True})
+    finally:
+        conn.close()
+try:
+    main()
+except MemoryError:
+    emit({"failed": "memory"})
+    sys.exit(4)
+except sqlite3.DatabaseError:
+    emit({"failed": "database"})
+    sys.exit(5)
+""" % {'memory': SQLITE_MEMORY, 'cpu': SQLITE_TIMEOUT, 'creds': MAX_CREDENTIALS, 'name': MAX_NAME}
 
 
 def _nobody():
@@ -372,6 +488,29 @@ def _nobody():
         return account.pw_uid, account.pw_gid
     except KeyError:
         return 65534, 65534
+
+
+def sqlite_limits(size, attempt=0):
+    """(seconds of CPU and of waiting, address space in bytes, file size in bytes) the child that reads `size` bytes of
+    SQLite files gets in its `attempt`-th run (0 = the first). The time grows with the size of the files (N8-06; never
+    below SQLITE_TIMEOUT, at most a day); a run that was killed or timed out is made again with twice the time and memory
+    (N8-07, N8-09), the memory up to SQLITE_MEMORY_CEILING. The child's own use of memory does not grow with the database
+    (it counts rows and reads each workflow within MAX_NODES_JSON / MAX_NODES_TOTAL), so the first run keeps the old
+    2 GiB: a limit that is a protection against a crafted file is only raised for a file that already failed."""
+    factor = 2 ** max(0, int(attempt))
+    seconds = min(podman.scaled_timeout(SQLITE_TIMEOUT, size) * factor, podman.SCALE_TIMEOUT_CEILING)
+    memory = min(SQLITE_MEMORY * factor, SQLITE_MEMORY_CEILING)
+    return int(seconds), int(memory), (2 * int(size) + 64 * 1024 * 1024) * factor
+
+
+class _Failed(BackupError):
+    """A run of the SQLite child that did not give a result. `kind`: `data` (the database itself is broken: a second
+    run reads the same), `limit` (it was killed or ran out of time or memory: a run with more room may do) or `unknown`
+    (no word from the child: one more run may do, and is the last)."""
+
+    def __init__(self, code, message, kind, **details):
+        super().__init__(code, message, **details)
+        self.kind = kind
 
 
 def _child_lines(proc, *, deadline, checkpoint=None, max_line):
@@ -385,13 +524,13 @@ def _child_lines(proc, *, deadline, checkpoint=None, max_line):
             if checkpoint is not None:
                 checkpoint()
             if time.monotonic() > deadline:
-                raise BackupError('job-failed', 'HA 的 n8n 資料庫讀取逾時。')
+                raise _Failed('job-failed', 'HA 的 n8n 資料庫讀取逾時。', 'limit')
             if not selector.select(1.0):
                 continue
             data = os.read(proc.stdout.fileno(), 1024 * 1024)
             if not data:
                 if buf:
-                    raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+                    raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。', 'unknown')
                 return
             buf += data
             start = 0
@@ -403,37 +542,60 @@ def _child_lines(proc, *, deadline, checkpoint=None, max_line):
                 start = end + 1
             del buf[:start]
             if len(buf) > max_line:
-                raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+                raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。', 'data')
     finally:
         selector.close()
 
 
-def inspect_sqlite(path, *, checkpoint=None):
-    """{owner_email, owner_ok, counts, workflows [(name, active, reasons)], workflows_active, tables {name: rows},
-    migration} of the staged SQLite copy at `path` (database.sqlite; its -wal beside it is used too). The file is
-    read by SQLITE_CHILD as the account nobody, on a copy of its own (this process never opens it, and never uses
-    anything the child touched); the workflows' reasons are worked out here, one row at a time."""
+def inspect_sqlite(path, *, checkpoint=None, log=None):
+    """{owner_email, owner_ok, counts, credential_names, workflows [(name, active, reasons)], workflows_active, tables
+    {name: rows}, migration} of the staged SQLite copy at `path` (database.sqlite; its -wal beside it is used too). The
+    file is read by SQLITE_CHILD as the account nobody, on a copy of its own (this process never opens it, and never
+    uses anything the child touched); the workflows' reasons are worked out here, one row at a time.
+
+    The time the child gets grows with the size of the files, and a run that was killed or timed out is made once more
+    with twice the time and memory (`sqlite_limits`; N8-06, N8-07, N8-09). What still does not work stops only n8n:
+    `n8n.database-unreadable` (the database is broken, the second run would read the same) or `n8n.database-slow`."""
     path = Path(path)
     work_dir = path.parent / 'inspect'
+    size = sum(os.path.getsize(path.parent / name if name != 'database.sqlite' else path) for name in SQLITE_FILES
+               if os.path.lexists(path.parent / name if name != 'database.sqlite' else path))
+    last = None
+    for attempt in range(SQLITE_ATTEMPTS):
+        seconds, memory, fsize = sqlite_limits(size, attempt)
+        try:
+            return _run_child(path, work_dir, size, checkpoint, seconds, memory, fsize)
+        except _Failed as error:
+            last = error
+            if error.kind == 'data' or attempt + 1 >= SQLITE_ATTEMPTS:
+                break
+            (log or (lambda _text: None))(f'讀取 HA 備份中 n8n 的資料庫沒有完成（第 {attempt + 1} 次），'
+                                          '自動加長時間、放寬記憶體再讀一次。')
+    if last.kind == 'data' or last.kind == 'unknown':
+        raise haissues.stopped(Issue('n8n.database-unreadable', 'stop', UNREADABLE, action=UNREADABLE_ACTION),
+                               'corrupt-archive') from last
+    raise haissues.stopped(Issue('n8n.database-slow', 'stop', SLOW.format(minutes=max(1, seconds // 60)),
+                                 action=SLOW_ACTION), 'job-failed') from last
+
+
+def _run_child(path, work_dir, size, checkpoint, seconds, memory, fsize):
     work_dir.mkdir(mode=0o700)
     try:
-        size = 0
         for name in SQLITE_FILES:
             source = path.parent / name if name != 'database.sqlite' else path
             if os.path.lexists(source):
                 shutil.copyfile(source, work_dir / name, follow_symlinks=False)
-                size += os.path.getsize(work_dir / name)
         uid, gid = _nobody()
         if os.geteuid() == 0:
             for item in [work_dir] + sorted(work_dir.iterdir()):
                 os.lchown(item, uid, gid)
         argv = [sys.executable, '-I', '-S', '-c', SQLITE_CHILD, str(uid), str(gid), str(MAX_NODES_JSON),
-                str(MAX_NODES_TOTAL), str(MAX_WORKFLOWS), str(2 * size + 64 * 1024 * 1024), str(MAX_LINE)]
+                str(MAX_NODES_TOTAL), str(MAX_WORKFLOWS), str(fsize), str(MAX_LINE), str(seconds), str(memory)]
         proc = subprocess.Popen(argv, cwd=work_dir, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True,
                                 env={'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
         try:
-            return _read_child(proc, checkpoint)
+            return _read_child(proc, checkpoint, timeout=seconds)
         finally:
             with contextlib.suppress(ProcessLookupError, PermissionError):
                 os.killpg(proc.pid, signal.SIGKILL)
@@ -443,24 +605,29 @@ def inspect_sqlite(path, *, checkpoint=None):
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-def _read_child(proc, checkpoint):
-    header, workflows, ended = None, [], False
-    lines = _child_lines(proc, deadline=time.monotonic() + SQLITE_TIMEOUT, checkpoint=checkpoint, max_line=MAX_LINE)
+def _read_child(proc, checkpoint, timeout=SQLITE_TIMEOUT):
+    header, workflows, ended, failed = None, [], False, None
+    lines = _child_lines(proc, deadline=time.monotonic() + timeout, checkpoint=checkpoint, max_line=MAX_LINE)
     for line in lines:
         try:
             doc = json.loads(line)
         except (ValueError, RecursionError):
             doc = None
         if not isinstance(doc, dict) or ended:
-            raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+            raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。', 'data')
         if header is None:
             header = doc
+            if doc.get('failed') in ('memory', 'database'):   # the child's own word, before it has anything to say
+                failed, header = doc['failed'], None
+            continue
+        if doc.get('failed') in ('memory', 'database'):
+            failed = doc['failed']
             continue
         if doc.get('end') is True:
             ended = True
             continue
         if len(workflows) >= MAX_WORKFLOWS or not isinstance(doc.get('n'), str):
-            raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。')
+            raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫內容無法讀取。', 'data')
         if doc.get('big') is True or not isinstance(doc.get('j'), str):
             reasons = [TOO_LARGE]
         else:
@@ -469,17 +636,24 @@ def _read_child(proc, checkpoint):
         if checkpoint is not None:
             checkpoint()
     status = proc.wait(timeout=60)
-    if status == NO_NETNS and header is None and not workflows and not ended:
+    if status == NO_NETNS and header is None and not workflows and not ended and failed is None:
         raise BackupError('job-failed', '無法替讀取 HA 備份中 n8n 資料庫的程序切斷網路（隔離失敗），已停止，沒有讀取任何資料。')
+    if failed == 'database':
+        raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取。', 'data')
+    if failed == 'memory' or status < 0:   # out of memory, or killed by a signal (the CPU limit, the kernel's memory kill)
+        raise _Failed('job-failed', 'HA 備份中 n8n 的資料庫在讀取時用完了時間或記憶體。', 'limit')
     if status != 0 or header is None or not ended:
-        raise BackupError('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取。')
+        raise _Failed('corrupt-archive', 'HA 備份中 n8n 的資料庫無法開啟或內容無法讀取。', 'unknown')
     tables = {name: rows for name, rows in (header.get('tables') or {}).items()
               if isinstance(name, str) and TABLE_RE.fullmatch(name) and isinstance(rows, int) and rows >= 0}
     owner = header.get('owner') if isinstance(header.get('owner'), list) and len(header['owner']) == 2 else None
     email = owner[0] if owner and isinstance(owner[0], str) and 0 < len(owner[0]) <= 254 else None
     migration = header.get('migration') if isinstance(header.get('migration'), str) else None
+    credentials = [name[:MAX_NAME] for name in (header.get('credentials') or [])[:MAX_CREDENTIALS]
+                   if isinstance(name, str)] if isinstance(header.get('credentials'), list) else []
     return {'owner_email': email, 'owner_ok': email is not None and owner[1] is True,
             'counts': {key: tables.get(name, 0) for key, name in COUNTED.items()},
+            'credential_names': credentials,
             'workflows_active': sum(1 for _n, active, _r in workflows if active), 'workflows': workflows,
             'tables': tables, 'migration': migration[:200] if migration else None}
 
@@ -550,36 +724,89 @@ def workflows_to_fix(workflows, limit=200):
 
 # ====================================================================== the live target
 
-class Target:
-    """The n8n app's catalog items the import fills, resolved against the live Quadlet files."""
+def _sink(work, app, converting=False):
+    """The issues of this app. A work without sinks (a lab harness) collects nowhere; in a conversion its sink still stops
+    at a stop and at a line nobody confirmed."""
+    maker = getattr(work, 'sink', None)
+    app_id = getattr(app, 'id', None) or APP_ID
+    if callable(maker):
+        return maker(app_id)
+    return haissues.Sink(app_id, () if converting else None)
 
-    def __init__(self, work, app):
+
+def _layout(app, problem):
+    """This device's n8n is not set up as the import knows: this app stops, nothing else (N8-01, N8-02)."""
+    return haissues.stopped(Issue('n8n.layout-unsupported', 'stop',
+                                  f'這台的 n8n 應用設定不是 HA 匯入支援的樣子：{problem}。', action=SETTINGS_ACTION),
+                            'incompatible', app=getattr(app, 'id', APP_ID))
+
+
+def _container_names(quadlets):
+    """[(file, container name)] of the `.container` files: the ContainerName=, else the name systemd gives (a file whose
+    name cannot be used is not the one the app settings name)."""
+    found = []
+    for file in quadlets:
+        if file.endswith('.container'):
+            try:
+                found.append((file, quadlet_container_name(quadlets, file)))
+            except BackupError:
+                continue
+    return found
+
+
+class Target:
+    """The n8n app's catalog items the import fills, resolved against the live Quadlet files.
+
+    What the app settings hold beyond n8n's own data is this device's, not HA's, and goes along as it is (N8-02, N8-27):
+    `extra_volumes` and `extra_dirs` (`hatarget.carry`). Only the volumes of the queue (a container whose image is Valkey or
+    Redis: `queue_volumes`) are emptied. A mount that is no data of n8n (a time zone file, a path of its own) is left out of
+    what a throwaway container sees (`skipped_mounts`, the n8n side of OD-08 and OD-09)."""
+
+    def __init__(self, work, app, sink=None):
         quadlets = work.quadlets(app)
         home = work.runner(app).home
+        sink = sink if sink is not None else _sink(work, app)
         self.app = app
         if len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database':
-            raise BackupError('incompatible', '這台的 n8n 應用設定不是 HA 匯入支援的樣子（需要一個 PostgreSQL 資料庫）。',
-                              app=app.id)
+            if any(item.get('scope') == 'instance' for item in app.postgres):
+                # The converted backup holds one database dump (adapter.import_manifest); an instance's globals, roles and
+                # databases are made by the backup of the app itself. Not producible from here (DESIGN H, N8-01 part).
+                raise _layout(app, '它備份的是整個資料庫執行個體，HA 匯入目前只能放進「單一資料庫」的設定')
+            raise _layout(app, '需要剛好一個 PostgreSQL 資料庫項目（單一資料庫）')
         self.pg = app.postgres[0]
-        self.main_file = self.pg_file = self.valkey_file = None
+        self.skipped_mounts = []
         mounts = {}
-        for name, text in quadlets.items():
+        for name in quadlets:
             if not name.endswith('.container'):
                 continue
-            body = text.decode('utf-8', 'replace') if isinstance(text, bytes) else str(text)
-            for source, target, _o in quadlet_mounts(quadlets, name, home):
+            for source, target, _o in quadlet_mounts(quadlets, name, home, skipped=self.skipped_mounts):
                 mounts.setdefault(source, []).append((name, target))
-            container = [v for k, v in tempctr.parse_unit(body).get('Container', []) if k == 'ContainerName']
-            if container and container[-1] == self.pg['container']:
-                self.pg_file = name
+        if self.skipped_mounts:
+            sink.notice('n8n.mount-skipped', '這台 n8n 的容器有掛載不是 n8n 資料的路徑（例如時區檔），匯入不會用到它們，已略過；'
+                        '它們在這台維持原樣。', [f'{file}：{target}' for file, target in self.skipped_mounts])
         declared = [v['name'] for v in app.volumes]
+        self.pg_file = next((file for file, container in _container_names(quadlets)
+                             if container == self.pg['container']), None)
         self.data_volume = next((src for src, users in mounts.items()
                                  if any(t == '/home/node/.n8n' for _n, t in users)), None)
-        self.valkey_volume = next((v for v in declared if v != self.data_volume), None)
         self.main_file = next((n for n, t in mounts.get(self.data_volume, []) if t == '/home/node/.n8n'), None)
-        if (self.pg_file is None or self.main_file is None or self.data_volume not in declared
-                or len(declared) != 2 or self.valkey_volume is None):
-            raise BackupError('incompatible', '這台的 n8n 應用設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
+        if self.pg_file is None:
+            raise _layout(app, f'找不到名叫 {haissues.clean(self.pg["container"], 80)} 的資料庫容器的 Quadlet 檔')
+        if self.main_file is None or self.data_volume is None:
+            raise _layout(app, 'n8n 的資料夾（/home/node/.n8n）沒有掛在資料卷上（或掛的是這個匯入不支援的主機路徑）')
+        if self.data_volume not in declared:
+            raise _layout(app, f'n8n 的資料夾掛的資料卷 {haissues.clean(self.data_volume, 80)} 沒有列在應用設定的資料卷裡')
+        self.queue_images = {}   # queue volume -> the image of its container
+        for volume in declared:
+            image = _queue_image(quadlets, mounts.get(volume, [])) if volume != self.data_volume else None
+            if image:
+                self.queue_images[volume] = image
+        self.queue_volumes = list(self.queue_images)
+        self.valkey_volume = self.queue_volumes[0] if self.queue_volumes else None
+        self.extra_volumes, self.extra_dirs = hatarget.extras(app, handled_volumes=(self.data_volume, *self.queue_volumes))
+        if self.extra_volumes or self.extra_dirs:
+            sink.auto('n8n.extras-carried', '這台 n8n 的應用設定還有其他資料卷或資料夾，匯入時會照這台現在的內容原樣帶過去，'
+                      '不會被 HA 的資料取代。', [*self.extra_volumes, *self.extra_dirs])
         self.n8n_image = tempctr.quadlet_image(quadlets[self.main_file])
         self.pg_image = tempctr.quadlet_image(quadlets[self.pg_file])
         env = tempctr.quadlet_environment(quadlets[self.pg_file], {'POSTGRES_USER', 'POSTGRES_DB', 'PGDATA', 'LANG',
@@ -593,13 +820,38 @@ class Target:
             raise BackupError('incompatible', '這台 n8n 的資料庫設定和應用設定不一致。', app=app.id)
 
 
+def _queue_image(quadlets, users):
+    """The image of the queue (Valkey / Redis) that keeps a volume, when every container that mounts the volume (`users`:
+    [(container file, target)]) is one and there is one; else None: the volume is data of this device's own."""
+    image = None
+    for file, _target in users:
+        try:
+            image = tempctr.quadlet_image(quadlets[file])
+        except BackupError:
+            return None
+        if not image or not QUEUE_IMAGE_RE.search(image):
+            return None
+    return image
+
+
+def _queue_owner(tmp, image):
+    """(uid, gid) of the account a queue's image runs its data folder as (valkey, redis); root when the image does not say."""
+    user = 'valkey' if 'valkey' in image.lower() else 'redis'
+    try:
+        return tmp.user_ids('ids-queue', image, user)
+    except BackupError as error:
+        if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
+            raise
+        return 0, 0
+
+
 def target_version(tmp, image, role='n8n-version'):
+    """`n8n --version` of this device's image; None when what it prints is no version (N8-10: the versions are then not
+    compared, and the customer is told)."""
     out = tmp.run(role, image, ['--version'], timeout=300, max_output=64 * 1024).stdout or b''
     lines = [line.strip() for line in out.decode('utf-8', 'replace').splitlines() if line.strip()]
     version = lines[-1] if lines else ''
-    if not VERSION_RE.fullmatch(version):
-        raise BackupError('job-failed', '無法讀取這台 n8n 的版本。')
-    return version
+    return version if VERSION_RE.fullmatch(version) else None
 
 
 def volume_root(work, app, name):
@@ -616,11 +868,28 @@ def volume_root(work, app, name):
     return int(out[0]), int(out[1]), int(out[2], 8)
 
 
+def volume_root_or_image(work, app, name, default, sink):
+    """`volume_root`, or when the owner and mode of the volume cannot be read -- it is not there yet, podman does not
+    tell -- the image's own: `default()` -> (uid, gid, mode) (N8-11, N8-12). One line says so. A restored volume the
+    container cannot write makes the app's health check fail, and the restore puts everything back by itself; what
+    ends the whole job (a full disk, a cancel) is never taken for a volume that cannot be read."""
+    try:
+        return volume_root(work, app, name)
+    except BackupError as error:
+        if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
+            raise
+    root = tuple(default())
+    sink.auto('n8n.volume-root-default', f'讀不到這台 n8n 資料卷 {haissues.clean(name, 80)} 現在的擁有者和權限，'
+              f'改用映像標準的擁有者（{root[0]}:{root[1]}）和權限（{root[2]:o}）；如果它寫不進去，匯入後的健康檢查不會過，'
+              '這台會自動退回匯入前的樣子。', [name])
+    return root
+
+
 # ====================================================================== the job steps
 
 def member_pass(work, app, staging, *, files=None):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)   # what is left out is told once (Sink.skipped), not only logged
     with work.open(member) as stream:
         src = scan_member(stream, report, staging, files=files, guard=work.guard, checkpoint=work.checkpoint)
     for note in report.warnings():
@@ -662,43 +931,60 @@ def fixed_key_settings(work, app):
     return sorted(set(found))
 
 
-def analyse(src, info, version, target, *, fixed_key=()):
-    blockers, warnings = [], []
+NO_KEY = ('HA 備份裡找不到 n8n 能用的加密金鑰（沒有設定檔、格式不對，或金鑰是空的），所以 HA 儲存的 {count} 個憑證（帳號密碼、API 金鑰）'
+          '在這台打不開。工作流程、使用者和執行紀錄照常搬過來，這台會自動產生新的金鑰；匯入後請把這些憑證重新輸入一次。')
+KEY_CREATED = 'HA 備份裡找不到 n8n 的加密金鑰（HA 的 n8n 也沒有儲存任何憑證，沒有東西要重新輸入），這台自動產生了新的金鑰。'
+
+
+def analyse(sink, src, info, version, target, *, fixed_key=()):
+    """What HA's n8n and this device's make of each other, as issues in `sink` (the check collects them all; the
+    conversion calls this again, with the same words, so that it stops at what stops and asks for what was not confirmed:
+    N8-18). `version`: the add-on's version, `target`: `n8n --version` here, None when it cannot be read (N8-10: no
+    comparison, a notice). `info`: inspect_sqlite's answer, None when there is no database to read."""
     if fixed_key:
-        blockers.append(f'這台的 n8n 設定了固定的加密金鑰（N8N_ENCRYPTION_KEY，在 {"、".join(fixed_key[:3])}）；匯入後 n8n 會因'
-                        '金鑰和 HA 的資料不同而無法啟動。請先移除這個設定再匯入。')
+        sink.stop('n8n.fixed-key', '這台的 n8n 設定了固定的加密金鑰（N8N_ENCRYPTION_KEY）；匯入後 n8n 會因金鑰和 HA 的資料不同而無法啟動。',
+                  items=fixed_key, action='請先移除這個設定（所在的檔案見名單）再匯入；這台的 n8n 不會有任何變更。')
     if 'database.sqlite' not in src.sqlite:
-        blockers.append('HA 備份裡沒有 n8n 的資料庫。')
-    if src.key is None:
-        blockers.append('HA 備份裡沒有 n8n 的加密金鑰設定，搬過來的憑證會打不開。')
+        sink.stop('n8n.no-database', NO_DATABASE, action=NO_DATABASE_ACTION)
     if info is not None and not info['owner_ok']:
-        blockers.append(NO_OWNER)
-    if version != target:
-        blockers.append(f'版本不同：HA 的 n8n 是 {version}，這台是 {target}。請先讓兩邊的 n8n 版本一致後再匯入。')
-    for package in src.native_bad:
-        warnings.append(f'社群節點 {package} 含有與這台不相容的程式，搬過來後需要重新安裝。')
-    if src.packages:
-        warnings.append(f'HA 的 n8n 裝了 {len(src.packages)} 個社群節點套件，搬過來後請確認它們能正常使用。')
-    return blockers, warnings
+        sink.stop('n8n.no-owner', NO_OWNER + '匯入的話，這台的 n8n 會變成沒有任何資料的空站，而且第一個打開網頁的人可以自己當管理者。',
+                  action=NO_OWNER_ACTION)
+    if src.key is None and info is not None:   # N8-15: nothing stops; what cannot be opened is entered again
+        count = info['counts'].get('credentials', 0)
+        if count:
+            sink.confirm('n8n.no-key', NO_KEY.format(count=count), haissues.Names(info['credential_names']))
+        else:
+            sink.auto('n8n.key-created', KEY_CREATED)
+    sink.extend(haissues.version_issues('n8n', version, version or None, target))
+    if src.native_bad:
+        sink.notice('n8n.native-code', f'有 {len(src.native_bad)} 個社群節點含有與這台不相容的程式（{"、".join(src.native_bad[:5])}'
+                    f'{"…" if len(src.native_bad) > 5 else ""}），搬過來後需要重新安裝。', src.native_bad)
+    if src.packages or src.packages_unlisted:
+        names = [package['name'] for package in src.packages]
+        sink.notice('n8n.community-packages', (f'HA 的 n8n 裝了 {len(src.packages)} 個社群節點套件，' if src.packages else
+                                              'HA 的 n8n 裝了社群節點套件（清單太大，沒有逐一列出），')
+                    + '搬過來後請確認它們能正常使用。', names)
 
 
 def check(work, app):
+    sink = _sink(work, app)
     tmp = work.temp(app)
-    items = Target(work, app)
+    items = Target(work, app, sink)
     staging = work.staging / 'n8n-work'
     staging.mkdir(mode=0o700)
     addon = work.addon_info(SLUG)
     src = member_pass(work, app, staging)
     sqlite_bytes = sum(os.path.getsize(p) for p in src.sqlite.values())
     work.phase('check')
-    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
-            else None)
+    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint, log=work.log)
+            if 'database.sqlite' in src.sqlite else None)
+    hatarget.ensure_image(work, app, items.n8n_image)   # CM-05: an image of this device that is not here is downloaded
     version = target_version(tmp, items.n8n_image)
-    blockers, warnings = analyse(src, info, addon.version if addon else '', version,
-                                 fixed_key=fixed_key_settings(work, app))
+    analyse(sink, src, info, addon.version if addon else '', version, fixed_key=fixed_key_settings(work, app))
+    sink.skipped(src.report)   # the one line about what the reader left out (IN-19, IN-27, ..., N8-28)
     fix = workflows_to_fix(info['workflows']) if info else []
     counts = info['counts'] if info else {}
-    return {'target_version': version, 'blockers': blockers, 'warnings': warnings,
+    return {'target_version': version or '',
             'sqlite_bytes': sqlite_bytes,
             'n8n': {'owner_email': info['owner_email'] if info else None,
                     'workflows': counts.get('workflows', 0), 'workflows_active': info['workflows_active'] if info else 0,
@@ -717,12 +1003,16 @@ def import_texts(data):
     if data.get('packages'):
         notes.append('HA 的 n8n 社群節點會一起搬過來。')
         reminders.append('請確認 HA 的 n8n 社群節點能正常使用（必要時重新安裝）。')
+    if data.get('credentials_to_enter'):
+        notes.append('HA 備份裡沒有 n8n 能用的加密金鑰，這台已產生新的金鑰；HA 儲存的憑證打不開。')
+        reminders.append(f'請把 n8n 裡 HA 儲存的 {data["credentials_to_enter"]} 個憑證（帳號密碼、API 金鑰）全部重新輸入一次。')
     return notes, reminders
 
 
-def _source_tar(out, src, password, *, node_ids):
+def _source_tar(out, src, password, *, node_ids, key=None):
     """The throwaway volume `n8nsrc`: home/.n8n/{database.sqlite*, config} owned by the image's node user, an
-    empty writable out/ and the temporary database password (pgpass, readable by both containers)."""
+    empty writable out/ and the temporary database password (pgpass, readable by both containers). `key`: the
+    encryption key to write (HA's, from `src`, unless there is none: N8-15)."""
     uid, gid = node_ids
     tar = tarfile.open(fileobj=out, mode='w|', format=tarfile.PAX_FORMAT)
     now = time.time()
@@ -733,7 +1023,7 @@ def _source_tar(out, src, password, *, node_ids):
         size = os.path.getsize(path)
         with open(path, 'rb') as handle:
             tar.addfile(_info(f'home/.n8n/{name}', 'file', mode=0o600, uid=uid, gid=gid, mtime=now, size=size), handle)
-    key = json.dumps({'encryptionKey': src.key}).encode('utf-8')
+    key = json.dumps({'encryptionKey': key if key is not None else src.key}).encode('utf-8')
     tar.addfile(_info('home/.n8n/config', 'file', mode=0o600, uid=uid, gid=gid, mtime=now, size=len(key)),
                 io.BytesIO(key))
     data = password.encode('ascii')
@@ -749,32 +1039,40 @@ def _n8n_env(extra):
     return env
 
 
-def count_rows(pg, tables):
+def count_rows(pg, tables, database='n8n'):
     """{table: rows} in the throwaway PostgreSQL for the tables that exist there (COUNT_CHUNK tables per query: a
-    function takes at most 100 arguments; review C-11)."""
+    function takes at most 100 arguments; review C-11) in the database `database`: the name the app settings give (N8-21;
+    it was always `n8n`)."""
     present = pg.query_json("SELECT coalesce(json_agg(tablename), '[]'::json) FROM pg_tables "
-                            "WHERE schemaname = 'public'", 'n8n')
+                            "WHERE schemaname = 'public'", database)
     present = {name for name in present if isinstance(name, str)} if isinstance(present, list) else set()
     names = [name for name in tables if name in present and TABLE_RE.fullmatch(name)]
     found = {}
     for start in range(0, len(names), COUNT_CHUNK):
         chunk = names[start:start + COUNT_CHUNK]
         parts = ', '.join(f"'{name}', (SELECT count(*) FROM \"{name}\")" for name in chunk)
-        doc = pg.query_json(f'SELECT json_build_object({parts})', 'n8n')
+        doc = pg.query_json(f'SELECT json_build_object({parts})', database)
         if isinstance(doc, dict):
             found.update({name: _int(doc.get(name)) for name in chunk if name in doc})
     return found
 
 
 def convert(work, app, test_mode, out_dir):
-    """Build the app's data items in `out_dir`; returns {volumes {name: path}, postgres {id: {...}}, counts,
-    workflows_to_fix}."""
+    """Build the app's data items in `out_dir`; returns {volumes {name: path}, dirs {path: tar}, postgres {id: {...}},
+    counts, workflows_to_fix}.
+
+    The same findings as the check, by the same code (N8-18): what stops n8n stops it here, a line to confirm that was not
+    confirmed -- or confirmed with other names -- is `confirmation-required`. This device's own other volumes and folders
+    come along as they are (N8-02, N8-27), the queue's volumes are emptied, HA's key is used (a new one is made when HA's
+    backup has none, N8-15)."""
     from . import jobs
     from .ha_odoo import Cluster
+    sink = _sink(work, app, converting=True)
     adapter = work.adapter(app)
     tmp = work.temp(app)
-    items = Target(work, app)
+    items = Target(work, app, sink)
     ids = adapter.owner_ids()
+    size = hatarget.size_hint(getattr(work, 'ha', None))
     staging = work.staging / 'n8n-work'
     staging.mkdir(mode=0o700)
     for sub in ('volumes', 'postgres'):
@@ -788,19 +1086,30 @@ def convert(work, app, test_mode, out_dir):
     work.phase('convert')
     # Still to be written (review C-01): the copy in the throwaway volume, n8n's export, the new database and its
     # dump -- about three times the SQLite files (already staged).
-    work.guard.check(4 * sum(os.path.getsize(p) for p in src.sqlite.values()))
-    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint) if 'database.sqlite' in src.sqlite
-            else None)
+    sqlite_bytes = sum(os.path.getsize(p) for p in src.sqlite.values())
+    work.guard.check(4 * sqlite_bytes)
+    info = (inspect_sqlite(src.sqlite['database.sqlite'], checkpoint=work.checkpoint, log=work.log)
+            if 'database.sqlite' in src.sqlite else None)
+    hatarget.ensure_image(work, app, items.n8n_image)   # CM-05: downloaded as the owner when it is not here
+    hatarget.ensure_image(work, app, items.pg_image)
     version = target_version(tmp, items.n8n_image)
-    blockers, _warnings = analyse(src, info, addon.version if addon else '', version,
-                                  fixed_key=fixed_key_settings(work, app))
-    if blockers:
-        raise BackupError('incompatible', f'n8n 不能搬過來：{blockers[0]}', app=app.id)
+    analyse(sink, src, info, addon.version if addon else '', version, fixed_key=fixed_key_settings(work, app))
+    sink.skipped(src.report)
+    carry_report = habackup.Report(names=haissues.Names)
+    carried = {'volumes': {}, 'dirs': {}}
+    if items.extra_volumes or items.extra_dirs:   # N8-02, N8-27: this device's own other data goes along as it is
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=items.extra_volumes, dirs=items.extra_dirs,
+                                 report=carry_report, size=size)
+        sink.skipped(carry_report)
     node_ids = tmp.user_ids('ids-node', items.n8n_image, 'node')
+    key, new_key = src.key, False
+    if key is None:   # N8-15: HA's credentials cannot be opened; n8n here gets a key of its own, made now
+        key, new_key = secrets.token_urlsafe(24), True
+        jobs.mask_secret(key)
     password = secrets.token_urlsafe(24)
     jobs.mask_secret(password)
     tmp.volume('n8nsrc')
-    tmp.volume_import('n8nsrc', lambda out: _source_tar(out, src, password, node_ids=node_ids))
+    tmp.volume_import('n8nsrc', lambda out: _source_tar(out, src, password, node_ids=node_ids, key=key))
     for path in src.sqlite.values():
         os.unlink(path)
     work.log('從 HA 的 n8n 資料庫匯出全部資料（含執行紀錄）')
@@ -811,14 +1120,14 @@ def convert(work, app, test_mode, out_dir):
             timeout=3600, max_output=4 * 1024 * 1024)
     network = tmp.network('n8n-net')
     tmp.volume('n8n-pgdata')
-    pg_env = {key: value for key, value in items.pg_env.items() if key in ('POSTGRES_INITDB_ARGS', 'LANG', 'TZ')}
+    pg_env = {key_: value for key_, value in items.pg_env.items() if key_ in ('POSTGRES_INITDB_ARGS', 'LANG', 'TZ')}
     pg_env.update({'POSTGRES_USER': items.pg['user'], 'POSTGRES_DB': items.pg['database'],
                    'POSTGRES_PASSWORD_FILE': '/work/pgpass'})
     tmp.run('n8n-pg', items.pg_image, [], detach=True, network=network,
             volumes=[(tmp.name('n8nsrc'), '/work', 'ro'), (tmp.name('n8n-pgdata'), items.pg_target, None)],
             env=pg_env)
     pg = Cluster(tmp, 'n8n-pg', superuser=items.pg['user'], log=work.log)
-    pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
+    pg.wait_ready(tcp=True, checkpoint=work.checkpoint, timeout=podman.scaled_timeout(PG_READY_TIMEOUT, sqlite_bytes))
     db_env = _n8n_env({'DB_TYPE': 'postgresdb', 'DB_POSTGRESDB_HOST': tmp.name('n8n-pg'), 'DB_POSTGRESDB_PORT': '5432',
                        'DB_POSTGRESDB_DATABASE': items.pg['database'], 'DB_POSTGRESDB_USER': items.pg['user'],
                        'DB_POSTGRESDB_PASSWORD_FILE': '/work/pgpass'})
@@ -827,7 +1136,7 @@ def convert(work, app, test_mode, out_dir):
             network=network, volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, timeout=3600,
             max_output=4 * 1024 * 1024)
     compared = {name: rows for name, rows in info['tables'].items() if rows and name not in NOT_COMPARED}
-    found = count_rows(pg, compared)
+    found = count_rows(pg, compared, items.pg['database'])
     missing = [name for name in compared if name not in found]
     differ = [f'{name}（HA {rows}，匯入後 {found[name]}）' for name, rows in compared.items()
               if name in found and found[name] != rows]
@@ -863,16 +1172,16 @@ def convert(work, app, test_mode, out_dir):
         tmp.remove(role)
     for role in ('n8n-pgdata', 'n8nsrc'):
         tmp.remove_volume(role)
-    # n8n_n8n_data from scratch and an empty n8n_valkey_data, their top directories owned like the live ones.
+    # n8n_n8n_data from scratch and the queue's volumes empty, their top directories owned like the live ones.
     data_path = out_dir / 'volumes' / f'{items.data_volume}.tar'
-    root = volume_root(work, app, items.data_volume)
+    root = volume_root_or_image(work, app, items.data_volume, lambda: (*node_ids, 0o755), sink)
     out = FileTar(data_path, work.guard)
     try:
         uid, gid = node_ids
         out.add_member(_info('.', 'dir', mode=root[2], uid=root[0], gid=root[1], mtime=time.time()))
-        key = json.dumps({'encryptionKey': src.key}).encode('utf-8')
-        out.add_member(_info('config', 'file', mode=0o600, uid=uid, gid=gid, mtime=time.time(), size=len(key)),
-                       io.BytesIO(key))
+        config = json.dumps({'encryptionKey': key}).encode('utf-8')
+        out.add_member(_info('config', 'file', mode=0o600, uid=uid, gid=gid, mtime=time.time(), size=len(config)),
+                       io.BytesIO(config))
         seen = set()
         with tarfile.open(staging / 'ha-n8n-files.tar', 'r|', encoding=habackup.ENCODING,
                           errors=habackup.ERRORS) as tar:
@@ -890,18 +1199,25 @@ def convert(work, app, test_mode, out_dir):
     finally:
         out.close()
     os.unlink(staging / 'ha-n8n-files.tar')
-    valkey_path = out_dir / 'volumes' / f'{items.valkey_volume}.tar'
-    vroot = volume_root(work, app, items.valkey_volume)
-    out = FileTar(valkey_path, work.guard)
-    try:
-        out.add_member(_info('.', 'dir', mode=vroot[2], uid=vroot[0], gid=vroot[1], mtime=time.time()))
-    finally:
-        out.close()
+    volumes = {items.data_volume: data_path}
+    for name in items.queue_volumes:
+        queue_path = out_dir / 'volumes' / f'{name}.tar'
+        queue_root = volume_root_or_image(work, app, name, lambda name=name: (*_queue_owner(tmp, items.queue_images[name]), 0o755),
+                                          sink)
+        out = FileTar(queue_path, work.guard)
+        try:
+            out.add_member(_info('.', 'dir', mode=queue_root[2], uid=queue_root[0], gid=queue_root[1], mtime=time.time()))
+        finally:
+            out.close()
+        volumes[name] = queue_path
     check_volume_tar(data_path, ids)
-    check_volume_tar(valkey_path, ids)
-    return {'volumes': {items.data_volume: data_path, items.valkey_volume: valkey_path},
+    for name in items.queue_volumes:
+        check_volume_tar(volumes[name], ids)
+    volumes.update(carried['volumes'])
+    return {'volumes': volumes, 'dirs': dict(carried['dirs']),
             'postgres': {items.pg['id']: {'database': items.pg['database'], 'server_version': str(text)[:32],
                                           'major': major, 'file': dump}},
             'counts': dict(info['counts'], workflows_active=info['workflows_active']),
             'owner_email': info['owner_email'],
-            'workflows_to_fix': workflows_to_fix(info['workflows']), 'packages': list(src.packages)}
+            'workflows_to_fix': workflows_to_fix(info['workflows']), 'packages': list(src.packages),
+            'credentials_to_enter': info['counts'].get('credentials', 0) if new_key else 0}

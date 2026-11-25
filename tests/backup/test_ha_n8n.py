@@ -14,8 +14,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_n8n, habackup, jobs
+from woowbackup import ha_n8n, habackup, haissues, jobs
 from woowbackup.errors import BackupError
+from woowbackup.haissues import Sink
 
 from . import hafixtures as hx
 
@@ -97,8 +98,9 @@ class SqliteTests(unittest.TestCase):
         info = ha_n8n.inspect_sqlite(self.path)
         self.assertFalse(info['owner_ok'])
         self.assertEqual(info['workflows'], [], 'a view named like a table is not read')
-        blockers, _w = ha_n8n.analyse(_source(), info, '2.43.6', '2.43.6')
-        self.assertIn(ha_n8n.NO_OWNER, blockers)
+        issue = issues_of(_source(), info)['n8n.no-owner']
+        self.assertEqual(issue.level, 'stop')
+        self.assertIn(ha_n8n.NO_OWNER, issue.message)
 
     def test_garbage_is_corrupt(self):
         self.path.write_bytes(b'SQLite format 3\x00' + b'\xff' * 4000)
@@ -225,19 +227,20 @@ def _source(**fields):
     return src
 
 
-class AnalyseTests(unittest.TestCase):
-    def test_version_key_and_native_code(self):
-        info = {'owner_ok': True}
-        self.assertEqual(ha_n8n.analyse(_source(), info, '2.43.6', '2.43.6'), ([], []))
-        blockers, _w = ha_n8n.analyse(_source(), info, '2.43.6', '2.44.0')
-        self.assertIn('HA 的 n8n 是 2.43.6，這台是 2.44.0', blockers[0])
-        blockers, _w = ha_n8n.analyse(_source(key=None), info, '2.43.6', '2.43.6')
-        self.assertIn('加密金鑰', blockers[0])
-        _b, warnings = ha_n8n.analyse(_source(native_bad=['n8n-nodes-x'], packages=[{'name': 'n8n-nodes-x',
-                                                                                     'version': '1'}]),
-                                      info, '2.43.6', '2.43.6')
-        self.assertTrue(any('n8n-nodes-x' in w and '重新安裝' in w for w in warnings))
+def good_info(credentials=('HA probe header',), owner=True):
+    """What inspect_sqlite answers for a good database (only what `analyse` reads)."""
+    return {'owner_ok': owner, 'owner_email': 'ha-probe@probe.invalid', 'credential_names': list(credentials),
+            'counts': {'credentials': len(credentials)}}
 
+
+def issues_of(src, info='good', version='2.43.6', target='2.43.6', **kwargs):
+    """{issue id: Issue} of what `analyse` finds (a collecting sink: the check's)."""
+    sink = Sink('n8n')
+    ha_n8n.analyse(sink, src, good_info() if info == 'good' else info, version, target, **kwargs)
+    return {issue.id: issue for issue in sink.found}
+
+
+class AnalyseTests(unittest.TestCase):
     def test_elf(self):
         self.assertTrue(ha_n8n.elf_fits(elf()))
         self.assertFalse(ha_n8n.elf_fits(elf(glibc=True)), 'glibc code does not run on the musl image')
@@ -384,8 +387,9 @@ class FixedKeyTests(unittest.TestCase):
         quiet = {'n8n.container': base + b'Environment=N8N_HOST=x\nEnvironmentFile=%h/missing.env\n'
                                          b'Secret=n8n-key,type=mount,target=N8N_ENCRYPTION_KEY\n'}
         self.assertEqual(ha_n8n.fixed_key_settings(self.work(quiet), None), [])
-        blockers, _w = ha_n8n.analyse(_source(), {'owner_ok': True}, '2.43.6', '2.43.6', fixed_key=found)
-        self.assertIn('N8N_ENCRYPTION_KEY', blockers[0])
+        issue = issues_of(_source(), None, fixed_key=found)['n8n.fixed-key']
+        self.assertEqual((issue.level, issue.names), ('stop', tuple(found)))
+        self.assertIn('N8N_ENCRYPTION_KEY', issue.message)
 
 
 class CountTests(unittest.TestCase):
