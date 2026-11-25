@@ -108,7 +108,9 @@ class Transport:
         return role
 
     def run(self, *args, **kwargs):
-        assert self.missing or 'authz/custom.acl' in self.seed
+        names_acl = any(isinstance(s, dict) and s.get('path') == '/opt/emqx/data/authz/custom.acl'
+                        for s in self.config['authorization']['sources'])
+        assert self.missing or not names_acl or 'authz/custom.acl' in self.seed
         assert 'certs/lab.pem' in self.seed
         self.run_env = dict(kwargs.get('env') or {})
         self.events.append('start')
