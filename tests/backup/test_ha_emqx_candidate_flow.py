@@ -356,11 +356,21 @@ class CandidateFlowTests(unittest.TestCase):
     def test_a_candidate_that_boots_unlike_the_live_config_is_listed_not_refused(self):
         """E-60: a setting changed and not yet restarted: the roots are said, what the files give is the baseline."""
         transport = Transport()
+        transport.config['mqtt'] = {'max_packet_size': '1MB'}
+        transport.running_config = copy.deepcopy(transport.config)
+        transport.running_config['mqtt'] = {'max_packet_size': '9MB'}
+        notes = {}
+        self.assertEqual(len(self.invoke(transport, notes=notes)), 4)
+        self.assertEqual(notes['differs'], ['mqtt'])
+        self.assertIn('import', transport.events)
+
+    def test_a_root_that_ha_replaces_anyway_is_not_listed_as_different(self):
+        """E-60 lists what stays this device's: HA's authorization, rules, ... replace this device's whatever the candidate booted with."""
+        transport = Transport()
         transport.running_config['authorization']['deny_action'] = 'disconnect'
         notes = {}
         self.assertEqual(len(self.invoke(transport, notes=notes)), 4)
-        self.assertEqual(notes['differs'], ['authorization'])
-        self.assertIn('import', transport.events)
+        self.assertEqual(notes['differs'], [])
 
     def test_only_another_node_name_stops_the_candidate(self):
         transport = Transport()

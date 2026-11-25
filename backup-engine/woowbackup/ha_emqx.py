@@ -1954,7 +1954,7 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             if (wanted_node != got_node and not (isinstance(wanted_node, dict) and isinstance(got_node, dict)
                                                  and wanted_node.get('name') == got_node.get('name'))):
                 raise BackupError('incompatible', 'EMQX 候選啟動後的節點名稱和這台不同，已停止。')
-            notes['differs'] = differ
+            notes['differs'] = [root for root in differ if root not in DATA_ROOTS]   # HA's roots replace this device's anyway
             raw_now = read_effective_config(read_candidate)
             target_config = dict(target_config)
             target_boot = dict(target_boot) if target_boot is not None else None
