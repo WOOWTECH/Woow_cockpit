@@ -1816,7 +1816,8 @@ def role_sql(name, role, dbname):
             f'REVOKE ALL PRIVILEGES ON DATABASE {db} FROM PUBLIC;\n')
 
 
-ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump archive of 11 and later begins with
+LISTING_SLACK = 9      # entries beyond the three settings a plain listing may keep back (a real PostgreSQL 16.15 listing: 2)
 INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
 
 
@@ -1838,14 +1839,20 @@ def toc_entries(text):
 
 
 def check_listing(text):
-    """The `pg_restore -l` listing is whole when the number of its entries is what its own header says the archive has
-    (pg-stdin follow-up F4: a listing that came back short would restore only the part it names, and nothing would notice).
-    The header counts the three archive settings of a pg_dump 16 archive, which pg_restore keeps out of a plain listing: the
-    lines are short by exactly the ones they do not show. A listing without the header cannot be checked and is refused
-    (the same rule as Odoo's). Returns the number of entries."""
+    """The `pg_restore -l` listing is whole when its entries are the ones its own header says the archive has, less the
+    few a plain listing keeps back (pg-stdin follow-up F4: a listing that came back short would restore only the part it
+    names, and nothing would notice). What a plain listing keeps back is no exact number: a REAL listing (PostgreSQL
+    16.15, a Nextcloud database, this lane's shape probe of 2026-11-24) has 1131 entry lines under `TOC Entries: 1136`, so
+    it keeps back five: the three archive settings ENCODING, STDSTRINGS and SEARCHPATH (none of them is listed) and two
+    more of a kind nobody looked at. The lines may be short of the header by the settings not shown, plus LISTING_SLACK;
+    a listing without the header, with more lines than the header or with a larger gap is refused (the same rule as
+    Odoo's). A gap inside the slack goes unnoticed (a listing that was cut short loses a stretch of its end). Returns
+    the number of entries."""
     entries, declared, shown_settings = toc_entries(text)
-    if declared is None or declared != entries + len(ARCHIVE_SETTINGS) - shown_settings:
-        # the numbers (no content) go with the error: what a real run shows decides whether the relation is right
+    held_back = None if declared is None else declared - entries
+    lowest = len(ARCHIVE_SETTINGS) - shown_settings
+    if held_back is None or not lowest <= held_back <= lowest + LISTING_SLACK:
+        # the numbers (no content) go with the error: what a real run shows decides how tight the check can be
         raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, shown=shown_settings,
                           **({} if declared is None else {'declared': declared}))
     return entries
