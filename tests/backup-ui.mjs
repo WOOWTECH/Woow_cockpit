@@ -7327,6 +7327,23 @@ try {
       assert.match(await page.locator('.job-result').textContent(), /注意事項[\s\S]*匯入時暫停的服務沒有重新啟動：filebrowser/);
     });
 
+  await check('HAOS 一次確認: what the kept copy says about its databases is only ever text',
+    v2Fixture({ chain: { kept: { n8n: { backup: { ...v2Kept('n8n'), note: '保留的複本：<b>x</b>' }, detail: { databases: ['<img src=x onerror="window.__pwned=1">', 'a'.repeat(120)], more: 1,
+      put_back: ['"><script>window.__pwned=2</script>'], not_put_back: [{ name: '<i>db</i>', reason: '<img src=y onerror="window.__pwned=3">' }], notes: ['<b>bold</b>'] } } },
+      restoreWarnings: { n8n: ['<img src=z onerror="window.__pwned=4">'] } } }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['n8n'] });
+      await page.locator('#ha-ack').check();
+      await v2Import(page).click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      await page.locator(`[data-section="kept"] [data-kept="${KEPT_ID}"][data-state="present"]`).waitFor();
+      assert.equal(await page.evaluate(() => window.__pwned), undefined);
+      assert.equal(await page.locator('#view img, #view script, #view b, #view i').count(), 0, 'no element came out of the copy\'s words');
+      assert.match(await page.locator(`[data-kept="${KEPT_ID}"]`).textContent(), /<img src=x onerror="window.__pwned=1">/);
+      assert.match(await page.locator('.ha-group-row[data-ha-app="n8n"] .ha-group-notes').textContent(), /<img src=z onerror="window.__pwned=4">/);
+      await allWidths(page, 'HAOS kept hostile');
+    });
+
   await check('HAOS 一次確認 in the dark theme: the kept copies and their delete dialog keep WCAG AA contrast and fit every width',
     v2KeptFixture(), async page => {
       await ready(page);
