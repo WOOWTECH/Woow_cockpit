@@ -76,6 +76,7 @@ class StrengthOwner(FakeOwner):
         self.superuser = True
         self.globals = GLOBALS
         self.applied_globals = []
+        self.cut_script = False     # the roles script arrived short: psql exits 0 but never reaches the end mark
         self.lose_rows = False      # pg_restore silently loses data (a digest must catch it)
         self.volume_lost = None     # a volume import that loses a member: its name
         self.dropped = []
@@ -135,13 +136,18 @@ class StrengthOwner(FakeOwner):
         return self.out(0, (json.dumps(value) + '\n').encode(), stdout)
 
     def psql_file(self, database, sql, stdout):
+        mark = None
+        if sql.startswith('BEGIN;\n') and '\\echo woowbk-sql-end-' in sql:
+            # a script with its own transaction and an end mark psql prints after running it (pg-stdin follow-up F1)
+            body, _, tail = sql.rpartition('COMMIT;\n')
+            mark, sql = tail.strip()[len('\\echo '):], body[len('BEGIN;\n'):]
         if sql.startswith('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n'):
             assert sql.endswith(';\nCOMMIT;\n'), sql[-40:]
             sql = sql[len('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n'):-len(';\nCOMMIT;\n')]
             self.snapshots += 1
         if sql.startswith('SET ') or sql.startswith('ALTER ROLE') or 'ROLE' in sql.split(';', 1)[0]:
             self.applied_globals.append(sql)
-            return podman.Result(0, b'', b'')
+            return podman.Result(0, (mark + '\n').encode() if mark and not self.cut_script else b'', b'')
         if sql == qp.SESSION_STATE_SQL:
             return self.json(self.session_state, stdout)
         if sql == qp.BOOTSTRAP_SQL:

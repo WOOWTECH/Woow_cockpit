@@ -562,7 +562,7 @@ Strict (unknown keys rejected; a schema violation is `corrupt-archive`, another 
 encryption, `size` (> 0, the member's size) and `sha256` (of the member's bytes).
 
 The inner tar of an app follows the strict tar rules of format 1: `manifest.json` first, then exactly the entries it
-lists, in order. The **per-app manifest** (≤ 1 MiB; authenticated by age when encrypted):
+lists, in order. The **per-app manifest** (≤ 16 MiB since 2026-11-25, X-AR-03; authenticated by age when encrypted):
 
 ```json
 {"format": 2, "backup_id": "…", "created": "…Z", "type": "manual", "note": "", "key_id": "ABCD-EF01-2345-6789",
@@ -590,7 +590,7 @@ gzip stream end exactly at the member's end and the member's sha256 match. Only 
 restore of one app never decrypts another. Their manifests are read first, so the totals and limits are known before
 anything is written. The combined manifest the flows get has the format 1 shape plus `format: 2`, `encryption` and
 `backup_apps`, holding the selected apps only (`incompatible` when a selected app is not in the backup). Limits: ≤ 100
-apps, ≤ 3,999 entries in all, manifest and `backup.json` ≤ 1 MiB, README ≤ 64 KiB, declared total ≤ 2 TiB and ≤ free
+apps, ≤ 39,999 entries in all, manifest ≤ 16 MiB, `backup.json` ≤ 1 MiB, README ≤ 64 KiB, declared total ≤ 16 TiB and ≤ free
 space − 512 MiB (extract). Errors as format 1 (`wrong-key` when age matches no identity and `backup.json` names a key
 this device does not hold, else `corrupt-archive`; `key-required` without usable identities; an unencrypted backup needs
 none).
@@ -645,7 +645,7 @@ WOOWTECH-BACKUP/1\n
   Never pass key material in argv/env; identity files live in `/run/woowtech-backup` (0600).
 * Tar members, in order: `manifest.json` first, then each entry listed in `manifest.entries` in
   that order. Regular files only, mode 0600, uid/gid 0, names exactly as listed.
-* `manifest.json` (≤ 1 MiB):
+* `manifest.json` (≤ 16 MiB):
 
 ```json
 {
@@ -680,8 +680,8 @@ matching identity), stream-decompress, parse+validate the manifest, then for eve
 name == next expected entry, type regular, size == declared, sha256 == declared, total ≤ limits;
 reject links, devices, absolute or `..` names, duplicates, extra or missing members, and require
 age and zstd to exit 0 before anything is considered valid. Extraction only into an empty
-root-owned 0700 directory, with `O_NOFOLLOW|O_EXCL` file creation. Limits: ≤ 4000 members,
-manifest ≤ 1 MiB, declared total ≤ free space − 512 MiB reserve, per-member size enforced while
+root-owned 0700 directory, with `O_NOFOLLOW|O_EXCL` file creation. Limits: ≤ 40,000 members,
+manifest ≤ 16 MiB, declared total ≤ free space − 512 MiB reserve, per-member size enforced while
 streaming.
 
 Key id: `sha256(recipient_utf8).hexdigest()[:16].upper()` grouped as `XXXX-XXXX-XXXX-XXXX`.
@@ -698,7 +698,7 @@ already does, before the safety backup, and the restore reuses the result):
 
 * A volume tar may hold only regular files, directories, FIFOs, symlinks and hard links to an earlier non-directory
   member (a second name of a file, symlink or FIFO, as `podman volume export` writes it), with no absolute or `..`
-  names, no duplicates, no member below a symlink or other non-directory, at most 2,000,000 members, no symlink whose
+  names, no duplicates, no member below a symlink or other non-directory, at most 4,000,000 members (2,000,000 before 2026-11-25; an image 100,000, was 10,000), no symlink whose
   target leaves the volume when resolved from the link's own directory (podman's own import rule, which otherwise
   aborts half-way after the volume was emptied), and only member owners (uid and gid) that the owner's user
   namespace maps (`podman unshare cat /proc/self/uid_map`, `gid_map`; else `incompatible`). Devices and sparse or
@@ -1077,13 +1077,13 @@ Key material only ever travels in stdin JSON field `key`.
 | --- | --- | --- |
 | `status` | – | `version, host{hostname,arch,os,podman}, storage{path,free_bytes,total_bytes,backups_bytes,backup_count,apps[AppUsage],ha_backups_bytes,ha_backup_count}, key{key_id,created,kit_confirmed}\|null, imported_keys[], apps[App], active_job Job\|null, warnings[], settings Settings, schedule ScheduleSummary\|null` (deletes expired unencrypted copies first, §8; `storage.apps` is the per-app usage of the overview, no I/O beyond the index listing and the policy file, `[]` when it cannot be computed; `schedule` null when it cannot be computed, 2026.11.17.1) |
 | `list` | – | `backups[BackupMeta]` (newest first), `exports[{export_id,backup_id,filename,size,expires}]` (unencrypted copies that can still be downloaded; `expires` epoch seconds), `ha_backups[HaBackupMeta]` (uploaded Home Assistant backups, newest HA backup date first; `[]` when the HA store cannot be read; branch feat/ha-import) |
-| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (`backup` carries `from_ha` exactly like `list`; with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`; an unencrypted backup needs no key and refuses one with `invalid-request`). Fast: a format 2 backup decrypts only each app's manifest |
+| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (`backup` carries `from_ha` exactly like `list`; with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`; a key that comes with an unencrypted backup is left out -- not read, not saved -- instead of refused, 2026-11-25, X-PF-05). Fast: a format 2 backup decrypts only each app's manifest |
 | `key-init` | – | `key, created(bool)` |
 | `key-kit` | – | `key_id, filename, content` (kit text) |
 | `key-confirm` | `key_id` | – |
 | `key-import` | `key` | `key{key_id,created}` |
 | `backup-start` | `apps[], include_images, note, request_id, encrypt?, acknowledge_plaintext?` | `job_id, deduplicated` (`encrypt` = 加密此備份, default the setting 預設加密備份; `encrypt: false` needs no device key, and while the setting is on it needs `acknowledge_plaintext: true`, else `invalid-request` with `details.field`; `encrypt: true` without a device key is `no-device-key`; params record `encrypt`) |
-| `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` (the job verifies deeply, §5; `key` is refused for an unencrypted backup) |
+| `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` (the job verifies deeply, §5; a `key` that comes with an unencrypted backup is ignored, 2026-11-25, X-PF-05) |
 | `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?, accept_unauthenticated?, acknowledged?` | `job_id, deduplicated, key_created` (2026-11-25: an in-place restore that encrypts its pre-restore backup creates the missing device key, `key_created`, `no-device-key` only when that fails; lines a restore check wants confirmed, `Preflight.apps[].issues` of level `confirm`, need their keys in `acknowledged` (the shape of `ha-import-start`), else `confirmation-required` with `details.apps {app_id: [HaIssue]}` and nothing started; `save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made"; `accept_unauthenticated: true` is required — `invalid-request` with `details.field` otherwise — for an `unauthenticated` backup: the separately confirmed "I trust where this unencrypted file came from"; only the selected apps are read; 2026-11-25, lane F2: a backup that was converted from an HA backup (`ha-imports.json` lists it) with several apps is restored one app after the other, each with its own pre-restore backup and its own automatic rollback (§8 "HA import chain", `kind` `ha-restore`): the answer then also has `group`, the first job restores the first app and `params.chain` holds the rest; any other backup, and a converted one with a single app, keeps its one job and its all-or-nothing rollback) |
 | `settings-get` | – | `settings Settings` |
 | `settings-set` | `encrypt_by_default, acknowledge_plaintext?` | `settings Settings` (turning it off needs `acknowledge_plaintext: true`, the acknowledgement of `plaintext_warning`; audited) |
@@ -2064,6 +2064,50 @@ changed is left alone. The failed restore's data (`-old-<job>-rollback`) is dele
 and reported otherwise. Any error of a directory step (also an unexpected exception) is recorded as a problem and never
 stops the rollback of the other apps.
 
+### Restore of a backup converted from an HA backup (2026-11-25, lane RESTORE; HAOS parity; `flows.py`, `kept.py`, `adapters/quadlet_postgres.py`)
+
+Only a backup that `ha-imports.json` lists (`flows.from_ha`; while that file cannot be read its note says it) is restored this
+way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps today's checks (owner decision H6).
+
+* **Waits (FL-17, X-AD-37).** The wait for a database and for the health checks is the larger of the fixed time and what the
+  data needs: 60 s + 120 s per GiB restored, at most one hour; the log says "still starting" every minute; a service that failed,
+  or is inactive without being a oneshot, twice in a row ends the wait at once and the restore rolls back.
+* **A missing volume (X-AD-36)** is created empty before the pre-restore copy (`adapter.ensure_volumes`); one whose existence
+  cannot be told stops that app only.
+* **The check after the restore (X-AD-39).** A conversion stores no snapshot, so nothing is read; a value the app does not
+  answer counts as not compared (`match` null, a warning); digests and a differing answer still fail the restore.
+* **Other services that use the data (D10: X-AD-14, X-AD-50).** The running containers of other services that mount one of
+  the app's host directories (or the whole home) or write to one of its volumes are one line of the confirmation, issue
+  `restore.pauses` (`confirm`, items: the service names without `.service`; in `Preflight.apps[].issues` and in `params.acknowledged`
+  with its key). The restore pauses them before the pre-restore copy, writes `paused:<unit>` next to the app's own units into the
+  job record's `stopped_writers` first (the recovery of a dead job starts exactly the marked ones, `flows.restart_writers`), and
+  starts them again after the restore, after a rollback or when the restore is refused (`flows.resume_paused`); one that does
+  not start stays in the record and in `warnings`. A container no service started cannot be started again: that app stops
+  (`incompatible`), as an ordinary restore does. A service that started after the check is paused too and the result says so.
+* **Lines to confirm (F1's hook).** `flows._require_confirmed`: every `confirm` line of the restore check must be in
+  `params.acknowledged[app]` with exactly its names, else `confirmation-required` for that app only, before anything changes.
+* **Owner ids outside the account's range (X-NS-09).** Found in the job once the tars are extracted: issue `restore.id-range`
+  (`confirm`, item: the account). Unconfirmed: `confirmation-required`, nothing touched. Confirmed: `usermod --add-subuids
+  / --add-subgids` (blocks of 65,536 ids no account has), `podman system migrate`, the account's services started again (the others
+  are in the record as `paused:` first). An owner id above 1,048,576 is not widened for.
+* **Other databases in the database service (S4: X-AD-07, X-AD-08; owner decisions D7 and H4), `kept.py`.** A single-database
+  app whose PostgreSQL service holds other databases, or cannot be listed, gets issue `restore.other-databases` (`confirm`, items:
+  the database names; the check says `warn`, no longer `fail`). Before anything is touched (after the pre-restore copy, with
+  space for it checked before any writer stops, `insufficient-space` for that app only) the restore keeps a copy of the whole
+  service: the app's units stop, `pg_dumpall --globals-only` and `pg_dump -Fc` of every database are read, the database stops and
+  its data volume is exported (the cold copy); both are ONE ordinary verified backup of type `safety` (encrypted per 預設加密備份)
+  whose note starts with `保留的複本：` (`kept.is_kept`). It is never pruned (`flows.prune_safety`), the converted backup's
+  `ha-imports.json` row says where it is (`from_ha.kept`), and the administrator downloads or deletes it like any backup.
+  A failed restore rolls back FROM it (`restore(kept_volumes=…)`: the service is put back whole, every database and role). After a
+  success the other databases and roles go back into the new cluster (`put_back_databases`: only roles that do not exist, never
+  the app's own; one database after the other with `pg_restore --create`; one that fails is dropped again); the result has `kept
+  {app: {backup_id, databases[], more, put_back[], not_put_back[{name, reason}], notes[]}}` (optional) and a warning names what is
+  still only in the copy.
+* **L-38 pin API.** `adapter.import_manifest(…, keep_safety=True)` writes `keep_safety: true` into the app section (optional; only `true`);
+  the restore then writes its pre-restore backup with the kept-copy note, so it is pinned like a kept copy.
+* **pg-stdin follow-up F1.** The roles script of an instance restore is `BEGIN;` script `COMMIT;` and an end mark psql prints
+  after it (`_run_sql`); a script that arrived short is `job-failed` instead of half applied.
+
 ### Home Assistant import (branch feat/ha-import, part B; `ha_odoo.py`, `ha_n8n.py`, `haimport.py`)
 
 **Revised 2026-11-25 (HAOS parity).** What an importer below calls a blocker is a `stop` of that one app (§7 `HaIssue`); which of
@@ -2822,10 +2866,13 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
    a hard link only to an earlier file of the same tree that moves; the HA-side secrets of the new add-ons are never
    read, and Omnigent's account hashes, Headscale's Noise key and Hermes's `.env` values are masked as soon as they are
    read.
-19. The only root command the engine added is `loginctl enable-linger <owner>` (`OwnerRunner.ensure_user_manager`): a fixed argv[0]
-   (`podman.LOGINCTL`, root-owned like the other tools, `root_only`), the owner name checked by `OWNER_RE`, a sanitized environment,
-   60 seconds, run only by a runner made with the real executor. A failed command's message holds only a sentence of `podman.REASONS`
-   and the command's name and exit code, never what it printed.
+19. The root commands the HAOS parity work added are `loginctl enable-linger <owner>` (lane F3, `OwnerRunner.ensure_user_manager`) and
+   `usermod --add-subuids/--add-subgids <range> <owner>` with `cat /etc/subuid` and `cat /etc/subgid` to read the tables (lane RESTORE,
+   `OwnerRunner.widen_subids`, §9 "Owner ids outside the account's range": only for the one line the customer confirmed). Each has a fixed
+   argv[0] (`podman.LOGINCTL`, `podman.USERMOD`, `podman.CAT`), an owner name that `OwnerRunner` has checked with `OWNER_RE` (never `root`),
+   a sanitized environment (`ROOT_ENV`), a time limit (60 seconds for `loginctl` and `usermod`) and a bounded output; `loginctl` runs only
+   for a runner made with the real executor. A failed command's message holds only a sentence of `podman.REASONS` or the command's
+   name and exit code, never what it printed.
 
 ## 11. UI (`backup/`) requirements
 
