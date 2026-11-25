@@ -561,14 +561,15 @@ def interrupted(record, message, result):
     return message, _with_group(result, _view(group, None, shown))
 
 
-def unstarted(paths, store, record):
-    """A chain job that was cancelled before it began (the record is finished already): its result says what became of
-    the import (nothing of this app, nothing of the rest). Returns True when the record was changed."""
+def unstarted(paths, store, record, stop=None):
+    """A chain job that never began although its record is finished already (cancelled before it started; or `busy`: another
+    job held the engine for the whole wait): its result says what became of the import (nothing of this app, nothing of the
+    rest), for `stop` (default: the customer's cancel). Returns True when the record was changed."""
     params = record.get('params') or {}
     group, chain = group_of(params), chain_of(params)
     if group is None or chain is None:
         return False
-    shown, _row = _dead_result(record, group, chain, False, '', Stop('cancelled'))
+    shown, _row = _dead_result(record, group, chain, False, '', stop or Stop('cancelled'))
     with store.locked(record['id']):
         fresh = store.get(record['id'])
         fresh['result'] = _with_group(fresh.get('result'), _view(group, None, shown))

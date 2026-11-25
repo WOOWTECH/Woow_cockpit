@@ -1689,6 +1689,11 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
                 reporter = JobReporter(store, store.get(job_id))
                 if reporter.record.get('state') == 'queued':
                     reporter.finish('failed', error={'code': 'busy', 'message': '另一個作業仍在執行，此作業未啟動。'})
+                    if chain:
+                        from . import hachain
+                        with contextlib.suppress(Exception):  # an import that never began says which apps it did not reach
+                            hachain.unstarted(paths, store, reporter.record, hachain.Stop('busy'))
+                        reporter.record = store.get(job_id)
             return reporter.record
         run = _Run(paths, store, lock_fd, masks, deps or flows.default_deps(paths), handlers, chain)
         return run.go(job_id)

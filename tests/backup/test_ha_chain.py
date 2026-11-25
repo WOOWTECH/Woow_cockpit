@@ -411,6 +411,22 @@ class RunTests(ChainCase):
         self.assertNotIn('group', first['result'], 'a job that runs alone concludes no chain')
         self.assertEqual(len(self.records()), 1)
 
+    def test_an_import_that_cannot_get_the_engine_says_which_apps_it_did_not_reach(self):
+        self.start_chain()
+        held = jobs.acquire_engine_lock(self.paths, timeout=0)
+        try:
+            first = self.run_chain(lock_timeout=0.3)
+        finally:
+            os.close(held)
+        self.assertEqual((first['state'], first['error']['code']), ('failed', 'busy'))
+        self.assertEqual(self.script.events, [])
+        results = {row['app_id']: row for row in first['result']['group']['results']}
+        self.assertEqual({app: row['status'] for app, row in results.items()}, {app: 'not-started' for app in APPS})
+        self.assertEqual({row['code'] for row in results.values()}, {'busy'})
+        self.assertEqual(results['n8n']['message'], hachain.STOPPED['busy'])
+        self.assertEqual(len(self.records()), 1)
+        self.assertEqual(jobs.JobStore(self.paths).get(self.first)['result'], first['result'])
+
     def test_the_memory_of_one_job_is_collected_before_the_next_one_starts(self):
         self.start_chain(['odoo', 'n8n'])
         with mock.patch.object(jobs.gc, 'collect') as collect:
