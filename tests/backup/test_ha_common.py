@@ -1009,6 +1009,71 @@ class RealWorkTests(hi.FlowCase):
         self.work.close()
 
 
+class RealRunnerTests(Case):
+    """The same helpers over the real `podman.OwnerRunner` (only its executor is a double): the argv it builds, the
+    arguments it accepts and the reason it finds in a failed command's stderr are the real ones."""
+
+    def setUp(self):
+        super().setUp()
+        self.executed = []
+
+        def executor(argv, **kwargs):
+            prefix = podman.OwnerRunner('appowner', runner=lambda *a, **k: None, user_lookup=lambda _n: types.SimpleNamespace(
+                pw_uid=1013, pw_gid=1013, pw_dir='/home/appowner')).prefix()
+            inner = argv[len(prefix):]
+            self.executed.append((inner, kwargs))
+            if inner[0] == podman.SYSTEMCTL:
+                verb = inner[2]                       # --user start|stop -- unit
+                (self.world.running.add if verb == 'start' else self.world.running.discard)('odoo-db')
+                return podman.Result(0, b'', b'')
+            return self.world.podman(tuple(inner[1:]), kwargs)
+
+        self.real = podman.OwnerRunner('appowner', runner=executor, user_lookup=lambda _name: types.SimpleNamespace(
+            pw_uid=1013, pw_gid=1013, pw_dir=self.tmpdir.name))
+        self.work.runner = lambda _app: self.real
+        self.work.adapter = lambda _app: types.SimpleNamespace(runner=self.real)
+
+    def test_a_missing_image_is_downloaded_with_the_real_arguments(self):
+        self.assertTrue(hatarget.ensure_image(self.work, APP, 'docker.io/emqx/emqx:5.8.9'))
+        pull = next((inner, kwargs) for inner, kwargs in self.executed if inner[1] == 'pull')
+        self.assertEqual(pull[0], [podman.PODMAN, 'pull', '--quiet', 'docker.io/emqx/emqx:5.8.9'])
+        self.assertEqual((pull[1]['timeout'], pull[1]['abort']), (hatarget.PULL_TIMEOUT, self.work.abort))
+
+    def test_a_download_that_fails_is_told_by_the_real_runners_reason(self):
+        self.world.pulls = [podman.Result(125, b'', SECRET_ERR)]
+        with self.assertRaises(BackupError) as caught:
+            hatarget.ensure_image(self.work, APP, 'docker.io/emqx/emqx:5.8.9')
+        self.assertIn('連不上網路', caught.exception.message)
+        self.assertNotIn('S3cr3tTokenValue', caught.exception.message)
+
+    def test_a_database_that_does_not_run_is_started_through_the_real_runner(self):
+        self.world.exec_results = [podman.Result(125, b'', b'Error: no container with name or ID "odoo-db" found'),
+                                   podman.Result(0, b'{"a": 1}\n', b'')]
+        self.assertEqual(hacommon.live_json(self.work, APP, 'odoo-db', 'odoo', 'odoo', 'select 1'), {'a': 1})
+        start = next(inner for inner, _kwargs in self.executed if inner[0] == podman.SYSTEMCTL)
+        self.assertEqual(start, [podman.SYSTEMCTL, '--user', 'start', '--', 'odoo-db.service'])
+        self.temp.runner = self.real
+        self.temp.cleanup()
+        stops = [inner for inner, _kwargs in self.executed if inner[0] == podman.SYSTEMCTL and inner[2] == 'stop']
+        self.assertEqual(stops, [[podman.SYSTEMCTL, '--user', 'stop', '--', 'odoo-db.service']])
+        self.assertTrue(all('abort' not in kwargs for inner, kwargs in self.executed if inner[:3][2:3] == ['stop']))
+
+    def test_a_failed_start_carries_the_real_commands_reason(self):
+        self.world.exec_results = [podman.Result(125, b'', b'Error: no such container')]
+
+        def failing(argv, **kwargs):
+            inner = argv[len(self.real.prefix()):]
+            if inner[0] == podman.SYSTEMCTL:
+                return podman.Result(1, b'', b'Failed to start odoo-db.service: Unit odoo-db.service is masked.')
+            return self.world.podman(tuple(inner[1:]), kwargs)
+
+        self.real._runner = failing
+        with self.assertRaises(BackupError) as caught:
+            hacommon.live_json(self.work, APP, 'odoo-db', 'odoo', 'odoo', 'select 1')
+        self.assertIn('暫時停用', caught.exception.message)
+        self.assertEqual(caught.exception.issues[0].id, 'target.service-failed')
+
+
 class NotDeployedTests(unittest.TestCase):
     """FL-11 and HA-07: the real reason is told, not "not deployed here"."""
 
