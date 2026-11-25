@@ -2037,6 +2037,17 @@ class HardLinkTests(WalkCase):
         _files, report = self.files(chain, habackup.Select(include=('l9',)))
         self.assertEqual(report.skip_names(), ['l9'])
 
+    def test_the_notes_about_chains_are_bounded(self):
+        """What a link names is noted for the chains behind it, as many notes as MAX_LINK_COPIES: a crafted tar of millions of
+        links must not make the table grow without end; a chain longer than the notes reach is listed, not followed."""
+        entries = [{'name': 'x/a', 'data': b'1'}, {'name': 'x/l1', 'type': 'hardlink', 'linkname': 'x/a'},
+                   {'name': 'x/l2', 'type': 'hardlink', 'linkname': 'x/l1'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/l2'}]
+        for limit, expected in ((2, {'y/b': b'1'}), (1, {})):
+            with self.subTest(limit=limit), mock.patch.object(habackup, 'MAX_LINK_COPIES', limit):
+                files, report = self.files(entries, habackup.Select(include=('y',)))
+                self.assertEqual(files, expected)
+                self.assertEqual(report.skip_names('hardlink'), [] if expected else ['y/b'])
+
     def test_the_names_of_waiting_links_are_bounded(self):
         """A few MiB of compressed headers must not hold gigabytes of names in memory."""
         entries = [{'name': 'x/a', 'data': b'1'}]
