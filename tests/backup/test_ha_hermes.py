@@ -980,9 +980,11 @@ REAL_KEY = os.environ.get('WOOWBK_HA_B1_KEY')
 
 @unittest.skipUnless(REAL_ROOT and REAL_KEY, 'set WOOWBK_HA_B1_FIXTURES and WOOWBK_HA_B1_KEY (guard.py --b1): the real lab backup of the x86 HA')
 class RealHermesTests(unittest.TestCase):
-    """The real Hermes add-on of the lab's x86 backup (made 2026-11-19, never committed) through the whole conversion of this
-    lane -- the walk into a real TreeTar, the sandboxed SQLite checks, the judgement and the databases written last -- and the
-    tree it makes passes the restore's own checks. Nothing of it is printed (a secret is never in a message)."""
+    """The real Hermes add-on of the lab's x86 backup (made 2026-11-19, never committed) through what works on the data -- the walk
+    into a real TreeTar, the sandboxed SQLite checks, the judgement and the databases written last -- and the tree it makes passes
+    the restore's own checks (ha_odoo.check_volume_tar). It is NOT `ha_hermes.convert()`: the live target (Quadlet files, owner
+    of the live folder), the redis folder, the PostgreSQL dump and the carried volumes are doubles in ConvertTests and not here.
+    Nothing of it is printed (a secret is never in a message)."""
 
     def test_the_real_add_on_converts_into_a_tree_the_restore_accepts(self):
         before = dict(jobs._MASK_COUNTS)
