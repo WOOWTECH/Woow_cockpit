@@ -3,6 +3,7 @@ provider's failure cleanup and the script it runs in the live database's contain
 for psql and pg_dump)."""
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -15,6 +16,7 @@ from woowbackup.haissues import Names
 from woowbackup.podman import CommandError, Result
 
 from . import hafakes
+from woowbackup import hatarget
 
 class TrustedDataTests(unittest.TestCase):
     def test_schema_entries_are_not_selected(self):
@@ -160,6 +162,8 @@ class SnapshotScriptTests(unittest.TestCase):
     SNAPSHOT = '00000003-0000001B-1'
     PSQL = r"""#!/bin/sh
 printf '%s\n' "$@" > "$STUB/psql.argv"
+n=$(cat "$STUB/psql.runs" 2>/dev/null || echo 0); n=$((n + 1)); printf '%s' "$n" > "$STUB/psql.runs"
+[ "$n" -gt "${STUB_FAIL_FIRST:-0}" ] || exit 3
 folder=$(dirname "$(readlink /proc/self/fd/0)")
 printf '%s\n' "$folder" "$(stat -c %a "$folder")" "$(stat -c %a "$folder/in")" > "$STUB/psql.folder"
 out=/dev/null
@@ -170,8 +174,8 @@ while IFS= read -r line; do
         '\o') out=/dev/null ;;
         'SELECT pg_export_snapshot();') printf '%s\n' "$STUB_SNAPSHOT" > "$out" ;;
         'LOCK TABLE '*) [ "$STUB_LOCKED" = no ] || exit 3 ;;
-        'SELECT CASE WHEN '*) printf '%s\n' "$STUB_REVISION" > "$out" ;;
-        'SELECT coalesce(json_agg(json_build_array(c.relname, '*) printf '%s\n' "$STUB_COLUMNS" > "$out" ;;
+        'SELECT CASE WHEN '*) if [ "$n" -le "${STUB_MISMATCH_FIRST:-0}" ]; then printf '%s\n' mismatch > "$out"; else printf '%s\n' "$STUB_REVISION" > "$out"; fi ;;
+        'SELECT coalesce(json_agg(json_build_array(c.relname, '*) if [ "$n" -le "${STUB_BAD_FIRST:-0}" ]; then printf '%s\n' "$STUB_BAD_TEXT" > "$out"; else printf '%s\n' "$STUB_COLUMNS" > "$out"; fi ;;
         '\q') exit 0 ;;
     esac
 done
@@ -194,14 +198,19 @@ printf 'PGDMP-schema-only'
             stub.chmod(0o755)
         self.path = self.root / 'target-schema.dump'
         self.calls = []
+        self.scripts = []
+        pause = patch.object(hatarget, '_sleep', lambda _seconds: None)   # no real pause between two tries
+        pause.start()
+        self.addCleanup(pause.stop)
 
     def capture(self, **answers):
         env = {'PATH': f'{self.root / "bin"}:/usr/bin:/bin', 'LC_ALL': 'C', 'STUB': str(self.root),
                'STUB_SNAPSHOT': self.SNAPSHOT, 'STUB_REVISION': 'ok', 'STUB_COLUMNS': json.dumps(self.COLUMNS),
-               'STUB_LOCKED': 'no', 'STUB_DUMP': 'ok', **answers}
+               'STUB_LOCKED': 'no', 'STUB_DUMP': 'ok', 'STUB_BAD_TEXT': 'not json', **answers}
 
         def podman(*args, input, stdout, **kwargs):
             self.calls.append(args)
+            self.scripts.append(input.decode('utf-8'))
             script = subprocess.run(['sh', *args[args.index('sh') + 1:]], input=input, stdout=stdout,
                                     stderr=subprocess.PIPE, env=env, timeout=300, start_new_session=True)
             if script.returncode:
@@ -267,6 +276,63 @@ printf 'PGDMP-schema-only'
                 self.assertIsNone(self.recorded('pg_dump.argv'), 'pg_dump never ran')
                 self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
                 self.assert_private_folder_removed()
+
+    def waits(self):
+        return [int(re.search(r'seq 1 ([0-9]+)', script).group(1)) for script in self.scripts]
+
+    def test_a_snapshot_that_was_not_taken_is_tried_again_with_a_longer_wait(self):
+        """O-58, O-59: psql that ends by itself (no connection, no lock within 15 s: exit 21) or finds another revision (exit
+        22) is a device that is busy: the snapshot is taken again, three tries in all, each with a longer wait for the
+        columns (60, 120, 180 seconds); what a failed try left is gone before the next one."""
+        for name, answers in (('psql ends by itself', {'STUB_FAIL_FIRST': '2'}), ('another revision', {'STUB_MISMATCH_FIRST': '2'})):
+            with self.subTest(name=name), patch.object(hatarget, '_sleep', lambda _s: None):
+                self.scripts.clear()
+                self.assertEqual(self.capture(**answers), self.COLUMNS)
+                self.assertEqual(self.waits(), [60, 120, 180])
+                self.assertEqual(self.path.read_bytes(), b'PGDMP-schema-only')
+                self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], ['target-schema.dump'])
+                self.path.unlink()
+                (self.root / 'psql.runs').unlink()
+
+    def test_a_snapshot_that_is_never_taken_stops_after_three_tries(self):
+        for name, answers, code in (('psql ends by itself', {'STUB_FAIL_FIRST': '9'}, 21),
+                                    ('another revision', {'STUB_MISMATCH_FIRST': '9'}, 22)):
+            with self.subTest(name=name), patch.object(hatarget, '_sleep', lambda _s: None):
+                self.scripts.clear()
+                (self.root / 'psql.runs').unlink(missing_ok=True)
+                with self.assertRaises(CommandError) as caught:
+                    self.capture(**answers)
+                self.assertEqual((caught.exception.returncode, len(self.scripts)), (code, 3))
+                self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
+                if self.recorded('psql.folder'):    # (a psql that ends at once never saw the folder)
+                    self.assert_private_folder_removed()
+
+    def test_a_damaged_columns_line_is_read_again_and_then_refused(self):
+        """O-32, O-33: the first line of the snapshot is no JSON (or no list of columns): another try; still damaged after
+        the last one: the plain refusal, nothing of it left."""
+        for name, text in (('no JSON', 'not json'), ('no list', '{"users": 1}'), ('an empty list', '[]'),
+                           ('a short row', '[["users", "id"]]')):
+            with self.subTest(name=name), patch.object(hatarget, '_sleep', lambda _s: None):
+                self.scripts.clear()
+                (self.root / 'psql.runs').unlink(missing_ok=True)
+                self.assertEqual(self.capture(STUB_BAD_FIRST='1', STUB_BAD_TEXT=text), self.COLUMNS)
+                self.assertEqual(len(self.scripts), 2)
+                self.path.unlink()
+                self.scripts.clear()
+                (self.root / 'psql.runs').unlink()
+                with self.assertRaises(BackupError) as caught:
+                    self.capture(STUB_BAD_FIRST='9', STUB_BAD_TEXT=text)
+                self.assertEqual((caught.exception.code, caught.exception.message, len(self.scripts)),
+                                 ('incompatible', '目標 Omnigent 的結構快照格式不正確。', 3))
+                self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], [])
+
+    def test_a_snapshot_id_that_is_no_id_is_never_tried_again(self):
+        for snapshot in ('', '00000003-0000001B-1 --file=/tmp/x'):
+            with self.subTest(snapshot=snapshot), patch.object(hatarget, '_sleep', lambda _s: None):
+                self.scripts.clear()
+                with self.assertRaises(CommandError) as caught:
+                    self.capture(STUB_SNAPSHOT=snapshot)
+                self.assertEqual((caught.exception.returncode, len(self.scripts)), (23, 1))
 
     def test_a_failed_dump_is_not_a_schema(self):
         with self.assertRaises(CommandError):

@@ -1264,12 +1264,28 @@ def read_schema(cluster, alembic):
 
 
 def live_schema(work, app, target):
-    """This device's schema, read from the LIVE database as the app owner (read only)."""
-    columns = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_COLUMNS_SQL)
-    if not isinstance(columns, list) or not columns or any(not isinstance(r, list) or len(r) != 6 for r in columns):
-        raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id)
-    signature = _signature(hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
-                                              SCHEMA_SIGNATURE_SQL))
+    """This device's schema, read from the LIVE database as the app owner (read only). An answer that is not what was asked
+    for is read again (O-40, O-41: hatarget.retry, READ_ATTEMPTS in all); a database that is not running is started by
+    `live_json` first (CM-07); only a structure that cannot be read at the end stops this app."""
+    def read_columns():
+        columns = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_COLUMNS_SQL)
+        if not isinstance(columns, list) or not columns or any(not isinstance(r, list) or len(r) != 6 for r in columns):
+            raise _Odd('這台 Omnigent 的資料表結構讀到的不是欄位清單。', app)
+        return columns
+
+    def read_signature():
+        value = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_SIGNATURE_SQL)
+        if not isinstance(value, dict) or set(value) != set(SIGNATURE_KEYS):
+            raise _Odd('這台 Omnigent 的資料庫結構讀到的不完整。', app)
+        return value
+    try:
+        columns = _again(work, read_columns, '讀取這台 Omnigent 的資料表結構')
+    except _Odd:
+        raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id) from None
+    try:
+        signature = _again(work, read_signature, '讀取這台 Omnigent 的資料庫結構')
+    except _Odd:
+        raise BackupError('incompatible', '無法確認 Omnigent 的資料庫結構。') from None
     alembic = live_alembic(work, app, target)
     if alembic is None:
         raise BackupError('incompatible', '無法讀取這台 Omnigent 的資料庫結構版本。', app=app.id)

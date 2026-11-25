@@ -120,9 +120,25 @@ def addon_tar(*, version='0.1.23', cookie=True, extra=(), artifacts=True, pg_ver
     return gzip.compress(hx.tar_bytes(entries + list(extra)), mtime=0)
 
 
+class Owner(fk.Owner):
+    """The fakes' owner that can also start and stop the units of this device (hatarget.ensure_running)."""
+
+    def systemctl(self, *args, **kwargs):
+        self.calls.append(('systemctl', *args))
+        self.world.units.append(args[:3])
+        if args[0] == 'start':
+            self.world.db_stopped = False
+        elif args[0] == 'stop':
+            self.world.db_stopped = True
+        return Result(0, b'', b'')
+
+
 class World(fk.World):
     def __init__(self):
         super().__init__()
+        self.owner = Owner(self)
+        self.db_stopped = False               # this device's own database is not running (until its unit is started)
+        self.units = []                       # (verb, '--', unit) of every systemctl call
         self.quadlets = {'omnigent': QUADLETS}
         self.ha_alembic = [ALEMBIC]
         self.live_alembic = [ALEMBIC]
@@ -154,8 +170,15 @@ class World(fk.World):
         self.cluster_state = b'shut down'     # what pg_controldata says of the new cluster after its stop
         self.extra_members = {}               # volume (or throwaway role) -> members its export holds besides the usual
         self.live_major = 16                  # what this device's database answers to server_version_num / 10000 (O-18)
+        self.superuser = []                   # the kinds of object only a database superuser can make that HA's database holds
 
     def podman(self, args, data, stdout):
+        if self.db_stopped and args[:2] == ['container', 'inspect'] and args[-1] == 'omnigent-postgres':
+            return Result(0, b'false\n', b'')
+        if self.db_stopped and args[:1] == ['exec'] and 'omnigent-postgres' in args:
+            from woowbackup.podman import CommandError
+            raise CommandError('podman exec 執行失敗（結束碼 125）。', returncode=125,
+                               stderr=b'Error: no container with name or id "omnigent-postgres": no such container')
         if args[:1] == ['exec']:
             self.exec_users.append((args[args.index('--user') + 1] if '--user' in args else None, list(args)))
         if args[:5] == ['exec', '-i', 'omnigent-postgres', 'sh', '-s']:
@@ -224,9 +247,11 @@ class World(fk.World):
                         'scheduled_tasks': 2, 'scheduled_tasks_active': 1, 'hosts': 1, 'agents': 3, 'files': 1,
                         'public_sessions': 1, 'connections_with_secrets': 0}
             if sql == ha_omnigent.KEYS_SQL:
+                if role == 'omni-db' and any('SET bundle_location' in statement for statement in self.executed('omni-db')):
+                    return dict(self.keys, bundles=[k for k in self.keys.get('bundles', []) if ha_omnigent.key_ok(k)])
                 return self.keys
             if sql == ha_odoo.SUPERUSER_SQL:
-                return []
+                return list(self.superuser)
             if sql.startswith('SELECT json_build_object(') and '(SELECT count(*) FROM' in sql:
                 counts = dict(self.counts)
                 if role == 'omni-db':
@@ -305,6 +330,30 @@ class OmnigentCase(fk.ConversionCase):
 
     def check_one(self, **upload):
         return self.check(self.upload_omnigent(**upload), ['omnigent'])[0]
+
+    @contextlib.contextmanager
+    def answering(self, role, wanted, value, *, skip=0):
+        """`role`'s answer to the statement `wanted` (its whole text or its start) is `value`, after `skip` answers as
+        usual."""
+        real, asked = self.world.answer, []
+
+        def answer(found, sql, database):
+            if found == role and sql.startswith(wanted):
+                asked.append(sql)
+                if len(asked) > skip:
+                    return value
+            return real(found, sql, database)
+        self.world.answer = answer
+        try:
+            yield
+        finally:
+            self.world.answer = real
+        self.assertGreater(len(asked), skip, 'the statement was asked')
+
+    def assert_nothing_loaded(self):
+        self.assertFalse([cmd for role, cmd, _d in self.world.execs if role == 'omni-db' and cmd[0] == 'pg_restore'
+                          and '-U' in cmd and ha_omnigent.RESTORE_ROLE in cmd], 'no HA data was loaded')
+        self.assertEqual(self.storage.list_backups(), [])
 
     def info(self, url):
         self.assertEqual(url, 'http://127.0.0.1:8000/v1/info')
@@ -1148,25 +1197,6 @@ class RefusalTests(OmnigentCase):
             self.assertFalse(result['ok'])
             self.assertIn(check, '\n'.join(result['blockers']))
 
-    @contextlib.contextmanager
-    def answering(self, role, wanted, value, *, skip=0):
-        """`role`'s answer to the statement `wanted` (its whole text or its start) is `value`, after `skip` answers as
-        usual."""
-        real, asked = self.world.answer, []
-
-        def answer(found, sql, database):
-            if found == role and sql.startswith(wanted):
-                asked.append(sql)
-                if len(asked) > skip:
-                    return value
-            return real(found, sql, database)
-        self.world.answer = answer
-        try:
-            yield
-        finally:
-            self.world.answer = real
-        self.assertGreater(len(asked), skip, 'the statement was asked')
-
     def test_a_device_that_is_not_set_up_like_the_package_is_no_target(self):
         layout = '這台的 Omnigent 應用設定不是 HA 匯入支援的樣子：'
         missing = layout + '找不到 PostgreSQL、伺服器或 runner 的 Quadlet 檔'
@@ -1382,6 +1412,529 @@ class ScanTests(unittest.TestCase):
         self.assertIn('COMMENT', kinds)
         self.assertIn('FUNCTION', kinds)
         self.assertIn('UNKNOWN WEIRD', kinds)
+
+
+class SkippedLineTests(OmnigentCase):
+    """HAOS parity (O-03, O-12, O-14, O-15, O-16, O-21, O-28): what this device cannot take over -- tables, objects,
+    extensions and links that are not Omnigent's, locations that could leave the artifact store -- is no refusal any more:
+    it is left out, listed in ONE line to confirm, and the rest is moved. For each kind: the line is not confirmed -> only
+    this app stops, before anything of HA is loaded; confirmed -> the conversion goes on and leaves exactly that out; one
+    more name -> the same line asks again."""
+
+    def kind_tables(self, more=False):
+        extra = ['evil', 'evil2'] if more else ['evil']
+        self.world.objects = dict(self.world.objects, tables=self.world.objects['tables'] + extra)
+        self.world.toc = TOC + b''.join(f'39{n}; 0 0 TABLE DATA public {t} x\n'.encode() for n, t in enumerate(extra))
+        self.world.ha_columns = COLUMNS + [[t, 'id', 'integer', False, '', ''] for t in extra]
+        sequences = [list(SEQUENCE)] + [[f'{t}_id_seq', 'bigint', 1, 1, 9223372036854775807, 1, 1, False, f'{t}.id']
+                                        for t in extra]
+        self.world.ha_signature = dict(signature(), sequences=sequences)
+        return {}, [f'資料表 {t}' for t in extra]
+
+    def kind_objects(self, more=False):
+        self.world.objects = dict(self.world.objects, functions=1, **({'views': 2} if more else {}))
+        self.world.toc = TOC + b'3700; 1255 16700 FUNCTION public evil() omnigent\n'
+        return {}, ['函式'] + (['檢視表'] if more else [])
+
+    def kind_superuser(self, more=False):
+        self.world.superuser = ['EVENT TRIGGER'] + (['CAST'] if more else [])
+        return {}, [f'只有資料庫超級使用者能建立的物件 {k}' for k in self.world.superuser]
+
+    def kind_extensions(self, more=False):
+        extra = ['dblink'] + (['hstore'] if more else [])
+        self.world.objects = dict(self.world.objects, extensions=extra + ['pg_trgm', 'plpgsql'])
+        return {}, [f'擴充功能 {e}' for e in extra]
+
+    def kind_links(self, more=False):
+        art = 'data/omnigent-home/.omnigent/artifacts'
+        names = ['x', 'y'] if more else ['x']
+        links = [{'name': f'{art}/{n}', 'type': 'hardlink', 'linkname': 'data/postgres/base/1/1259'} for n in names]
+        return {'extra': links}, [f'檔案區裡指到區外的硬連結 {n}' for n in names]
+
+    def kind_locations(self, more=False):
+        bad = ['../../etc/passwd'] + (['/etc/shadow'] if more else [])
+        self.world.keys = {'bundles': [BUNDLE, *bad], 'blobs': [BLOB]}
+        return {}, [f'會跑出檔案區的代理程式位置（會被清空） {b}' for b in bad]
+
+    def line_of(self, kind, more=False):
+        upload, items = getattr(self, f'kind_{kind}')(more)
+        ha_id = self.upload_omnigent(**upload)
+        result = self.check(ha_id, ['omnigent'])[0]
+        return ha_id, result, items
+
+    def assert_not_confirmed(self, kind):
+        ha_id, result, items = self.line_of(kind)
+        self.assertTrue(result['importable'], 'a line to confirm is no stop')
+        line = self.issues(result, 'omnigent.skipped')
+        self.assertEqual((len(line), line[0]['level'], sorted(line[0]['items'])), (1, 'confirm', sorted(items)))
+        self.assertEqual(self.issues(result, level='stop'), [])
+        self.assertTrue(line[0]['key'].startswith('omnigent.skipped:'))
+        key = line[0]['key']
+        for acknowledged in (None, {}, {'omnigent': []}, {'hermes': [key]}, {'omnigent': ['omnigent.skipped:' + '0' * 16]}):
+            self.world.forget()
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['omnigent'], **({} if acknowledged is None else {'acknowledged': acknowledged}))
+            self.assertEqual(caught.exception.code, 'confirmation-required', acknowledged)
+            self.assertEqual(self.runs('omni-db'), [], 'nothing was created')
+            self.assertFalse([cmd for _r, cmd, _d in self.world.execs if cmd[0] == 'pg_dump'], 'HA was not dumped')
+            self.assert_nothing_loaded()
+
+    def assert_confirmed_goes_on(self, kind):
+        ha_id, result, items = self.line_of(kind)
+        converted = self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(result))
+        self.assertEqual(len(self.storage.list_backups()), 1)
+        line = [i for i in converted['results'][0]['issues'] if i['id'] == 'omnigent.skipped']
+        self.assertEqual([sorted(i['items']) for i in line], [sorted(items)], 'the conversion says what it left out')
+        self.assertEqual(self.world.written['/tmp/woowbk-omnigent.toc'].decode().splitlines(), DATA_LINES,
+                         'only the trusted TABLE DATA and SEQUENCE SET entries are loaded')
+        return converted
+
+    def assert_one_more_asks(self, kind):
+        ha_id, result, _items = self.line_of(kind)
+        keys = self.confirmed(result)
+        self.world.forget()
+        ha_id, more, items = self.line_of(kind, more=True)
+        self.assertNotEqual(self.confirmed(more), keys, 'one more name is another key')
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['omnigent'], acknowledged=keys)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertIn('請再確認一次', caught.exception.message)
+        self.assert_nothing_loaded()
+        self.world.forget()
+        self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(more))
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_tables_not_confirmed(self):
+        self.assert_not_confirmed('tables')
+
+    def test_tables_confirmed(self):
+        self.assert_confirmed_goes_on('tables')
+        moved = self.world.volume_data
+        self.assertEqual(sorted(moved), ['omnigent-pi-data', 'omnigent-postgres-data', 'omnigent-server-data'])
+
+    def test_tables_one_more(self):
+        self.assert_one_more_asks('tables')
+
+    def test_objects_not_confirmed(self):
+        self.assert_not_confirmed('objects')
+
+    def test_objects_confirmed(self):
+        self.assert_confirmed_goes_on('objects')
+
+    def test_objects_one_more(self):
+        self.assert_one_more_asks('objects')
+
+    def test_superuser_objects_not_confirmed(self):
+        self.assert_not_confirmed('superuser')
+
+    def test_superuser_objects_confirmed(self):
+        self.assert_confirmed_goes_on('superuser')
+
+    def test_superuser_objects_one_more(self):
+        self.assert_one_more_asks('superuser')
+
+    def test_extensions_not_confirmed(self):
+        self.assert_not_confirmed('extensions')
+
+    def test_extensions_confirmed(self):
+        self.assert_confirmed_goes_on('extensions')
+
+    def test_extensions_one_more(self):
+        self.assert_one_more_asks('extensions')
+
+    def test_links_not_confirmed(self):
+        self.assert_not_confirmed('links')
+
+    def test_links_confirmed(self):
+        self.assert_confirmed_goes_on('links')
+        server = self.volume('omnigent-server-data')
+        self.assertNotIn('artifacts/x', server, 'a link to a file outside the store is never carried, nor copied')
+        self.assertIn(f'artifacts/{BUNDLE}', server)
+
+    def test_links_one_more(self):
+        self.assert_one_more_asks('links')
+
+    def test_locations_not_confirmed(self):
+        self.assert_not_confirmed('locations')
+
+    def test_locations_confirmed(self):
+        self.assert_confirmed_goes_on('locations')
+
+    def test_locations_one_more(self):
+        self.assert_one_more_asks('locations')
+
+
+class RowTests(OmnigentCase):
+    """The rows of the HAOS parity list that are not a line to confirm (DESIGN F-d): what is done by itself (auto), what is
+    only told (notice), what is no refusal any more (removed). Each shows that it works and that what cannot be handled
+    still stops this app only."""
+
+    LIVE_USERS = 'SELECT coalesce(json_agg(u ORDER BY u.id)'
+
+    def stopped_with(self, code, words):
+        self.world.forget()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual((caught.exception.code, caught.exception.message[:len(words)]), (code, words))
+        self.assertEqual(self.storage.list_backups(), [])
+        return caught.exception
+
+    # ------------------------------------------------------------------ O-01
+    def test_the_dump_runs_as_a_spare_id_when_the_list_has_none(self):
+        from woowbackup import nested
+        tiny = nested.IdMap('0 1013 1\n1 100000 100\n')      # none of 65534, 32767, 9999, 999 is mapped
+        with mock.patch.object(fk, 'IDS', (tiny, tiny)):
+            self.convert(self.upload_omnigent(), ['omnigent'])
+        dumps = [user for user, args in self.world.exec_users if 'pg_dump' in args and any(a.endswith('-hapg') for a in args)]
+        self.assertEqual(dumps, ['100:100'])
+
+    def test_no_id_at_all_stops_the_conversion_before_the_dump(self):
+        from woowbackup import nested
+        only_root = nested.IdMap('0 1013 1\n')
+        with mock.patch.object(fk, 'IDS', (only_root, only_root)):
+            error = self.stopped_with('job-failed', '這台的使用者命名空間沒有可用來匯出 HA 資料庫的帳號 ID')
+        self.assertFalse([cmd for _r, cmd, _d in self.world.execs if cmd[0] == 'pg_dump'])
+        self.assertEqual(self.world.manifests, {})
+        self.assertEqual(error.code, 'job-failed')
+
+    # ------------------------------------------------------------------ O-02
+    def test_hard_links_in_has_database_folder_are_copied_as_files(self):
+        link = {'name': 'data/postgres/base/1/2', 'type': 'hardlink', 'linkname': 'data/postgres/base/1/1259'}
+        result = self.check_one(extra=[link])
+        self.assertTrue(result['importable'])
+        auto = self.issues(result, 'omnigent.hardlinks-copied')
+        self.assertEqual((auto[0]['level'], auto[0]['items']), ('auto', ['base/1/2']))
+        self.convert(self.upload_omnigent(extra=[link]), ['omnigent'])
+        with tarfile.open(fileobj=io.BytesIO(self.world.imported['hapg'])) as tar:
+            members = {m.name: m for m in tar.getmembers()}
+            self.assertTrue(members['base/1/2'].isfile(), 'an ordinary file in the throwaway cluster, not a link')
+            self.assertEqual(tar.extractfile('base/1/2').read(), b'page', "with the content of the file it named")
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_a_hard_link_with_no_file_behind_it_is_asked_about_and_stops_only_this_app(self):
+        link = {'name': 'data/postgres/base/1/9', 'type': 'hardlink', 'linkname': 'data/postgres/base/1/nowhere'}
+        result = self.check_one(extra=[link])
+        line = self.issues(result, 'files.skipped')
+        self.assertEqual((len(line), line[0]['level']), (1, 'confirm'))
+        self.assertTrue(result['importable'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_omnigent(extra=[link]), ['omnigent'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assert_nothing_loaded()
+
+    # ------------------------------------------------------------------ O-07
+    def test_this_devices_other_volumes_go_along_as_they_are(self):
+        self.catalog['omnigent'].volumes = self.catalog['omnigent'].volumes + [{'name': 'omnigent-extra-data'}]
+        result = self.check_one()
+        self.assertTrue(result['importable'])
+        auto = self.issues(result, 'omnigent.extras-carried')
+        self.assertEqual((auto[0]['level'], auto[0]['items']), ('auto', ['omnigent-extra-data']))
+        converted = self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertIn('omnigent-extra-data', self.world.exported(), 'read from this device while the app runs')
+        self.assertEqual(sorted(self.world.manifests['omnigent']['volumes']),
+                         ['omnigent-extra-data', 'omnigent-pi-data', 'omnigent-postgres-data', 'omnigent-server-data'])
+        self.assertIn('PG_VERSION', self.volume('omnigent-extra-data'))
+        notes = converted['ha_import']['notes']
+        self.assertTrue(any('omnigent-extra-data' in line and '原樣帶過去' in line for line in notes), notes)
+
+    def test_a_missing_or_doubled_volume_still_stops_with_extra_ones_around(self):
+        extra = {'name': 'omnigent-extra-data'}
+        for name, change in (('one of the three is missing', lambda vols: [v for v in vols if v['name'] != 'omnigent-pi-data']),
+                             ('one is listed twice', lambda vols: vols + [dict(vols[0])])):
+            with self.subTest(name=name):
+                self.catalog['omnigent'].volumes = change(self.catalog_apps()['omnigent'].volumes + [extra])
+                result = self.check_one()
+                self.assertFalse(result['importable'])
+                self.assertIn('資料卷、資料庫設定和 Quadlet 檔不一致', '\n'.join(result['blockers']))
+
+    # ------------------------------------------------------------------ O-09
+    def test_this_devices_accounts_that_cannot_be_read_are_not_kept_and_the_import_goes_on(self):
+        with self.answering('omnigent-postgres', self.LIVE_USERS, {}):
+            converted = self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual(self.world.carried(), [])
+        issue = next(i for i in converted['results'][0]['issues'] if i['id'] == 'omnigent.accounts-unreadable')
+        self.assertEqual((issue['level'], issue['items']), ('notice', ['admin', 'operator']))
+        self.assertTrue(any('帳號沒有讀到' in line for line in converted['ha_import']['reminders_by_app']['omnigent']))
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_a_read_that_fails_once_is_read_again(self):
+        real, asked = self.world.answer, []
+
+        def answer(role, sql, database):
+            if role == 'omnigent-postgres' and sql.startswith(self.LIVE_USERS):
+                asked.append(sql)
+                if len(asked) == 1:
+                    return {}
+            return real(role, sql, database)
+        self.world.answer = answer
+        self.convert(self.upload_omnigent(), ['omnigent'])
+        self.assertEqual((len(asked), [row['id'] for row in self.world.carried()]), (2, ['admin', 'operator']))
+
+    def test_a_read_that_is_refused_stops_this_app(self):
+        from woowbackup.podman import CommandError
+        real = self.world.answer
+
+        def answer(role, sql, database):
+            if role == 'omnigent-postgres' and sql.startswith(self.LIVE_USERS):
+                raise CommandError('podman exec 執行失敗（結束碼 2）。', returncode=2,
+                                   stderr=b'FATAL:  password authentication failed for user "omnigent"')
+            return real(role, sql, database)
+        self.world.answer = answer
+        error = self.stopped_with('job-failed', '無法讀取這台「Omnigent 協作平台」的資料庫')
+        self.assertIn('帳號或密碼', error.message)
+
+    # ------------------------------------------------------------------ O-40, O-41
+    def test_a_database_that_is_not_running_is_started_to_be_read_and_put_back(self):
+        """CM-07 for O-40, O-41, O-32..: this device's database is stopped: its own unit is started, the structure is read,
+        and the unit is stopped again when the app's throwaway objects are cleaned up (check and conversion alike)."""
+        for step in ('check', 'convert'):
+            with self.subTest(step=step):
+                self.world.forget()
+                self.world.units.clear()
+                self.world.db_stopped = True
+                if step == 'check':
+                    self.assertTrue(self.check_one()['importable'])
+                else:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                started = [unit for unit in self.world.units if unit[0] == 'start']
+                self.assertEqual(started, [('start', '--', 'omnigent-postgres.service')])
+                self.assertEqual(self.world.units[-1], ('stop', '--', 'omnigent-postgres.service'), 'put back')
+                self.assertTrue(self.world.db_stopped)
+
+    def test_this_devices_structure_is_read_again_when_the_answer_is_odd(self):
+        for name, wanted, odd in (('the structure version', 'SELECT coalesce(json_agg(version_num)', {}),
+                                  ('the columns', ha_omnigent.SCHEMA_COLUMNS_SQL, []),
+                                  ('the signature', ha_omnigent.SCHEMA_SIGNATURE_SQL, None)):
+            with self.subTest(name=name):
+                real, asked = self.world.answer, []
+
+                def answer(role, sql, database, wanted=wanted, odd=odd):
+                    if role == 'omnigent-postgres' and sql.startswith(wanted):
+                        asked.append(1)
+                        if len(asked) == 1:
+                            return odd
+                    return real(role, sql, database)
+                self.world.answer = answer
+                self.world.forget()
+                self.assertTrue(self.check_one()['importable'])
+                self.assertGreaterEqual(len(asked), 2, 'read again')
+                self.world.answer = real
+
+    def test_this_devices_structure_that_is_never_readable_stops_this_app(self):
+        revision = 'SELECT coalesce(json_agg(version_num)'
+        for name, wanted, odd, ident, message in (
+                ('the structure version', revision, {}, 'omnigent.target-unreadable', '無法讀取這台 Omnigent 的資料庫結構版本。'),
+                ('the columns', ha_omnigent.SCHEMA_COLUMNS_SQL, [], 'failure.incompatible', '無法確認這台 Omnigent 的資料表結構。'),
+                ('the signature', ha_omnigent.SCHEMA_SIGNATURE_SQL, None, 'failure.incompatible', '無法確認 Omnigent 的資料庫結構。')):
+            with self.subTest(name=name), self.answering('omnigent-postgres', wanted, odd):
+                result = self.check_one()
+                self.assertEqual([(i['id'], i['message']) for i in self.issues(result, level='stop')][0][0], ident)
+                self.assertIn(message, '\n'.join(result['blockers']))
+                self.assertFalse(result['importable'])
+                self.stopped_with('incompatible', message)
+
+    # ------------------------------------------------------------------ O-18
+    def test_an_image_without_pg_major_is_asked_through_its_database(self):
+        with mock.patch.object(self.world, 'image_info', lambda image: {'id': 'sha256:' + 'c' * 64, 'env': []}):
+            self.assertTrue(self.check_one()['importable'], 'the database it runs here says 16')
+            self.world.forget()
+            self.convert(self.upload_omnigent(), ['omnigent'])
+            self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_a_postgresql_newer_than_the_image_stops_this_app(self):
+        for name, env, live, pg_version in (('PG_MAJOR says 16', ['PG_MAJOR=16'], 16, b'17\n'),
+                                            ('the database says 15', [], 15, b'16\n')):
+            with self.subTest(name=name), mock.patch.object(self.world, 'image_info', lambda image, env=env: {
+                    'id': 'sha256:' + 'c' * 64, 'env': env}):
+                self.world.live_major = live
+                result = self.check_one(pg_version=pg_version)
+                self.assertEqual([i['id'] for i in self.issues(result, level='stop')], ['omnigent.pg-newer'])
+                self.assertFalse(result['importable'])
+
+    # ------------------------------------------------------------------ O-20
+    def test_a_missing_login_key_is_a_notice_and_nothing_of_it_is_carried(self):
+        result = self.check_one(cookie=False)
+        self.assertTrue(result['importable'])
+        self.assertEqual([i['level'] for i in self.issues(result, 'omnigent.cookie-missing')], ['notice'])
+        converted = self.convert(self.upload_omnigent(cookie=False), ['omnigent'])
+        self.assertNotIn('artifacts/accounts-cookie-secret', self.volume('omnigent-server-data'),
+                         'neither HA\'s nor this device\'s: Omnigent makes a new one')
+        self.assertTrue(any('自己產生新的' in line for line in converted['ha_import']['notes']))
+
+    def test_an_empty_or_huge_login_key_is_no_key(self):
+        art = 'data/omnigent-home/.omnigent/artifacts'
+        for name, data in (('empty', b''), ('huge', b'k' * 5000)):
+            with self.subTest(name=name):
+                extra = [{'name': f'{art}/accounts-cookie-secret', 'data': data, 'mode': 0o600}]
+                result = self.check_one(cookie=False, extra=extra)
+                self.assertEqual([i['id'] for i in self.issues(result, 'omnigent.cookie-missing')], ['omnigent.cookie-missing'])
+                src = ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(cookie=False, extra=extra))),
+                                              habackup.Report())
+                self.assertEqual((src.cookie, src.cookie_unusable, 'accounts-cookie-secret' in src.keys), (False, True, False))
+
+    # ------------------------------------------------------------------ O-21
+    def test_the_rule_of_an_artifact_key(self):
+        for key in (BUNDLE, BLOB, 'a b/c', 'ünï/çode', 'a/b/c/d/e/f', 'a' * 255, 'x.y/z-1_2+3', 'a/' * 15 + 'b'):
+            self.assertTrue(ha_omnigent.key_ok(key), key)
+        for key in ('', '/abs/olute', '../x', 'a/../b', 'a//b', 'a/./b', '.', '..', 'a\\b', 'x\x00y', 'a/‮/b', 'a\nb',
+                    'a' * 256, 'a/' * 16 + 'b', ('a' * 100 + '/') * 6, None, 5):
+            self.assertFalse(ha_omnigent.key_ok(key), repr(key))
+
+    def test_the_locations_that_could_leave_the_store_are_cleared_by_the_role_without_privileges(self):
+        self.world.keys = {'bundles': [BUNDLE, '../../etc/passwd', "x'y/../z"], 'blobs': [BLOB]}
+        ha_id = self.upload_omnigent()
+        result = self.check(ha_id, ['omnigent'])[0]
+        converted = self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(result))
+        statements = self.world.executed('omni-db')
+        grant = [s for s in statements if s.startswith('GRANT SELECT (bundle_location), UPDATE (bundle_location)')]
+        self.assertEqual(len(grant), 1)
+        self.assertIn(f'TO {ha_omnigent.RESTORE_ROLE}', grant[0])
+        update = [s for s in self.world.restricted() if "SET bundle_location = ''" in s]
+        self.assertEqual(len(update), 1, 'by the role without privileges, on stdin')
+        text = update[0]
+        literal = re.search(r"json_array_elements_text\('((?:[^']|'')*)'::json\)", text)
+        outside = text.replace(literal.group(0), '')
+        self.assertTrue(outside.startswith("BEGIN;\nUPDATE public.agents SET bundle_location = '' WHERE bundle_location IN"))
+        self.assertNotIn('passwd', outside, 'nothing of HA outside the one literal')
+        payload = json.loads(literal.group(1).replace("''", "'"))
+        self.assertEqual(payload, sorted(["../../etc/passwd", "x'y/../z"]), 'the unsafe ones; the safe one is left alone')
+        self.assertTrue(any('已清空' in note for note in converted['ha_import']['notes']))
+        self.assertTrue(any('清空了 2 個' in line for line in self.reporter.logs))
+
+    def test_a_location_that_is_still_unsafe_after_the_clearing_stops_the_conversion(self):
+        self.world.keys = {'bundles': [BUNDLE, '../../etc/passwd'], 'blobs': [BLOB]}
+        ha_id = self.upload_omnigent()
+        keys = self.confirmed(self.check(ha_id, ['omnigent'])[0])
+        real = self.world.answer
+
+        def answer(role, sql, database):
+            if role == 'omni-db' and sql == ha_omnigent.KEYS_SQL:
+                return self.world.keys      # the new cluster still holds the unsafe one
+            return real(role, sql, database)
+        self.world.answer = answer
+        self.world.forget()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['omnigent'], acknowledged=keys)
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('仍有會跑出檔案區的代理程式位置', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+    # ------------------------------------------------------------------ O-22
+    def missing_files(self, more=False):
+        self.world.keys = {'bundles': [BUNDLE, f'{AGENT}/{"9" * 64}'] + ([f'{AGENT}/{"8" * 64}'] if more else []), 'blobs': [BLOB]}
+
+    def test_missing_files_not_confirmed(self):
+        self.missing_files()
+        ha_id = self.upload_omnigent()
+        result = self.check(ha_id, ['omnigent'])[0]
+        line = self.issues(result, 'omnigent.files-missing')
+        self.assertEqual((len(line), line[0]['level'], line[0]['items']), (1, 'confirm', [f'{AGENT}/{"9" * 64}']))
+        self.assertTrue(result['importable'])
+        for acknowledged in (None, {}, {'omnigent': []}):
+            self.world.forget()
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['omnigent'], **({} if acknowledged is None else {'acknowledged': acknowledged}))
+            self.assertEqual(caught.exception.code, 'confirmation-required')
+            self.assert_nothing_loaded()
+
+    def test_missing_files_confirmed(self):
+        self.missing_files()
+        ha_id = self.upload_omnigent()
+        converted = self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(self.check(ha_id, ['omnigent'])[0]))
+        self.assertEqual(len(self.storage.list_backups()), 1)
+        self.assertEqual([i['items'] for i in converted['results'][0]['issues'] if i['id'] == 'omnigent.files-missing'],
+                         [[f'{AGENT}/{"9" * 64}']])
+
+    def test_missing_files_one_more(self):
+        self.missing_files()
+        ha_id = self.upload_omnigent()
+        keys = self.confirmed(self.check(ha_id, ['omnigent'])[0])
+        self.missing_files(more=True)
+        self.world.forget()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['omnigent'], acknowledged=keys)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assert_nothing_loaded()
+
+    def test_when_no_file_of_the_store_is_there_at_all_the_line_says_so(self):
+        result = self.check_one(artifacts=False)
+        line = self.issues(result, 'omnigent.files-missing')
+        self.assertEqual(len(line), 1)
+        self.assertIn('完全沒有它們要的檔案', line[0]['message'])
+        self.assertEqual(sorted(line[0]['items']), sorted([BUNDLE, BLOB]))
+
+    # ------------------------------------------------------------------ O-44
+    def test_a_newer_extension_version_of_the_new_cluster_is_no_difference(self):
+        newer = dict(signature(), extensions=[['pg_trgm', '1.7', 'public'], ['plpgsql', '1.0', 'pg_catalog']])
+        self.world.restored_signature = newer
+        converted = self.convert(self.upload_omnigent(), ['omnigent'])
+        issue = next(i for i in converted['results'][0]['issues'] if i['id'] == 'omnigent.extension-version')
+        self.assertEqual((issue['level'], issue['items']), ('auto', ['pg_trgm 1.6 -> 1.7']))
+        self.assertEqual(len(self.storage.list_backups()), 1)
+
+    def test_another_set_of_extensions_still_stops(self):
+        for name, extensions in (('one more', [['pg_trgm', '1.6', 'public'], ['plpgsql', '1.0', 'pg_catalog'],
+                                                ['hstore', '1.8', 'public']]),
+                                 ('one less', [['plpgsql', '1.0', 'pg_catalog']]),
+                                 ('another schema', [['pg_trgm', '1.6', 'evil'], ['plpgsql', '1.0', 'pg_catalog']])):
+            with self.subTest(name=name):
+                self.world.restored_signature = dict(signature(), extensions=extensions)
+                self.world.forget()
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_omnigent(), ['omnigent'])
+                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertIn('extensions', caught.exception.message)
+                self.assertEqual(self.storage.list_backups(), [])
+
+    def test_the_drift_rule_on_its_own(self):
+        live = [['pg_trgm', '1.6', 'public'], ['plpgsql', '1.0', 'pg_catalog']]
+        self.assertEqual(ha_omnigent.extension_drift(live, live), [])
+        self.assertEqual(ha_omnigent.extension_drift([['pg_trgm', '1.5', 'public'], live[1]], live), ['pg_trgm 1.6 -> 1.5'])
+        for found in (live[:1], live + [['x', '1', 'public']], [['pg_trgm', '1.6', 'other'], live[1]], 'x', [[1]]):
+            self.assertIsNone(ha_omnigent.extension_drift(found, live), found)
+
+    # ------------------------------------------------------------------ O-50
+    def test_the_conversion_says_what_the_check_said(self):
+        """The conversion asks the same questions again and tells the same findings (the same ids, levels and names)."""
+        self.world.objects = dict(self.world.objects, functions=1, tables=self.world.objects['tables'] + ['evil'])
+        self.world.keys = {'bundles': [BUNDLE, f'{AGENT}/{"9" * 64}'], 'blobs': [BLOB]}
+        ha_id = self.upload_omnigent(cookie=False)
+        result = self.check(ha_id, ['omnigent'])[0]
+        converted = self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(result))
+        shape = lambda issues: sorted((i['id'], i['level'], tuple(i['items'])) for i in issues  # noqa: E731
+                                      if i['id'] != 'omnigent.entries-skipped')
+        self.assertEqual(shape(converted['results'][0]['issues']), shape(result['issues']))
+        self.assertEqual({i['level'] for i in result['issues']} >= {'confirm', 'notice'}, True)
+
+    def test_the_first_stop_of_the_conversion_is_the_check_s(self):
+        self.world.objects = dict(self.world.objects, encoding='SQL_ASCII', functions=1)
+        self.world.ha_alembic = ['older']
+        result = self.check_one()
+        stops = [i['id'] for i in self.issues(result, level='stop')]
+        self.assertEqual(stops, ['omnigent.encoding', 'omnigent.alembic-different'])
+        error = self.stopped_with('incompatible', 'HA 的 Omnigent 資料庫不是 UTF8 編碼。')
+        self.assertEqual(error.issues[0].id, 'omnigent.encoding', 'a stop comes before a question')
+
+    # ------------------------------------------------------------------ O-61
+    def test_a_huge_pg_version_file_is_read_by_its_start_only(self):
+        result = self.check_one(pg_version=b'16\n' + b'x' * 70000)
+        self.assertTrue(result['importable'])
+        src = ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(pg_version=b'16\n' + b'x' * 70000))),
+                                      habackup.Report())
+        self.assertEqual(src.pg_version, '16')
+        self.convert(self.upload_omnigent(pg_version=b'16\n' + b'x' * 70000), ['omnigent'])
+        with tarfile.open(fileobj=io.BytesIO(self.world.imported['hapg'])) as tar:
+            self.assertEqual(len(tar.extractfile('PG_VERSION').read()), 70003, 'the whole file is copied; PostgreSQL judges it')
+
+    # ------------------------------------------------------------------ O-13
+    def test_a_table_that_ha_lacks_is_found_by_the_comparison_of_the_columns(self):
+        self.world.objects = dict(self.world.objects, tables=[t for t in self.world.objects['tables'] if t != 'hosts'])
+        self.world.live_columns = COLUMNS + [['hosts', 'id', 'text', True, '', '']]
+        result = self.check_one()
+        self.assertEqual([(i['id']) for i in self.issues(result, level='stop')], ['omnigent.schema-different'])
+        self.assertIn('hosts', ha_omnigent.schema_blocker(['hosts']))
+        self.assertIn('資料庫結構不同（hosts）', '\n'.join(result['blockers']))
+        self.assertNotIn('缺少資料表', '\n'.join(result['blockers']), 'no block of its own any more')
 
 
 if __name__ == '__main__':
