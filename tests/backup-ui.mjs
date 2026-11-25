@@ -339,7 +339,7 @@ function installCockpitFixture() {
     'key-import': { required: ['key'], optional: [] },
     'backup-start': { required: ['apps', 'request_id'], optional: ['include_images', 'note', 'encrypt', 'acknowledge_plaintext'] },
     'verify-start': { required: ['backup_id', 'request_id'], optional: ['key'] },
-    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key', 'allow_no_safety', 'accept_unauthenticated'] },
+    'restore-start': { required: ['backup_id', 'apps', 'request_id', 'confirm'], optional: ['key', 'save_key', 'allow_no_safety', 'accept_unauthenticated', 'acknowledged'] },
     'settings-set': { required: ['encrypt_by_default'], optional: ['acknowledge_plaintext'] },
     'export-start': { required: ['backup_id', 'request_id', 'confirm'], optional: ['key'] },
     'export-info': { required: ['export_id'], optional: [] }, 'export-delete': { required: ['export_id'], optional: [] },
@@ -6615,11 +6615,13 @@ try {
       await allWidths(page, 'HAOS result');
     });
 
-  await check('HAOS 一次確認: with more apps than one database to choose, the only database that can move is chosen already; a line of another database is not asked',
+  await check('HAOS 一次確認: the only database that can move is chosen already, a line of another database is not asked, and an app the check has no result for is left out and named (UI-15, UI-16)',
     v2Fixture({ check: v2Check({ odoo: { choices: { database: [{ value: 'prod', label: 'prod', ok: true }, { value: 'test', label: 'test', ok: false }, { value: 'demo-old', label: 'demo-old', ok: false }] } },
       apps: ['odoo'] }) }), async page => {
       await ready(page);
-      await v2Check1(page, { keep: ['odoo'] });
+      await v2Check1(page, { keep: ['odoo', 'hermes'] });
+      assert.equal(await page.locator('[data-summary="check"]').textContent(), '可以匯入 1 個，不能匯入 1 個');
+      await page.getByText('檢查結果沒有包含「Hermes 代理」，這次不會匯入它；可以按「重新檢查」再試。').waitFor();
       assert.equal(await page.locator('#ha-db-0').isChecked(), true, 'UI-16: the only one that can move is chosen');
       assert.equal(await page.locator('#ha-db-1').isDisabled(), true);
       assert.equal(await page.locator('#ha-db-2').isDisabled(), true);
@@ -6817,6 +6819,121 @@ try {
       await page.locator('#ha-ack').check();
       await allWidths(page, 'HAOS confirm');
       assert.deepEqual((await contrastOf(page)).failures, [], 'the confirmation keeps WCAG AA contrast');
+    });
+
+
+  await check('HAOS 一次確認: a job of an import found again after a reload shows every app of the import, what became of each, and the way to the next job',
+    (() => {
+      const data = v2Fixture();
+      const group = 'g1a2b3c4d5e6f0042';
+      const chainParams = (results, step, app) => ({ source: 'ha', ha_backup_id: HA_V2, apps: [app], odoo_database: app === 'odoo' ? 'prod' : null, test_mode: false, encrypt: true, key_provided: false,
+        group: { id: group, index: app === 'odoo' ? 0 : 1, count: 2, kind: 'ha-import', step, app_id: app },
+        chain: { apps: ['odoo', 'n8n'], test_mode: false, then_restore: true, encrypt: true, key_provided: false, ha_backup_id: HA_V2, acknowledged: {}, choices: {}, results } });
+      const done = { app_id: 'odoo', status: 'imported', convert_job_id: J_HA_CONVERT, restore_job_id: J_HA_RESTORE, backup_id: B_V2.odoo, safety_backup_id: B_V2_SAFETY.odoo, code: null, message: null };
+      const running = haJob(J_HA_RUN, 'ha-convert', 'running', '2026-11-25T03:20:00Z', { params: chainParams([done], 'convert', 'n8n') });
+      Object.assign(running, { phase: 'convert', phases: phasesAt('ha-convert', 'convert'), cancellable: true });
+      data.jobs = { [J_HA_RUN]: { job: running, log: ['2026-11-25T03:20:01Z 階段：轉換資料'], steps: [] } };
+      data.status.active_job = structuredClone(running);
+      return data;
+    })(), async page => {
+      await ready(page);
+      // A reload during an import lands on the job that is running; the page rebuilds the whole import from its record.
+      await page.waitForFunction(id => window.location.hash === `#/jobs/${id}`, J_HA_RUN);
+      const section = page.locator('[data-group="g1a2b3c4d5e6f0042"]');
+      await section.waitFor();
+      assert.equal(await section.locator('.ha-group-row[data-ha-app="odoo"]').getAttribute('data-status'), 'imported');
+      assert.equal(await section.locator('.ha-group-row[data-ha-app="n8n"]').getAttribute('data-status'), 'pending');
+      assert.match(await section.locator('.ha-group-row[data-ha-app="n8n"]').textContent(), /轉換中[\s\S]*正在把 HA 的資料轉成這台的備份/);
+      assert.equal(await section.locator(`a[href="#/backups/${B_V2_SAFETY.odoo}"]`).count(), 1);
+      assert.match(await page.locator('#view-heading').textContent(), /轉換 HA 備份：n8n 工作流程/);
+    });
+
+  await check('HAOS 一次確認: a job that is not found says the job may still be running and offers to read it again (X-JOB-03)', fixture(), async page => {
+    await ready(page);
+    await page.evaluate(() => { window.location.hash = '#/jobs/j20261113T020000Z-deadbeef'; });
+    const notice = page.locator('.job-error .notice-error');
+    await notice.waitFor();
+    assert.match(await notice.textContent(), /找不到指定的作業。看不到進度不代表作業停了，它可能還在執行；請按「重試」重新讀取，或到「活動紀錄」確認。/);
+    const before = (await calls(page, 'job-status')).length;
+    await notice.locator('[data-focus="error-retry"]').click();
+    await page.waitForFunction(count => window.testcalls.filter(call => call.argv[1] === 'job-status').length > count, before);
+  });
+
+  await check('HAOS 一次確認: a conversion that reports no new backup is a hint to the backup list, not an error (UI-21), and one app that fails the check does not hold back the others in the two-step flow (UI-14, UI-15)',
+    haFixture({ ha: { backups: [haMeta(HA_PLAIN, { protected: false })] } }), async page => {
+      await ready(page);
+      await setScript(page, 'ha-check', haScripts({ check: haCheck({ n8n: { ok: false, blockers: ['HA 的 n8n 還沒有建立管理者帳號。'] } }) })['ha-check']);
+      await openHa(page, HA_PLAIN);
+      await page.locator('#ha-app-n8n').check();
+      await page.locator('[data-focus="ha-apps-next"]').click();
+      await page.locator('[data-ha-app="n8n"]').waitFor({ timeout: 30000 });
+      // The old engine's words: no schema 2, so the two steps stay; the app that does not pass is listed, the other one can go.
+      assert.equal(await activeStep(page), '結果與選項');
+      await page.locator('#ha-db-0').check();
+      await page.getByText('「n8n 工作流程」沒有通過檢查，這次不會匯入，這台的它也不會有任何變更；其他應用可以繼續轉換。').waitFor();
+      assert.equal(await page.locator('[data-focus="ha-convert"]').isDisabled(), false, 'one app that does not pass never holds back the other');
+      await setScript(page, 'ha-convert', [{ job: { state: 'succeeded', phase: 'verify', phases: phasesAt('ha-convert', null), progress: { percent: 100, message: '已完成' },
+        finished: '2026-11-18T03:05:30Z', cancellable: false, result: { size: 1, apps: ['odoo'], encrypted: true, ha_import: haImportView(['odoo']) } }, log: ['2026-11-18T03:05:30Z 完成'] }]);
+      await page.locator('[data-focus="ha-convert"]').click();
+      await page.locator('#confirm-ok').click();
+      await page.locator('.wizard-card .notice-info').filter({ hasText: '轉換已完成，但作業沒有回報新的備份編號' }).waitFor({ timeout: 30000 });
+      assert.equal(await page.locator('.wizard-card .notice-error').count(), 0, 'it is a hint, not an error');
+      assert.match(await page.locator('.wizard-card').textContent(), /標示「由 HA 轉換」/);
+      const [convert] = (await calls(page, 'ha-convert-start')).map(requestOf);
+      assert.deepEqual(convert.apps, ['odoo'], 'only the app that passed is converted');
+    });
+
+  await check('HAOS 一次確認: the engine could not make the device key — the refusal is shown with the way to 加密金鑰, the import is not started (UI-17)',
+    v2Fixture({ key: false }), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['n8n'] });
+      await page.locator('#ha-ack').check();
+      await page.evaluate(() => window.__fixture.failures.push({ command: 'ha-import-start', code: 'no-device-key', message: '這台設備尚未建立加密金鑰，而且無法自動建立。' }));
+      await v2Import(page).click();
+      const error = page.locator('.wizard-card .notice-error');
+      await error.getByText('這台設備尚未建立加密金鑰，而且無法自動建立。').waitFor();
+      assert.equal(await error.locator('a[href="#/keys"]').count(), 1);
+      assert.equal(await activeStep(page), '結果與確認');
+    });
+
+  await check('HAOS 一次確認: the restore check of a converted backup lists its lines; an app that fails it is not offered and the others go on; the lines to confirm are sent with the restore (UI-25)',
+    (() => {
+      const data = haFixture();
+      const inspected = haInspect();
+      const [odoo, n8n] = inspected.preflight.apps;
+      odoo.issues = [v2Issue('odoo', 'confirm', 'restore.pauses', '還原時會先暫停下列服務，完成後自動啟動回來。', { items: ['檔案管理 filebrowser'] }),
+        v2Issue('odoo', 'auto', 'restore.device-key', '這台的加密金鑰會在還原開始時自動建立。')];
+      Object.assign(n8n, { restorable: false, checks: [{ id: 'n8n/dir-in-use', status: 'fail', message: '這台 n8n 的資料夾被其他服務佔用，不能還原。' }],
+        issues: [v2Issue('n8n', 'stop', 'restore.dir-in-use', '這台 n8n 的資料夾被其他服務佔用，不能還原。', { action: '請先停掉那個服務。' })] });
+      data.inspect[B_HA] = inspected;
+      data.backups.unshift(convertedMeta());
+      return data;
+    })(), async page => {
+      await ready(page);
+      await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_HA);
+      await page.locator('.app-preflight').first().waitFor();
+      assert.equal(await page.locator('.app-preflight').nth(1).locator('input[type="checkbox"]').isDisabled(), true, 'the app that fails is not offered');
+      assert.match(await page.locator('.app-preflight').nth(1).textContent(), /請先停掉那個服務。/);
+      assert.match(await page.locator('.app-preflight').first().textContent(), /要確認[\s\S]*還原時會先暫停下列服務[\s\S]*檔案管理 filebrowser[\s\S]*系統會自動做[\s\S]*這台的加密金鑰會在還原開始時自動建立。/);
+      assert.equal(await page.locator('[data-focus="pf-next"]').isDisabled(), false, 'one app failing never stops the page while another can go');
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#restore-confirm-list').waitFor();
+      assert.equal(await page.locator('#restore-confirm-list li').count(), 1);
+      // The first start is refused: what has to be confirmed is not what was shown. The page checks again and says so.
+      await page.evaluate(() => window.__fixture.failures.push({ command: 'restore-start', code: 'confirmation-required', message: '還原 Odoo 18 前還有事情要確認。',
+        details: { apps: { odoo: [] } } }));
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.getByText('還原 Odoo 18 前還有事情要確認。這和剛才看到的不一樣，已經重新檢查；請看過新的內容後再確認一次。').waitFor();
+      assert.equal((await calls(page, 'inspect')).length, 2, 'checked again');
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor({ timeout: 30000 });
+      const starts = (await calls(page, 'restore-start')).map(requestOf);
+      assert.equal(starts.length, 2);
+      assert.deepEqual(starts[1].apps, ['odoo']);
+      assert.deepEqual(starts[1].acknowledged, { odoo: [keyOf('odoo', 'restore.pauses', ['檔案管理 filebrowser'])] });
     });
 
 

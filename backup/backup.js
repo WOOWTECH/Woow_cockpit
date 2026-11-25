@@ -867,6 +867,15 @@
     }
     // The HA import wizard follows its own check and conversion on its page.
     haJobFinished(job);
+    // A job of an import is followed by the next one (written before this one ended): a page that shows it moves on.
+    const following = groupOf(job) ? haGroupInfo(job)?.next : null;
+    if (following) {
+      const route = currentRoute();
+      watchJob(following);
+      if (route.page === "jobs" && route.arg === job.id) {
+        try { cockpit.location.replace(["jobs", following]); } catch { go(["jobs", following]); }
+      }
+    }
   }
 
   function jobChanged(id) {
@@ -3061,6 +3070,8 @@
           ? "這台設備已部署此應用：會覆寫目前的資料；還原前會先保存目前的資料，並封裝成還原前備份（空間足夠時在應用恢復後才封裝）。"
           : "這台設備尚未部署此應用：會依這台設備的受信任設定全新建立服務、資料卷與資料庫。" }) : null,
         checkList(app.checks, `${str(app.name || app.id)} 的檢查結果`),
+        haIssuesOf(app.issues).length ? h("ul", { class: "ha-issues", "aria-label": `${str(app.name || app.id)} 的還原檢查` },
+          haIssuesOf(app.issues).map(issue => haIssueItem(issue, HA_LEVEL_LABELS[issue.level]))) : null,
         settingsReview(wizard, app),
         content ? disclosure(`pf-details-${app.id}`, "備份內容", appContents(content)) : null);
     });
@@ -3093,6 +3104,11 @@
           primary: true, disabled: !canContinue || wizard.busy, focus: "pf-next"
         }))
     ];
+  }
+
+  // The lines of the restore check that have a consequence (level confirm), of the apps selected, with the app's name.
+  function restoreConfirmLines(wizard, apps) {
+    return apps.flatMap(app => haIssuesOf(app.issues).filter(issue => issue.level === "confirm").map(issue => ({ app: str(app.name || app.id), id: app.id, issue })));
   }
 
   function stepConfirm(wizard) {
@@ -3138,12 +3154,16 @@
     const checkboxText = !inplace.length ? `我了解還原會在這台設備全新部署上列 ${apps.length} 個應用`
       : !fresh.length ? `我了解還原會停止並覆寫上列 ${apps.length} 個應用的資料`
         : `我了解還原會停止並覆寫 ${inplace.length} 個應用的資料，並全新部署 ${fresh.length} 個應用`;
-    const checkboxHint = inplace.length && (sourceSafety || noSafety)
+    const restoreLines = restoreConfirmLines(wizard, apps);
+    const checkboxHint = (inplace.length && (sourceSafety || noSafety)
       ? "已確認受影響的應用與停機時間；若無法建立新的還原前備份，仍會直接還原，且還原失敗時無法自動回復。"
-      : "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。";
+      : "已確認受影響的應用、停機時間，以及還原前備份與自動回復的方式。") + (restoreLines.length ? "也已確認上面「還原前請確認」列的事。" : "");
     return [
       h("h3", { class: "step-title", text: "確認還原" }),
       h("p", { class: "muted", text: "請確認以下影響。按下「開始還原」後，作業會在背景執行，關閉瀏覽器也會繼續。" }),
+      restoreLines.length ? h("section", { class: "ha-confirm", "aria-labelledby": "restore-confirm-title" },
+        h("h4", { id: "restore-confirm-title", class: "subheading", text: "還原前請確認" }),
+        h("ul", { id: "restore-confirm-list", class: "ha-issues ha-confirm-list" }, restoreLines.map(({ app, issue }) => haIssueItem(issue, app)))) : null,
       h("h4", { class: "subheading", text: "受影響的應用" }),
       h("ul", { class: "card item-list affected" }, apps.map(app => h("li", { class: "item-row" }, tile("package-variant-closed", true),
         h("div", { class: "item-main" }, h("strong", { class: "item-title", text: str(app.name || app.id) }),
@@ -3218,12 +3238,17 @@
     if (noSafety && !wizard.confirmedNoSafety) return;
     const unauthenticated = wizard.backup?.unauthenticated === true;
     if (unauthenticated && !wizard.acceptUnauthenticated) return;
-    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key), noSafety, unauthenticated]);
+    const acknowledged = {};
+    for (const { id, issue } of restoreConfirmLines(wizard, selected)) {
+      if (issue.key && !(acknowledged[id] ||= []).includes(issue.key)) acknowledged[id].push(issue.key);
+    }
+    const signature = JSON.stringify([wizard.backupId, apps, Boolean(wizard.key), noSafety, unauthenticated, acknowledged]);
     if (!wizard.requestId || wizard.signature !== signature) {
       wizard.requestId = requestId();
       wizard.signature = signature;
     }
     const request = { backup_id: wizard.backupId, apps, request_id: wizard.requestId, confirm: true };
+    if (Object.keys(acknowledged).length) request.acknowledged = acknowledged;
     if (wizard.key) request.key = wizard.key;
     if (noSafety) request.allow_no_safety = true;
     if (unauthenticated) request.accept_unauthenticated = true;
@@ -3241,6 +3266,12 @@
       loadStatus({ quiet: true });
     } catch (error) {
       wizard.error = error;
+      // What has to be confirmed is not what the page showed (e.g. another service uses the same folder now): check again.
+      if (error.code === "confirmation-required") {
+        wizard.error = null;
+        wizard.notice = `${error.message || "還原前還有事情要確認。"}這和剛才看到的不一樣，已經重新檢查；請看過新的內容後再確認一次。`;
+        queueMicrotask(() => runInspect(wizard, wizard.key, false));
+      }
     } finally {
       wizard.busy = false;
       render();
@@ -5072,6 +5103,23 @@
     render();
   }
 
+  // The job view of any job of an import (hachain.py): every app with what became of it or what it is doing, and the way on to
+  // the job that follows; found again after a reload from the job records alone (`params.chain`, `result.group`).
+  function haGroupJobSection(job) {
+    const info = haGroupInfo(job);
+    if (!info) return [];
+    const title = info.kind === "ha-restore" ? "這次還原（各應用）" : "這次匯入（各應用）";
+    const next = info.next ? state.jobCache.get(info.next)?.job : null;
+    return [h("section", { class: "card ha-job-group", "aria-labelledby": "job-group-heading", dataset: { group: info.id } },
+      h("div", { class: "card-head" }, h("h3", { id: "job-group-heading", text: title })),
+      h("div", { class: "card-body" },
+        h("p", { class: "muted", text: info.kind === "ha-restore"
+          ? "這份備份裡的應用一個接著一個還原：每個應用有自己的還原前備份，失敗只退回它自己。"
+          : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查；失敗只退回它自己，其他應用照常。" }),
+        haGroupRows(info, { actions: info.over }),
+        info.next ? h("p", null, link(next ? `接著：${jobLabel(next)}` : "查看下一個作業", ["jobs", info.next], { class: "button small", dataset: { focus: "job-group-next" } })) : null))];
+  }
+
   // The end of the import: one line per app and what to do afterwards.
   function haImportResult(ha, wizard, ended) {
     const { info, error } = ended;
@@ -5128,6 +5176,7 @@
     nodes.state = h("span", { class: "job-state" });
     nodes.meta = h("p", { class: "muted job-meta" });
     nodes.error = h("div", { class: "job-error" });
+    nodes.group = h("div", { class: "job-group" });
     nodes.phases = h("ol", { class: "phases", "aria-label": "作業階段" });
     nodes.progress = h("progress", { id: "job-progress", max: 100, value: 0, "aria-labelledby": "job-progress-label" });
     nodes.percent = h("span", { class: "progress-percent" });
@@ -5142,7 +5191,7 @@
       backLink("返回活動紀錄", ["activity"]), nodes.stepper,
       h("section", { class: "card job-head" }, tile("progress-clock"),
         h("div", { class: "job-head-main" }, h("div", { class: "title-row" }, nodes.title, nodes.state), nodes.meta)),
-      nodes.error,
+      nodes.error, nodes.group,
       h("section", { class: "card", "aria-labelledby": "job-progress-heading" },
         h("div", { class: "card-head" }, h("h3", { id: "job-progress-heading", text: "進度" })),
         h("div", { class: "card-body" }, nodes.phases,
@@ -5178,7 +5227,8 @@
     fill(nodes.state, runStateChip(job));
     text(nodes.meta, [`作業 ID ${job.id}`, `建立於 ${date(job.created)}`,
       job.finished ? `結束於 ${date(job.finished)}` : job.started ? `開始於 ${date(job.started)}` : null].filter(Boolean).join(" · "));
-    fill(nodes.stepper, ...(job.type === "restore" ? [jobWizardStepper(job)] : []));
+    fill(nodes.stepper, ...(job.type === "restore" && !groupOf(job) ? [jobWizardStepper(job)] : []));
+    fill(nodes.group, ...haGroupJobSection(job));
     fill(nodes.phases, ...job.phases.map(phaseItem));
     const percent = clamp(Math.round(Number(job.progress?.percent) || 0), 0, 100);
     nodes.progress.value = percent;
@@ -5325,6 +5375,11 @@
 
     if (ha === "check" && job.state === "succeeded" && result) {
       body.push(...haCheckResult(job, result));
+    } else if (ha === "convert" && job.state === "succeeded" && result && groupOf(job)) {
+      // Part of an import: the app is restored next, by the same import (see the apps above).
+      const backupId = isString(result.backup_id) && BACKUP_ID_RE.test(result.backup_id) ? result.backup_id : null;
+      body.push(h("p", { text: "這個應用已轉換成這台的備份並驗證過，這台的應用還沒有任何變更。" }),
+        metadata([["備份", backupId ? link(backupId, ["backups", backupId], { class: "mono", dataset: { focus: "result-backup" } }) : "—"]]));
     } else if (ha === "convert" && job.state === "succeeded" && result) {
       const converted = haConverted(job, result);
       body.push(...converted.body);
