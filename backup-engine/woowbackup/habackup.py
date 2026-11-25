@@ -65,8 +65,8 @@ version. `protected` absent: false, not a boolean: true; `compressed` absent or 
 say, else true.
 
 Errors (errors.CODES): corrupt-archive (hasecuretar.CORRUPT_MESSAGE for the file, MEMBER_MESSAGE with the detail `scope`
-"member" for one member; English `reason` in the details), unsupported-format, limit-exceeded, not-found, key-required,
-wrong-key, internal-error (missing crypto package).
+"member" for one member; English `reason` in the details), limit-exceeded (LIMIT_MESSAGE, MEMBER_LIMIT_MESSAGE the same
+way), unsupported-format, not-found, key-required, wrong-key, internal-error (missing crypto package).
 """
 import array
 import dataclasses
@@ -159,7 +159,8 @@ PAX_INT_RE = re.compile(r'[0-9]{1,20}\Z')
 PAX_TIME_RE = re.compile(r'-?[0-9]{1,20}(?:\.[0-9]{1,20})?\Z')
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f]')
 
-LIMIT_MESSAGE = 'HA 備份檔超出安全限制（檔案數量或大小），已拒絕處理。'
+LIMIT_MESSAGE = 'HA 備份檔超出安全限制（檔案數量或大小），已拒絕處理。'                      # the whole file
+MEMBER_LIMIT_MESSAGE = 'HA 備份裡這一項超出安全限制（檔案數量或大小），所以不會使用它；這台的應用不會變更。'  # one member
 # Why a member of a backup is listed but never opened (the sidecar's `addons[].problem`): code -> (error code, text).
 PROBLEMS = {
     'missing': ('not-found', 'HA 備份的說明檔有列出這一項，但檔案裡沒有它的資料（可能是 HA 備份時失敗，或檔案被刪減過），'
@@ -186,7 +187,13 @@ def _broken(reason, **details):
 
 
 def _limit(reason, **details):
+    """The whole file is beyond a limit (the outer tar, backup.json)."""
     return BackupError('limit-exceeded', LIMIT_MESSAGE, reason=reason, **details)
+
+
+def _too_much(reason, **details):
+    """One member is beyond a limit; the rest of the file can be read."""
+    return BackupError('limit-exceeded', MEMBER_LIMIT_MESSAGE, reason=reason, scope='member', **details)
 
 
 def problem_text(code):
@@ -348,7 +355,7 @@ def _read_head(src, *, outer=False):
             if typeflag == b'g' and (not outer or pax is not None or long_name is not None or long_link is not None):
                 raise bad('global pax headers are not supported')
             if size > (MAX_LONG_NAME if typeflag in (b'L', b'K') else MAX_PAX):
-                raise _limit('extended header too large', size=size)
+                raise (_limit if outer else _too_much)('extended header too large', size=size)
             data = src.read_exact(size)
             src.skip((-size) % BLOCK)
             if typeflag == b'g':
@@ -481,11 +488,11 @@ def _is_ha_doc(doc):
     return 'supervisor_version' in doc or ('backup_id' not in doc and {'slug', 'name', 'date', 'type'} <= set(doc))
 
 
-def _strict_json(data, max_bytes, reason):
-    """The strict JSON in `data`; ValueError when it is not one, limit-exceeded (`reason`) when it would take too much
-    memory: over `max_bytes` long or of more than MAX_JSON_ITEMS pieces (one of 3 bytes takes 70 once it is read)."""
+def _strict_json(data, max_bytes, limit, reason):
+    """The strict JSON in `data`; ValueError when it is not one, `limit(reason)` when it would take too much memory: over
+    `max_bytes` long or of more than MAX_JSON_ITEMS pieces (one of 3 bytes takes 70 once it is read)."""
     if len(data) > max_bytes or sum(data.count(mark) for mark in (b',', b'[', b'{')) > MAX_JSON_ITEMS:
-        raise _limit(reason, size=len(data))
+        raise limit(reason, size=len(data))
     return util.loads_strict(data, max_bytes=max_bytes)
 
 
@@ -493,7 +500,7 @@ def _load_doc(fd, raw):
     """The strict JSON of a member (read only up to MAX_BACKUP_JSON: limit-exceeded); ValueError when it is not one."""
     if raw.size > MAX_BACKUP_JSON:
         raise _limit('backup.json too large', size=raw.size)
-    return _strict_json(_pread_exact(fd, raw.offset, raw.size), MAX_BACKUP_JSON, 'backup.json too large')
+    return _strict_json(_pread_exact(fd, raw.offset, raw.size), MAX_BACKUP_JSON, _limit, 'backup.json too large')
 
 
 def looks_like_ha(fd):
@@ -833,7 +840,7 @@ class _Gunzip:
     def _begin(self):
         self._members += 1
         if self._members > MAX_GZIP_MEMBERS:
-            raise _limit('too many gzip members', limit=MAX_GZIP_MEMBERS)
+            raise _too_much('too many gzip members', limit=MAX_GZIP_MEMBERS)
         self._inflate = zlib.decompressobj(-zlib.MAX_WBITS)
         self._crc = 0
         self._size = 0
@@ -1125,7 +1132,7 @@ def parse_addon_json(data):
     version that is not one is '' (the importers then read it from the data, CM-01), an image name that is not one None
     (an unknown processor), a name that cannot be shown ''."""
     try:
-        doc = _strict_json(data, MAX_ADDON_JSON, 'addon.json too large')
+        doc = _strict_json(data, MAX_ADDON_JSON, _too_much, 'addon.json too large')
     except ValueError:
         raise _broken('addon.json is not strict JSON') from None
     if not isinstance(doc, dict) or not isinstance(doc.get('system'), dict):
@@ -1200,9 +1207,9 @@ SKIP_KINDS = {
 
 
 class SkipList:
-    """The skipped entries of one kind, without keeping them all: how many (`count`), the first SAMPLES names as they may
-    be shown (`first`) and, for a confirmation's key, what stands for every one of them (`key_items`: the names up to
-    MAX_KEPT_NAMES, above that their number and an order-independent digest). The interface of haissues.Names."""
+    """The skipped entries of one kind, without keeping them all: how many (`count`), the first SAMPLES names as they
+    may be shown (`first`) and, for a confirmation's key, what stands for every one of them (`key_items`: the names up
+    to MAX_KEPT_NAMES, above that their number and an order-independent digest). The interface of haissues.Names."""
 
     def __init__(self):
         self.count = 0
@@ -1355,7 +1362,7 @@ class Entry:
     def read_all(self, max_bytes):
         """The whole file (limit-exceeded when it is larger than `max_bytes`)."""
         if self.size > max_bytes:
-            raise _limit('file too large to read', member=shown_name(self.name), size=self.size)
+            raise _too_much('file too large to read', member=shown_name(self.name), size=self.size)
         parts = []
         while True:
             data = self.read(CHUNK)
@@ -1425,7 +1432,7 @@ class _Reader:
             have += len(data)
             self.consumed += len(data)
             if self.max_bytes is not None and self.consumed > self.max_bytes:
-                raise _limit('the add-on archive inflates too much', limit=self.max_bytes)
+                raise _too_much('the add-on archive inflates too much', limit=self.max_bytes)
             if self.consumed >= self._next_check:
                 self._next_check = self.consumed + CHECK_BYTES
                 if self.checkpoint is not None:
@@ -1655,7 +1662,7 @@ class _Names:
 
     def _put(self, key, state):
         if self.used >= self.limit:
-            raise _limit('too many names in an inner tar', limit=self.limit)
+            raise _too_much('too many names in an inner tar', limit=self.limit)
         if 2 * (self.used + 1) > self.mask + 1:
             keys, states = self.keys, self.states
             self._table(2 * (self.mask + 1))
@@ -1717,8 +1724,8 @@ class _Link:
 
 
 class _Links:
-    """The hard links of a walk: the ones that wait, and what every one names (a link may name another link; None: a name
-    that is withheld or no entry's)."""
+    """The hard links of a walk: the ones that wait, and what every one names (a link may name another link; None: a
+    name that is withheld or no entry's)."""
 
     def __init__(self):
         self.waiting = []
@@ -1806,7 +1813,7 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
                 break
             report.entries += 1
             if report.entries > select.max_members:
-                raise _limit('too many entries in an inner tar', limit=select.max_members)
+                raise _too_much('too many entries in an inner tar', limit=select.max_members)
             if checkpoint is not None and report.entries % CHECK_ENTRIES == 0:
                 checkpoint()
             name, flaw = _entry_name(header.name)
@@ -1832,7 +1839,7 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
                 if kind != 'file':
                     raise _broken('unexpected entry type for a metadata file', member=name)
                 if header.size > MAX_ADDON_JSON:
-                    raise _limit('addon.json too large', size=header.size)
+                    raise _too_much('addon.json too large', size=header.size)
                 report.addon = parse_addon_json(reader.read_exact(header.size))
                 reader.skip((-header.size) % BLOCK)
                 if until_addon:
@@ -1877,7 +1884,7 @@ def iter_entries(stream, select=None, report=None, *, addon=None, until_addon=Fa
                 linkname = target
             elif kind == 'file':
                 if report.bytes + header.size > select.max_bytes:
-                    raise _limit('the selected files are too large', limit=select.max_bytes)
+                    raise _too_much('the selected files are too large', limit=select.max_bytes)
                 report.bytes += header.size
                 names.hand_out(key)
             setattr(report, f'{kind}s', getattr(report, f'{kind}s') + 1)
@@ -1995,7 +2002,7 @@ def _copy_pass(stream, budget, wanted, later, names, select, report, checkpoint)
                     later.setdefault(key, []).append(link)
                 continue
             if report.bytes + header.size > select.max_bytes:
-                raise _limit('the selected files are too large', limit=select.max_bytes)
+                raise _too_much('the selected files are too large', limit=select.max_bytes)
             report.bytes += header.size
             report.files += 1
             report.copied_links += 1

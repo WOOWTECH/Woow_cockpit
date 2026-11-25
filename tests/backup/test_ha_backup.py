@@ -1132,8 +1132,9 @@ class WalkCase(unittest.TestCase):
         try:
             self.walk(entries, select, **kwargs)
         except BackupError as error:
-            if error.code == 'corrupt-archive':
-                self.assertEqual((error.details['scope'], error.message), ('member', hasecuretar.MEMBER_MESSAGE))
+            message = {'corrupt-archive': hasecuretar.MEMBER_MESSAGE, 'limit-exceeded': habackup.MEMBER_LIMIT_MESSAGE}
+            if error.code in message:
+                self.assertEqual((error.details['scope'], error.message), ('member', message[error.code]))
             return error.code, error.details.get('reason')
         raise AssertionError('accepted')
 
