@@ -1324,7 +1324,7 @@ class CheckTests(NextcloudCase):
         result = self.assert_confirmed('nextcloud.db-objects-skipped')
         _backup, row, issue = self.line_found('nextcloud.db-objects-skipped')
         self.assertTrue(row['importable'])
-        self.assertIn('Memories', issue['message'])
+        self.assertIn('更新或重新安裝那個應用', issue['message'])
         listing = self.world.container_files.files[('nc-db', '/tmp/woowbk-nc.toc')].decode()
         self.assertEqual([line.split(' ', 3)[3].split(' ')[0] for line in listing.splitlines() if line[:1].isdigit()],
                          ['TABLE', 'COMMENT', 'TABLE'], 'the tables, the comment on a column and the data stay')
@@ -1333,6 +1333,92 @@ class CheckTests(NextcloudCase):
 
     def test_functions_and_triggers_of_other_apps_one_more_name_asks_again(self):
         self.assert_one_more_name_asks_again('nextcloud.db-objects-skipped')
+
+    MEMORIES = ('public.memories_fcu_fun', 'oc_filecache.memories_fcu_trg')    # what Memories makes (vendor source, see KNOWN_OBJECTS)
+
+    def memories_world(self, *, more_functions=(), cut=False):
+        """HA's database holds what Memories makes, and `more_functions` besides; `cut`: the list of names is shorter than the
+        number the shape counted (OBJECTS_SQL cuts it at 100)."""
+        functions = [self.MEMORIES[0], *more_functions]
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=len(functions) + (1 if cut else 0), triggers=1)
+        self.world.objects = {'functions': functions, 'triggers': [self.MEMORIES[1]]}
+        self.world.toc = toc_of('201; 1259 16390 TABLE public oc_users nextcloud',
+                                '202; 1255 16400 FUNCTION public memories_fcu_fun() nextcloud',
+                                '203; 2620 16401 TRIGGER public oc_filecache memories_fcu_trg nextcloud',
+                                '204; 0 0 COMMENT public FUNCTION memories_fcu_fun() nextcloud',
+                                '205; 0 0 COMMENT public TRIGGER memories_fcu_trg ON oc_filecache nextcloud',
+                                *[f'{210 + n}; 1255 {16500 + n} FUNCTION public {f.split(".")[1]}() nextcloud'
+                                  for n, f in enumerate(more_functions)],
+                                '207; 0 16390 TABLE DATA public oc_users nextcloud')
+
+    def test_what_memories_makes_again_by_itself_is_left_out_without_a_question(self):
+        # NC-38, NC-45: its function and trigger are no code to carry over (the vendor's repair step makes them again, and
+        # without them Memories runs in its compatibility mode): a notice, no line to confirm, a reminder with the command
+        self.memories_world()
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.db-objects-known')
+        self.assertEqual((row['ok'], row['importable'], issue['level']), (True, True, 'notice'))
+        self.assertEqual(issue['items'], ['函式 ' + self.MEMORIES[0], '觸發程序 ' + self.MEMORIES[1]])
+        for part in ('Memories', '相容模式', 'maintenance:repair', '不會搬過來'):
+            self.assertIn(part, issue['message'])
+        self.assertLessEqual(len(issue['message']), 300, 'shown whole')
+        self.assertIsNone(issue_of(row, 'nextcloud.db-objects-skipped'), 'nothing to confirm')
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])      # nothing was confirmed and it goes on
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        listing = self.world.container_files.files[('nc-db', '/tmp/woowbk-nc.toc')].decode()
+        self.assertEqual([line.split(' ', 3)[3].split(' ')[0] for line in listing.splitlines() if line[:1].isdigit()],
+                         ['TABLE', 'TABLE'], 'the table and its data stay; the code of HA is not restored, a known name or not')
+        self.assertNotIn('memories', listing)
+        reminders = result['ha_import']['reminders_by_app']['nextcloud']
+        mine = [r for r in reminders if 'maintenance:repair' in r]
+        self.assertEqual(len(mine), 1)
+        for part in ('Memories', '相容模式', 'podman exec -u www-data nextcloud-app php occ maintenance:repair'):
+            self.assertIn(part, mine[0])
+        self.assertFalse([r for r in reminders if r == nc.MSG_LEFT_OUT], 'nothing besides a known app was left out')
+        self.assertEqual(sum(i['id'] == 'nextcloud.db-objects-known' for i in result['results'][0]['issues']), 1)
+
+    def test_what_memories_makes_and_another_program_is_a_line_to_confirm(self):
+        # the other program is not known: the line is the one of NC-38 again, and both reminders come after the import
+        self.memories_world(more_functions=('public.other_f',))
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertIsNone(issue_of(row, 'nextcloud.db-objects-known'))
+        issue = issue_of(row, 'nextcloud.db-objects-skipped')
+        self.assertEqual((row['ok'], issue['level']), (False, 'confirm'))
+        self.assertEqual(len(issue['items']), 3)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+        reminders = result['ha_import']['reminders_by_app']['nextcloud']
+        self.assertTrue([r for r in reminders if 'maintenance:repair' in r])
+        self.assertIn(nc.MSG_LEFT_OUT, reminders)
+
+    def test_a_list_of_names_that_is_cut_or_a_name_that_only_looks_known_is_a_line_to_confirm(self):
+        # the names are read up to a limit: when the shape counted more than the names, something else may be there; and
+        # only the exact names count (what matters in any case: nothing of HA's is restored)
+        self.memories_world(cut=True)
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertEqual((issue_of(row, 'nextcloud.db-objects-known'), issue_of(row, 'nextcloud.db-objects-skipped')['level']),
+                         (None, 'confirm'))
+        for name in ('public.memories_fcu_fun2', 'other.memories_fcu_fun', 'public.Memories_fcu_fun'):
+            with self.subTest(name=name):
+                self.memories_world()
+                self.world.objects = {'functions': [name], 'triggers': [self.MEMORIES[1]]}
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                self.assertIsNone(issue_of(row, 'nextcloud.db-objects-known'))
+                self.assertEqual(issue_of(row, 'nextcloud.db-objects-skipped')['level'], 'confirm')
+
+    def test_the_names_of_the_known_apps_are_found_only_in_the_whole_list(self):
+        full = {'functions': 1, 'triggers': 1}
+        names = ['函式 public.memories_fcu_fun', '觸發程序 oc_filecache.memories_fcu_trg']
+        self.assertEqual(nc.known_objects(names, full), (['Memories'], False))
+        self.assertEqual(nc.known_objects(names[:1], full), (['Memories'], True), 'one of the two counted objects is not named')
+        self.assertEqual(nc.known_objects(names + ['函式 public.x'], dict(full, functions=2)), (['Memories'], True))
+        self.assertEqual(nc.known_objects(['函式 public.x'], {'functions': 1, 'triggers': 0}), ([], True))
+        self.assertEqual(nc.known_objects(names, None), (['Memories'], True), 'no shape: nothing is known to be whole')
+        self.assertEqual(nc.known_objects([], {'functions': 0, 'triggers': 0}), ([], False))
+        # the reminders of a conversion that left nothing out say nothing about it
+        self.assertFalse([r for r in nc.import_texts({})[1] if 'maintenance:repair' in r or r == nc.MSG_LEFT_OUT])
 
     def test_procedures_and_aggregates_are_programs_too(self):
         # pg_proc holds functions, procedures and aggregates; the check counts them all as functions, the dump lists three kinds
@@ -1921,6 +2007,8 @@ class LiveTargetTests(NextcloudCase):
         text = '\n'.join(executed)
         self.assertIn('CREATE ROLE "oc_admin" LOGIN SUPERUSER', text)
         self.assertIn('CREATE ROLE "woowbk_load" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', text)
+        self.assertRegex(text, r'GRANT CONNECT ON DATABASE "[^"]+" TO "woowbk_load"',
+                         'role_sql took the right to connect from every role: the plain role is given it')
         restore = [c for r, c, _d in self.world.execs if r == 'nc-db' and c[:1] == ['pg_restore'] and '-U' in c]
         self.assertEqual(restore[0][:3], ['pg_restore', '-U', 'woowbk_load'], 'HA\'s data is loaded by the plain role')
         first = next(i for i, x in enumerate(executed) if 'REASSIGN OWNED BY "woowbk_load" TO "oc_admin"' in x)
@@ -1944,6 +2032,11 @@ class LiveTargetTests(NextcloudCase):
         self.assertNotIn('CREATE ROLE "nextcloud"', text, 'it exists already')
         self.assertIn(f'ALTER ROLE "nextcloud" PASSWORD \'{VERIFIER}\'', text)
         self.assertIn(f'REASSIGN OWNED BY "woowbk_load" TO "{name}"', text)
+        # nothing took the right to connect from every role here (role_sql did not run): a grant and its revoke would leave a
+        # list of rights in the database's ACL where this device's own database has none (the grants are compared)
+        self.assertIn('CREATE ROLE "woowbk_load" LOGIN NOSUPERUSER', text)
+        self.assertNotIn('GRANT CONNECT ON DATABASE', text)
+        self.assertNotIn('REVOKE ALL PRIVILEGES ON DATABASE', text)
 
     def test_a_superuser_role_that_owns_nothing_after_the_hand_over_stops_the_conversion(self):
         # the verification is what it was: the owner of every table must be the role, the role must be what the live one is
