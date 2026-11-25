@@ -668,6 +668,52 @@ class AliasTests(HermesCase):
         self.assertEqual((data['shm-copy'][0].isreg(), data['shm-copy'][1]), (True, b'shm'))
         self.assertNotIn('state.db-shm', data, 'the wal-index itself is still left out')
 
+    def test_any_shape_of_links_never_carries_what_stays_out(self):   # H-01, H-19, H-11: seeded; the check and the conversion agree
+        import random
+        import tarfile
+        rng = random.Random(20261125)
+        secret = b'API_SERVER_KEY=never-moved-key\n' + b'# ' + b'x' * 5000 + b'\n'   # an .env above the limit set below
+        files = [{'name': 'config/.env', 'data': secret, **OWN}, {'name': 'config/kanban.db', 'data': BAD_DB, **OWN},
+                 {'name': 'config/kanban.db-wal', 'data': b'wal-never-moved', **OWN},
+                 {'name': 'config/state.db', 'data': sqlite_bytes(), **OWN}, {'name': 'config/gateway.pid', 'data': b'1', **OWN},
+                 {'name': 'config/state.db-shm', 'data': b'2', **OWN}, {'name': 'config/config.yaml', 'data': CONFIG, **OWN}]
+        targets = ['.env', 'kanban.db', 'kanban.db-wal', 'state.db', 'gateway.pid', 'state.db-shm', 'config.yaml']
+        stays_out = (b'never-moved-key', BAD_DB[:64], b'wal-never-moved')
+        for case in range(80):
+            names = [f'l{case}-{n}' for n in range(rng.randint(1, 4))]
+            links = []
+            for index, name in enumerate(names):
+                links.append(self.link(name, rng.choice(targets + names[:index])))   # also a link to an earlier link: a chain
+            at = rng.choice((0, len(files)))   # the links come before or after the files they name
+            entries = [{'name': 'config', 'type': 'dir', **OWN}] + files[:at] + links + files[at:]
+            member = hx.tar_bytes(entries)
+            seen = []
+            for kind in ('check', 'conversion'):
+                report = habackup.Report(names=haissues.Names)
+                with tempfile.TemporaryDirectory() as tmp, mock.patch.object(ha_hermes, 'MAX_ENV', self.SMALL):
+                    tmp = Path(tmp)
+                    out = ha_hermes._Count(report) if kind == 'check' else hacommon.TreeTar(tmp / 'out.tar', 1000, 1000, None, report=report)
+                    (tmp / 'stage').mkdir()
+                    src = ha_hermes.scan_member(io.BytesIO(member), report, tmp / 'stage', out)
+                    src.db_skip.update(('kanban.db', 'kanban.db-wal'))   # what judge decides for the damaged database
+                    ha_hermes.settle_links(src)
+                    if kind == 'conversion':
+                        ha_hermes.add_databases(out, src)
+                        out.close()
+                        with tarfile.open(tmp / 'out.tar') as tar:
+                            for member_ in tar.getmembers():
+                                if member_.isfile():
+                                    body = tar.extractfile(member_).read()
+                                    for needle in stays_out:
+                                        self.assertNotIn(needle, body, f'case {case}: {member_.name} carries what stays out')
+                            islnk = sorted(m.name for m in tar.getmembers() if m.islnk())
+                    skips = report.skips.get('hardlink')
+                    seen.append((sorted(skips.first) if skips else [], src.counts['hardlinks'] if kind == 'check' else out.counts['hardlinks'],
+                                 out.copied))
+                    if kind == 'conversion':
+                        self.assertEqual(len(islnk), out.counts['hardlinks'], f'case {case}')
+            self.assertEqual(seen[0], seen[1], f'case {case}: the check and the conversion judge the links alike ({names})')
+
     def test_settling_twice_lists_a_link_once(self):   # H-01: judge may run for the same walk again
         member = hx.tar_bytes([{'name': 'config', 'type': 'dir', **OWN}, {'name': 'config/kanban.db', 'data': BAD_DB, **OWN},
                                self.link('kanban-copy', 'kanban.db')])
