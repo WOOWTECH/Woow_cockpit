@@ -679,6 +679,67 @@ class ImportStartTests(HaCliCase):
         self.assertFalse(key_file.exists())
         self.assertEqual(list(Path(self.paths.run).glob('key-*')), [])
 
+    def test_a_conversion_that_fails_anywhere_leaves_the_apps_before_it_whole_and_nothing_of_its_own(self):
+        """DESIGN C5: the second app's conversion fails in convert(), in import_manifest(), in the packaging (after its row was
+        registered) or its process dies: the first app's backup and row stay, the second leaves no backup, no row, no staging."""
+        from .test_ha_import import FakeHaAdapter
+        original_manifest = FakeHaAdapter.import_manifest
+        original_package = flows._package
+
+        def manifest(adapter, staging_dir, **items):
+            if adapter.app.id == 'n8n':
+                raise BackupError('job-failed', '無法整理 n8n 的備份內容。')
+            return original_manifest(adapter, staging_dir, **items)
+
+        def package(ctx, apps, *args, **kwargs):
+            if [app.id for app in apps] == ['n8n']:
+                raise BackupError('job-failed', '無法封裝 n8n 的備份。')
+            return original_package(ctx, apps, *args, **kwargs)
+
+        class Killed(BaseException):
+            pass
+
+        def killed(work, app_, test_mode, out_dir):
+            raise Killed()
+
+        cases = (('in convert()', {'n8n': mock.Mock(side_effect=BackupError('corrupt-archive', 'n8n 的資料讀不出來。'))}, None, 'failed'),
+                 ('in import_manifest()', {}, (FakeHaAdapter, 'import_manifest', manifest), 'failed'),
+                 ('in the packaging, after the row was registered', {}, (flows, '_package', package), 'failed'),
+                 ('by a process that dies', {'n8n': killed}, None, 'running'))
+        for index, (label, stub, patch, state) in enumerate(cases):
+            with self.subTest(label):
+                self.tearDown()
+                self.setUp()
+                self.addCleanup(jobs.unmask_secret, hx.PASSWORD)
+                response = self.call(['ha-import-start'], {**self.base, 'then_restore': False, 'overwrite': False,
+                                                           'choices': {'odoo': {'database': 'prod'}}})
+                stubs = {'odoo': ConvertStubs.odoo, 'n8n': stub.get('n8n', ConvertStubs.n8n)}
+                with contextlib.ExitStack() as stack:
+                    if patch is not None:
+                        stack.enter_context(mock.patch.object(*patch))
+                    if state == 'running':
+                        with self.assertRaises(Killed):
+                            self.run_whole_chain(response, **stubs)
+                    else:
+                        self.run_whole_chain(response, **stubs)
+                records = self.group_records(response)
+                self.assertEqual([(r['params']['group']['app_id'], r['state']) for r in records],
+                                 [('odoo', 'succeeded'), ('n8n', state)], label)
+                kept = self.storage.list_backups()
+                self.assertEqual([[item['id'] for item in meta['apps']] for meta in kept], [['odoo']], label)
+                rows = haimport.load_registry(self.paths)
+                self.assertEqual([(bid, row['apps'], row['group']) for bid, row in rows.items()],
+                                 [(kept[0]['id'], ['odoo'], response['group'])], label)
+                if state == 'running':
+                    self.assertEqual(jobs.recover_interrupted(self.paths, unit_active=lambda unit: False), [records[1]['id']])
+                    result = jobs.JobStore(self.paths).get(records[1]['id'])['result']['group']['results']
+                    self.assertEqual([(row['app_id'], row['status']) for row in result], [('odoo', 'converted'), ('n8n', 'failed')])
+                else:
+                    last = records[1]['result']['group']['results']
+                    self.assertEqual([(row['app_id'], row['status']) for row in last], [('odoo', 'converted'), ('n8n', 'failed')])
+                    self.assertEqual(records[1]['result']['results'][0]['status'], 'failed')
+                self.assertEqual(os.listdir(self.paths.staging), [], label)
+
     def test_the_ha_file_cannot_be_deleted_while_any_job_of_the_import_is_waiting_or_running(self):
         """The restore jobs of the chain name the HA file too: between two jobs and during a restore it stays."""
         response = self.call(['ha-import-start'], self.base)

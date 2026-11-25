@@ -530,6 +530,37 @@ class IsolationTests(ChainCase):
                                                                               'invalid-request', 'wrong-key') else 'failed')
                 self.assertEqual((self.statuses()['odoo'], self.statuses()['emqx']), ('imported', 'imported'))
 
+    def test_every_code_of_one_restore_leaves_the_others_alone(self):
+        for code in ('corrupt-archive', 'insufficient-space', 'permission-denied', 'invalid-manifest', 'internal-error',
+                     'incompatible', 'job-failed', 'limit-exceeded', 'unsupported-format', 'owner-missing', 'not-deployed',
+                     'app-not-in-catalog', 'not-found', 'invalid-request', 'wrong-key', 'key-required', 'no-device-key'):
+            with self.subTest(code=code):
+                self.fresh()
+                error = BackupError(code, f'測試：{code}。')
+                error.result = {'changed': False, 'rolled_back': False, 'safety_backup_id': None}
+                self.script.restore_fail['n8n'] = error
+                self.start_chain()
+                self.run_chain()
+                self.assertEqual(self.statuses(), {'odoo': 'imported', 'n8n': 'failed', 'emqx': 'imported'}, code)
+                self.assertEqual(self.last_results()['n8n']['code'], code)
+
+    def test_ten_apps_in_one_import_fit_their_records_and_each_second_one_may_fail(self):
+        from woowbackup import haapps
+        apps = list(haapps.APP_IDS)
+        self.assertEqual(len(apps), 10)
+        for app_id in apps[1::2]:
+            self.fail_convert(app_id, BackupError('corrupt-archive', f'{app_id} 的資料讀不出來。' + '長' * 200))
+        self.start_chain(apps)
+        self.run_chain()
+        statuses = self.statuses()
+        self.assertEqual(statuses, {app: ('failed' if index % 2 else 'imported') for index, app in enumerate(apps)})
+        records = self.records()
+        self.assertEqual(len(records), 5 * 2 + 5)
+        for record in records:
+            self.assertLess(Path(self.store.path(record['id'])).stat().st_size, jobs.MAX_RECORD_BYTES // 8)
+        self.assertEqual(len(records[-1]['result']['group']['results']), 10)
+        self.assertEqual(self.last_results()[apps[9]]['code'], 'corrupt-archive')
+
     def test_a_restore_that_is_refused_before_anything_changed_is_that_apps_alone(self):
         """FL-09: the restore check of one app does not pass; the others are restored. The converted backup stays."""
         error = BackupError('incompatible', '相容性檢查未通過：缺少映像 localhost/x:1。')
