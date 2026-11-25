@@ -167,15 +167,13 @@ def live_json(work, app, container, user, database, sql, *, size=None):
     while True:
         try:
             out = runner.podman('exec', container, 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user,
-                                '-d', database, '-c', sql, timeout=wait,
-                                max_output=limit).stdout or b''
+                                '-d', database, '-c', sql, timeout=wait, max_output=limit).stdout or b''
             break
         except BackupError as error:
             if error.code != 'job-failed':
                 raise
             reason = podman.reason_code(error)
             if not started and reason in ('no-container', 'db-not-ready'):
-                from . import hatarget
                 hatarget.ensure_running(work, app, container, ready='postgres', size=data)
                 started = True
                 continue
@@ -200,8 +198,9 @@ def live_export(work, app, volume, path, *, size=None):
     volume's bytes when known (the wait grows with it: X-PD-05; the 3 hours of before are the floor)."""
     with open(path, 'xb') as handle:
         os.fchmod(handle.fileno(), 0o600)
-        work.runner(app).relay(['volume', 'export', volume], stdout=handle, timeout=podman.scaled_timeout(3 * 3600, size),
-                               max_output=work.guard.budget(), abort=work.abort)
+        work.runner(app).relay(['volume', 'export', volume], stdout=handle,
+                               timeout=podman.scaled_timeout(3 * 3600, size), max_output=work.guard.budget(),
+                               abort=work.abort)
         handle.flush()
         os.fsync(handle.fileno())
     return path

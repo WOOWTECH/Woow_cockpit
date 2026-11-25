@@ -26,6 +26,8 @@ What an app module uses. Every function takes `work` (haimport.Work) and `app` (
                                        this device's own volumes and folders an importer does not convert are copied into the
                                        backup as they are (OD-12/13, N8-02/27, O-07, HS-04, CS-04).
 * not_deployed_error(app, info)        the error for an app the adapter calls not deployed, with the real reason (FL-11, HA-07).
+* size_hint(ha), scale_waits(tmp, ha)  about how big the apps of an open HA backup are; the waits of an app's throwaway containers
+                                       follow it (X-PD-05: haimport.Work.temp calls scale_waits; no wait ever gets shorter).
 
 Nothing here weakens a protection: a throwaway container still never pulls (`--pull=never`; the pull is made here, before,
 as the owner); an image is only ever pulled by the reference this device's own Quadlet file names; a service is only ever

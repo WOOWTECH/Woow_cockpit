@@ -663,6 +663,17 @@ class SweepListingTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 'job-failed')
                 self.assertFalse([call for call in runner.calls if call[:1] == ('rm',)])
 
+    def test_a_long_list_of_leftovers_is_read_not_refused(self):
+        pad = 'x' * 1500
+        rows = [{'Names': [f'woowbk-{OTHER}-{i}-hapg'], 'Labels': {tempctr.LABEL: OTHER}, 'Command': pad} for i in range(3500)]
+        data = json.dumps(rows).encode()
+        self.assertGreater(len(data), 4 * 1024 * 1024)
+        self.assertLessEqual(len(data), tempctr.LIST_OUTPUT)
+        runner = FakeRunner({('ps',): Result(0, data, b''), ('volume', 'ls'): Result(0, b'[]', b''),
+                             ('network', 'ls'): Result(0, b'[]', b'')})
+        removed, left = tempctr.sweep(runner, lambda _job: False, only_job=OTHER)
+        self.assertEqual((len(removed), left), (3500, []))
+
     def test_the_recovery_reports_it_as_a_line_and_the_job_start_ignores_it(self):
         from unittest import mock
 

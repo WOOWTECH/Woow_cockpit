@@ -105,7 +105,7 @@ MEMORY = '2g'
 PIDS = 1024
 SHORT_TIMEOUT = 120
 LIST_TIMEOUT = 30
-LIST_OUTPUT = 4 * 1024 * 1024
+LIST_OUTPUT = 32 * 1024 * 1024   # was 4 MiB: a long list of leftovers is read, not refused (X-PD-04); still bounded
 STOP_TIMEOUT = 120
 CONTROLLERS = '/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/cgroup.controllers'
 

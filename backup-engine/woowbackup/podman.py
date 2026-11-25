@@ -921,7 +921,7 @@ REASONS = (
     ('role-missing', '資料庫帳號不存在。', (re.compile(r'role "[^"]{0,200}" does not exist'),)),
     ('pull-denied', '映像倉庫拒絕下載（需要登入，或沒有權限）。',
      ('pull access denied', 'authentication required', 'requested access to the resource is denied',
-      'unauthorized', 'denied: ')),
+      'unauthorized')),
     ('image-missing', '找不到這個映像。',
      ('image not known', 'no such image', 'manifest unknown', 'name unknown', 'repository does not exist',
       'unable to find image', 'short-name resolution', 'not found: manifest')),

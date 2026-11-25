@@ -419,6 +419,8 @@ class FailureReasonTests(unittest.TestCase):
                          'db-not-ready')
         self.assertEqual(podman.classify(b'dial tcp 10.0.0.9:443: connect: connection refused')[0], 'network')
         self.assertEqual(podman.classify(b'pull access denied for x, repository does not exist')[0], 'pull-denied')
+        self.assertEqual(podman.classify(b'Error: mkdir /home/x/.local: permission denied: unknown')[0], 'permission',
+                         'a refusal of the file system is not a registry that refuses')
 
     def test_only_the_tail_of_a_huge_stderr_is_read(self):
         noise = b'x' * (podman.STDERR_TAIL * 2)
