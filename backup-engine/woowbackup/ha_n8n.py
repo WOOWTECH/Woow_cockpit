@@ -768,13 +768,13 @@ class Target:
         home = work.runner(app).home
         sink = sink if sink is not None else _sink(work, app)
         self.app = app
-        if len(app.postgres) != 1 or app.postgres[0].get('scope', 'database') != 'database':
+        if len(app.postgres) > 1 or any(item.get('scope', 'database') != 'database' for item in app.postgres):
             if any(item.get('scope') == 'instance' for item in app.postgres):
                 # The converted backup holds one database dump (adapter.import_manifest); an instance's globals, roles and
                 # databases are made by the backup of the app itself. Not producible from here (DESIGN H, N8-01 part).
-                raise _layout(app, '它備份的是整個資料庫執行個體，HA 匯入目前只能放進「單一資料庫」的設定')
-            raise _layout(app, '需要剛好一個 PostgreSQL 資料庫項目（單一資料庫）')
-        self.pg = app.postgres[0]
+                raise _layout(app, '它備份的是整個資料庫執行個體，HA 匯入目前只能放進「單一資料庫」或「資料庫資料卷」的設定')
+            raise _layout(app, '需要一個 PostgreSQL 資料庫項目（單一資料庫），或把資料庫的資料卷列在資料卷裡')
+        self.cold = not app.postgres   # N8-01: the data of the database is a volume of the app (a cold backup)
         self.skipped_mounts = []
         mounts = {}
         for name in quadlets:
@@ -786,8 +786,13 @@ class Target:
             sink.notice('n8n.mount-skipped', '這台 n8n 的容器有掛載不是 n8n 資料的路徑（例如時區檔），匯入不會用到它們，已略過；'
                         '它們在這台維持原樣。', [f'{file}：{target}' for file, target in self.skipped_mounts])
         declared = [v['name'] for v in app.volumes]
-        self.pg_file = next((file for file, container in _container_names(quadlets)
-                             if container == self.pg['container']), None)
+        containers = _container_names(quadlets)
+        self.pg_data_volume = None
+        if self.cold:
+            self.pg_file, self.pg, self.pg_data_volume = _cold_database(app, quadlets, mounts, declared, containers)
+        else:
+            self.pg = app.postgres[0]
+            self.pg_file = next((file for file, container in containers if container == self.pg['container']), None)
         self.data_volume = next((src for src, users in mounts.items()
                                  if any(t == '/home/node/.n8n' for _n, t in users)), None)
         self.main_file = next((n for n, t in mounts.get(self.data_volume, []) if t == '/home/node/.n8n'), None)
@@ -799,19 +804,21 @@ class Target:
             raise _layout(app, f'n8n 的資料夾掛的資料卷 {haissues.clean(self.data_volume, 80)} 沒有列在應用設定的資料卷裡')
         self.queue_images = {}   # queue volume -> the image of its container
         for volume in declared:
-            image = _queue_image(quadlets, mounts.get(volume, [])) if volume != self.data_volume else None
+            image = (_queue_image(quadlets, mounts.get(volume, []))
+                     if volume not in (self.data_volume, self.pg_data_volume) else None)
             if image:
                 self.queue_images[volume] = image
         self.queue_volumes = list(self.queue_images)
         self.valkey_volume = self.queue_volumes[0] if self.queue_volumes else None
-        self.extra_volumes, self.extra_dirs = hatarget.extras(app, handled_volumes=(self.data_volume, *self.queue_volumes))
+        self.extra_volumes, self.extra_dirs = hatarget.extras(
+            app, handled_volumes=(self.data_volume, self.pg_data_volume, *self.queue_volumes))
         if self.extra_volumes or self.extra_dirs:
             sink.auto('n8n.extras-carried', '這台 n8n 的應用設定還有其他資料卷或資料夾，匯入時會照這台現在的內容原樣帶過去，'
                       '不會被 HA 的資料取代。', [*self.extra_volumes, *self.extra_dirs])
         self.n8n_image = tempctr.quadlet_image(quadlets[self.main_file])
         self.pg_image = tempctr.quadlet_image(quadlets[self.pg_file])
         env = tempctr.quadlet_environment(quadlets[self.pg_file], {'POSTGRES_USER', 'POSTGRES_DB', 'PGDATA', 'LANG',
-                                                                    'TZ', 'POSTGRES_INITDB_ARGS'})
+                                                                    'TZ', 'POSTGRES_INITDB_ARGS', 'POSTGRES_PASSWORD_FILE'})
         self.pg_env = env
         self.pg_target = next((t for _n, t in sum(mounts.values(), []) if t.startswith('/var/lib/postgresql')),
                               '/var/lib/postgresql/data')
@@ -819,6 +826,54 @@ class Target:
             raise BackupError('incompatible', '這台 n8n 的 Quadlet 設定缺少映像。', app=app.id)
         if env.get('POSTGRES_USER', self.pg['user']) != self.pg['user'] or self.pg.get('database') is None:
             raise BackupError('incompatible', '這台 n8n 的資料庫設定和應用設定不一致。', app=app.id)
+        self.pg_secrets, self.import_secrets, self.import_env = [], [], {}
+        if self.cold:
+            # The new cluster is made like this device's own, so it needs the password of this device's cluster: the podman
+            # secret the database container gets it from is handed to the throwaway containers (never a value: names only).
+            self.pg_secrets = tempctr.quadlet_secrets(quadlets[self.pg_file])
+            found = _import_password(self.pg_secrets, env)
+            if found is None:
+                raise _layout(app, '資料庫的密碼不是用 podman 機密（secret）提供的，這個匯入無法安全地用它建立新的資料庫')
+            self.import_secrets, self.import_env = found
+            self.pg_target = next((t for _n, t in mounts.get(self.pg_data_volume, []) if t.startswith('/var/lib/postgresql')),
+                                  self.pg_target)
+
+
+def _cold_database(app, quadlets, mounts, declared, containers):
+    """(Quadlet file, {container, user, database, scope}, data volume) of the PostgreSQL container whose data folder is one
+    of the app's declared volumes (a cold backup, N8-01). Its account and database come from its own settings
+    (POSTGRES_USER, POSTGRES_DB); without them the app stops."""
+    for file, container in containers:
+        try:
+            image = tempctr.quadlet_image(quadlets[file])
+        except BackupError:
+            continue
+        if not image or 'postgres' not in image.split('@', 1)[0].rsplit('/', 1)[-1].lower():
+            continue
+        for source, users in mounts.items():
+            if source in declared and any(f == file and t.startswith('/var/lib/postgresql') for f, t in users):
+                env = tempctr.quadlet_environment(quadlets[file], {'POSTGRES_USER', 'POSTGRES_DB'})
+                if 'POSTGRES_USER' not in env or 'POSTGRES_DB' not in env:
+                    raise _layout(app, f'資料庫容器 {haissues.clean(container, 80)} 沒有設定 POSTGRES_USER 和 POSTGRES_DB')
+                return file, {'id': None, 'container': container, 'user': env['POSTGRES_USER'],
+                              'database': env['POSTGRES_DB'], 'scope': 'cold'}, source
+    raise _layout(app, '應用設定沒有資料庫項目，也找不到把資料放在資料卷裡的 PostgreSQL 容器')
+
+
+def _import_password(secrets_, env):
+    """(secrets, environment) that give a throwaway n8n the password of this device's database cluster, from the podman
+    secret its database container reads it from: an environment secret `POSTGRES_PASSWORD` becomes `DB_POSTGRESDB_PASSWORD`, a
+    file secret named by `POSTGRES_PASSWORD_FILE` is handed over as it is and named by `DB_POSTGRESDB_PASSWORD_FILE`. None when
+    the database container gets its password some other way."""
+    for spec in secrets_:
+        parts = spec.split(',')
+        options = dict(part.split('=', 1) for part in parts[1:] if '=' in part)
+        if options.get('type') == 'env' and options.get('target') == 'POSTGRES_PASSWORD':
+            return [f'{parts[0]},type=env,target=DB_POSTGRESDB_PASSWORD'], {}
+        path = env.get('POSTGRES_PASSWORD_FILE')
+        if path and tempctr.secret_mount_path(spec) == path:
+            return [spec], {'DB_POSTGRESDB_PASSWORD_FILE': path}
+    return None
 
 
 def _queue_image(quadlets, users):
@@ -1148,21 +1203,28 @@ def convert(work, app, test_mode, out_dir):
             timeout=3600, max_output=4 * 1024 * 1024)
     network = tmp.network('n8n-net')
     tmp.volume('n8n-pgdata')
-    pg_env = {key_: value for key_, value in items.pg_env.items() if key_ in ('POSTGRES_INITDB_ARGS', 'LANG', 'TZ')}
-    pg_env.update({'POSTGRES_USER': items.pg['user'], 'POSTGRES_DB': items.pg['database'],
-                   'POSTGRES_PASSWORD_FILE': '/work/pgpass'})
-    tmp.run('n8n-pg', items.pg_image, [], detach=True, network=network,
-            volumes=[(tmp.name('n8nsrc'), '/work', 'ro'), (tmp.name('n8n-pgdata'), items.pg_target, None)],
-            env=pg_env)
+    if items.cold:   # N8-01: a new cluster made like this device's own, with the password of its own (the podman secret)
+        pg_env = {key_: value for key_, value in items.pg_env.items()
+                  if key_ in ('POSTGRES_INITDB_ARGS', 'LANG', 'TZ', 'PGDATA', 'POSTGRES_PASSWORD_FILE')}
+        pg_volumes = [(tmp.name('n8n-pgdata'), items.pg_target, None)]
+        password_env = dict(items.import_env)
+    else:
+        pg_env = {key_: value for key_, value in items.pg_env.items() if key_ in ('POSTGRES_INITDB_ARGS', 'LANG', 'TZ')}
+        pg_env['POSTGRES_PASSWORD_FILE'] = '/work/pgpass'
+        pg_volumes = [(tmp.name('n8nsrc'), '/work', 'ro'), (tmp.name('n8n-pgdata'), items.pg_target, None)]
+        password_env = {'DB_POSTGRESDB_PASSWORD_FILE': '/work/pgpass'}
+    pg_env.update({'POSTGRES_USER': items.pg['user'], 'POSTGRES_DB': items.pg['database']})
+    tmp.run('n8n-pg', items.pg_image, [], detach=True, network=network, volumes=pg_volumes, env=pg_env,
+            secrets=items.pg_secrets)
     pg = Cluster(tmp, 'n8n-pg', superuser=items.pg['user'], log=work.log)
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint, timeout=podman.scaled_timeout(PG_READY_TIMEOUT, sqlite_bytes))
     db_env = _n8n_env({'DB_TYPE': 'postgresdb', 'DB_POSTGRESDB_HOST': tmp.name('n8n-pg'), 'DB_POSTGRESDB_PORT': '5432',
                        'DB_POSTGRESDB_DATABASE': items.pg['database'], 'DB_POSTGRESDB_USER': items.pg['user'],
-                       'DB_POSTGRESDB_PASSWORD_FILE': '/work/pgpass'})
+                       **password_env})
     work.log('把資料匯入新的 PostgreSQL 資料庫')
     tmp.run('n8n-import', items.n8n_image, ['import:entities', '--inputDir=/work/out', '--truncateTables=true'],
-            network=network, volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, timeout=3600,
-            max_output=4 * 1024 * 1024)
+            network=network, volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, secrets=items.import_secrets,
+            timeout=3600, max_output=4 * 1024 * 1024)
     compared = {name: rows for name, rows in info['tables'].items() if rows and name not in NOT_COMPARED}
     found = count_rows(pg, compared, items.pg['database'])
     missing = [name for name in compared if name not in found]
@@ -1175,31 +1237,59 @@ def convert(work, app, test_mode, out_dir):
     if test_mode:
         work.log('測試匯入：停用全部工作流程')
         tmp.run('n8n-unpublish', items.n8n_image, ['unpublish:workflow', '--all'], network=network,
-                volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, timeout=1800, max_output=4 * 1024 * 1024)
+                volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, secrets=items.import_secrets, timeout=1800,
+                max_output=4 * 1024 * 1024)
         active = pg.query_json("SELECT to_json(count(*)) FROM workflow_entity WHERE active", items.pg['database'])
         if _int(active):
             raise BackupError('job-failed', '測試匯入沒有停用全部 n8n 工作流程。')
-    number = pg.query_json('SELECT to_json(current_setting(\'server_version_num\'))', items.pg['database'])
-    text = pg.query_json('SELECT to_json(current_setting(\'server_version\'))', items.pg['database'])
-    try:
-        major = int(str(number)) // 10000
-    except ValueError:
-        raise BackupError('job-failed', '無法判斷暫用資料庫的版本。') from None
-    dump = out_dir / 'postgres' / f'{items.pg["id"]}.dump'
-    with open(dump, 'xb') as handle:
-        os.fchmod(handle.fileno(), 0o600)
-        tmp.exec('n8n-pg', ['pg_dump', '-w', '-U', items.pg['user'], '-d', items.pg['database'], '-Fc'],
-                 stdout=handle, timeout=3 * 3600, max_output=work.guard.budget())
-        handle.flush()
-        os.fsync(handle.fileno())
-    if os.path.getsize(dump) == 0:
-        raise BackupError('job-failed', 'n8n 資料庫匯出結果為空。')
-    with open(dump, 'rb') as handle:  # a full read (like the adapter's): every data block decompresses
-        tmp.exec('n8n-pg', ['pg_restore', '-f', '/dev/null'], input=handle, timeout=3 * 3600, max_output=64 * 1024)
-    for role in ('n8n-pg',):
-        tmp.remove(role)
-    for role in ('n8n-pgdata', 'n8nsrc'):
-        tmp.remove_volume(role)
+    volumes, postgres = {}, {}
+    if items.cold:
+        # N8-01: what the restore puts back is the cluster itself: checkpointed, stopped cleanly (its control file says so),
+        # exported as the volume the app settings list.
+        pg.statement('CHECKPOINT;', items.pg['database'])
+        code = tmp.stop('n8n-pg', timeout=300)
+        if code != 0:
+            raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')
+        pgdata = items.pg_env.get('PGDATA') or items.pg_target
+        state = tmp.run('controldata', items.pg_image, ['pg_controldata', pgdata], user='postgres',
+                        volumes=[(tmp.name('n8n-pgdata'), items.pg_target, 'ro')], timeout=300, read_only_root=True,
+                        max_output=1024 * 1024).stdout or b''
+        if not re.search(rb'Database cluster state:\s+shut down\s*$', state, re.M):
+            raise BackupError('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')
+        tmp.remove('n8n-pg')
+        db_path = out_dir / 'volumes' / f'{items.pg_data_volume}.tar'
+        with open(db_path, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            tmp.volume_export('n8n-pgdata', handle, max_output=work.guard.budget())
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.remove_volume('n8n-pgdata')
+        tmp.remove_volume('n8nsrc')
+        volumes[items.pg_data_volume] = db_path
+    else:
+        number = pg.query_json('SELECT to_json(current_setting(\'server_version_num\'))', items.pg['database'])
+        text = pg.query_json('SELECT to_json(current_setting(\'server_version\'))', items.pg['database'])
+        try:
+            major = int(str(number)) // 10000
+        except ValueError:
+            raise BackupError('job-failed', '無法判斷暫用資料庫的版本。') from None
+        dump = out_dir / 'postgres' / f'{items.pg["id"]}.dump'
+        with open(dump, 'xb') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            tmp.exec('n8n-pg', ['pg_dump', '-w', '-U', items.pg['user'], '-d', items.pg['database'], '-Fc'],
+                     stdout=handle, timeout=3 * 3600, max_output=work.guard.budget())
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.path.getsize(dump) == 0:
+            raise BackupError('job-failed', 'n8n 資料庫匯出結果為空。')
+        with open(dump, 'rb') as handle:  # a full read (like the adapter's): every data block decompresses
+            tmp.exec('n8n-pg', ['pg_restore', '-f', '/dev/null'], input=handle, timeout=3 * 3600, max_output=64 * 1024)
+        for role in ('n8n-pg',):
+            tmp.remove(role)
+        for role in ('n8n-pgdata', 'n8nsrc'):
+            tmp.remove_volume(role)
+        postgres[items.pg['id']] = {'database': items.pg['database'], 'server_version': str(text)[:32], 'major': major,
+                                    'file': dump}
     # n8n_n8n_data from scratch and the queue's volumes empty, their top directories owned like the live ones.
     data_path = out_dir / 'volumes' / f'{items.data_volume}.tar'
     root = volume_root_or_image(work, app, items.data_volume, lambda: (*node_ids, 0o755), sink)
@@ -1227,7 +1317,7 @@ def convert(work, app, test_mode, out_dir):
     finally:
         out.close()
     os.unlink(staging / 'ha-n8n-files.tar')
-    volumes = {items.data_volume: data_path}
+    volumes[items.data_volume] = data_path
     for name in items.queue_volumes:
         queue_path = out_dir / 'volumes' / f'{name}.tar'
         queue_root = volume_root_or_image(work, app, name, lambda name=name: (*_queue_owner(tmp, items.queue_images[name]), 0o755),
@@ -1241,10 +1331,10 @@ def convert(work, app, test_mode, out_dir):
     check_volume_tar(data_path, ids)
     for name in items.queue_volumes:
         check_volume_tar(volumes[name], ids)
+    if items.cold:
+        check_volume_tar(volumes[items.pg_data_volume], ids)
     volumes.update(carried['volumes'])
-    return {'volumes': volumes, 'dirs': dict(carried['dirs']),
-            'postgres': {items.pg['id']: {'database': items.pg['database'], 'server_version': str(text)[:32],
-                                          'major': major, 'file': dump}},
+    return {'volumes': volumes, 'dirs': dict(carried['dirs']), 'postgres': postgres,
             'counts': dict(info['counts'], workflows_active=info['workflows_active']),
             'owner_email': info['owner_email'],
             'workflows_to_fix': workflows_to_fix(info['workflows']), 'packages': list(src.packages),

@@ -1061,6 +1061,7 @@ class World(fk.World):
         self.live = {}                             # this device's own volumes: volume -> entries of a tar
         self.root = b'1000 1000 755\n'
         self.dir_data = {}                         # the folders the adapter was handed: path -> tar
+        self.controldata_state = 'shut down'       # what `pg_controldata` says of the new cluster (a cold backup)
 
     def podman(self, args, data, stdout):
         if args[:2] == ['image', 'inspect'] and self.present is not None and args[-1] not in self.present:
@@ -1082,6 +1083,8 @@ class World(fk.World):
     def run(self, role, image, command, options, data):
         if role == 'n8n-version':
             return fk.Result(0, self.version, b'')
+        if role == 'controldata':
+            return fk.Result(0, f'Database cluster state:               {self.controldata_state}\n'.encode(), b'')
         if role == 'n8n-import':
             self.n8n_tables = dict(self.tables)
         if role == 'n8n-unpublish':
@@ -1109,6 +1112,9 @@ class World(fk.World):
         return None
 
     def export(self, volume):
+        if volume.endswith('n8n-pgdata'):   # the new cluster of a cold backup (owner postgres = 70 in the image)
+            return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 70, 'gid': 70, 'mode': 0o700},
+                              {'name': 'PG_VERSION', 'data': b'16\n', 'uid': 70, 'gid': 70, 'mode': 0o600}])
         return fk.tar_of(self.live.get(volume, [{'name': '.', 'type': 'dir'}]))
 
 
@@ -1484,6 +1490,115 @@ class BigFilesFlowTests(N8nCase):
         volume = self.data_tar()
         self.assertEqual(volume['nodes/node_modules/n8n-nodes-big/b.node'][1], big)
 
+
+
+COLD_QUADLETS = dict(QUADLETS, **{
+    'n8n-postgres.container': QUADLETS['n8n-postgres.container'] + b'Secret=n8n-db-password,type=env,target=POSTGRES_PASSWORD\n',
+})
+COLD_VOLUMES = ('n8n_n8n_data', 'n8n_valkey_data', 'n8n_postgres_data')
+
+
+class ColdTargetTests(unittest.TestCase):
+    """N8-01: this device's app settings may hold the database's data folder as a volume (a cold backup) instead of one database
+    item; the instance of a whole PostgreSQL stays a stop."""
+
+    def target(self, quadlets=COLD_QUADLETS, volumes=COLD_VOLUMES):
+        return target_of(quadlets, n8n_app(volumes=volumes, postgres=[]))
+
+    def test_the_database_volume_is_found_and_is_neither_queue_nor_extra(self):
+        target, sink = self.target()
+        self.assertEqual((target.cold, target.pg_data_volume, target.queue_volumes, target.extra_volumes, sink.found),
+                         (True, 'n8n_postgres_data', ['n8n_valkey_data'], [], []))
+        self.assertEqual((target.pg['container'], target.pg['user'], target.pg['database'], target.pg_file),
+                         ('n8n-postgres', 'n8n', 'n8n', 'n8n-postgres.container'))
+        self.assertEqual((target.import_secrets, target.import_env),
+                         (['n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD'], {}))
+        self.assertEqual(target.pg_secrets, ['n8n-db-password,type=env,target=POSTGRES_PASSWORD'])
+
+    def test_a_password_file_secret_is_handed_over_as_the_file_it_is(self):
+        pg = QUADLETS['n8n-postgres.container'] + (b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/dbpass\n'
+                                                   b'Secret=n8n-db-password,type=mount,target=/run/secrets/dbpass\n')
+        target, _sink = self.target(dict(QUADLETS, **{'n8n-postgres.container': pg}))
+        self.assertEqual((target.import_secrets, target.import_env),
+                         (['n8n-db-password,type=mount,target=/run/secrets/dbpass'],
+                          {'DB_POSTGRESDB_PASSWORD_FILE': '/run/secrets/dbpass'}))
+
+    def test_what_cannot_be_made_like_this_devices_own_cluster_stops_n8n(self):
+        def stopped(quadlets, volumes=COLD_VOLUMES):
+            with self.assertRaises(BackupError) as caught:
+                self.target(quadlets, volumes)
+            self.assertEqual((caught.exception.code, caught.exception.issues[0].id), ('incompatible', 'n8n.layout-unsupported'))
+            return caught.exception.issues[0].message
+
+        self.assertIn('podman 機密', stopped(QUADLETS), 'a password that is no podman secret cannot be handed over safely')
+        self.assertIn('POSTGRES_USER', stopped(dict(COLD_QUADLETS, **{
+            'n8n-postgres.container': COLD_QUADLETS['n8n-postgres.container'].replace(b'Environment=POSTGRES_USER=n8n\n', b'')})))
+        self.assertIn('PostgreSQL 容器', stopped(COLD_QUADLETS, ('n8n_n8n_data', 'n8n_valkey_data')), 'its volume is not listed')
+
+
+class ColdFlowTests(N8nCase):
+    """The whole conversion for a cold app: the new cluster is made like this device's own and is the volume that goes back."""
+    volumes = COLD_VOLUMES
+
+    def catalog_apps(self):
+        return {'n8n': fk.app('n8n', 'n8n 工作流程', volumes=[{'name': name} for name in self.volumes], postgres=[])}
+
+    def setUp(self):
+        super().setUp()
+        self.world.quadlets['n8n'] = dict(COLD_QUADLETS)
+
+    def runs_of(self, role):
+        return [run for run in self.world.runs if run[0] == role]
+
+    def test_the_check_is_the_same(self):
+        row = self.row()
+        self.assertEqual((row['importable'], row['ok'], self.levels(row)), (True, True, {}))
+
+    def test_the_cluster_is_the_volume_and_there_is_no_dump(self):
+        result = self.convert(self.upload_n8n(), ['n8n'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        items = self.world.manifests['n8n']
+        self.assertEqual((sorted(items['volumes']), items['postgres']), (list(sorted(COLD_VOLUMES)), {}))
+        cluster = self.volume('n8n_postgres_data')
+        self.assertEqual(cluster['PG_VERSION'][1], b'16\n')
+        self.assertEqual([command[0] for _r, command, _d in self.world.execs if command[0] in ('pg_dump', 'pg_restore')], [])
+        self.assertEqual(self.runs_of('controldata')[0][2], ['pg_controldata', '/var/lib/postgresql/data'])
+
+    def test_the_new_cluster_and_the_import_get_the_password_from_the_podman_secret_never_as_a_value(self):
+        self.convert(self.upload_n8n(), ['n8n'])
+        _role, image, _command, options = self.runs_of('n8n-pg')[0]
+        self.assertEqual(image, 'docker.io/library/postgres:16.15-alpine')
+        self.assertEqual(options['--secret'], ['n8n-db-password,type=env,target=POSTGRES_PASSWORD'])
+        self.assertNotIn('POSTGRES_PASSWORD_FILE=/work/pgpass', options.get('--env', []))
+        self.assertFalse([v for v in options.get('--volume', []) if '/work' in v], 'the throwaway source is not mounted into it')
+        for role in ('n8n-import',):
+            _r, _i, _c, import_options = self.runs_of(role)[0]
+            self.assertEqual(import_options['--secret'], ['n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD'])
+            self.assertFalse([e for e in import_options['--env'] if 'PASSWORD' in e], import_options['--env'])
+
+    def test_unpublished_in_test_mode_with_the_same_secret(self):
+        self.convert(self.upload_n8n(), ['n8n'], test_mode=True)
+        self.assertTrue(self.world.unpublished)
+        _r, _i, _c, options = self.runs_of('n8n-unpublish')[0]
+        self.assertEqual(options['--secret'], ['n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD'])
+
+    def test_a_cluster_that_was_not_shut_down_cleanly_is_never_used(self):
+        self.world.controldata_state = 'in production'
+        error = self.convert_stopped(self.upload_n8n())
+        self.assertEqual(error.code, 'job-failed')
+        self.assertEqual(error.result['results'][0]['status'], 'failed')
+        self.assertEqual((self.world.manifests, self.storage.list_backups()), ({}, []))
+
+    def test_a_cluster_that_exited_with_an_error_is_never_used(self):
+        self.world.exit_codes['n8n-pg'] = 137
+        error = self.convert_stopped(self.upload_n8n())
+        self.assertEqual(error.code, 'job-failed')
+        self.assertEqual(self.world.manifests, {})
+
+    def test_the_other_findings_still_hold_for_a_cold_app(self):
+        error = self.convert_stopped(self.upload_n8n(owner=False))
+        self.assertEqual(error.result['results'][0]['issues'][0]['id'], 'n8n.no-owner')
+        self.assertEqual(self.built().count('n8n-pg'), 0)
 
 
 if __name__ == '__main__':
