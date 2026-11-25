@@ -1553,6 +1553,14 @@ def ha_datadir_source(src):
     return datadir_source(config.get('datadirectory'))
 
 
+def raise_stops(sink):
+    """A conversion never goes on past a stop, whatever kind of sink it was given (a conversion's own sink raises at the stop;
+    this is what keeps it so for one that only collects)."""
+    stop = next((issue for issue in sink.found if issue.level == 'stop'), None)
+    if stop is not None:
+        raise haissues.stopped(stop)
+
+
 def member_issues(sink, src, target):
     """What the add-on's own files say (check and conversion, right after the add-on member was read): config.php, the
     PostgreSQL data, the files of an online backup, what the reader left out. Returns the reminders (notice texts)."""
@@ -2269,6 +2277,7 @@ def convert(work, app, test_mode, out_dir):
     finally:
         apps.close()
     member_issues(sink, src, target)      # a stop stops this app, a line to confirm needs its key (haissues.Sink)
+    raise_stops(sink)
 
     # HA's data directory, written as the data dir while it is read (owner www-data, top like the live one). When its files are
     # not in the backup (or the folder is not the data directory: no .ncdata) the data dir stays empty with its marker.
@@ -2301,12 +2310,14 @@ def convert(work, app, test_mode, out_dir):
     finally:
         data_out.close()
     datadir_issues(sink, src.config, data, ha_datadir_source(src))
+    raise_stops(sink)
     work.phase('convert')
     hapg = Pinned(tmp, 'hapg')
     cluster = ha_odoo.start_ha_cluster(work, hapg, image)
     dbname = src.config['dbname']
     details = ha_database(cluster, dbname)
     database_issues(sink, src, data, details, target)
+    raise_stops(sink)
     # What is still to be written: the dump, the new cluster with its WAL and its export, the html dir twice.
     html_bytes = runner.dir_measure(live.rels['html'])['bytes']
     work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE + 2 * html_bytes)

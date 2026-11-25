@@ -532,6 +532,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(self.issues(None, found=True), [('nextcloud.config-unreadable', 'stop')])
         self.assertEqual(self.issues(None, found=False), [('nextcloud.config-missing', 'stop')])
 
+    def test_a_conversion_never_goes_on_past_a_stop_even_with_a_sink_that_only_collects(self):
+        sink = haissues.Sink('nextcloud')       # a check's sink: nothing raises by itself
+        nc.config_issues(sink, nc.parse_config(HA_CONFIG), nc.parse_config(LIVE_CONFIG), '35.0.1')
+        nc.raise_stops(sink)
+        nc.config_issues(sink, dict(nc.parse_config(HA_CONFIG), installed=False), nc.parse_config(LIVE_CONFIG), '35.0.1')
+        with self.assertRaises(BackupError) as caught:
+            nc.raise_stops(sink)
+        self.assertEqual([i.id for i in caught.exception.issues], ['nextcloud.not-installed'])
+
     def test_maintenance_mode_is_a_reminder_unless_an_upgrade_may_have_been_half_done(self):
         # NC-14: the same version on both sides: maintenance was only forgotten; the version of this device's config.php
         # (maintenance false) is what the merged file keeps.
