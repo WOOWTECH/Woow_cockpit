@@ -1410,6 +1410,9 @@ def capture_target_seed(work, app, target, staging, *, notes=None):
         stage('target_tls');fingerprints=tls_fingerprints(execute,image_tls_references(original))
         stage('target_snapshot')
         snapshot=snapshot_target_volume(work,app,target.data_volume,staging,required,absent=absent,missing=missing)
+        if 'configs/cluster.hocon' in missing:   # the override file's own state was proven by metadata: this is no "file named but not there"
+            os.unlink(snapshot)
+            raise BackupError('incompatible', '目標 EMQX 設定參照的檔案不存在，已停止。')
         stage('target_consistency')
         if target_override_state(execute)==state and read_effective_config(execute)==original:
             if notes is not None:
@@ -1420,7 +1423,7 @@ def capture_target_seed(work, app, target, staging, *, notes=None):
             time.sleep(2)
     raise haissues.stopped(haissues.Issue('emqx.config-changing', 'stop', CONFIG_CHANGING,
                                           action='請先不要在這台 EMQX 的管理頁修改設定，等修改完成後再匯入。'),
-                           'incompatible', app=app.id)
+                           'incompatible', app=getattr(app, 'id', app))
 
 
 def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint='', readings=None, notes=None):
