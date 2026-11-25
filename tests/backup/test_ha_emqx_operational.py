@@ -586,6 +586,39 @@ class DeviceFoldersTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
+class EnvironmentFileTests(unittest.TestCase):
+    """E-23: this device's EMQX_LOG_DIR may be set in an `EnvironmentFile=` instead of the Quadlet itself."""
+
+    @staticmethod
+    def target(files, env_files):
+        def read_file(rel, max_bytes):
+            if rel not in files:
+                raise BackupError('not-found', 'no such file')
+            return files[rel]
+        target = ha_emqx.Target.__new__(ha_emqx.Target)
+        target.env, target.env_files, target._runner = {}, env_files, SimpleNamespace(read_file=read_file)
+        return target
+
+    def test_the_last_file_that_sets_it_wins_and_only_plain_values_count(self):
+        files = {'.config/a.env': b'# c\nEMQX_LOG_DIR=/var/log/a\nOTHER=1\n', '.config/b.env': b'EMQX_LOG_DIR="/var/log/b"\r\n',
+                 '.config/c.env': b"EMQX_LOG_DIR='/var/log/c'\n", '.config/d.env': b'EMQX_LOG_DIR=/var/log/$HOME\n',
+                 '.config/e.env': b'  EMQX_LOG_DIR=/var/log/e  \n', '.config/f.env': b'XEMQX_LOG_DIR=/x\nEMQX_LOG_DIR_MORE=/y\n'}
+        for names, want in ((['.config/a.env'], '/var/log/a'), (['.config/a.env', '.config/b.env'], '/var/log/b'),
+                            (['.config/c.env'], '/var/log/c'), (['.config/d.env'], None), (['.config/e.env'], '/var/log/e'),
+                            (['.config/f.env'], None), (['.config/a.env', '.config/f.env'], '/var/log/a'), ([], None)):
+            with self.subTest(files=names):
+                got = self.target(files, [f'%h/{name}' for name in names]).file_env('EMQX_LOG_DIR')
+                self.assertEqual(got, want)
+
+    def test_a_file_outside_the_home_or_that_cannot_be_read_is_skipped(self):
+        files = {'.config/a.env': b'EMQX_LOG_DIR=/var/log/a\n'}
+        target = self.target(files, ['/etc/emqx.env', '-%h/.config/missing.env', '%h/../x.env', '%h/.config/a.env', '%h/bad name.env'])
+        self.assertEqual(target.file_env('EMQX_LOG_DIR'), '/var/log/a')
+        self.assertEqual(ha_emqx.device_log_dir(target), '/var/log/a')
+        target.env = {'EMQX_LOG_DIR': '/var/log/quadlet'}
+        self.assertEqual(ha_emqx.device_log_dir(target), '/var/log/quadlet', 'the Quadlet\'s own setting is the stronger one')
+
+
 class OwnLinesTests(base.EmqxCase):
     """E-41, E-42, E-43, E-44, E-47 through the whole candidate of the generated device: each line to confirm has its three steps
     (not confirmed: only this app stops; confirmed: it goes on; one more name: confirm again), the plugins are a notice."""
@@ -802,6 +835,19 @@ class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
         self.assertEqual(scratch[0][0], [v for v in volumes if v[1] == '/opt/emqx/log'][0][0], 'the candidate\'s own log volume')
         [run] = self.runs('emqx-new')
         self.assertIn('EMQX_LOG_DIR=/var/log/emqx', run[3]['--env'])
+
+    def test_a_log_folder_set_in_the_environment_file_is_found_too(self):
+        """E-23: EMQX_LOG_DIR is in the Quadlet's EnvironmentFile=, not in the Quadlet: podman gives it to the candidate, the scan
+        finds where it points, the candidate gets scratch space there."""
+        self.world.files['.config/emqx/emqx.env'] = b'# woow emqx\nEMQX_LOG__CONSOLE__LEVEL=warning\nEMQX_LOG_DIR=/var/log/emqx\n'
+        self.world.target_config.update({'log': {'file': {'default': {'enable': True, 'path': '${EMQX_LOG_DIR}/emqx.log'}}}})
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        self.assertTrue([v for v in self.candidate_volumes() if v[1] == '/var/log/emqx'])
+        [run] = self.runs('emqx-new')
+        self.assertFalse([e for e in run[3]['--env'] if e.startswith('EMQX_LOG_DIR')], 'podman reads the file, nothing is copied')
+        self.assertTrue(run[3]['--env-file'])
 
     def test_a_log_folder_that_is_one_of_this_devices_mounts_is_never_mounted_for_the_candidate(self):
         """E-35: this device's real folder stays untouched; the candidate gets scratch space at its place."""

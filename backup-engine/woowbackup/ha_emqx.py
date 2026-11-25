@@ -535,6 +535,28 @@ class Target:
         self.access_env = sorted(names)
         return env, files
 
+    def file_env(self, name):
+        """E-23: the value of the setting `name` in this device's `EnvironmentFile=` files (the last file that sets it wins; the
+        Quadlet's own `Environment=` is looked at first by the caller, as podman gives it the stronger place), None when none
+        sets it or the value is not a plain one. Only tells where this device's log folder is: podman itself reads the files for
+        the candidate (candidate_env). A file that is not under the owner's home or cannot be read is skipped."""
+        pattern = re.compile(r'\s*' + re.escape(name) + r'=(?:"([^"\\$`]{0,1000})"|\'([^\'$]{0,1000})\'|([^\s"\'\\$`#]{0,1000}))\s*\Z')
+        found = None
+        for value in self.env_files:
+            path = value.lstrip('-')
+            rel = path[3:] if path.startswith('%h/') else None
+            if rel is None or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', rel) or '..' in rel.split('/'):
+                continue
+            try:
+                data = self._runner.read_file(rel, max_bytes=256 * 1024)
+            except BackupError:
+                continue
+            for raw in data.split(b'\n'):
+                match = pattern.match(raw.decode('utf-8', 'replace').rstrip('\r'))
+                if match:
+                    found = next(group for group in match.groups() if group is not None)
+        return found
+
 
 # ====================================================================== the brokers
 
@@ -1520,6 +1542,8 @@ def device_log_dir(target):
     when that setting is no plain absolute folder."""
     env = getattr(target, 'env', None)
     value = env.get('EMQX_LOG_DIR') if isinstance(env, dict) else None
+    if not value and callable(getattr(target, 'file_env', None)):
+        value = target.file_env('EMQX_LOG_DIR')   # podman gives `Environment=` the stronger place; an EnvironmentFile= may hold it
     if not value:
         return LOG_TARGET
     return resolve_path(value, etc_dir=None, log_dir=None) if isinstance(value, str) and value.startswith('/') else None
