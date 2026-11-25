@@ -411,6 +411,12 @@ class RunTests(ChainCase):
         self.assertNotIn('group', first['result'], 'a job that runs alone concludes no chain')
         self.assertEqual(len(self.records()), 1)
 
+    def test_the_memory_of_one_job_is_collected_before_the_next_one_starts(self):
+        self.start_chain(['odoo', 'n8n'])
+        with mock.patch.object(jobs.gc, 'collect') as collect:
+            self.run_chain()
+        self.assertEqual(collect.call_count, 3, 'between the four jobs of one process (DESIGN H-c)')
+
     def test_a_job_that_is_no_import_is_run_as_before(self):
         result = self.start(job_type='backup', params={'apps': ['a']}, request_id='req-plain-0001')
         record = jobs.run_job(self.paths, result['job_id'], deps=object(), handlers={'backup': lambda ctx, p: {'ok': 1}})

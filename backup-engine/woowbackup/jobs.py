@@ -35,6 +35,7 @@
 import calendar
 import contextlib
 import fcntl
+import gc
 import json
 import os
 import re
@@ -1580,6 +1581,7 @@ class _Run:
         record, next_id = self.execute(job_id, first=True)
         first = record
         while next_id is not None:
+            gc.collect()  # one process for the whole import: what the job before left behind goes before the next one starts
             record, next_id = self.execute(next_id, first=False)
         return first
 
@@ -1621,13 +1623,15 @@ class _Run:
             try:
                 result = handler(ctx, reporter.record.get('params') or {})
             except flows.Cancelled as caught:
-                state, exc = 'cancelled', caught
+                # An HA check that is cancelled still hands over what it found (haimport.run_ha_check, `exc.result`).
+                state, result, exc = 'cancelled', getattr(caught, 'result', None), caught
             except flows.RolledBack as rolled:
                 state, result, error, exc = 'rolled-back', rolled.result, rolled.error.as_dict(), rolled
             except Terminated as caught:
                 _restart_after_termination(ctx)
                 message, partial = interrupted_details(reporter.record)
-                state, result, error, exc = 'interrupted', partial, {'code': 'job-failed', 'message': message}, caught
+                state, result, error, exc = ('interrupted', getattr(caught, 'result', None) or partial,
+                                             {'code': 'job-failed', 'message': message}, caught)
             except BackupError as caught:
                 state, result, error, exc = 'failed', getattr(caught, 'result', None), caught.as_dict(), caught
             except Exception as caught:  # noqa: BLE001 - recorded generically, details go to the journal only

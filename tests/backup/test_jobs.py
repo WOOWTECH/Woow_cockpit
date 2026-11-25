@@ -447,6 +447,34 @@ class RunJobTests(JobCase):
         self.assertEqual(record['state'], 'interrupted')
         self.assertEqual(list(Path(self.paths.run).glob('key-*')), [])
 
+    def test_what_a_cancelled_or_terminated_job_found_is_kept(self):
+        """An HA check that is cancelled or terminated hands over what it had checked (`exc.result`; haimport.run_ha_check)."""
+        found = {'ha_check': {'schema': 2, 'apps': [{'app_id': 'odoo'}]}}
+        job_id = self.queue(job_type='verify')
+
+        def cancel(ctx, params):
+            error = flows.Cancelled()
+            error.result = found
+            raise error
+
+        record, _ = self.run_with(job_id, cancel)
+        self.assertEqual((record['state'], record['result']), ('cancelled', found))
+        job_id = self.queue(job_type='verify')
+
+        def terminated(ctx, params):
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+                time.sleep(5)
+            except jobs.Terminated as error:
+                error.result = found
+                raise
+
+        record, _ = self.run_with(job_id, terminated)
+        self.assertEqual((record['state'], record['result']), ('interrupted', found))
+        job_id = self.queue(job_type='verify')
+        record, _ = self.run_with(job_id, lambda ctx, params: (_ for _ in ()).throw(flows.Cancelled()))
+        self.assertEqual((record['state'], record['result']), ('cancelled', None), 'a job with nothing to hand over keeps none')
+
     def test_sigterm_during_restore_keeps_safety_guidance(self):
         job_id = self.queue(job_type='restore')
 
