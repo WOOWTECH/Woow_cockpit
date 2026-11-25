@@ -28,7 +28,7 @@ TESTS (unit level, fakes for Podman and the app modules -- say it as it is)
   RealBackupTests (the real HA fixtures, no container): tests=1 failures=0 errors=0 skipped=0 blocked=0
   backup-ui (node tests/backup-ui.mjs): 108 pass (# tests 108 # pass 108 # fail 0) on 77b33c0 (not repeated on 0f6e4d4: the later commits change no page file)
   the same three steps on the commit before the last text change (77b33c0): tests=2053 failures=2 errors=3 skipped=1 blocked=6; ui # tests 108 # pass 108 # fail 0
-  lab discover suite (tests/e2e/lab, the unit tests of the lab harnesses; clean tree): no result yet when this folder was written (the run waits behind other lanes for the host heavy lock; parity-f1.md of the team notes says where it ends up)
+  lab discover suite (tests/e2e/lab, the unit tests of the lab harnesses; clean tree): tests=1294 failures=2 errors=71 skipped=0 blocked=133 (commit 77b33c0); 48 different test ids are not ok, exactly the ids of the integration lane's run m23 of the same suite (48; tests that need run_native, which the guard refuses, and 2 stale persisted values); not-ok now but not in m23: 0 []; not-ok in m23 but ok now: 0
   F1 modules alone: test_ha_issues 48, test_ha_import 85, test_ha_cli 52, test_ha_registry 6, test_ha_common 9, test_ha_parity_rows 9,
     test_ha_pg_stdin 25 (all OK on the source commit)
   Trial merge F1 + READ + PKG (units only, throwaway tree; recipe in snippets/F1-foundation/INTEGRATION.txt): test_ha_parity_rows 9,
@@ -42,7 +42,7 @@ OFFLINE PROBES ON REAL HA BACKUPS (real_file_probes.py; no container, no device,
   isolation (real-isolation.json): the check job on a real unencrypted backup with four add-ons; one add-on at a time damaged by one flipped
     byte: only that app stops (failure.corrupt-archive), the other three stay importable, no staging is left. The apps' own checks are
     replaced by a complete read of their add-on (every checksum), so this shows the job's isolation on real bytes, not the apps' checks.
-  the same probes on the throwaway merge F1 + READ + PKG (READ's tolerant reader with F1's job): no result yet when this folder was written (queued behind other lanes for the host heavy lock)
+  the same probes on the throwaway merge F1 + READ + PKG (READ's tolerant reader with F1's job): isolation pass, selection identical to the one above: True
 NOT DONE / NOT PROVEN
   - No device, no real import, no real restore, no chain (lane F2), no page (lane PAGE). commercial_acceptance stays not-complete.
   - The unit tests use fakes (hafakes.py, hab1fakes.py, FakeHaAdapter); the real runs R1/R2 of DESIGN G4 come later.

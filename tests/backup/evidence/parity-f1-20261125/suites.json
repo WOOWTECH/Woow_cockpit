@@ -83,5 +83,33 @@
    "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
   ],
   "only_the_5_known_not_ok": true
+ },
+ "lab_fin5": {
+  "commit": "77b33c0651ef128977304af267f2c62f7539a607",
+  "steps": {
+   "lab": {
+    "rc": 1,
+    "seconds": 5923,
+    "line": "tests=1294 failures=2 errors=71 skipped=0 expected_failures=0 unexpected_successes=0 blocked=133 shim_hits=0 run_native=denied elapsed=293"
+   }
+  },
+  "compare_with_baseline": {
+   "not_ok": 48,
+   "integration_lane_baseline_not_ok": 48,
+   "new_not_ok": [],
+   "no_longer_not_ok": [],
+   "baseline": "integration lane run m23 of the lab discover suite at fdc922f (73 not-ok: tests that need run_native, refused by the guard, and 2 stale persisted values)"
+  }
+ },
+ "trial_probes_fin7": {
+  "tree": "throwaway merge of F1 + READ + PKG (+ their patches, uncommitted)",
+  "base": "6290127d0772771fbc9454bd8dc8d6d881f686f0",
+  "steps": {
+   "probes": {
+    "rc": 0,
+    "seconds": 3179,
+    "line": "selection: real HA backups opened: 27; isolation: \"result\":\"pass\","
+   }
+  }
  }
 }
