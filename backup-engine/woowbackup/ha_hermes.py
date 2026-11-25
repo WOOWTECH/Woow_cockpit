@@ -16,7 +16,10 @@ know). No size limit refuses an app: `.woow-image-version` is only read at its s
 for what they say up to SCAN_MAX. An entry that is a link or a folder where a file must be is left out and listed (one
 line of the one confirmation); a secondary database that is damaged or stands where a link is is left out with its WAL and
 listed, a damaged `state.db` stops only Hermes; an index structure the sandbox does not know does not stop anything (the
-database moves unchanged, unchecked). A hard link to a file that does not move is copied as a file (CM-11).
+database moves unchanged, unchecked). A hard link follows the file it names, never more: to a runtime file that does not move
+it is copied as a file (CM-11); to a database it moves with the database or stays out with it; to a file that stays out for
+what it holds (an `.env` too large to filter, a damaged database, what lies below a folder where a file must be) it stays out
+too and is listed -- no name carries what its file may not.
 
 The tree moves as it is -- data, the data's own keys (vault, OAuth tokens, per-route webhook secrets, plugin logins)
 and HA's `config.yaml` -- with every owner set to this device's hermes uid/gid and no setuid/setgid bit; symlinks stay
@@ -28,9 +31,10 @@ win over HA's), every `-shm` wal-index, the browser login profiles (a credential
 HA's `.env` keeps HA's provider keys but loses the lines this device's secrets and URLs own (API_SERVER_KEY,
 WEBHOOK_SECRET, HERMES_DASHBOARD_BASIC_AUTH_*, HERMES_DASHBOARD_PUBLIC_URL, HERMES_BASE_URL, HERMES_PASEO_*). The SQLite
 files move unchanged with their WAL, after the sandboxed child (hasqlite) checked each known database (`quick_check`)
-and read `state.db`'s counts and schema version; they are written into the tree only then (so one that stays out leaves
-nothing behind); known Hermes FTS5 layouts are allowed, their index structure is checked by quick_check in the sandbox,
-but an index is not compared with its messages. `hermes-redis-data` is only its top folder (owned like the live one),
+and read `state.db`'s counts and schema version; they are written into the tree only then, and so are the hard links to them
+(so one that stays out leaves nothing behind, not even under the name of a link); known Hermes FTS5 layouts are allowed,
+their index structure is checked by quick_check in the sandbox, but an index is not compared with its messages.
+`hermes-redis-data` is only its top folder (owned like the live one),
 every other volume or folder of this device's entry (a cold database, a workspace) is carried as it is, and the database
 `main` is a dump of the live, unused database (this device's own, unchanged). HA's /media is never moved.
 """
@@ -116,6 +120,11 @@ class Source:
         self.db_meta = {}         # staged name -> (name in the tree, mode, mtime)
         self.db_skip = set()      # staged names that stay out of the tree (a group left out, with its sidecars)
         self.skipped = []         # runtime files, -shm, ...
+        self.runtime = set()      # H-01: the names in `skipped`: a hard link to one of them may be copied
+        self.copying = set()      # H-01: the hard links whose copy was asked for (the reader hands their names out again, after the walk)
+        self.db_links = []        # H-01: hard links to a known database (name, the database's name in the tree, mtime), settled by judge
+        self.kept_links = []      # of those, the links whose database stays: add_databases writes them after the databases
+        self.links_settled = False
         self.foreign = []         # programs for another processor
         self.specials = haissues.Names()    # H-02: a link or a folder where a file must be
         self.unread = haissues.Names()      # H-20, H-21: copied without being read
@@ -229,6 +238,40 @@ def _mask_values(values):
                 break
 
 
+def _hard_link(src, out, rel, entry):
+    """H-01: a hard link follows what the importer did with the file it names -- never more. The file is in the tree: a hard
+    link. The file did not move because it is only runtime state (a pid file, a wal-index): the link is copied as a file (the
+    reader hands the name out again after the walk). A known database: the link follows the database, which is only decided
+    once the checks are in (`settle_links`, called by `judge`, so the check and the conversion list the same names). Every
+    other file that is not in the tree stays out for what it holds -- an `.env` too large to filter, what lies below a folder
+    where a file must be -- and the link stays out with it and is listed: `entry` is never handed to the tar for those
+    (TreeTar.hardlink would copy exactly the content that stays out, under another name)."""
+    linkname = entry.linkname
+    target = linkname[len(TREE) + 1:] if linkname.startswith(TREE + '/') else None
+    if target is not None and _known_db(target) is not None:
+        src.db_links.append((rel, target, entry.mtime))
+        return
+    copy = entry if target in src.runtime else None
+    if out.hardlink(rel, target if target is not None else linkname, entry.mtime, entry=copy) == 'copy':
+        src.copying.add(rel)
+
+
+def settle_links(src):
+    """H-01, H-02, H-11: a hard link to a known database (or to its WAL) moves when that database moves and stays out, listed
+    in the reader's own line, when the database stays out (damaged, or in a group with a member that is no file): what stays
+    out leaves nothing behind, not even under another name. Called by `judge` after the checks; once only."""
+    if src.links_settled:
+        return
+    src.links_settled = True
+    for name, target, mtime in src.db_links:
+        staged = flat(target)
+        if staged in src.dbs and staged not in src.db_skip:
+            src.kept_links.append((name, target, mtime))
+        elif src.report is not None:
+            src.report.skip('hardlink', name)
+    src.counts['hardlinks'] = src.counts.get('hardlinks', 0) + len(src.kept_links)
+
+
 def scan_member(stream, report, staging, out, *, machine=None, guard=None, checkpoint=None):
     """One strict pass over `config/**` into `out` (a TreeTar or _Count; names relative to the tree); the known
     databases and their sidecars are staged in `staging` for the SQLite child and only added to `out` afterwards
@@ -239,10 +282,12 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
     src = Source()
     src.report = report
     count = 0
+    handed = 0   # report.copied_links before this entry: when it grows, the reader hands this regular file out for a hard link
     for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
         if checkpoint is not None and count % 256 == 0:
             checkpoint()
+        linked, handed = report.copied_links - handed, report.copied_links
         if entry.name == TREE:
             continue  # the volume's top folder is the live one
         rel = entry.name[len(TREE) + 1:]
@@ -252,6 +297,15 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
         if top == 'plugins' and rest and '/' not in rest and entry.kind == 'dir':
             src.plugins.add(rest[:100])
         db = _known_db(rel)
+        if linked and rel not in src.copying:
+            # H-01: a regular file the reader hands out for a hard link this walk never saw as one and never asked to copy -- a chain
+            # of links, which the reader follows to the file at its end without naming it. Nothing says what it holds (an `.env` too
+            # large to filter, a database that stays out), so it is judged like a link to such a file: left out and listed
+            if rel in SPECIAL_FILES or db is not None or rel == 'cron':
+                _leave_out(src, rel, db, 'hardlink')
+            else:
+                report.skip('hardlink', rel)
+            continue
         if ((rel in SPECIAL_FILES or db is not None) and entry.kind != 'file') or (rel == 'cron' and entry.kind != 'dir'):
             _leave_out(src, rel, db, entry.kind)
             continue
@@ -262,16 +316,18 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
             out.symlink(rel, entry.linkname, entry.mtime)
             continue
         if entry.kind == 'hardlink':
-            out.hardlink(rel, entry.linkname[len(TREE) + 1:], entry.mtime, entry=entry)
+            _hard_link(src, out, rel, entry)
             continue
         # a regular file
         if '/' not in rel and rel in RUNTIME_FILES:
             if rel == '.woow-image-version':
                 src.image_version = entry.peek(VERSION_BYTES).decode('ascii', 'replace').strip()[:64]
             src.skipped.append(rel)
+            src.runtime.add(rel)
             continue
         if rel.endswith('-shm'):
             src.skipped.append(rel)
+            src.runtime.add(rel)
             continue
         if machine is not None and hacommon.foreign_elf(entry.peek(20), machine) and len(src.foreign) < 1000:
             src.foreign.append(rel)
@@ -333,7 +389,7 @@ def scan_member(stream, report, staging, out, *, machine=None, guard=None, check
 
 def add_databases(out, src):
     """Put the databases that stay into the tree: their staged copies, after the checks (a database that is left out leaves
-    nothing behind). `out`: a TreeTar."""
+    nothing behind, also no hard link to it: `settle_links`), then the hard links to them. `out`: a TreeTar."""
     for staged, path in sorted(src.dbs.items()):
         if staged in src.db_skip:
             continue
@@ -344,6 +400,8 @@ def add_databases(out, src):
         out.files.add(rel)
         out.counts['files'] += 1
         out.counts['bytes'] += size
+    for name, target, mtime in src.kept_links:   # H-01: a hard link to a database follows its database
+        out.hardlink(name, target, mtime)
 
 
 # ====================================================================== the live target
@@ -460,6 +518,7 @@ def judge(sink, src, answers, *, addon_version, release, digest):
             details['sessions'] = ha_odoo._int(counts.get('sessions'))
             details['messages'] = ha_odoo._int(counts.get('messages'))
             details['schema_version'] = (answer.get('values') or {}).get('hermes.schema_version')
+    settle_links(src)   # H-01: the databases are decided: a hard link to one follows it
     schema = details['schema_version']
     state = answers.get('state.db')
     if state is not None and not hasqlite.problem(state) and (type(schema) is not int or schema < 0):   # H-12 (kept)
