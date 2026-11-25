@@ -6850,6 +6850,26 @@ try {
       await page.getByText('「n8n 工作流程」的內容和檢查時不一樣，請重新檢查後再確認一次。').waitFor();
     });
 
+  await check('HAOS 一次確認: 只轉換 converts the apps and leaves the restore to the customer; nothing of this device is replaced',
+    v2Fixture(), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['n8n'] });
+      await page.locator('#ha-ack').check();
+      await page.locator('[data-focus="ha-convert-only"]').click();
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      const [request] = (await calls(page, 'ha-import-start')).map(requestOf);
+      assert.equal(request.then_restore, false);
+      assert.equal(request.overwrite, undefined, 'nothing is replaced, so nothing to confirm to replace');
+      assert.deepEqual(request.acknowledged, { _shared: [V2_PAUSES.key], n8n: [V2_N8N_KEY.key] }, 'the lines are still the ones the customer ticked');
+      assert.equal(await page.locator('[data-result="group"] .ha-summary').textContent(), '全部應用都已轉換成備份');
+      const row = page.locator('.ha-group-row[data-ha-app="n8n"]');
+      assert.equal(await row.getAttribute('data-status'), 'converted');
+      assert.equal(await row.locator(`a[href="#/backups/${B_V2.n8n}"]`).count(), 1, 'the converted backup is linked');
+      await row.locator('[data-focus="group-restore-n8n"]').waitFor();
+      assert.equal((await calls(page, 'restore-start')).length, 0);
+      assert.equal(await page.locator('.ha-after').count(), 0, 'nothing was imported yet: no to-do list');
+    });
+
   await check('HAOS 一次確認: the choices, the one tick and the buttons are reachable with the keyboard, each with a visible focus ring',
     v2Fixture(), async page => {
       await ready(page);
