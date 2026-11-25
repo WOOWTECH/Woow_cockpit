@@ -1680,6 +1680,31 @@ class RealOdooBackupTests(unittest.TestCase):
         ids = nested.IdMap('0 1013 1\n1 100000 65536\n')
         nested.check_volume(out_path, ids=(ids, ids))        # the check the import runs before `podman volume import`
 
+    def test_a_native_file_of_the_other_processor_in_a_real_arm_backup_is_named_for_an_x86_device_only(self):
+        """OD-46 on real bytes: the test add-on of the ARM lab backup has a module with an aarch64 shared object."""
+        path = Path(os.environ['WOOWBK_HA_FIXTURES']).parent / '20261119-arm' / 'woow-arm-native' / 'woow-arm-native.tar'
+        if not path.exists():
+            self.skipTest('the ARM backup with a native module is not next to WOOWBK_HA_FIXTURES')
+
+        def scan(machine):
+            with habackup.open_backup(path) as ha:
+                member = next(m for m in ha.layout.members if m.role == 'addon' and m.name.endswith('odoo18ce.tar.gz'))
+                with mock.patch.object(ha_odoo, 'host_elf_machine', lambda: machine), ha.open_member(member.name, None) as stream:
+                    return ha_odoo.scan_member(stream, habackup.Report(names=haissues.Names))
+
+        x86, arm = scan(0x3E), scan(0xB7)
+        self.assertEqual(x86.addon.arch, 'aarch64')
+        self.assertEqual({name: info.get('foreign') for name, info in x86.modules.items() if info.get('foreign')},
+                         {'woow_arm_native_probe': ['lib/native_probe.so']})
+        self.assertFalse([name for name, info in arm.modules.items() if info.get('foreign')], 'on an ARM device it runs')
+        issues, copy, _unavailable = ha_odoo.database_issues(
+            'woowtest', details([('base', '18.0.1.3', 'installed'), ('woow_arm_native_probe', '18.0.1.0.0', 'installed')]),
+            target({'base': ('18.0.1.3', True, CORE)}),
+            {name: info for name, info in x86.modules.items() if name == 'woow_arm_native_probe'}, ha_major=16, target_major=17)
+        self.assertEqual(list(copy), ['woow_arm_native_probe'], 'the module is copied whole, the native file with it')
+        self.assertEqual([(i.id, i.level, list(i.names)) for i in issues],
+                         [('odoo.module-foreign-native', 'notice', ['woow_arm_native_probe'])])
+
 
 def details_base(**extra):
     base = details([('base', '18.0.1.3', 'installed')])
