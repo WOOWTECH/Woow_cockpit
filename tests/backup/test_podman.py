@@ -461,6 +461,18 @@ class FailureReasonTests(unittest.TestCase):
         self.assertIsNone(caught.exception.reason)
         self.assertNotIn('reason', caught.exception.details)
 
+    def test_the_reason_of_an_error_is_found_whoever_raised_it(self):
+        # one of this runner (reason set), one that only carries a code in its details, one of another runner (only stderr)
+        self.assertEqual(podman.reason_code(podman.CommandError('x', returncode=1, reason='network')), 'network')
+        self.assertEqual(podman.reason_code(BackupError('job-failed', 'x', reason='timeout')), 'timeout')
+        other = podman.CommandError('x', returncode=125, stderr=b'Error: write: no space left on device')
+        self.assertIsNone(other.reason)
+        self.assertEqual(podman.reason_code(other), 'no-space', 'what its stderr says')
+        self.assertEqual(podman.reason_code(podman.CommandError('x', returncode=137)), 'memory', 'what its exit code says')
+        for nothing in (BackupError('job-failed', 'x'), BackupError('job-failed', 'x', reason='some English sentence'),
+                        podman.CommandError('x', returncode=1, stderr=b'something new'), ValueError('x')):
+            self.assertIsNone(podman.reason_code(nothing), nothing)
+
     def test_a_timeout_says_what_to_do_and_a_command_that_checks_for_itself_gets_the_reason(self):
         runner = podman.OwnerRunner('appowner', runner=Recorder(exc=subprocess.TimeoutExpired('x', 1)),
                                     user_lookup=owner_lookup())

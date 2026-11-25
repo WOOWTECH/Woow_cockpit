@@ -977,8 +977,8 @@ def reason_code(error):
     for code in (getattr(error, 'reason', None), (getattr(error, 'details', None) or {}).get('reason')):
         if code in KNOWN_REASONS:
             return code
-    stderr = getattr(error, 'stderr', None)
-    return classify(stderr, getattr(error, 'returncode', None))[0] if stderr else None
+    stderr, code = getattr(error, 'stderr', None), getattr(error, 'returncode', None)
+    return classify(stderr, code)[0] if (stderr or code is not None) else None
 
 
 def reason_of(result):
