@@ -2261,33 +2261,55 @@ secret and mounts); an entry of another shape is `incompatible`.
    `odoo.settings-not-carried` notice, `odoo.target-modules-partial` notice.
 
 **n8n** (add-on `woow-n8n` → app `n8n`: database `main`, volumes `n8n_n8n_data` and `n8n_valkey_data`).
-1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the
-   WAL) and reads `config/.n8n/config`'s `encryptionKey`
-   (masked); `nodes/package.json` names the community packages; every native `.node` file must be an ELF of this
-   device's processor (the n8n image's) without glibc (the image is musl) or the package is named in a warning; a conversion stages `nodes/**` (relative links that
-   stay inside `nodes/` and whose `..` components all come before their names, so no chain of links can climb out)
-   and `storage/**`. Caches, Redis, runner files, logs and `data/` never move.
-2. The SQLite file is never opened by the job process: a child (`python3 -I -S`) reads a copy of its own after it
-   dropped to the account nobody (no supplementary groups, its own network namespace, memory/CPU/file-size/process
-   limits), with `SQLITE_DBCONFIG_DEFENSIVE`, `PRAGMA trusted_schema=OFF`, `cell_size_check=ON`, ordinary tables only
-   (no virtual table or its shadow tables), explicit columns: the `global:owner` user must have an email and a password;
-   counts; the workflows one JSON line each (a workflow over 16 MiB, or past 256 MiB in all, comes as "too large to
-   analyse"), whose nodes the job scans one at a time for things that need changes here (`workflow_reasons`). The
-   add-on version must equal `n8n --version` of the live image, and the live n8n must not set its own
-   `N8N_ENCRYPTION_KEY`/`_FILE` (Quadlet `Environment=`, `Secret=…,type=env`, an `EnvironmentFile=` in the owner's home:
-   names only; it would refuse HA's key).
-3. Conversion: a throwaway volume with the copy, HA's key (0600, the image's node uid/gid), an empty `out/` and a
-   random temporary database password (`pgpass`, masked); `n8n export:entities --outputDir=/work/out
-   --includeExecutionHistoryDataTables=true` (network none, SQLite); a throwaway PostgreSQL from the live n8n-postgres
-   image (user and database as the catalog's) and `n8n import:entities --inputDir=/work/out --truncateTables=true` on
-   an internal network; every table with rows in the copy (but `migrations`, `sqlite_sequence`, `sqlite_stat1`,
-   `sqlite_stat4`) must hold exactly as many rows after the import (it exits 0 when it skipped; counted 40 tables per
-   query); test mode `n8n unpublish:workflow --all` and no active workflow left;
-   `pg_dump -Fc` (read in full once) becomes database `main` with the temporary server's version.
-4. `n8n_n8n_data` from scratch: the top directory owned like the live one, `config` `{"encryptionKey": <HA key>}`
-   (0600), HA's `nodes/**` and `storage/` (node uid/gid); `n8n_valkey_data` only its top directory (owned like the live
-   one): HA's queued jobs never run here.
-
+1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the WAL) and reads
+   `config/.n8n/config`'s `encryptionKey` (masked; any text without control characters up to 1024 characters is a key: N8-15; a text
+   shorter than 4 characters is not masked, it cannot be hidden from a log without hiding ordinary text). `nodes/package.json` names the
+   community packages; every native `.node` file must be an ELF of this device's processor without glibc, else its package is named in a
+   notice (`n8n.native-code`). A conversion stages `nodes/**` (relative links that stay inside `nodes/`) and `storage/**`. Nothing is
+   stopped for the size of a file (N8-28): a `.node` file is looked at in its first 64 MiB and copied as a stream; a `package.json` over
+   1 MiB is copied unread and its packages are not listed (`n8n.community-packages`, "list too large"); a `config` over 1 MiB is no key file
+   and is listed in the one skipped-items line (`files.skipped`, kind `large`). Caches, Redis, runner files, logs and `data/` never move.
+   The walk's `Report` keeps the names of what it left out (`haissues.Names`) and the check and the conversion ask once about them
+   (`Sink.skipped`).
+2. The SQLite file is never opened by the job process: a child (`python3 -I -S`) reads a copy of its own after it dropped to the account
+   nobody (no supplementary groups, its own network namespace, chroot into its folder). Its limits are arguments: CPU seconds and waiting time
+   = 1800 s plus 1 s per 20 MiB of the files (at most a day; N8-06), address space 2 GiB, file size twice the database plus 64 MiB. A run that
+   was killed by a signal, ran out of memory (`{"failed": "memory"}`), timed out or said nothing is made ONCE more with twice the time, memory
+   (ceiling 8 GiB) and file size (N8-07, N8-09); a database SQLite itself refuses (`{"failed": "database"}`) is not read again. What still fails
+   stops only n8n: `n8n.database-unreadable` (code `corrupt-archive`) or `n8n.database-slow` (`job-failed`); a child that cannot leave the
+   network namespace stops as before (`job-failed`). The child answers: a header (tables with their row counts, the owner's email and whether a
+   password is set, the last migration, the NAMES of the credentials up to 20000, never a value), one line per workflow, `{"end": true}`.
+   Findings (all in the check, the same words again in the conversion: N8-18): `n8n.no-database` (stop, N8-14), `n8n.no-owner` (stop, N8-16),
+   `n8n.fixed-key` (stop; the live n8n sets its own `N8N_ENCRYPTION_KEY`/`_FILE`, wave 2 lifts it), `n8n.no-key` (**confirm**, N8-15: no usable
+   key in HA's backup; the names of the credentials are the items, the count is in the message), `n8n.key-created` (auto: no key and no
+   credentials), `version.different` (stop: add-on version and `n8n --version` both known and not equal), `version.target-unknown` (notice,
+   N8-10: `n8n --version` of this device prints no x.y.z: nothing is compared), `n8n.native-code`, `n8n.community-packages` (notices). The
+   image of this device is downloaded first when it is missing (`hatarget.ensure_image`, CM-05) -- but only while n8n has not stopped.
+3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list either ONE database item of
+   scope `database`, or no database item and the data volume of the PostgreSQL container as one of the volumes (a cold backup: the container
+   is found by its image name and its `/var/lib/postgresql*` mount, its account and database are its own `POSTGRES_USER`/`POSTGRES_DB`, which
+   must be set). More than one item or the scope `instance` stops n8n (`n8n.layout-unsupported`, `incompatible`: `adapter.import_manifest`
+   writes one dump per item and no globals, roles or databases). A database container without `ContainerName=` has the name systemd gives it.
+   n8n's data is the declared volume mounted at `/home/node/.n8n`. The queue's volumes are the declared ones that only containers whose image
+   repository is named `valkey` or `redis` mount; every other declared volume and every declared host folder is this device's own and is
+   carried exactly as it is (`hatarget.carry`; `n8n.extras-carried`, auto); a link that would leave a carried volume is left out and
+   listed (`files.skipped`, asked once, found only by the conversion). A mount that is no data (an absolute path, a `%h/` path with `..`) is
+   left out of what throwaway containers see (`n8n.mount-skipped`, notice).
+4. Conversion: a throwaway volume with the copy, the key (HA's; a new one, 32 URL-safe characters, made and masked here when HA's backup has
+   none: the credentials of HA cannot be opened and are entered again, `ha_import.reminders_by_app`), an empty `out/` and a random temporary
+   database password (`pgpass`, masked); `n8n export:entities` (network none, SQLite); a throwaway PostgreSQL from the live n8n-postgres image
+   and `n8n import:entities --truncateTables=true` on an internal network; the rows of every table with rows (but `migrations`,
+   `sqlite_sequence`, `sqlite_stat1`, `sqlite_stat4`) are counted in the database of the app settings (N8-21) and must be the same; the
+   waiting for the new database grows with the SQLite files (OD-28); test mode unpublishes every workflow. Single database: `pg_dump -Fc`
+   (read in full once) becomes database `main`. Cold: the new cluster is made like this device's own (same image and settings, the password
+   from the same podman secret handed to the throwaway containers by name: `POSTGRES_PASSWORD` becomes `DB_POSTGRESDB_PASSWORD` for the
+   throwaway n8n, a `POSTGRES_PASSWORD_FILE` secret is handed over as the file), then `CHECKPOINT`, a clean stop (exit code 0 and
+   `pg_controldata` says "shut down"), and its volume is exported as the app's PostgreSQL volume; no dump.
+5. `n8n_n8n_data` from scratch: the top directory owned like the live one -- when its owner and mode cannot be read (the volume is not there,
+   podman does not tell) the image's own, the `node` account and 0755 (`n8n.volume-root-default`, auto; N8-11, N8-12) --, `config`
+   `{"encryptionKey": <key>}` (0600), HA's `nodes/**` and `storage/` (node uid/gid); each queue volume only its top directory (owned like the
+   live one, else the account of its image: `valkey`/`redis`, else root): HA's queued jobs never run here and this device's old ones are dropped.
+   The conversion returns `volumes`, `dirs` (this device's host folders carried), `postgres` ({} for a cold app), `credentials_to_enter`.
 **Batch 1** (branch `feat/ha-import-batch1`; `ha_omnigent.py`, `ha_hermes.py`, `ha_emqx.py`, `ha_headscale.py`,
 `hasqlite.py`, `hacommon.py`). Binding rules for every app: the data, the data's own keys and the accounts move; the
 target keeps its URL, ports, database passwords, secrets, settings and units; the versions must be identical (each

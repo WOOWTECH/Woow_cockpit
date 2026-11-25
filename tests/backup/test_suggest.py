@@ -568,11 +568,16 @@ class ReferenceHostTests(unittest.TestCase):
                 app = self.apps[app_id]
                 self.assertTrue(app['valid'])
                 self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
-        for app_id, modes in (('n8n', ('cold', 'instance')), ('hermes', ('instance',))):
+        # (N8-01: n8n's import fills the cold entry, too; its instance entry stays refused, and so does Hermes' instance entry.)
+        for app_id, modes in (('n8n', ('instance',)), ('hermes', ('instance',))):
             for mode in modes:
                 with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
                     self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
                 self.assertEqual(caught.exception.code, 'incompatible')
+        cold = variant(self.apps['n8n'], 'cold')['entry']
+        n8n_target = self.import_target('n8n', cold)
+        self.assertTrue(n8n_target.cold)
+        self.assertIn(n8n_target.pg_data_volume, [volume['name'] for volume in cold['volumes']])
         # HAOS parity (H-03): a Hermes entry with a cold database is imported too (its database volume is carried as it is)
         target = self.import_target('hermes', variant(self.apps['hermes'], 'cold')['entry'])
         self.assertEqual(target.pgs, [])
