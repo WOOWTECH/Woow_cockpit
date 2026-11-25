@@ -1,0 +1,39 @@
+{
+ "lane": "F2-chain",
+ "branch": "parity/f2-20261125",
+ "base": "1dc9108",
+ "tip_of_final_runs": "6de94f6fa2ad5823e3a75be99368ef89a718aafc",
+ "branch_head": "6de94f6fa2ad5823e3a75be99368ef89a718aafc",
+ "first_sweep": {
+  "head": "906c4961b56a5d039a30371f0a08c311776806df",
+  "caught": 60,
+  "total": 65,
+  "missed": [
+   "C11",
+   "C21",
+   "C26",
+   "J21",
+   "L10"
+  ],
+  "controls_noticed": []
+ },
+ "final_tip_sweep": {
+  "head": "6de94f6fa2ad5823e3a75be99368ef89a718aafc",
+  "caught": 12,
+  "total": 13,
+  "missed": [
+   "C11"
+  ],
+  "controls_noticed": []
+ },
+ "suite_summary": [
+  "tag final head 6de94f6 dirty 0 start 16:36:05",
+  "step b1 rc=1 seconds=463 tests=2279 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=460",
+  "step ha118 rc=0 seconds=12 tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=11",
+  "step top rc=0 seconds=137 tests=153 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=137",
+  "step ui rc=0 seconds=446 # tests 108 # pass 108 # fail 0 ",
+  "end 16:53:43 head-after 6de94f6 dirty 0"
+ ],
+ "level": "unit level only: fake handlers and fake adapters, the real jobs.py loop, the real nested.py on hostile tars; no device, no podman, no systemd",
+ "commercial_acceptance": "not-complete"
+}

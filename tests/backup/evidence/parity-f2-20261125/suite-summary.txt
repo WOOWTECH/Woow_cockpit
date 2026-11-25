@@ -1,0 +1,6 @@
+tag final head 6de94f6 dirty 0 start 16:36:05
+step b1 rc=1 seconds=463 tests=2279 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=460
+step ha118 rc=0 seconds=12 tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=11
+step top rc=0 seconds=137 tests=153 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=137
+step ui rc=0 seconds=446 # tests 108 # pass 108 # fail 0 
+end 16:53:43 head-after 6de94f6 dirty 0

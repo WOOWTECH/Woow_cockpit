@@ -1,0 +1,567 @@
+{
+ "lane": "F2-chain",
+ "head": "906c4961b56a5d039a30371f0a08c311776806df",
+ "baseline": {
+  "returncode": 0,
+  "tests": 291
+ },
+ "sources": {
+  "woowbackup/hachain.py": "b45a22eb7ee43eec23ab3558c5cc23e6e3f3fee46ced1156fc31560e75564368",
+  "woowbackup/jobs.py": "4542b489c85eb4f13df3e4bac77fc86634275253a107e6fcfeb5e6f827583e2f",
+  "woowbackup/cli.py": "6af6ab6cb687c3ec1b6d9c4d15fcae8a8e8e92f2012c9c507c96938ec6183254"
+ },
+ "tests": [
+  "tests.backup.test_ha_chain",
+  "tests.backup.test_jobs",
+  "tests.backup.test_ha_cli",
+  "tests.backup.test_cli"
+ ],
+ "caught": 60,
+ "total": 65,
+ "missed": [
+  "C11",
+  "C21",
+  "C26",
+  "J21",
+  "L10"
+ ],
+ "controls_noticed": [],
+ "rows": [
+  {
+   "id": "C01",
+   "what": "a conversion is followed by the restore of the same app",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 3.0
+  },
+  {
+   "id": "C02",
+   "what": "stop after this app never cuts an app between its conversion and its restore",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 5,
+   "seconds": 4.0
+  },
+  {
+   "id": "C03",
+   "what": "one app's failure does not stop the others",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 14,
+   "seconds": 3.3
+  },
+  {
+   "id": "C04",
+   "what": "a cancel ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 6,
+   "seconds": 2.4
+  },
+  {
+   "id": "C05",
+   "what": "a termination ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 86,
+   "seconds": 69.0
+  },
+  {
+   "id": "C06",
+   "what": "a cancel that came a moment too late still ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 75,
+   "seconds": 66.6
+  },
+  {
+   "id": "C07",
+   "what": "what is job-wide ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 21,
+   "seconds": 10.6
+  },
+  {
+   "id": "C08",
+   "what": "a disk that is still full ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 78,
+   "seconds": 75.9
+  },
+  {
+   "id": "C09",
+   "what": "a disk that has room again only fails that app",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 77,
+   "seconds": 79.7
+  },
+  {
+   "id": "C10",
+   "what": "a damaged HA file ends the import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 76,
+   "seconds": 71.6
+  },
+  {
+   "id": "C11",
+   "what": "a changed HA file is damaged",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 139.0
+  },
+  {
+   "id": "C12",
+   "what": "an HA file that cannot be read is damaged",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 31,
+   "seconds": 56.7
+  },
+  {
+   "id": "C13",
+   "what": "the apps not reached are listed as not started",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 5,
+   "seconds": 3.2
+  },
+  {
+   "id": "C14",
+   "what": "a restore chain restores the next app",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 17,
+   "seconds": 3.9
+  },
+  {
+   "id": "C15",
+   "what": "the next job runs in the unit of the first",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 48,
+   "seconds": 33.0
+  },
+  {
+   "id": "C16",
+   "what": "the jobs of one import are in order",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 1.3
+  },
+  {
+   "id": "C17",
+   "what": "the restore of an app restores the backup its conversion made",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 1.9
+  },
+  {
+   "id": "C18",
+   "what": "a restore chain restores the same backup for each app",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 52,
+   "seconds": 48.9
+  },
+  {
+   "id": "C19",
+   "what": "a restore job carries only its own app's confirmed lines",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 41,
+   "seconds": 43.0
+  },
+  {
+   "id": "C20",
+   "what": "a conversion job carries only its own app's confirmed lines",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 40,
+   "seconds": 45.5
+  },
+  {
+   "id": "C21",
+   "what": "the Odoo database goes to Odoo only",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 126.8
+  },
+  {
+   "id": "C22",
+   "what": "a restore job keeps the HA file from being deleted",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 41,
+   "seconds": 40.3
+  },
+  {
+   "id": "C23",
+   "what": "a rolled back restore says rolled-back",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 16,
+   "seconds": 7.4
+  },
+  {
+   "id": "C24",
+   "what": "a restore that changed something is not told that nothing changed",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 14,
+   "seconds": 7.8
+  },
+  {
+   "id": "C25",
+   "what": "a conversion that names no backup is not restored",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 13,
+   "seconds": 6.8
+  },
+  {
+   "id": "C26",
+   "what": "the apps of a record belong to its group",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 157.2
+  },
+  {
+   "id": "C27",
+   "what": "an index outside the count is no group",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 38,
+   "seconds": 68.0
+  },
+  {
+   "id": "C28",
+   "what": "the stop request has done its work when the import ends",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 10,
+   "seconds": 3.2
+  },
+  {
+   "id": "C29",
+   "what": "the room a job keeps free is measured",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 84,
+   "seconds": 59.7
+  },
+  {
+   "id": "C30",
+   "what": "a job that never started says so",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 48,
+   "seconds": 39.3
+  },
+  {
+   "id": "C31",
+   "what": "the results go into the converted backups' rows",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 206,
+   "seconds": 95.4
+  },
+  {
+   "id": "C32",
+   "what": "the groups results are in the finished record",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 5,
+   "seconds": 2.5
+  },
+  {
+   "id": "C33",
+   "what": "the key never reaches a restore job",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 41,
+   "seconds": 41.7
+  },
+  {
+   "id": "J01",
+   "what": "the next job is written before the finished one",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 1.4
+  },
+  {
+   "id": "J02",
+   "what": "the HA key file goes with the first job",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 25,
+   "seconds": 15.4
+  },
+  {
+   "id": "J03",
+   "what": "the HA key reaches the later jobs in memory",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 69,
+   "seconds": 63.4
+  },
+  {
+   "id": "J04",
+   "what": "the key is masked for the whole run",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 69,
+   "seconds": 62.8
+  },
+  {
+   "id": "J05",
+   "what": "the age key of a restore chain stays for every job",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 24,
+   "seconds": 13.0
+  },
+  {
+   "id": "J06",
+   "what": "a cancel of any job of an import means its live job",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 3.1
+  },
+  {
+   "id": "J07",
+   "what": "a cancel finds the successor of a job that ended while it waited",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 2.9
+  },
+  {
+   "id": "J08",
+   "what": "only an import can stop after this app",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 3,
+   "seconds": 1.8
+  },
+  {
+   "id": "J09",
+   "what": "a job that was written but never began is finished at once when the process is told to end",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 88,
+   "seconds": 78.7
+  },
+  {
+   "id": "J10",
+   "what": "a signal in the critical section is only noted",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 87,
+   "seconds": 75.5
+  },
+  {
+   "id": "J11",
+   "what": "a job cancelled before it began tells what became of the import",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 1.7
+  },
+  {
+   "id": "J12",
+   "what": "recovery says which apps of an import are done",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 45,
+   "seconds": 58.0
+  },
+  {
+   "id": "J13",
+   "what": "run_job answers with the job it was given",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 6,
+   "seconds": 4.9
+  },
+  {
+   "id": "J14",
+   "what": "the memory of one job is collected before the next",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 72,
+   "seconds": 63.6
+  },
+  {
+   "id": "J15",
+   "what": "the lock file names the job that runs",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 70,
+   "seconds": 54.7
+  },
+  {
+   "id": "J16",
+   "what": "a cancelled check keeps what it found",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 159,
+   "seconds": 99.7
+  },
+  {
+   "id": "J17",
+   "what": "a terminated check keeps what it found",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 159,
+   "seconds": 118.9
+  },
+  {
+   "id": "J18",
+   "what": "a stop request of an import that is over is swept",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 145,
+   "seconds": 112.5
+  },
+  {
+   "id": "J19",
+   "what": "a stop request of a live import is kept",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 145,
+   "seconds": 103.0
+  },
+  {
+   "id": "J20",
+   "what": "the stop request is a file of the group only",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 12,
+   "seconds": 4.4
+  },
+  {
+   "id": "J21",
+   "what": "a job of an import is a chain job only with its group and chain",
+   "module": "woowbackup/jobs.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 145.7
+  },
+  {
+   "id": "J22",
+   "what": "a record names its unit",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 48,
+   "seconds": 48.4
+  },
+  {
+   "id": "L01",
+   "what": "only a converted backup with several apps is split",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 229,
+   "seconds": 128.2
+  },
+  {
+   "id": "L02",
+   "what": "a converted backup of one app restores as a single job",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 231,
+   "seconds": 135.3
+  },
+  {
+   "id": "L03",
+   "what": "the first job of a split restore restores the first app",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 227,
+   "seconds": 126.4
+  },
+  {
+   "id": "L04",
+   "what": "job-cancel passes after_this",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 208,
+   "seconds": 96.8
+  },
+  {
+   "id": "L05",
+   "what": "an import chain remembers whether a key was typed",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 206,
+   "seconds": 83.7
+  },
+  {
+   "id": "L06",
+   "what": "an import chain remembers its HA backup",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 201,
+   "seconds": 80.7
+  },
+  {
+   "id": "L07",
+   "what": "the options of a split restore go to every job",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 235,
+   "seconds": 111.1
+  },
+  {
+   "id": "L08",
+   "what": "a retry of a split restore returns the same group",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 228,
+   "seconds": 120.7
+  },
+  {
+   "id": "L09",
+   "what": "the first job of a split restore keeps only its app's lines",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 233,
+   "seconds": 112.3
+  },
+  {
+   "id": "L10",
+   "what": "an unreadable registry never splits",
+   "module": "woowbackup/cli.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 109.7
+  },
+  {
+   "id": "K01",
+   "what": "a comment of hachain.py",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 149.1
+  },
+  {
+   "id": "K02",
+   "what": "a comment of jobs.py",
+   "module": "woowbackup/jobs.py",
+   "caught": false,
+   "tests_run": 291,
+   "seconds": 150.8
+  }
+ ]
+}
