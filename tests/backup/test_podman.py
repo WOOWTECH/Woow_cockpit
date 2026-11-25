@@ -9,14 +9,17 @@ import os
 import stat
 import subprocess
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from woowbackup import podman
 from woowbackup.errors import BackupError
 
 OWNER = types.SimpleNamespace(pw_name='appowner', pw_uid=1001, pw_gid=1001, pw_dir='/home/appowner')
+REAL_DEFAULT_RUNNER = podman.default_runner   # the executor itself: UserManagerTests replace the module's name for it
 EXPECTED_PREFIX = ['/usr/sbin/runuser', '-u', 'appowner', '--', '/usr/bin/env', '-i',
                    'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'HOME=/home/appowner', 'LANG=C.UTF-8',
                    'XDG_RUNTIME_DIR=/run/user/1001', 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus']
@@ -354,6 +357,381 @@ class BoundedOutputTests(unittest.TestCase):
         rec = Recorder()
         podman.OwnerRunner('appowner', runner=rec, user_lookup=owner_lookup()).podman('ps', max_output=7)
         self.assertEqual(rec.calls[0][1]['max_output'], 7)
+
+
+SECRET_STDERR = (b'Error: initializing source docker://deploy:S3cr3tTokenValue@registry.example/app:1: pinging container '
+                 b'registry registry.example: Get "https://registry.example/v2/": dial tcp 10.0.0.9:443: connect: '
+                 b'connection refused\n')
+
+
+class FailureReasonTests(unittest.TestCase):
+    """X-PD-07: a failed command says why, in one fixed sentence per kind of failure; none of its own words are shown."""
+
+    CASES = (
+        (b'Error: writing blob: storage: no space left on device', 'no-space'),
+        (b'Failed to connect to bus: No such file or directory', 'no-user-manager'),
+        (b'Failed to start x.service: Unit x.service is masked.', 'unit-masked'),
+        (b'Failed to start y.service: Unit y.service not found.', 'unit-missing'),
+        (b'Job for z.service failed because the control process exited with error code.', 'unit-failed'),
+        (b'psql: error: connection to server on socket "/run/postgresql/.s.PGSQL.5432" failed: FATAL:  the database '
+         b'system is starting up', 'db-not-ready'),
+        (b'psql: error: connection to server at "10.0.0.2", port 5432 failed: Connection refused', 'db-not-ready'),
+        (b'psql: error: ... FATAL:  password authentication failed for user "odoo"', 'db-auth'),
+        (b'psql: error: ... FATAL:  database "prod" does not exist', 'db-missing'),
+        (b'psql: error: ... FATAL:  role "odoo" does not exist', 'role-missing'),
+        (b'Error: copying system image: pull access denied, repository does not exist or may require authorization',
+         'pull-denied'),
+        (b'Error: initializing source docker://x:1: reading manifest 1 in x: manifest unknown', 'image-missing'),
+        (b'Error: x: image not known', 'image-missing'),
+        (b'Get "https://r/v2/": dial tcp: lookup r on 1.1.1.1:53: no such host', 'network'),
+        (b'Error: no container with name or ID "woowbk-x" found: no such container', 'no-container'),
+        (b'Error: creating container storage: the container name "x" is already in use by container abc', 'name-in-use'),
+        (b'Error: mkdir /home/x/.local: permission denied', 'permission'),
+        (b'fatal error: out of memory', 'memory'),
+        (b'Error: cannot set up namespace using "/usr/bin/newuidmap": exit status 1', 'subid'),
+        (b'Error: acquiring lock 0 for container: resource temporarily unavailable', 'storage-busy'),
+        (b'Error: crun: creating cgroup directory failed', 'runtime'),
+        (b'Error: executable file not found in $PATH: No such file or directory: OCI runtime attempted',
+         'no-program'),
+    )
+
+    def test_every_kind_of_failure_is_told_by_its_own_words(self):
+        for stderr, code in self.CASES:
+            with self.subTest(code=code, stderr=stderr[:40]):
+                found, sentence = podman.classify(stderr, 125)
+                self.assertEqual(found, code)
+                self.assertTrue(sentence.endswith('。') and not sentence.isascii(), sentence)
+        self.assertEqual({code for _s, code in self.CASES if code} - {row[0] for row in podman.REASONS}, set())
+        self.assertEqual({row[0] for row in podman.REASONS} - {code for _s, code in self.CASES}, set(),
+                         'every kind in the table is tried once')
+
+    def test_the_exit_code_tells_when_the_words_do_not(self):
+        self.assertEqual(podman.classify(b'', 137)[0], 'memory')
+        self.assertEqual(podman.classify(b'', 127)[0], 'no-program')
+        self.assertEqual(podman.classify(b'', 126)[0], 'no-program')
+        self.assertEqual(podman.classify(b'nothing known', 1), (None, ''))
+        self.assertEqual(podman.classify(None, None), (None, ''))
+        self.assertEqual(podman.classify('text instead of bytes: no space left on device', 1)[0], 'no-space')
+
+    def test_the_specific_kind_wins_over_the_general_one(self):
+        # a database that refuses a connection is "not ready", a registry that does is "network"
+        self.assertEqual(podman.classify(b'psql: error: connection to server on socket failed: Connection refused')[0],
+                         'db-not-ready')
+        self.assertEqual(podman.classify(b'dial tcp 10.0.0.9:443: connect: connection refused')[0], 'network')
+        self.assertEqual(podman.classify(b'pull access denied for x, repository does not exist')[0], 'pull-denied')
+        self.assertEqual(podman.classify(b'Error: mkdir /home/x/.local: permission denied: unknown')[0], 'permission',
+                         'a refusal of the file system is not a registry that refuses')
+
+    def test_only_the_tail_of_a_huge_stderr_is_read(self):
+        noise = b'x' * (podman.STDERR_TAIL * 2)
+        self.assertEqual(podman.classify(b'no space left on device\n' + noise)[0], None)
+        self.assertEqual(podman.classify(noise + b'no space left on device\n')[0], 'no-space')
+
+    def runner(self, result):
+        return podman.OwnerRunner('appowner', runner=Recorder(result=result), user_lookup=owner_lookup())
+
+    def test_a_failed_command_says_why_and_never_in_the_commands_words(self):
+        runner = self.runner(podman.Result(125, b'', SECRET_STDERR))
+        with self.assertRaises(podman.CommandError) as caught:
+            runner.podman('pull', 'registry.example/app:1')
+        error = caught.exception
+        self.assertEqual(error.reason, 'network')
+        self.assertEqual(error.details['reason'], 'network')
+        self.assertEqual(error.message, 'podman pull registry.example/app:1 執行失敗（結束碼 125）：連不上網路（映像倉庫沒有回應）。')
+        shown = error.message + repr(error.details) + str(error)
+        for word in ('S3cr3tTokenValue', 'deploy', '10.0.0.9', 'pinging'):
+            self.assertNotIn(word, shown)
+        self.assertEqual(error.stderr, SECRET_STDERR, 'the journal copy stays for the engineers')
+
+    def test_data_in_the_commands_words_never_reaches_the_message(self):
+        stderr = (b'ERROR:  duplicate key value violates unique constraint "users_email_key"\n'
+                  b'DETAIL:  Key (email)=(boss@example.com) already exists.\nCommand was: INSERT INTO users VALUES '
+                  b"('boss@example.com', 'hunter2-password');\nFATAL:  password authentication failed for user \"x\"")
+        with self.assertRaises(podman.CommandError) as caught:
+            self.runner(podman.Result(1, b'', stderr)).podman('exec', 'db', 'psql')
+        shown = caught.exception.message + repr(caught.exception.details)
+        self.assertIn('資料庫帳號或密碼和這台的設定不符', shown)
+        for word in ('boss@example.com', 'hunter2', 'INSERT', 'users_email_key'):
+            self.assertNotIn(word, shown)
+
+    def test_an_unknown_failure_reads_as_before(self):
+        with self.assertRaises(podman.CommandError) as caught:
+            self.runner(podman.Result(3, b'', b'something new')).podman('volume', 'export', 'v')
+        self.assertEqual(caught.exception.message, 'podman volume export v 執行失敗（結束碼 3）。')
+        self.assertIsNone(caught.exception.reason)
+        self.assertNotIn('reason', caught.exception.details)
+
+    def test_a_timeout_says_what_to_do_and_a_command_that_checks_for_itself_gets_the_reason(self):
+        runner = podman.OwnerRunner('appowner', runner=Recorder(exc=subprocess.TimeoutExpired('x', 1)),
+                                    user_lookup=owner_lookup())
+        with self.assertRaises(BackupError) as caught:
+            runner.podman('exec', 'db', 'psql', timeout=7)
+        self.assertIn('（7 秒）', caught.exception.message)
+        self.assertIn('請稍後再試一次', caught.exception.message)
+        self.assertEqual(caught.exception.details['reason'], 'timeout')
+        result = podman.Result(125, b'', b'Error: no such image')
+        self.assertEqual(podman.reason_of(result), 'image-missing')
+        self.assertIsNone(podman.reason_of(podman.Result(0, b'', b'no such image')))
+        self.assertIsNone(podman.reason_of(None))
+        self.assertLessEqual(podman.RETRYABLE, {row[0] for row in podman.REASONS})
+
+
+class ScaledLimitTests(unittest.TestCase):
+    """X-PD-05 and X-PD-04: waits and limits grow with the data they are about; what a call had is the floor."""
+
+    def test_a_wait_never_gets_shorter_and_grows_with_the_data(self):
+        self.assertEqual(podman.scaled_timeout(600), 600)
+        for none in (None, 0, -5, True, 'big', float('nan') * 0):
+            self.assertEqual(podman.scaled_timeout(600, none), 600, none)
+        self.assertEqual(podman.scaled_timeout(600, 1024), 600, 'a small app keeps the old value')
+        gib = 1024 ** 3
+        self.assertEqual(podman.scaled_timeout(600, 100 * gib, rate=gib), 700)
+        self.assertGreater(podman.scaled_timeout(600, 100 * gib), podman.scaled_timeout(600, 10 * gib))
+        self.assertEqual(podman.scaled_timeout(600, 1 << 60), podman.SCALE_TIMEOUT_CEILING, 'never more than a day')
+        self.assertEqual(podman.scaled_timeout(2 * podman.SCALE_TIMEOUT_CEILING, 1 << 60), 2 * podman.SCALE_TIMEOUT_CEILING,
+                         'a call that already waits longer than the ceiling keeps its own value')
+        self.assertEqual(podman.scaled_timeout(600, 5, rate=0), 600)
+        self.assertIsNone(podman.scaled_timeout(None, 10 ** 12), 'no wait at all stays no wait')
+        self.assertEqual(podman.scaled_timeout(True, 10 ** 12), True)
+
+    def test_an_output_limit_never_gets_smaller_and_has_a_ceiling(self):
+        mib = 1024 * 1024
+        self.assertEqual(podman.scaled_limit(4 * mib), 4 * mib)
+        self.assertEqual(podman.scaled_limit(4 * mib, 1 * mib), 4 * mib)
+        self.assertEqual(podman.scaled_limit(4 * mib, 100 * mib), 100 * mib)
+        self.assertEqual(podman.scaled_limit(4 * mib, 100 * mib, ratio=2), 200 * mib)
+        self.assertEqual(podman.scaled_limit(4 * mib, 1 << 60), podman.SCALE_OUTPUT_CEILING, 'a runaway is still stopped')
+        self.assertEqual(podman.scaled_limit(4 * mib, None), 4 * mib)
+        self.assertEqual(podman.scaled_limit(4 * mib, True), 4 * mib)
+
+
+class LineStreamTests(unittest.TestCase):
+    """X-PD-04: a listing of any length is read line by line, never held whole."""
+
+    def test_lines_are_handed_over_as_they_arrive(self):
+        got = []
+        sink = podman.LineSink(got.append)
+        for chunk in (b'one\ntw', b'o\n\nthree', b'\n', b'last without a newline'):
+            self.assertEqual(sink.write(chunk), len(chunk))
+        self.assertEqual(got, [b'one', b'two', b'', b'three'], 'the last line waits for its end')
+        sink.close()
+        self.assertEqual(got[-1], b'last without a newline')
+        self.assertEqual((sink.lines, sink.total), (5, 37))
+        sink.close()
+        self.assertEqual(len(got), 5, 'closed twice: nothing again')
+        self.assertIsNone(sink.flush())
+
+    def test_however_the_stream_is_cut_the_lines_are_the_same(self):
+        import random
+        rnd = random.Random(20261125)
+        for round_ in range(300):
+            lines = [bytes(rnd.choice(b'abc \x00\xff\r') for _ in range(rnd.randint(0, 12))) for _ in range(rnd.randint(0, 25))]
+            data = b'\n'.join(lines) + (b'\n' if rnd.random() < 0.5 and lines else b'')
+            expected = data.split(b'\n')
+            if expected and expected[-1] == b'':
+                expected.pop()
+            got = []
+            sink = podman.LineSink(got.append)
+            position = 0
+            while position < len(data):
+                step = rnd.randint(1, 9)
+                sink.write(data[position:position + step])
+                position += step
+            sink.close()
+            self.assertEqual(got, expected, (round_, data))
+            self.assertEqual(sink.total, len(data))
+
+    def test_the_memory_is_one_line_not_the_listing(self):
+        count = []
+        sink = podman.LineSink(count.append)
+        row = b'x' * 99 + b'\n'
+        for _ in range(60000):                 # 6 MB of rows in chunks that cut rows in half
+            sink.write(row[:57])
+            sink.write(row[57:])
+        self.assertEqual(len(count), 60000)
+        self.assertLess(len(sink._pending), 200)
+
+    def test_a_runaway_is_stopped(self):
+        sink = podman.LineSink(lambda _line: None, max_line=100, max_total=1000, what='podman exec')
+        with self.assertRaises(BackupError) as caught:
+            sink.write(b'x' * 101)                 # a line with no end
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertIn('podman exec 的一行輸出超過上限', caught.exception.message)
+        sink = podman.LineSink(lambda _line: None, max_line=100, max_total=1000)
+        with self.assertRaises(BackupError):
+            sink.write(b'x' * 101 + b'\n')         # a long line with its end
+        sink = podman.LineSink(lambda _line: None, max_line=100, max_total=1000)
+        with self.assertRaises(BackupError) as caught:
+            for _ in range(20):
+                sink.write(b'y' * 60 + b'\n')
+        self.assertIn('輸出超過上限', caught.exception.message)
+
+    def local(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return podman.OwnerRunner('appowner', runner=LocalRunner(), user_lookup=owner_lookup(tmp.name))
+
+    def test_a_real_command_is_read_to_its_end_and_a_runaway_is_killed(self):
+        got = []
+        runner = self.local()
+        result = runner.stream_lines(['/bin/sh', '-c', 'seq 1 200000'], got.append, timeout=60)
+        self.assertEqual((result.returncode, result.stdout, len(got), got[-1]), (0, None, 200000, b'200000'))
+        tail = []
+        runner.stream_lines(['/bin/sh', '-c', 'printf "a\\nb"'], tail.append, timeout=60)
+        self.assertEqual(tail, [b'a', b'b'], 'the last line has no newline: it is handed over when the command ends')
+        started = time.monotonic()
+        with self.assertRaises(BackupError) as caught:
+            runner.stream_lines(['/bin/sh', '-c', 'head -c 50000000 /dev/zero; sleep 30'], got.append, timeout=60,
+                                max_line=1 << 16)
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertLess(time.monotonic() - started, 20, 'the command is killed, not waited for')
+
+    def test_a_failing_command_still_says_why_and_the_caller_sees_the_lines_it_printed(self):
+        got = []
+        runner = self.local()
+        with self.assertRaises(podman.CommandError) as caught:
+            runner.stream_lines(['/bin/sh', '-c', 'echo row1; echo "no space left on device" >&2; exit 5'], got.append,
+                                timeout=60)
+        self.assertEqual((got, caught.exception.reason), ([b'row1'], 'no-space'))
+        result = runner.stream_lines(['/bin/sh', '-c', 'echo a; exit 5'], got.append, check=False, timeout=60)
+        self.assertEqual(result.returncode, 5)
+
+
+class UserManagerTests(unittest.TestCase):
+    """X-AD-01: an owner without a running user manager is given one (linger), and only the real runner can do that."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.run_dir = Path(self.tmp.name)
+        outer = self
+
+        class Runner(podman.OwnerRunner):
+            runtime_dir = property(lambda self: str(outer.run_dir))
+
+        self.runner = Runner('appowner', runner=Recorder(), user_lookup=owner_lookup())
+        self.calls, self.notes, self.slept = [], [], []
+        # Whatever the code under test decides, the real executor (a root command on this host) is never reached here.
+        patcher = mock.patch.object(podman, 'default_runner', self.never_the_real_one)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.real_calls = []
+
+    def never_the_real_one(self, argv, **kwargs):
+        self.real_calls.append(argv)
+        return podman.Result(1, None, b'refused by the test: the real executor must not run')
+
+    def root(self, code=0, stderr=b'', start=True, exc=None):
+        def run(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            if exc:
+                raise exc
+            if code == 0 and start:
+                (self.run_dir / 'bus').write_text('')   # logind starts the manager once linger is on
+            return podman.Result(code, None, stderr)
+        return run
+
+    def ensure(self, root, **kwargs):
+        clock = iter(range(0, 1000))
+        return self.runner.ensure_user_manager(log=self.notes.append, root_run=root, trusted=lambda _path: True,
+                                               sleep=self.slept.append, clock=lambda: next(clock), **kwargs)
+
+    def test_a_running_user_manager_is_left_alone(self):
+        (self.run_dir / 'bus').write_text('')
+        self.assertTrue(self.runner.user_manager_ready())
+        self.assertFalse(self.ensure(self.root()))
+        self.assertEqual((self.calls, self.notes), ([], []))
+
+    def test_linger_is_enabled_as_root_with_a_fixed_command_and_the_manager_is_waited_for(self):
+        self.assertFalse(self.runner.user_manager_ready())
+        self.assertTrue(self.ensure(self.root()))
+        argv, kwargs = self.calls[0]
+        self.assertEqual(argv, ['/usr/bin/loginctl', 'enable-linger', 'appowner'])
+        self.assertEqual((kwargs['cwd'], kwargs['env'], kwargs['timeout']), ('/', dict(podman.ROOT_ENV), 60))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(len(self.notes), 1)
+        self.assertIn('loginctl enable-linger', self.notes[0])
+        self.assertIn('會保留', self.notes[0])
+        self.assertTrue(self.runner.user_manager_ready())
+        self.assertFalse(self.ensure(self.root()), 'now it runs: nothing more is done')
+        self.assertEqual(len(self.calls), 1)
+
+    def test_the_manager_that_comes_up_a_moment_later_is_waited_for(self):
+        state = {'polls': 0}
+
+        def late(argv, **kwargs):
+            self.calls.append(argv)
+            return podman.Result(0, None, b'')
+
+        def sleep(_seconds):
+            state['polls'] += 1
+            if state['polls'] == 3:
+                (self.run_dir / 'bus').write_text('')
+
+        self.assertTrue(self.runner.ensure_user_manager(root_run=late, trusted=lambda _p: True, sleep=sleep, wait=30))
+        self.assertEqual(state['polls'], 3)
+
+    def test_a_manager_that_does_not_come_up_stops_only_that_app_with_the_reason(self):
+        with self.assertRaises(BackupError) as caught:
+            self.ensure(self.root(start=False), wait=5)
+        self.assertEqual((caught.exception.code, caught.exception.details['reason']), ('job-failed', 'no-user-manager'))
+        self.assertIn('帳號 appowner', caught.exception.message)
+        self.assertIn('5 秒', caught.exception.message)
+
+    def test_a_loginctl_that_fails_is_told_with_the_fix_and_no_command_text(self):
+        for code, stderr, words in ((1, b'Failed to enable linger: Access denied', '權限不足'), (5, b'weird', '結束碼 5')):
+            with self.subTest(code=code), self.assertRaises(BackupError) as caught:
+                self.ensure(self.root(code=code, stderr=stderr))
+            self.assertIn(words, caught.exception.message)
+            self.assertIn('loginctl enable-linger appowner', caught.exception.message)
+            self.assertNotIn('Failed to enable', caught.exception.message)
+        for exc in (subprocess.TimeoutExpired('loginctl', 60), OSError('gone')):
+            with self.subTest(exc=type(exc).__name__), self.assertRaises(BackupError):
+                self.ensure(self.root(exc=exc))
+
+    def test_an_untrusted_loginctl_is_never_run(self):
+        calls = []
+        with self.assertRaises(BackupError) as caught:
+            self.runner.ensure_user_manager(root_run=lambda *a, **k: calls.append(a), trusted=lambda _path: False)
+        self.assertEqual(calls, [])
+        self.assertIn('找不到可以信任的 loginctl', caught.exception.message)
+
+    def test_the_real_executor_runs_the_fixed_command_with_a_sanitized_environment(self):
+        # A stand-in program takes the place of loginctl (the path is a module constant): what the real executor is given.
+        script = self.run_dir / 'fake-loginctl'
+        script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$0" "$@" "cwd=$(pwd)" > {self.run_dir}/seen\nenv >> {self.run_dir}/seen\n'
+                          f': > {self.run_dir}/bus\n')
+        script.chmod(0o755)
+        with mock.patch.object(podman, 'LOGINCTL', str(script)):
+            self.assertTrue(self.runner.ensure_user_manager(root_run=REAL_DEFAULT_RUNNER, trusted=lambda _path: True))
+        seen = (self.run_dir / 'seen').read_text().splitlines()
+        self.assertEqual(seen[:4], [str(script), 'enable-linger', 'appowner', 'cwd=/'])
+        environment = {line.split('=', 1)[0] for line in seen[4:] if '=' in line}
+        self.assertLessEqual(environment, {'PATH', 'LANG', 'LC_ALL', 'PWD', 'SHLVL', '_', 'OLDPWD'}, environment)
+        self.assertTrue(self.runner.user_manager_ready())
+        self.assertEqual(self.real_calls, [])
+
+    def test_only_the_real_runner_acts_as_root(self):
+        # a runner made with another executor (every test, every lab double) never touches the device
+        self.assertFalse(self.runner.ensure_user_manager(trusted=lambda _path: True))
+        self.assertFalse(self.runner.user_manager_ready())
+        self.assertEqual(self.real_calls, [], 'no root command was tried')
+        calls = []
+
+        def fake_default(argv, **kwargs):
+            calls.append(argv)
+            return podman.Result(0, None, b'')
+
+        outer = self
+
+        class Real(podman.OwnerRunner):
+            runtime_dir = property(lambda self: str(outer.run_dir))
+
+        with mock.patch.object(podman, 'default_runner', fake_default):
+            real = Real('appowner', user_lookup=owner_lookup())      # no executor given: the real one
+            with self.assertRaises(BackupError):                    # nothing creates the socket here: it is waited for
+                real.ensure_user_manager(trusted=lambda _path: True, wait=0)
+        self.assertEqual(calls, [['/usr/bin/loginctl', 'enable-linger', 'appowner']])
 
 
 if __name__ == '__main__':

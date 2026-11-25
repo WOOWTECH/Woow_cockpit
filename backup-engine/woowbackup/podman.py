@@ -8,6 +8,12 @@ Python snippet run as the owner that walks every path component with O_NOFOLLOW 
 over stdin/stdout only. Host directories (files of the owner's subordinate ids) go through DIR_HELPER, run
 the same way but inside the owner's user namespace (`podman unshare`). Secrets and keys never appear in argv
 or in the environment.
+
+HAOS parity (2026-11-25, lane F3-helpers): a failed command says why in words that cannot carry a secret (`classify`:
+one fixed sentence per kind of failure, never the command's own text; X-PD-07), waits and output limits grow with the
+data they are about (`scaled_timeout`, `scaled_limit`; the old values are the floor; X-PD-05), a long listing can be read
+line by line without being held whole (`LineSink`, `OwnerRunner.stream_lines`; X-PD-04) and an owner whose user manager
+is not running is given one (`OwnerRunner.ensure_user_manager`: linger, X-AD-01).
 """
 import json
 import os
@@ -63,6 +69,7 @@ def find_podman(paths=PODMAN_PATHS, trusted=root_only):
 
 PODMAN = find_podman()
 SYSTEMCTL = '/usr/bin/systemctl'
+LOGINCTL = '/usr/bin/loginctl'
 PYTHON = '/usr/bin/python3'
 SAFE_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 ROOT_ENV = {'PATH': SAFE_PATH, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
@@ -713,12 +720,16 @@ class Result:
 
 
 class CommandError(BackupError):
-    """A command run as the owner exited non-zero. `stderr` is kept for diagnostics only."""
+    """A command run as the owner exited non-zero. `stderr` is kept for diagnostics only. `reason`: the kind of failure
+    `classify` told from it (REASONS; None when nothing is known): a short code a caller can act on (retry a busy storage,
+    start a database that is not ready); the message already carries its zh-TW sentence."""
 
-    def __init__(self, message, *, returncode, stderr=b'', command=''):
-        super().__init__('job-failed', message, command=command, returncode=returncode)
+    def __init__(self, message, *, returncode, stderr=b'', command='', reason=None):
+        extra = {} if reason is None else {'reason': reason}
+        super().__init__('job-failed', message, command=command, returncode=returncode, **extra)
         self.returncode = returncode
         self.stderr = stderr or b''
+        self.reason = reason
 
 
 class OutputLimitExceeded(Exception):
@@ -884,6 +895,177 @@ def stderr_tail(data, lines=3, width=200):
     return kept[-lines:]
 
 
+# ====================================================================== why a command failed (X-PD-07)
+
+# One fixed sentence per kind of failure, found by the words the command itself used (lower case, `needles` are plain
+# substrings, a `re.Pattern` is searched). Only the sentence is ever shown: stderr may hold a password in a registry
+# URL, an SQL statement or a row of the customer's data, so none of its words reach a message. First match wins, the
+# specific kinds before the general ones. Each sentence says what happened; the page adds what to do (haissues.ACTIONS).
+REASONS = (
+    ('no-space', '磁碟空間不足。',
+     ('no space left on device', 'disk quota exceeded', 'not enough free space', 'insufficient disk space')),
+    ('no-user-manager', '這個帳號的使用者服務管理器沒有在執行（沒有開啟 linger）。',
+     ('failed to connect to bus', 'xdg_runtime_dir', 'dbus_session_bus_address', 'user scope bus')),
+    ('unit-masked', '服務單元被暫時停用（先前的還原可能沒有完成）。', (re.compile(r'unit \S{1,100} is masked'),)),
+    ('unit-missing', '找不到這個服務單元。',
+     (re.compile(r'unit \S{1,100} (?:not found|could not be found)'), 'no such unit')),
+    ('unit-failed', '服務單元啟動失敗（詳情在系統日誌）。', ('job for ', 'control process exited with error code')),
+    ('db-not-ready', '資料庫還沒有準備好（還在啟動，或沒有在執行）。',
+     ('the database system is starting up', 'the database system is shutting down', 'is not accepting connections',
+      'is the server running', 'could not connect to server', 'connection to server on socket',
+      'connection to server at', 'pg_isready')),
+    ('db-auth', '資料庫帳號或密碼和這台的設定不符。',
+     ('password authentication failed', 'authentication failed for user', 'no pg_hba.conf entry',
+      'peer authentication failed', 'scram authentication')),
+    ('db-missing', '資料庫不存在。', (re.compile(r'database "[^"]{0,200}" does not exist'),)),
+    ('role-missing', '資料庫帳號不存在。', (re.compile(r'role "[^"]{0,200}" does not exist'),)),
+    ('pull-denied', '映像倉庫拒絕下載（需要登入，或沒有權限）。',
+     ('pull access denied', 'authentication required', 'requested access to the resource is denied',
+      'unauthorized')),
+    ('image-missing', '找不到這個映像。',
+     ('image not known', 'no such image', 'manifest unknown', 'name unknown', 'repository does not exist',
+      'unable to find image', 'short-name resolution', 'not found: manifest')),
+    ('network', '連不上網路（映像倉庫沒有回應）。',
+     ('no route to host', 'connection refused', 'i/o timeout', 'tls handshake timeout', 'network is unreachable',
+      'temporary failure in name resolution', 'no such host', 'dial tcp', 'context deadline exceeded',
+      'timeout awaiting response', 'connection reset by peer', 'unexpected eof')),
+    ('no-container', '容器不存在，或沒有在執行。',
+     ('no such container', 'no container with name or id', 'container does not exist', 'container state improper',
+      'is not running', 'no such object')),
+    ('name-in-use', '同名的暫用容器還在，暫時不能再建立。', ('name is already in use', 'is already in use by container')),
+    ('permission', '權限不足。',
+     ('permission denied', 'operation not permitted', 'eacces', 'access denied', 'interactive authentication required')),
+    ('memory', '記憶體不足，命令被中止。', ('out of memory', 'cannot allocate memory', 'oom-kill')),
+    ('subid', '這個帳號可用的 subuid／subgid 範圍不夠。',
+     ('newuidmap', 'newgidmap', 'no subuid ranges', 'no subgid ranges', 'insufficient uid', 'cannot set up namespace',
+      'cannot re-exec process')),
+    ('storage-busy', 'Podman 的儲存區正忙著，稍後再試一次。',
+     ('resource temporarily unavailable', 'storage.lock', 'timed out waiting for lock', 'database is locked')),
+    ('no-program', '容器裡找不到要執行的程式。',
+     ('executable file not found', 'command not found', 'no such file or directory: unknown',
+      'attempted to invoke a command that was not found')),
+    ('runtime', '容器執行環境沒能啟動容器。',
+     ('oci runtime', 'runc:', 'crun:', 'container_linux', 'cannot start a container that has stopped',
+      'error starting container')),
+)
+RETRYABLE = frozenset({'network', 'storage-busy', 'db-not-ready', 'name-in-use'})  # worth another try after a pause
+BY_EXIT = {126: ('no-program', '容器裡找不到要執行的程式。'), 127: ('no-program', '容器裡找不到要執行的程式。'),
+           137: ('memory', '記憶體不足，命令被中止。')}
+
+
+def classify(stderr, returncode=None):
+    """(code, zh-TW sentence) of a failed command (REASONS), or (None, '') when nothing is known. Only the fixed sentence
+    is ever to be shown, never `stderr`."""
+    text = (stderr or b'')
+    text = text.decode('utf-8', 'replace') if isinstance(text, (bytes, bytearray)) else str(text)
+    text = text[-STDERR_TAIL:].lower()
+    if text.strip():
+        for code, sentence, needles in REASONS:
+            for needle in needles:
+                if (needle.search(text) if hasattr(needle, 'search') else needle in text):
+                    return code, sentence
+    return BY_EXIT.get(returncode, (None, ''))
+
+
+SENTENCES = {**{row[0]: row[1] for row in REASONS}, 'timeout': '等待逾時，這台比預期的慢。'}   # code -> the sentence
+KNOWN_REASONS = frozenset(SENTENCES)
+
+
+def reason_code(error):
+    """The kind of failure behind a BackupError a podman or systemctl command raised (REASONS, or 'timeout'): the one the
+    runner found, else what the error's own stderr says (a CommandError of another runner); None when nothing is known."""
+    for code in (getattr(error, 'reason', None), (getattr(error, 'details', None) or {}).get('reason')):
+        if code in KNOWN_REASONS:
+            return code
+    stderr = getattr(error, 'stderr', None)
+    return classify(stderr, getattr(error, 'returncode', None))[0] if stderr else None
+
+
+def reason_of(result):
+    """The reason code of a command that was run with check=False and failed (None when it did not or nothing is known)."""
+    if result is None or result.returncode == 0:
+        return None
+    return classify(result.stderr, result.returncode)[0]
+
+
+# ====================================================================== waits and limits that grow with the data (X-PD-05)
+
+SCALE_RATE = 20 * 1024 * 1024        # bytes per second a slow disk on a busy host still manages (export, dump, import)
+SCALE_TIMEOUT_CEILING = 24 * 3600    # no command is given longer than a day
+SCALE_OUTPUT_CEILING = 1 << 30       # ... or more than 1 GiB of output held in memory
+
+
+def scaled_timeout(base, nbytes=None, *, rate=SCALE_RATE, ceiling=SCALE_TIMEOUT_CEILING):
+    """Seconds a command may take: `base` (what the call always had: the floor), or, when it works through `nbytes` of
+    data, `base` plus the time those bytes need at `rate` bytes per second, at most `ceiling`. A wait that is only too
+    short for a big app grows with the app (X-PD-05); an unknown size changes nothing."""
+    if not isinstance(base, (int, float)) or isinstance(base, bool):
+        return base     # no wait at all stays no wait
+    if not isinstance(nbytes, (int, float)) or isinstance(nbytes, bool) or nbytes <= 0 or rate <= 0:
+        return base
+    return int(max(base, min(base + nbytes / rate, ceiling)))
+
+
+def scaled_limit(base, nbytes=None, *, ratio=1, ceiling=SCALE_OUTPUT_CEILING):
+    """Bytes of output a command may print: `base` (the floor) or `ratio` times the data it is about, at most `ceiling`
+    (X-PD-04). The ceiling is what keeps a runaway command from filling the engine's memory; real listings stay far below
+    it."""
+    if not isinstance(nbytes, (int, float)) or isinstance(nbytes, bool) or nbytes <= 0:
+        return base
+    return int(max(base, min(nbytes * ratio, ceiling)))
+
+
+# ====================================================================== a long listing, line by line (X-PD-04)
+
+MAX_LINE = 1 << 20           # one line of a stream: a row, a module, a table
+MAX_STREAM = 1 << 34         # the whole stream (16 GiB): a runaway command, not a big listing
+
+
+class LineSink:
+    """A writable that `OwnerRunner.run(stdout=...)` copies a command's output into: every complete line goes to
+    `on_line(bytes)` (without its newline) as it arrives, so a listing of any length is never held whole (X-PD-04). A
+    line longer than `max_line` or a stream longer than `max_total` stops the command (limit-exceeded): those limits
+    only keep a runaway out, they are far above what real data needs. `close()` hands over the last line."""
+
+    def __init__(self, on_line, *, max_line=MAX_LINE, max_total=MAX_STREAM, what='命令'):
+        self.on_line = on_line
+        self.max_line, self.max_total, self.what = int(max_line), int(max_total), what
+        self.total = 0
+        self.lines = 0
+        self._pending = bytearray()
+
+    def write(self, data):
+        view = bytes(data)
+        self.total += len(view)
+        if self.total > self.max_total:
+            raise BackupError('limit-exceeded', f'{self.what} 的輸出超過上限，已停止。')
+        self._pending += view
+        while True:
+            end = self._pending.find(b'\n')
+            if end < 0:
+                break
+            line = bytes(self._pending[:end])
+            del self._pending[:end + 1]
+            self._line(line)
+        if len(self._pending) > self.max_line:
+            raise BackupError('limit-exceeded', f'{self.what} 的一行輸出超過上限，已停止。')
+        return len(view)
+
+    def _line(self, line):
+        if len(line) > self.max_line:
+            raise BackupError('limit-exceeded', f'{self.what} 的一行輸出超過上限，已停止。')
+        self.lines += 1
+        self.on_line(line)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        if self._pending:
+            line, self._pending = bytes(self._pending), bytearray()
+            self._line(line)
+
+
 def validate_rel_path(rel):
     if not isinstance(rel, str) or not rel or len(rel) > 1024 or rel.startswith('/'):
         raise BackupError('invalid-request', '檔案路徑不正確。')
@@ -944,15 +1126,17 @@ class OwnerRunner:
                                   command=what) from None
             raise BackupError('limit-exceeded', f'{what} 的輸出超過上限，已停止。', command=what) from None
         except subprocess.TimeoutExpired:
-            raise BackupError('job-failed', f'{what} 執行逾時（{timeout} 秒）。', command=what) from None
+            raise BackupError('job-failed', f'{what} 執行逾時（{timeout} 秒）；資料量大或這台正忙時會需要更久，請稍後再試一次。',
+                              command=what, reason='timeout') from None
         except FileNotFoundError:
             raise BackupError('owner-missing', f'無法以帳號 {self.owner} 執行命令（家目錄或工具不存在）。',
                               owner=self.owner) from None
         except OSError:
             raise BackupError('job-failed', f'無法執行 {what}。', command=what) from None
         if check and result.returncode != 0:
-            raise CommandError(f'{what} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode,
-                               stderr=result.stderr, command=what)
+            reason, sentence = classify(result.stderr, result.returncode)
+            raise CommandError(f'{what} 執行失敗（結束碼 {result.returncode}）' + (f'：{sentence}' if sentence else '。'),
+                               returncode=result.returncode, stderr=result.stderr, command=what, reason=reason)
         return result
 
     def podman(self, *args, **kwargs):
@@ -965,6 +1149,63 @@ class OwnerRunner:
         """`podman <args>` whose stdout is an owner-created pipe, copied to `stdout` by the helper."""
         return self.run([PYTHON, '-I', '-c', FILE_HELPER, 'relay', PODMAN, *podman_args], stdout=stdout,
                         timeout=timeout, check=check, max_output=max_output, abort=abort)
+
+    def stream_lines(self, argv, on_line, *, timeout=3600, check=True, max_line=MAX_LINE, max_total=MAX_STREAM,
+                     abort=None):
+        """Run `argv` as the owner and hand every line of its stdout to `on_line(bytes)` as it arrives (LineSink): a long
+        listing is never held whole in memory (X-PD-04). Returns the Result (its stdout is None)."""
+        sink = LineSink(on_line, max_line=max_line, max_total=max_total, what=describe([str(arg) for arg in argv]))
+        result = self.run(argv, stdout=sink, timeout=timeout, check=check, abort=abort)
+        sink.close()
+        return result
+
+    # ---------------------------------------------------------------- the user manager (X-AD-01)
+    def user_manager_ready(self):
+        """True while the owner's user manager runs (its D-Bus socket is there: what every `systemctl --user` and every
+        Podman unit needs; the adapter's `runtime_ready` asks the same)."""
+        return os.path.exists(f'{self.runtime_dir}/bus')
+
+    def ensure_user_manager(self, *, log=None, wait=30.0, root_run=None, trusted=None, sleep=time.sleep,
+                            clock=time.monotonic):
+        """Make the owner's user manager run, when it does not (X-AD-01): `loginctl enable-linger <owner>` as root, then wait
+        up to `wait` seconds for the manager's socket. Returns True when this call had to start it, False when it ran (or
+        when this runner cannot act as root: only the real runner does; one made with another executor never touches the
+        device). Raises BackupError (job-failed) with the reason when it did not come up: only that app stops. The setting
+        stays: it is what keeps the account's apps running without a login."""
+        if self.user_manager_ready():
+            return False
+        root_run = root_run if root_run is not None else (default_runner if self._runner is default_runner else None)
+        if root_run is None:
+            return False
+        say = log or (lambda _text: None)
+        if not (trusted or root_only)(LOGINCTL):
+            raise BackupError('job-failed', f'帳號 {self.owner} 的使用者服務管理器沒有在執行，這台也找不到可以信任的 loginctl，'
+                                            f'無法自動開啟；請在這台設備執行 loginctl enable-linger {self.owner} 後再試一次。',
+                              owner=self.owner, reason='no-user-manager')
+        say(f'帳號 {self.owner} 的使用者服務管理器沒有在執行，自動開啟它（loginctl enable-linger）；'
+            '這個設定會保留，讓這個帳號的應用在沒有人登入時也能執行。')
+        try:
+            result = root_run([LOGINCTL, 'enable-linger', self.owner], timeout=60, cwd='/', env=dict(ROOT_ENV),
+                              max_output=64 * 1024)
+        except subprocess.TimeoutExpired:
+            result = Result(124, None, b'')
+        except OSError:
+            result = Result(127, None, b'')
+        if result.returncode != 0:
+            _code, sentence = classify(result.stderr, result.returncode)
+            raise BackupError('job-failed', f'帳號 {self.owner} 的使用者服務管理器沒有在執行，自動開啟失敗'
+                                            f'（loginctl 結束碼 {result.returncode}）' + (f'：{sentence}' if sentence
+                                                                                          else '。')
+                                            + f'請在這台設備執行 loginctl enable-linger {self.owner} 後再試一次。',
+                              owner=self.owner, reason='no-user-manager')
+        deadline = clock() + max(0.0, float(wait))
+        while not self.user_manager_ready():
+            if clock() >= deadline:
+                raise BackupError('job-failed', f'已為帳號 {self.owner} 開啟 linger，但它的使用者服務管理器在 {int(wait)} 秒內'
+                                                '沒有起來；請稍後再試一次，仍然不行時請把作業紀錄交給工程人員。',
+                                  owner=self.owner, reason='no-user-manager')
+            sleep(0.5)
+        return True
 
     def _helper(self, args, **kwargs):
         result = self.run([PYTHON, '-I', '-c', FILE_HELPER, *args], check=False, **kwargs)

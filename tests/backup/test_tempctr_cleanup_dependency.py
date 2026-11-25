@@ -110,9 +110,7 @@ class CleanupDependencyTests(unittest.TestCase):
                 key = (kind, name)
                 runner.failures[key] = 'exception'
                 runner.unknown.add(key)
-                with self.assertRaises(BackupError) as caught:
-                    getattr(tmp, method)('first')
-                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertFalse(getattr(tmp, method)('first'), 'X-TC-05: the job goes on, the object stays listed')
                 self.assertIn(name, getattr(tmp, kind + 's'))
                 self.assertEqual(tmp.cleanup(), [name])
                 runner.failures.clear()
