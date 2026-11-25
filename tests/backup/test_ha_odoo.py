@@ -881,6 +881,86 @@ class ConfScriptTests(unittest.TestCase):
         self.assertNotIn('LeakMe', json.dumps(doc))
 
 
+class ScannerScriptTests(unittest.TestCase):
+    """The script that lists this device's modules inside its Odoo image, run here by a real Python against a stub of the
+    few Odoo names it uses (the real Odoo is not on this host: the names are the ones of Odoo 18's odoo.modules.module,
+    odoo.tools and odoo.release, from its source; a real run in the lab image is FOR-REAL.txt 3)."""
+
+    STUB = {
+        'odoo/__init__.py': 'from . import addons\n',
+        'odoo/addons/__init__.py': "__path__ = ['/opt/odoo/addons', '/mnt/extra-addons']\n",
+        'odoo/release.py': "version = '18.0-20260926'\n",
+        'odoo/tools/__init__.py': (
+            "import os\n"
+            "class _Config:\n"
+            "    def parse_config(self, args):\n"
+            "        open(os.environ['STUB_CALLS'], 'a').write(repr(list(args)) + '\\n')\n"
+            "config = _Config()\n"
+            "def find_in_path(name):\n"
+            "    if name != 'wkhtmltopdf':\n"
+            "        raise IOError(name)\n"),
+        'odoo/modules/__init__.py': '',
+        'odoo/modules/module.py': (
+            "def initialize_sys_path():\n    pass\n"
+            "def get_modules():\n    return ['base', 'live_mod', 'broken_mod', 'not_installable']\n"
+            "def get_manifest(name):\n"
+            "    if name == 'broken_mod':\n        raise SyntaxError('bad manifest')\n"
+            "    return {'version': '18.0.1.3', 'installable': name != 'not_installable'}\n"
+            "def get_module_path(name, display_warning=True):\n"
+            "    assert display_warning is False\n"
+            "    return '/mnt/extra-addons/' + name if name == 'live_mod' else '/opt/odoo/addons/' + name\n"
+            "def check_python_external_dependency(dep):\n"
+            "    if dep != 'lxml':\n        raise ImportError(dep)\n"),
+    }
+
+    def run_script(self, request, *, stub=True, conf_exists=True):
+        import subprocess
+        import sys
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            if stub:
+                for name, text in self.STUB.items():
+                    (root / 'stub' / name).parent.mkdir(parents=True, exist_ok=True)
+                    (root / 'stub' / name).write_text(text, encoding='utf-8')
+            conf = root / 'odoo.conf'
+            if conf_exists:
+                conf.write_text('[options]\n', encoding='utf-8')
+            calls = root / 'calls'
+            request = {'conf': str(conf), **request}
+            boot = f"import sys; sys.path.insert(0, {str(root / 'stub')!r}); exec(sys.stdin.read())"
+            done = subprocess.run([sys.executable, '-I', '-c', boot, json.dumps(request)], input=ha_odoo.SCANNER.encode(),
+                                  capture_output=True, timeout=60, env={'STUB_CALLS': str(calls)})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(done.stderr, b'')
+            return json.loads(done.stdout), (calls.read_text().splitlines() if calls.exists() else []), str(conf)
+
+    def test_the_modules_the_dependencies_and_the_modules_that_cannot_be_read_are_listed(self):
+        doc, calls, conf = self.run_script({'python': ['lxml', 'missingpkg'], 'bin': ['wkhtmltopdf', 'antiword']})
+        self.assertEqual(doc['version'], '18.0-20260926')
+        self.assertEqual(doc['paths'], ['/opt/odoo/addons', '/mnt/extra-addons'])
+        self.assertEqual(doc['modules'], [['base', '18.0.1.3', True, '/opt/odoo/addons'],
+                                          ['live_mod', '18.0.1.3', True, '/mnt/extra-addons'],
+                                          ['not_installable', '18.0.1.3', False, '/opt/odoo/addons']])
+        self.assertEqual(doc['broken'], ['broken_mod'], 'one module that cannot be read is named, the others are listed (OD-35)')
+        self.assertEqual((doc['python'], doc['bin']), ({'lxml': True, 'missingpkg': False},
+                                                       {'wkhtmltopdf': True, 'antiword': False}))
+        self.assertNotIn('error', doc)
+        self.assertEqual(calls, [repr(['-c', conf])], 'the configuration of this device is read when it is there')
+
+    def test_without_a_configuration_file_odoo_is_configured_with_nothing(self):
+        doc, calls, _conf = self.run_script({}, conf_exists=False)
+        self.assertEqual(calls, ['[]'])
+        self.assertEqual(len(doc['modules']), 3)
+
+    def test_an_odoo_that_cannot_be_imported_says_only_the_kind_of_error(self):
+        doc, _calls, _conf = self.run_script({'python': ['lxml']}, stub=False)
+        self.assertEqual(doc, {'python': {}, 'bin': {}, 'error': 'ModuleNotFoundError'})
+        with self.assertRaises(BackupError) as caught:      # and target_inventory turns it into a stop of this app only
+            tmp = types.SimpleNamespace(run=lambda *a, **k: hafakes.Result(0, json.dumps(doc).encode(), b''))
+            ha_odoo.target_inventory(tmp, types.SimpleNamespace(web_image='localhost/odoo:1', conf_secret='s', web_mounts=[]))
+        self.assertEqual((caught.exception.code, caught.exception.details.get('reason')), ('job-failed', 'ModuleNotFoundError'))
+
+
 class InventoryTests(unittest.TestCase):
     """OD-35, OD-73: one module that cannot be read is skipped; the wait and the room grow with the data."""
 
