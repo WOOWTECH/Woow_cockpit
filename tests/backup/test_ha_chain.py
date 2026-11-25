@@ -33,6 +33,7 @@ from .test_jobs import JobCase
 
 HA_ID = 'ha-' + '0' * 20
 APPS = ['odoo', 'n8n', 'emqx']
+THREE_RESTORE = APPS  # a split restore of three apps of one converted backup
 KEY = hx.PASSWORD
 
 
@@ -1003,6 +1004,23 @@ class CancelTests(ChainCase):
         self.assertEqual((results['emqx']['code'], results['emqx']['message']), ('stopped', hachain.STOPPED['stopped']))
         self.assertFalse(self.store.stop_requested(self.group), 'the request has done its work')
         self.assertIn(hachain.STOP_REQUESTED_LOG, '\n'.join(self.store.read_log(self.records()[2]['id'])))
+
+    def test_a_split_restore_stops_after_the_app_it_is_restoring_and_a_cancel_stops_it_at_once(self):
+        self.answers = []
+        self.script.before[('restore', 'n8n')] = lambda ctx, params: self.answers.append(
+            jobs.cancel_job(self.paths, ctx.job_id, after_this=True))
+        self.start_chain(THREE_RESTORE, kind='ha-restore')
+        self.run_chain()
+        self.assertEqual(self.script.events, [('restore', 'odoo'), ('restore', 'n8n')])
+        self.assertEqual(self.statuses(), {'odoo': 'imported', 'n8n': 'imported', 'emqx': 'not-started'})
+        self.assertEqual(self.last_results()['emqx']['code'], 'stopped')
+        self.fresh()
+        self.cancel_in('restore', 'odoo')
+        self.start_chain(THREE_RESTORE, kind='ha-restore')
+        self.run_chain()
+        self.assertEqual(self.script.events, [('restore', 'odoo')])
+        self.assertEqual(self.statuses(), {'odoo': 'converted', 'n8n': 'not-started', 'emqx': 'not-started'})
+        self.assertEqual({row['code'] for row in self.last_results().values()}, {'cancelled'})
 
     def test_stop_after_this_app_is_also_accepted_where_the_job_cannot_be_cancelled(self):
         answers = []
