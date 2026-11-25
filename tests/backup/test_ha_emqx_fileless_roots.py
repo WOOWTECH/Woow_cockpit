@@ -8,7 +8,6 @@ import copy
 import io
 import tarfile
 import unittest
-from woowbackup import ha_emqx
 from woowbackup.errors import BackupError
 from . import test_ha_emqx_candidate_flow as flow
 

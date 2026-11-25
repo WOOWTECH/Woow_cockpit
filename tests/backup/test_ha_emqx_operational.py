@@ -16,7 +16,6 @@ from woowbackup.podman import Result
 from . import test_ha_emqx as base
 from . import test_ha_emqx_candidate_flow as flow
 from . import test_ha_emqx_parity as parity
-from .test_ha_emqx_fileless_roots import FilesTransport
 
 
 def operational():
