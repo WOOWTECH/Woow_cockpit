@@ -14,7 +14,6 @@ import os
 import random
 import signal
 import tarfile
-import tempfile
 import threading
 import time
 import types
