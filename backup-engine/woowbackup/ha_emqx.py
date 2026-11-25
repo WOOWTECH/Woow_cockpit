@@ -1560,7 +1560,8 @@ def apply_ha_access(tmp, read_candidate, readings, original, lost_paths, *, obse
         # the candidate, the list that would be loaded is not HA's, and cutting this device's own to it could leave nobody to
         # log in or everybody in (S2 is HA's own choice, confirmed by name; this is a failed import). Stops only this app.
         raise BackupError('incompatible', 'EMQX 匯入後，HA 的帳號驗證或授權設定（' + hacommon.names(facts['absent'], 8)
-                          + '）沒有出現在暫用的 EMQX 裡，已停止；這台沒有任何改變。')
+                          + '）沒有出現在暫用的 EMQX 裡，已停止；這台沒有任何改變。請在 HA 先停止 EMQX 附加元件，重新備份後再匯入；'
+                            '如果仍然一樣，請把這份備份交給支援人員檢查。')
     if changed:
         if observe is not None:
             observe('access_apply')
