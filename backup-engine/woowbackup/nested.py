@@ -24,8 +24,8 @@ ID map is given, a member owner the owner's user namespace cannot represent (pod
 half-way otherwise; HD-02). Re-emitted members keep their mode (without setuid/setgid on
 non-directories), numeric owner, mtime and `SCHILY.xattr.user.*` records only; what was dropped is
 counted in the check report, so the restore can say so (HD-09). Member names are remembered as keyed
-128-bit digests, not strings, which keeps a pass at the 2,000,000-member cap well below the job's memory
-limit (HD-03).
+128-bit digests, not strings, which keeps a pass at the member cap (4,000,000 since 2026-11-25, X-NS-03: a cap
+is a bomb guard, not a verdict on the data; it was 2,000,000) well below the job's memory limit (HD-03).
 
 Host directory tars (`apps/<id>/dirs/<n>.tar`, written by GNU tar as the owner inside his user namespace) follow
 the volume rules with two differences: the root entry `./` is expected (it carries the directory's own owner,
@@ -55,8 +55,10 @@ import threading
 
 from .errors import BackupError
 
-MAX_VOLUME_MEMBERS = 2_000_000
-MAX_OCI_MEMBERS = 10_000
+# Bomb guards, not verdicts on the data (X-NS-03, HAOS parity 2026-11-25: HAOS has none): raised to what no ordinary
+# volume reaches and a crafted tar cannot use to exhaust the job (the disk reserve and the watchdog still stop it first).
+MAX_VOLUME_MEMBERS = 4_000_000   # was 2,000,000
+MAX_OCI_MEMBERS = 100_000        # was 10,000
 MAX_OCI_JSON = 4 * 1024 * 1024
 MAX_NAME = 4096
 OCI_LAYOUT = b'{"imageLayoutVersion":"1.0.0"}'
@@ -385,6 +387,18 @@ def volume_root(path, ids=None):
                 return int(member.uid), int(member.gid), member.mode & 0o7777
             return None
     return None
+
+
+def max_owner_ids(path, what=VOLUME):
+    """(the highest uid, the highest gid) among the members of a volume or host-directory tar, read from the headers without
+    unpacking anything (X-NS-09: how far the owner's id range would have to reach); (0, 0) for a tar without members.
+    The tar is not trusted: at most MAX_VOLUME_MEMBERS members are read, and the checks that follow refuse what is unsafe;
+    a header that cannot be read is the same refusal those checks give."""
+    top_uid = top_gid = 0
+    with _open(path, what, 'r:') as tar:
+        for member in _members(tar, what, MAX_VOLUME_MEMBERS):
+            top_uid, top_gid = max(top_uid, int(member.uid)), max(top_gid, int(member.gid))
+    return top_uid, top_gid
 
 
 def check_dir(path, ids=None):

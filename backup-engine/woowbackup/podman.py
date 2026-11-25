@@ -70,6 +70,11 @@ def find_podman(paths=PODMAN_PATHS, trusted=root_only):
 PODMAN = find_podman()
 SYSTEMCTL = '/usr/bin/systemctl'
 LOGINCTL = '/usr/bin/loginctl'
+USERMOD = '/usr/sbin/usermod'
+CAT = '/usr/bin/cat'
+SUBID_FILES = {'uid': '/etc/subuid', 'gid': '/etc/subgid'}
+SUBID_BLOCK = 65536      # subordinate ids are added in blocks of this many (what useradd gives an account)
+SUBID_MAX_NEED = 16 * SUBID_BLOCK  # an owner id above this is not a container user: nothing is widened for it
 PYTHON = '/usr/bin/python3'
 SAFE_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 ROOT_ENV = {'PATH': SAFE_PATH, 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
@@ -1138,6 +1143,58 @@ class OwnerRunner:
             raise CommandError(f'{what} 執行失敗（結束碼 {result.returncode}）' + (f'：{sentence}' if sentence else '。'),
                                returncode=result.returncode, stderr=result.stderr, command=what, reason=reason)
         return result
+
+    def run_root(self, argv, *, timeout=120, check=True, max_output=1024 * 1024):
+        """Run fixed `argv` as root (the engine's own account) in `/`; only for the account's subordinate ids (X-NS-09)."""
+        argv = [str(arg) for arg in argv]
+        what = describe(argv)
+        try:
+            result = self._runner(argv, input=None, stdout=None, timeout=timeout, cwd='/', env=dict(ROOT_ENV),
+                                  max_output=int(max_output))
+        except OutputLimitExceeded:
+            raise BackupError('limit-exceeded', f'{what} 的輸出超過上限，已停止。', command=what) from None
+        except subprocess.TimeoutExpired:
+            raise BackupError('job-failed', f'{what} 執行逾時（{timeout} 秒）。', command=what) from None
+        except OSError:
+            raise BackupError('job-failed', f'無法執行 {what}。', command=what) from None
+        if check and result.returncode != 0:
+            raise CommandError(f'{what} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode,
+                               stderr=result.stderr, command=what)
+        return result
+
+    def subid_table(self, kind):
+        """[(account, first id, count)] of /etc/subuid (kind 'uid') or /etc/subgid ('gid'); lines that are not three fields
+        of a name and two numbers are left out."""
+        text = (self.run_root([CAT, SUBID_FILES[kind]]).stdout or b'').decode('utf-8', 'replace')
+        rows = []
+        for line in text.splitlines():
+            name, _, rest = line.partition(':')
+            first, _, count = rest.partition(':')
+            if name and first.isdigit() and count.isdigit() and int(count) > 0:
+                rows.append((name, int(first), int(count)))
+        return rows
+
+    def widen_subids(self, needed):
+        """Give this account subordinate ids up to `needed` inside its user namespace (X-NS-09): uids and gids (the larger of
+        the two when they differ are asked for separately), each in a block of SUBID_BLOCK ids no account has: usermod
+        --add-subuids/--add-subgids. Returns {'uid': (first, last) or None, 'gid': ...} of what was added; nothing is
+        added for a kind the account already covers. The caller makes Podman pick the new ids up (`podman system migrate`)."""
+        added, args = {}, []
+        for kind, flag in (('uid', '--add-subuids'), ('gid', '--add-subgids')):
+            table = self.subid_table(kind)
+            have = sum(count for name, _first, count in table if name == self.owner)
+            need = int(needed.get(kind, 0))
+            if need <= have:
+                added[kind] = None
+                continue
+            extra = -(-(need - have) // SUBID_BLOCK) * SUBID_BLOCK
+            top = max([first + count for _name, first, count in table] + [100000])
+            first = -(-top // SUBID_BLOCK) * SUBID_BLOCK
+            added[kind] = (first, first + extra - 1)
+            args += [flag, f'{first}-{first + extra - 1}']
+        if args:
+            self.run_root([USERMOD, *args, self.owner], timeout=60)
+        return added
 
     def podman(self, *args, **kwargs):
         return self.run([PODMAN, *args], **kwargs)

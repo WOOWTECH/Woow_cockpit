@@ -704,6 +704,7 @@ def build_preflight(svc, manifest, meta=None):
     entry_sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or []}
     device_key = svc.keys.device_key()
     safety_encrypted = svc.encrypt_by_default()  # safety backups follow the setting 預設加密備份
+    ha_import = flows.from_ha(svc.paths, meta['id'], meta) if isinstance(meta, dict) and meta.get('id') else False
     apps = []
     for app_manifest in manifest.get('apps') or []:
         app = catalog.get(app_manifest['id'])
@@ -732,6 +733,7 @@ def build_preflight(svc, manifest, meta=None):
             apps.append(item)
             continue
         adapter = svc.adapter(app)
+        adapter.ha_import = ha_import
         mode = 'fresh'
         try:
             mode = adapter.detect_mode()
@@ -850,9 +852,13 @@ def cmd_list(svc, _req):
             'ha_backups': ha_backups_view(svc)}
 
 
-def _refuse_key_for_plain(header, req):
-    if header.get('encryption') == 'none' and req.get('key') is not None:
-        raise BackupError('invalid-request', '這份備份沒有加密，不需要金鑰。', field='key')
+def request_key(header, req):
+    """The key text a request carries, or None. A backup that is not encrypted needs none (X-PF-05, HAOS parity): a key
+    that comes with such a backup is left out -- not read, not saved, not handed to a job -- and the request goes on
+    (it used to be refused with `invalid-request`)."""
+    if header.get('encryption') == 'none':
+        return None
+    return req.get('key')
 
 
 def _member_sizes(svc, path):
@@ -872,8 +878,7 @@ def cmd_inspect(svc, req):
     meta = svc.storage.get(backup_id)
     path = svc.storage.archive_path(backup_id)
     header = svc.archive.read_header(path)
-    _refuse_key_for_plain(header, req)
-    key_text = req.get('key')
+    key_text = request_key(header, req)
     identities = list(svc.keys.identities())
     with ExitStack() as stack:
         if header.get('encryption') == 'none':
@@ -947,19 +952,18 @@ def cmd_backup_start(svc, req):
 
 def cmd_verify_start(svc, req):
     svc.storage.get(req['backup_id'])
-    _refuse_key_for_plain(svc.archive.read_header(svc.storage.archive_path(req['backup_id'])), req)
-    params = {'backup_id': req['backup_id'], 'key_provided': 'key' in req}
-    return svc.start('verify', params, req['request_id'], key_text=req.get('key'))
+    key_text = request_key(svc.archive.read_header(svc.storage.archive_path(req['backup_id'])), req)
+    params = {'backup_id': req['backup_id'], 'key_provided': key_text is not None}
+    return svc.start('verify', params, req['request_id'], key_text=key_text)
 
 
 def cmd_restore_start(svc, req):
     meta = svc.storage.get(req['backup_id'])
     flows.resolve_apps(svc.catalog(), req['apps'])
     header = svc.archive.read_header(svc.storage.archive_path(req['backup_id']))
-    _refuse_key_for_plain(header, req)
+    key_text = request_key(header, req)
     if backup_view(meta, set())['unauthenticated'] and req.get('accept_unauthenticated') is not True:
         raise BackupError('invalid-request', UNAUTHENTICATED_MESSAGE, field='accept_unauthenticated')
-    key_text = req.get('key')
     if key_text is not None and req.get('save_key'):
         # Saved only after it opened this backup (review finding F4).
         path = svc.storage.archive_path(req['backup_id'])
@@ -1031,11 +1035,16 @@ def confirm_restore(svc, req, header, key_text):
     `details.apps`; nothing started). Only adapters that report such lines (`restore_issues`, a class attribute) are
     asked; one that cannot be made is the job's to report."""
     adapters = {}
+    ha_import = flows.from_ha(svc.paths, req['backup_id'])
     for app in flows.resolve_apps(svc.catalog(), req['apps']):
         with contextlib.suppress(BackupError):
             adapter = svc.adapter(app)
-            if getattr(type(adapter), 'restore_issues', None) is not None:
-                adapters[app.id] = adapter
+            adapter.ha_import = ha_import
+            if getattr(type(adapter), 'restore_issues', None) is None:
+                continue
+            if getattr(type(adapter), 'issues_only_for_ha', False) and not ha_import:
+                continue  # an ordinary restore has no lines to confirm and keeps its checks (H6): no extra preflight either
+            adapters[app.id] = adapter
     if not adapters:
         return
     path = svc.storage.archive_path(req['backup_id'])
