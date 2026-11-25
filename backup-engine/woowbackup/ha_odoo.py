@@ -590,14 +590,68 @@ DB_ENV_KEYS = frozenset({'POSTGRES_USER', 'POSTGRES_DB', 'POSTGRES_INITDB_ARGS',
                          'POSTGRES_INITDB_WALDIR', 'POSTGRES_HOST_AUTH_METHOD', 'PGDATA', 'LANG', 'LC_ALL', 'TZ'})
 
 
+# OD-57: an `EnvironmentFile=` of the database container (podman --env-file: the Quadlet hands the path over as it is).
+# The engine reads only the keys it has to know about (what the cluster is called and where it lives); the superuser's
+# password is never looked at: podman itself reads the file again for the new cluster, so the value never reaches a
+# command line or a log (the rule of the EMQX candidate, security review SR-8).
+ENV_FILE_KEYS = DB_ENV_KEYS | {'POSTGRES_PASSWORD'}
+ENV_FILE_VALUE = re.compile(r'[^\s"\'\\$](?:[^"\'\\$]{0,4094}[^\s"\'\\$])?\Z')   # a value podman keeps literal on every version
+ENV_FILE_REL = re.compile(r'[A-Za-z0-9._/-]{1,200}\Z')
+ENV_FILE_MAX = 64 * 1024
+
+
+def _env_file_stop(container_file, what, action):
+    return haissues.stopped(Issue('odoo.layout-unsupported', 'stop', f'{container_file} 的 EnvironmentFile：{what}', action=action),
+                            'incompatible')
+
+
+def read_env_files(container_file, text, home, read_file):
+    """What the `EnvironmentFile=` files of a database container tell the engine, as ({key: value} of the DB_ENV_KEYS found
+    in them, [absolute paths podman reads again for the new cluster], whether a POSTGRES_PASSWORD line is there). A path
+    that is not `%h/...` or below the owner's home, a file that cannot be read, and a key the engine has to read whose
+    value podman might read differently from the engine (quotes, backslashes, `$`, blanks around it, two values) stop
+    this app, naming the file and the key, never a value."""
+    found, files, password = {}, [], False
+    base = home.rstrip('/')
+    for value in tempctr._container_values(text, 'EnvironmentFile'):
+        rel = value[3:] if value.startswith('%h/') else value[len(base) + 1:] if value.startswith(base + '/') else None
+        if rel is None or not ENV_FILE_REL.fullmatch(rel) or '..' in rel.split('/') or rel.endswith('/'):
+            raise _env_file_stop(container_file, f'「{haissues.clean(value, 80)}」不在應用擁有者的家目錄下，或寫法不受支援，這個匯入無法讀它。',
+                                 '請把環境檔放在家目錄下並用 %h/ 開頭的路徑，或把資料庫的設定改放在 Quadlet 的 Environment= 和 podman secret 裡，再重新檢查。')
+        try:
+            if read_file is None:
+                raise BackupError('not-found', 'no reader')
+            data = read_file(rel, max_bytes=ENV_FILE_MAX)
+        except BackupError as error:
+            if haissues.is_job_wide(error):
+                raise
+            raise _env_file_stop(container_file, f'讀不到 ~/{rel}，無法確認資料庫容器的設定。',
+                                 '請確認這個檔案存在、應用擁有者讀得到，再重新檢查。') from None
+        for raw in data.split(b'\n'):   # podman --env-file: one line per \n, a final \r dropped, leading blanks and tabs trimmed
+            line = (raw[:-1] if raw.endswith(b'\r') else raw).decode('utf-8', 'replace').lstrip(' \t')
+            key, equals, rest = line.partition('=')
+            if not equals or key not in ENV_FILE_KEYS:
+                continue
+            if key == 'POSTGRES_PASSWORD':
+                password = True
+                continue
+            if not ENV_FILE_VALUE.fullmatch(rest) or (key in found and found[key] != rest):
+                raise _env_file_stop(container_file, f'~/{rel} 裡的 {key} 設定寫法無法安全重現（引號、跳脫字元、變數、前後空白或重複的設定）。',
+                                     f'請把它改成單純的 {key}=值 一行，或改放在 Quadlet 的 Environment= 裡，再重新檢查。')
+            found[key] = rest
+        files.append(f'{base}/{rel}')
+    return found, files, password
+
+
 class Live:
     """The live Odoo target as its Quadlet files describe it: the database container (image, allowed environment,
-    secret mounts, data dir target, container name), the web container (image, configuration secret, mounts).
-    `skipped_mounts`: [(container file, target)] of the mounts that are no data of Odoo and were left out (OD-08, OD-09).
-    `db_name` and `db_role`: what the configuration of this device's Odoo names (`apply_conf`; the tenant's own `odoo`
-    until then)."""
+    secret mounts, environment files, data dir target, container name), the web container (image, configuration secret,
+    mounts). `skipped_mounts`: [(container file, target)] of the mounts that are no data of Odoo and were left out (OD-08,
+    OD-09). `db_name` and `db_role`: what the configuration of this device's Odoo names (`apply_conf`; the tenant's own
+    `odoo` until then). `read_file(rel, max_bytes=)`: reads a file of the owner's home (the app runner's), for the
+    environment files of the database container (OD-57)."""
 
-    def __init__(self, quadlets, home):
+    def __init__(self, quadlets, home, read_file=None):
         files = list(quadlets)
         self.db_file = next((f for f in files if f.endswith('.container') and _is_db(quadlets[f])), None)
         self.web_file = next((f for f in files if f.endswith('.container') and _is_web(quadlets[f])), None)
@@ -610,14 +664,19 @@ class Live:
         self.db_env = tempctr.quadlet_environment(db_text, DB_ENV_KEYS)
         self.db_secrets = tempctr.quadlet_secrets(db_text)
         self.db_container = quadlet_container_name(quadlets, self.db_file)
-        if ('POSTGRES_PASSWORD_FILE' not in self.db_env and not any('POSTGRES_PASSWORD' in spec for spec in self.db_secrets)
-                and _password_elsewhere(db_text)):
-            # OD-57 (the part that cannot be made): the new cluster is started from the live container's own settings; a
-            # superuser password that lives in an environment file or a plain variable cannot be handed to it without
-            # putting a secret on a command line, so this is said at once instead of as a cluster that does not start.
+        # OD-57: environment files of the database container go to the new cluster as they are (podman reads them again);
+        # what they say about the cluster counts like an `Environment=` line, which wins over them as --env wins over --env-file.
+        file_env, self.db_env_files, file_password = (read_env_files(self.db_file, db_text, home, read_file)
+                                                      if tempctr._container_values(db_text, 'EnvironmentFile') else ({}, [], False))
+        known = {**file_env, **self.db_env}
+        if ('POSTGRES_PASSWORD_FILE' not in known and not file_password and _plain_password(db_text)
+                and not any('POSTGRES_PASSWORD' in spec for spec in self.db_secrets)):
+            # OD-57 (the one place left): a superuser password written plainly in `Environment=` would have to be an
+            # argument of `podman run`, which every local account can read; it is said at once instead of as a cluster
+            # that does not start.
             raise haissues.stopped(Issue('odoo.layout-unsupported', 'stop',
-                                         f'{self.db_file} 的資料庫超級使用者密碼放在環境檔或環境變數裡，這個匯入無法安全地用它建立新的資料庫叢集。',
-                                         action='請把密碼改用 podman secret 提供（POSTGRES_PASSWORD_FILE，WOOWTECH 套件的標準做法），再重新檢查。'),
+                                         f'{self.db_file} 的資料庫超級使用者密碼直接寫在 Environment= 裡，這個匯入無法安全地用它建立新的資料庫叢集。',
+                                         action='請把密碼改用 podman secret（POSTGRES_PASSWORD_FILE，WOOWTECH 套件的標準做法）或環境檔（EnvironmentFile=）提供，再重新檢查。'),
                                    'incompatible')
         db_skipped = []
         db_mounts = quadlet_mounts(quadlets, self.db_file, home, skipped=db_skipped)
@@ -626,7 +685,7 @@ class Live:
             raise BackupError('incompatible', f'{self.db_file} 沒有資料卷設定。')
         # The data volume is the mount that holds the cluster (PGDATA, else the image's own folder); the first mount when
         # nothing says so -- but never another one when the mount that held the cluster was left out.
-        wanted = self.db_env.get('PGDATA') or '/var/lib/postgresql/data'
+        wanted = known.get('PGDATA') or '/var/lib/postgresql/data'
         holder = next((m for m in db_mounts if wanted == m[1] or wanted.startswith(m[1].rstrip('/') + '/')), None)
         if holder is None:
             if db_skipped:   # (also when nothing else is mounted)
@@ -635,9 +694,9 @@ class Live:
                                              action='請把這台 Odoo 資料庫的資料夾改放在資料卷裡，再重新檢查。'), 'incompatible')
             holder = db_mounts[0]
         self.db_volume, self.db_target = holder[0], holder[1]
-        self.db_user = self.db_env.get('POSTGRES_USER', 'postgres')
+        self.db_user = known.get('POSTGRES_USER', 'postgres')
         # The cluster lives in PGDATA when the Quadlet sets it (a folder of the volume), else at the mount point.
-        self.pgdata = self.db_env.get('PGDATA') or self.db_target
+        self.pgdata = known.get('PGDATA') or self.db_target
         if not (tempctr.TARGET_RE.fullmatch(self.pgdata) and '..' not in self.pgdata.split('/')
                 and (self.pgdata == self.db_target or self.pgdata.startswith(self.db_target.rstrip('/') + '/'))):
             raise BackupError('incompatible', f'{self.db_file} 的 PGDATA 設定不在資料卷裡，不受支援。')
@@ -676,12 +735,10 @@ def _text_of(data):
     return data.decode('utf-8', 'replace') if isinstance(data, bytes) else str(data)
 
 
-def _password_elsewhere(text):
-    """True when a database container file keeps the superuser's password in `EnvironmentFile=` or a plain
-    `Environment=POSTGRES_PASSWORD=...` (never the value is looked at)."""
+def _plain_password(text):
+    """True when a database container file keeps the superuser's password in a plain `Environment=POSTGRES_PASSWORD=...`
+    (never the value is looked at)."""
     import shlex
-    if tempctr._container_values(text, 'EnvironmentFile'):
-        return True
     for value in tempctr._container_values(text, 'Environment'):
         try:
             if any(item.startswith('POSTGRES_PASSWORD=') for item in shlex.split(value)):
@@ -1656,7 +1713,7 @@ class Target:
         self.app = app
         runner = work.runner(app)
         sink = sink if sink is not None else _sink(work, app)
-        self.live = Live(work.quadlets(app), runner.home)
+        self.live = Live(work.quadlets(app), runner.home, getattr(runner, 'read_file', None))
         if self.live.skipped_mounts:
             sink.notice('odoo.mount-skipped', '這台 Odoo 的容器有掛載不是 Odoo 資料的路徑（例如時區檔），匯入不會用到它們，已略過；'
                         '它們在這台維持原樣。', [f'{file}：{target}' for file, target in self.live.skipped_mounts])
@@ -2361,7 +2418,8 @@ def convert(work, app, database, test_mode, out_dir):
     network = tmp.network('odoo-net') if test_mode else None
     tmp.volume('odoo-db')
     tmp.run('odoo-db', live.db_image, [], detach=True, network=network,
-            volumes=[(tmp.name('odoo-db'), live.db_target, None)], env=live.db_env, secrets=live.db_secrets)
+            volumes=[(tmp.name('odoo-db'), live.db_target, None)], env=live.db_env, secrets=live.db_secrets,
+            env_files=live.db_env_files)
     pg17 = Cluster(tmp, 'odoo-db', superuser=live.db_user, log=work.log)
     pg17.wait_ready(tcp=True, checkpoint=work.checkpoint, timeout=podman.scaled_timeout(PG_READY_TIMEOUT, src.pg_bytes))
     pg17.script(role_sql(role, live.db_role))

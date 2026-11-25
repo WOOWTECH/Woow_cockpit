@@ -150,7 +150,10 @@ class FakeOwner:
                              {'name': './live_mod/__manifest__.py', 'data': b"{'version': '18.0.1.0.0'}"}]))
 
     def read_file(self, rel, max_bytes=None):
-        raise BackupError('not-found', 'x')
+        self.world.files_read.append(rel)
+        if rel not in self.world.files:
+            raise BackupError('not-found', 'x')
+        return self.world.files[rel]
 
 
 class FakeAdapter:
@@ -235,6 +238,7 @@ class World(HaWorld):
         self.verify_partners = None    # None: what HA had; else what the converted database counts
         self.web_id = WEB_ID           # what `podman image inspect` says the ID of the live Odoo image is
         self.live_freeze = 'True'
+        self.files, self.files_read = {}, []   # files of the owner's home (the runner's read_file), what was asked for
 
     def factory(self, app, **_kwargs):
         return FakeAdapter(app, self)
@@ -594,6 +598,49 @@ class OdooCheckTests(OdooCase):
 
 class OdooTargetTests(OdooCase):
     """HAOS parity, this device's side: what the check reads is made ready instead of refused (rows OD-14 .. OD-23)."""
+
+    CANARY = 'Env-File-Canary-Pw-0123456789'
+
+    def with_environment_file(self, lines=b'', *, secret=False):
+        """The live database container keeps its settings in an environment file (OD-57)."""
+        db = (self.world.quadlets['odoo']['odoo-db.container']
+              .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', b'')
+              .replace(b'Environment=POSTGRES_USER=postgres\n', b'')
+              .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,mode=0400\n', b''))
+        self.world.quadlets['odoo'] = {**self.world.quadlets['odoo'],
+                                       'odoo-db.container': db + b'EnvironmentFile=%h/.config/odoo18/db.env\n'}
+        self.world.files['.config/odoo18/db.env'] = (b'# settings of the database\nPOSTGRES_PASSWORD=' + self.CANARY.encode()
+                                                     + b'\nPOSTGRES_USER=filedb\n' + lines)
+
+    def test_a_superuser_password_in_an_environment_file_is_handed_to_the_new_cluster_by_podman_and_never_read(self):
+        """OD-57: the check goes on, the conversion starts the new cluster with the file as the live one has it (`--env-file`),
+        the superuser is the one the file names, and the password is on no command line, in no log, in no result."""
+        self.with_environment_file()
+        result = self.check(self.upload_odoo())
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertEqual(self.world.files_read, ['.config/odoo18/db.env'])
+        done = self.convert(self.upload_odoo(), ['odoo'])
+        _role, _image, _args, argv = self.runs('odoo-db')[0]
+        self.assertEqual(argv[argv.index('--env-file') + 1], '/home/appowner/.config/odoo18/db.env')
+        self.assertNotIn('--secret', argv, 'the file is the password provider of this device')
+        self.assertFalse(any(a.startswith('POSTGRES_USER') for a in argv), 'the file says it, not the command line')
+        createdb = next(cmd for role, cmd, _d in self.world.execs if role == 'odoo-db' and cmd[0] == 'createdb')
+        self.assertEqual(createdb[1:3], ['-U', 'filedb'], 'the superuser is the one the environment file names')
+        everything = repr(self.world.owner.calls) + repr(self.world.execs) + repr(self.world.runs) + json.dumps(done, default=str)
+        self.assertNotIn(self.CANARY, everything)
+        self.assertNotIn(self.CANARY, repr([self.reporter.__dict__]))
+
+    def test_an_environment_file_the_engine_cannot_read_safely_stops_only_this_app_before_anything_is_read_from_ha(self):
+        """OD-57: a quoted user name could be read differently by podman; the app stops with the file and the key."""
+        self.with_environment_file(b'PGDATA="/var/lib/postgresql/data/pgdata"\n')
+        result = self.check(self.upload_odoo())
+        self.assertFalse(result['importable'])
+        issue = result['issues'][0]
+        self.assertEqual((issue['id'], issue['level']), ('odoo.layout-unsupported', 'stop'))
+        self.assertIn('PGDATA', issue['message'])
+        self.assertIn('~/.config/odoo18/db.env', issue['message'])
+        self.assertNotIn(self.CANARY, json.dumps(result, default=str))
+        self.assertEqual(self.runs('hapg'), [], 'refused before HA data is read')
 
     def test_an_image_this_device_lacks_is_downloaded_and_said(self):
         """OD-14, OD-23."""
