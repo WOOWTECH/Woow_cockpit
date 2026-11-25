@@ -820,7 +820,7 @@ function installCockpitFixture() {
     const created = stampOf(jobSeq);
     const phases = PHASE_LABELS[kind].map(([phase, label]) => ({ id: phase, label, state: 'pending' }));
     const job = { id, type, state: 'queued', phase: 'prepare', phases, progress: { percent: 0, message: '等待開始' }, created, started: null, finished: null,
-      params, result: null, error: null, cancellable: true };
+      params, result: null, error: null, cancellable: chain.uncancellable !== true };
     const running = structuredClone(job);
     Object.assign(running, { state: 'running', phase: PHASE_LABELS[kind][2][0], started: created, progress: { percent: 40, message: PHASE_LABELS[kind][2][1] },
       cancellable: chain.uncancellable !== true,
