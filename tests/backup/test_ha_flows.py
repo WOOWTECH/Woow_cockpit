@@ -150,7 +150,10 @@ class FakeOwner:
                              {'name': './live_mod/__manifest__.py', 'data': b"{'version': '18.0.1.0.0'}"}]))
 
     def read_file(self, rel, max_bytes=None):
-        raise BackupError('not-found', 'x')
+        self.world.files_read.append(rel)
+        if rel not in self.world.files:
+            raise BackupError('not-found', 'x')
+        return self.world.files[rel]
 
 
 class FakeAdapter:
@@ -235,6 +238,7 @@ class World(HaWorld):
         self.verify_partners = None    # None: what HA had; else what the converted database counts
         self.web_id = WEB_ID           # what `podman image inspect` says the ID of the live Odoo image is
         self.live_freeze = 'True'
+        self.files, self.files_read = {}, []   # files of the owner's home (the runner's read_file), what was asked for
 
     def factory(self, app, **_kwargs):
         return FakeAdapter(app, self)
@@ -595,6 +599,50 @@ class OdooCheckTests(OdooCase):
 class OdooTargetTests(OdooCase):
     """HAOS parity, this device's side: what the check reads is made ready instead of refused (rows OD-14 .. OD-23)."""
 
+    CANARY = 'Env-File-Canary-Pw-0123456789'
+
+    def with_environment_file(self, lines=b'', *, secret=False):
+        """The live database container keeps its settings in an environment file (OD-57)."""
+        db = (self.world.quadlets['odoo']['odoo-db.container']
+              .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', b'')
+              .replace(b'Environment=POSTGRES_USER=postgres\n', b'')
+              .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,mode=0400\n', b''))
+        self.world.quadlets['odoo'] = {**self.world.quadlets['odoo'],
+                                       'odoo-db.container': db + b'EnvironmentFile=%h/.config/odoo18/db.env\n'}
+        self.world.files['.config/odoo18/db.env'] = (b'# settings of the database\nPOSTGRES_PASSWORD=' + self.CANARY.encode()
+                                                     + b'\nPOSTGRES_USER=filedb\n' + lines)
+
+    def test_a_superuser_password_in_an_environment_file_is_handed_to_the_new_cluster_by_podman_and_never_read(self):
+        """OD-57: the check goes on, the conversion starts the new cluster with the file as the live one has it (`--env-file`),
+        the superuser is the one the file names, and the password is on no command line, in no log, in no result."""
+        self.with_environment_file()
+        result = self.check(self.upload_odoo())
+        self.assertTrue(result['ok'], result['blockers'])
+        self.assertEqual(self.world.files_read, ['.config/odoo18/db.env'])
+        done = self.convert(self.upload_odoo(), ['odoo'])
+        _role, _image, _args, argv = self.runs('odoo-db')[0]
+        self.assertEqual(argv[argv.index('--env-file') + 1], '/home/appowner/.config/odoo18/db.env')
+        self.assertNotIn('--secret', argv, 'the file is the password provider of this device')
+        self.assertFalse(any(a.startswith('POSTGRES_USER') for a in argv), 'the file says it, not the command line')
+        createdb = next(cmd for role, cmd, _d in self.world.execs if role == 'odoo-db' and cmd[0] == 'createdb')
+        self.assertEqual(createdb[1:3], ['-U', 'filedb'], 'the superuser is the one the environment file names')
+        everything = repr(self.world.owner.calls) + repr(self.world.execs) + repr(self.world.runs) + json.dumps(done, default=str)
+        self.assertNotIn(self.CANARY, everything)
+        self.assertNotIn(self.CANARY, repr([self.reporter.__dict__]))
+        self.assertIn('新的叢集用和這台資料庫容器相同的環境檔：~/.config/odoo18/db.env', self.reporter.logs, 'the file is named in the job log, never its content')
+
+    def test_an_environment_file_the_engine_cannot_read_safely_stops_only_this_app_before_anything_is_read_from_ha(self):
+        """OD-57: a quoted user name could be read differently by podman; the app stops with the file and the key."""
+        self.with_environment_file(b'PGDATA="/var/lib/postgresql/data/pgdata"\n')
+        result = self.check(self.upload_odoo())
+        self.assertFalse(result['importable'])
+        issue = result['issues'][0]
+        self.assertEqual((issue['id'], issue['level']), ('odoo.layout-unsupported', 'stop'))
+        self.assertIn('PGDATA', issue['message'])
+        self.assertIn('~/.config/odoo18/db.env', issue['message'])
+        self.assertNotIn(self.CANARY, json.dumps(result, default=str))
+        self.assertEqual(self.runs('hapg'), [], 'refused before HA data is read')
+
     def test_an_image_this_device_lacks_is_downloaded_and_said(self):
         """OD-14, OD-23."""
         self.world.images.discard(self.world.db_image)
@@ -749,6 +797,37 @@ class OdooTargetTests(OdooCase):
         row = self.check()
         self.assertTrue(row['importable'])
         self.assertEqual(self.ids(row)['odoo.base-url-invalid'], 'notice')
+
+    def new_cluster_statements(self):
+        """The statements the newest new cluster ran (a conversion of this test has its own job, so its own container)."""
+        db = [c for c in self.world.owner.psql if c.endswith('-odoo-db')][-1]
+        return [s for _db, s, _tx in self.world.owner.psql[db].executed]
+
+    def test_an_address_with_a_control_character_is_replaced_by_the_default_at_the_check_not_refused_at_the_end_of_the_conversion(self):
+        """OD-19: sql_literal refuses control characters; the address (and the freeze flag) of this device's own database are
+        checked for the same characters when they are read, so that the conversion never ends in a late 'internal error'."""
+        for address in ('https://cockpit.example/\x0c', 'https://a.example/\x00', '\x1fhttps://a.example', 'https://a.example/' + 'x' * 2049):
+            with self.subTest(address=address[:30]):
+                self.world.live_base_url = address
+                ha_id = self.upload_odoo()
+                row = self.check(ha_id)
+                self.assertTrue(row['importable'], row['blockers'])
+                self.assertEqual(self.ids(row)['odoo.base-url-invalid'], 'notice')
+                done = self.convert(ha_id, ['odoo'])
+                self.assertEqual(done['ha_import']['apps'], ['odoo'])
+                statements = self.new_cluster_statements()
+                self.assertIn("DELETE FROM ir_config_parameter WHERE key = 'web.base.url'", statements,
+                              'the default address: Odoo sets its own on the first login')
+                self.assertFalse(any(s.startswith("INSERT INTO ir_config_parameter") and "'web.base.url'," in s for s in statements))
+        # a tab, a newline and a carriage return are no reason (sql_literal takes them)
+        self.world.live_base_url = 'https://cockpit.example/\t'
+        self.assertNotIn('odoo.base-url-invalid', self.ids(self.check()))
+        self.world.live_base_url = 'https://cockpit.example'
+        self.world.live_freeze = 'Tr\x00ue'
+        row = self.check()
+        self.assertTrue(row['importable'])
+        self.convert(self.upload_odoo(), ['odoo'])
+        self.assertIn("DELETE FROM ir_config_parameter WHERE key = 'web.base.url.freeze'", self.new_cluster_statements())
 
     def test_a_mount_that_is_no_odoo_data_is_left_out_and_said(self):
         """OD-08, OD-09: a time zone file or another host path is no reason to refuse; it is never mounted anywhere."""

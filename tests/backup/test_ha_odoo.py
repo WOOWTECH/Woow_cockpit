@@ -71,6 +71,16 @@ class VersionTests(unittest.TestCase):
         self.assertFalse(ha_odoo.same_version('18.0.x', '18.0.x'))
         self.assertIsNone(ha_odoo.version_key('1'))
 
+    def test_a_version_of_any_other_text_is_no_version_and_never_a_crash(self):
+        # str.isdigit() accepts a superscript two (int() refuses it) and int() refuses thousands of digits: a manifest of
+        # the backup is any text, and such a version ended the whole check in a ValueError.
+        for text in ('18.0.1.\u00b2', '18.0.\u00b2.1', '18.0.1.' + '9' * 5000, '18.0.1.' + '9' * 19, '\uff11\uff18.0.1',
+                     '18.0.\u0661', '18.0.1.3\n', ' 18.0.1.3', '18.0.-1'):
+            with self.subTest(text=text[:30]):
+                self.assertIsNone(ha_odoo.version_key(text))
+                self.assertFalse(ha_odoo.same_version(text, text))
+        self.assertEqual(ha_odoo.version_key('18.0.1.' + '9' * 18), (18, 0, 1, 10 ** 18 - 1, 0))
+
     def test_manifest_is_read_never_run(self):
         info = ha_odoo.parse_manifest(MANIFEST)
         self.assertEqual(info, {'version': '18.0.1.0.0', 'installable': True, 'python': ['lxml'],
@@ -80,6 +90,26 @@ class VersionTests(unittest.TestCase):
                      b'x' * (ha_odoo.MAX_MANIFEST + 1)):
             with self.subTest(data=data[:30]):
                 self.assertIsNone(ha_odoo.parse_manifest(data))
+
+    def test_dependencies_that_are_no_list_make_the_manifest_unreadable_and_never_a_crash(self):
+        # A manifest of the backup is data nobody vouches for: `external_dependencies` entries Odoo cannot go through (a
+        # number, a flag, a single string, a dict that has keys) made the strict pass end in a TypeError, an unexplained
+        # failure of the whole app; now the module simply has no readable manifest (a module the device lacks, then).
+        for entry in ('5', 'True', '3.5', "'requests'", "{'a': 1}", '1j'):
+            for key in ('python', 'bin'):
+                data = f"{{'version': '1.2', 'external_dependencies': {{'{key}': {entry}}}}}".encode()
+                with self.subTest(data=data):
+                    self.assertIsNone(ha_odoo.parse_manifest(data))
+        # what is plainly nothing (or a list of anything) is read as before
+        for entry in ('None', '[]', '()', '{}', "''"):
+            data = f"{{'external_dependencies': {{'python': {entry}, 'bin': {entry}}}}}".encode()
+            with self.subTest(data=data):
+                self.assertEqual(ha_odoo.parse_manifest(data), {'version': '18.0.1.0', 'installable': True,
+                                                                 'python': [], 'bin': []})
+        info = ha_odoo.parse_manifest(b"{'external_dependencies': {'python': ('lxml', 3, 'pytz'), 'bin': ['a', None]}}")
+        self.assertEqual((info['python'], info['bin']), (['lxml', 'pytz'], ['a']))
+        many = ha_odoo.parse_manifest(("{'external_dependencies': {'python': [" + ', '.join(f"'p{i}'" for i in range(80)) + "]}}").encode())
+        self.assertEqual(len(many['python']), 50)
 
 
 def details(modules, **counts):
@@ -646,7 +676,8 @@ class PackageQuadletTests(unittest.TestCase):
                                            ('/home/appowner/.local/share/odoo18/addons', '/mnt/extra-addons', 'ro')])
         self.assertTrue(live.conf_secret.startswith('odoo18-odoo-conf,type=mount,target=/etc/odoo/odoo.conf'))
         self.assertEqual(live.skipped_mounts, [])
-        self.assertFalse(ha_odoo._password_elsewhere(self.rendered()['odoo-db.container']), 'nothing for the OD-57 stop to say')
+        self.assertFalse(ha_odoo._plain_password(self.rendered()['odoo-db.container']), 'nothing for the OD-57 stop to say')
+        self.assertEqual(live.db_env_files, [])
 
     def test_and_the_target_resolves_them_against_the_app_settings_of_the_tenant(self):
         runner = types.SimpleNamespace(home='/home/appowner')
@@ -715,10 +746,10 @@ class MountTests(unittest.TestCase):
             self.assertEqual([(i.id, i.level) for i in caught.exception.issues], [('odoo.layout-unsupported', 'stop')])
             self.assertTrue(caught.exception.issues[0].action)
 
-    def test_a_superuser_password_in_an_environment_file_is_said_at_once_not_as_a_cluster_that_does_not_start(self):
-        """OD-57, the part that cannot be made safely: only this app, with what to do; the standard layout is untouched."""
-        for text in (b'EnvironmentFile=%h/.config/odoo18/db.env\n', b'Environment=POSTGRES_PASSWORD=not-for-a-log\n',
-                     b'Environment=A=1 POSTGRES_PASSWORD=x\n'):
+    def test_a_superuser_password_written_plainly_in_environment_is_said_at_once_not_as_a_cluster_that_does_not_start(self):
+        """OD-57, the one place left: a plain `Environment=POSTGRES_PASSWORD=` would be an argument of `podman run`; only this
+        app stops, with what to do; the standard layout and an environment file are untouched."""
+        for text in (b'Environment=POSTGRES_PASSWORD=not-for-a-log\n', b'Environment=A=1 POSTGRES_PASSWORD=x\n'):
             quadlets = dict(QUADLETS)
             quadlets['odoo-db.container'] = QUADLETS['odoo-db.container'].replace(
                 b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', text)
@@ -726,18 +757,24 @@ class MountTests(unittest.TestCase):
                 ha_odoo.Live(quadlets, '/home/appowner')
             self.assertEqual([(i.id, i.level) for i in caught.exception.issues], [('odoo.layout-unsupported', 'stop')])
             self.assertIn('POSTGRES_PASSWORD_FILE', caught.exception.issues[0].action)
+            self.assertIn('EnvironmentFile', caught.exception.issues[0].action)
             self.assertNotIn('not-for-a-log', repr(caught.exception.issues[0].view('odoo')))
         quadlets = dict(QUADLETS)
-        quadlets['odoo-db.container'] += b'EnvironmentFile=%h/.config/odoo18/other.env\n'   # next to the standard secret: fine
-        self.assertEqual(ha_odoo.Live(quadlets, '/home/appowner').db_user, 'postgres')
         quadlets['odoo-db.container'] = (QUADLETS['odoo-db.container']
                                          .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n',
-                                                  b'EnvironmentFile=%h/.config/odoo18/other.env\n')
+                                                  b'Environment=POSTGRES_PASSWORD=not-for-a-log\n')
                                          .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,'
                                                   b'uid=999,gid=999,mode=0400\n',
                                                   b'Secret=odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD\n'))
-        live = ha_odoo.Live(quadlets, '/home/appowner')    # the password is a podman secret that sets the variable: fine
-        self.assertEqual(live.db_secrets, ['odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD'])
+        live = ha_odoo.Live(quadlets, '/home/appowner')
+        self.assertEqual(live.db_secrets, ['odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD'],
+                         'a podman secret that sets the variable is the password the new cluster gets: nothing to stop for')
+        quadlets = dict(QUADLETS)
+        quadlets['odoo-db.container'] = (QUADLETS['odoo-db.container']
+                                         .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n',
+                                                  b'Environment=POSTGRES_PASSWORD=not-for-a-log\nEnvironmentFile=%h/.config/odoo18/db.env\n'))
+        live = ha_odoo.Live(quadlets, '/home/appowner', lambda rel, max_bytes=None: b'POSTGRES_PASSWORD=also-not-for-a-log\n')
+        self.assertEqual(live.db_env_files, ['/home/appowner/.config/odoo18/db.env'], 'the file holds the password: nothing to say')
 
     def test_the_superuser_name_may_hold_any_character_but_a_control_one(self):
         """OD-05: it is one argument, never a shell word or SQL."""
@@ -753,6 +790,126 @@ class MountTests(unittest.TestCase):
                 b'Environment=POSTGRES_USER=postgres', f'Environment="POSTGRES_USER={name}"'.encode())
             with self.subTest(name=name[:5], length=len(name.encode())), self.assertRaises(BackupError):
                 ha_odoo.Live(quadlets, '/home/appowner')
+
+
+class EnvironmentFileTests(unittest.TestCase):
+    """OD-57: the superuser's password (and the rest of the cluster's settings) may live in an `EnvironmentFile=`; podman reads
+    the file again for the new cluster as it does for the live one, the engine only reads what the cluster is called and where it
+    lives, and never a password."""
+
+    CANARY = 'Super-Secret-Canary-0123456789'
+
+    def quadlets(self, *lines):
+        db = (QUADLETS['odoo-db.container']
+              .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', b'')
+              .replace(b'Environment=POSTGRES_USER=postgres\n', b'')    # (the file says it in some tests)
+              .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,mode=0400\n', b''))
+        found = dict(QUADLETS)
+        found['odoo-db.container'] = db + ''.join(f'{line}\n' for line in lines).encode()
+        return found
+
+    @staticmethod
+    def reader(files):
+        asked = []
+
+        def read(rel, max_bytes=None):
+            asked.append((rel, max_bytes))
+            if rel not in files:
+                raise BackupError('not-found', 'x')
+            return files[rel]
+        read.asked = asked
+        return read
+
+    def test_a_password_in_an_environment_file_is_no_reason_to_stop_and_the_file_goes_to_the_new_cluster_as_it_is(self):
+        read = self.reader({'.config/odoo18/db.env': f'# the database\nPOSTGRES_PASSWORD={self.CANARY}\nTZ=Asia/Taipei\n'.encode()})
+        for path in ('%h/.config/odoo18/db.env', '/home/appowner/.config/odoo18/db.env'):
+            with self.subTest(path=path):
+                live = ha_odoo.Live(self.quadlets(f'EnvironmentFile={path}'), '/home/appowner', read)
+                self.assertEqual(live.db_env_files, ['/home/appowner/.config/odoo18/db.env'])
+                self.assertEqual((live.db_user, live.pgdata), ('postgres', '/var/lib/postgresql/data'))
+                self.assertNotIn('POSTGRES_PASSWORD', live.db_env, 'the value is never kept: podman reads the file itself')
+                self.assertNotIn(self.CANARY, repr(vars(live)))
+        self.assertEqual(read.asked[0], ('.config/odoo18/db.env', ha_odoo.ENV_FILE_MAX))
+
+    def test_what_the_file_says_about_the_cluster_counts_like_an_environment_line_which_wins(self):
+        text = b'POSTGRES_USER=filedb\nPGDATA=/var/lib/postgresql/data/pgdata\nPOSTGRES_INITDB_ARGS=--data-checksums\nOTHER=1\n'
+        read = self.reader({'.config/odoo18/db.env': text})
+        live = ha_odoo.Live(self.quadlets('EnvironmentFile=%h/.config/odoo18/db.env'), '/home/appowner', read)
+        self.assertEqual((live.db_user, live.pgdata), ('filedb', '/var/lib/postgresql/data/pgdata'))
+        self.assertNotIn('POSTGRES_USER', live.db_env, 'handed over by the file itself, not as an argument of podman run')
+        live = ha_odoo.Live(self.quadlets('Environment=POSTGRES_USER=quadlet', 'EnvironmentFile=%h/.config/odoo18/db.env'),
+                            '/home/appowner', read)
+        self.assertEqual(live.db_user, 'quadlet', '--env wins over --env-file')
+        # the first of two files is overruled only by an equal value; two different values stop (podman's order is not guessed)
+        read = self.reader({'a.env': b'POSTGRES_USER=one\n', 'b.env': b'POSTGRES_USER=two\n'})
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.Live(self.quadlets('EnvironmentFile=%h/a.env', 'EnvironmentFile=%h/b.env'), '/home/appowner', read)
+        self.assertIn('POSTGRES_USER', caught.exception.issues[0].message)
+        read = self.reader({'a.env': b'POSTGRES_USER=one\r\n', 'b.env': b'  POSTGRES_USER=one\n'})
+        live = ha_odoo.Live(self.quadlets('EnvironmentFile=%h/a.env', 'EnvironmentFile=%h/b.env'), '/home/appowner', read)
+        self.assertEqual((live.db_user, live.db_env_files), ('one', ['/home/appowner/a.env', '/home/appowner/b.env']))
+
+    def test_the_data_folder_the_file_names_picks_the_mount_that_holds_the_cluster(self):
+        quadlets = self.quadlets('Volume=pg2.volume:/srv/pg', 'EnvironmentFile=%h/db.env')
+        quadlets['pg2.volume'] = b'[Volume]\nVolumeName=pg2vol\n'
+        live = ha_odoo.Live(quadlets, '/home/appowner', self.reader({'db.env': b'PGDATA=/srv/pg/data\n'}))
+        self.assertEqual((live.db_volume, live.db_target, live.pgdata), ('pg2vol', '/srv/pg', '/srv/pg/data'))
+        live = ha_odoo.Live(quadlets, '/home/appowner', self.reader({'db.env': b'TZ=Asia/Taipei\n'}))
+        self.assertEqual((live.db_volume, live.db_target, live.pgdata), ('odoo18-db-data-isolated', '/var/lib/postgresql/data',
+                                                                          '/var/lib/postgresql/data'))
+
+    def test_what_podman_might_read_differently_from_the_engine_stops_this_app_naming_the_file_and_the_key_never_a_value(self):
+        for line in ('POSTGRES_USER="app"', "POSTGRES_USER='app'", 'POSTGRES_USER=ap$p', 'POSTGRES_USER=a\\b', 'POSTGRES_USER= app',
+                     'POSTGRES_USER=app ', 'PGDATA=', 'POSTGRES_USER=' + 'x' * 4100):
+            read = self.reader({'db.env': f'{line}\nPOSTGRES_PASSWORD={self.CANARY}\n'.encode()})
+            with self.subTest(line=line[:30]), self.assertRaises(BackupError) as caught:
+                ha_odoo.Live(self.quadlets('EnvironmentFile=%h/db.env'), '/home/appowner', read)
+            issue = caught.exception.issues[0]
+            self.assertEqual((issue.id, issue.level), ('odoo.layout-unsupported', 'stop'))
+            self.assertIn('~/db.env', issue.message)
+            self.assertIn(line.split('=')[0], issue.message)
+            self.assertTrue(issue.action)
+            self.assertNotIn(self.CANARY, repr(issue.view('odoo')) + caught.exception.message)
+            self.assertNotIn('"app"', issue.message)
+
+    def test_a_file_that_is_not_below_the_homes_percent_h_or_cannot_be_read_stops_this_app(self):
+        read = self.reader({'db.env': b'TZ=Asia/Taipei\n', '../etc/db.env': b'TZ=Asia/Taipei\n', 'a/../../db.env': b'TZ=Asia/Taipei\n'})
+        for path in ('/etc/odoo/db.env', '%h/../etc/db.env', '%h/a/../../db.env', 'db.env', '-%h/db.env', '%h/', '/home/appowner2/db.env',
+                     '%h/db env', '%h/' + 'a' * 250, '/home/appowner/db.env/'):
+            with self.subTest(path=path), self.assertRaises(BackupError) as caught:
+                ha_odoo.Live(self.quadlets(f'EnvironmentFile={path}'), '/home/appowner', read)
+            issue = caught.exception.issues[0]
+            self.assertEqual((issue.id, issue.level), ('odoo.layout-unsupported', 'stop'))
+            self.assertIn('EnvironmentFile', issue.message)
+            self.assertIn('不在應用擁有者的家目錄下', issue.message, 'refused for its path, not for being unreadable')
+            self.assertTrue(issue.action)
+            self.assertEqual(read.asked, [], 'a path outside the home is never asked for')
+        for reader in (self.reader({}), None):
+            with self.subTest(reader=reader), self.assertRaises(BackupError) as caught:
+                ha_odoo.Live(self.quadlets('EnvironmentFile=%h/db.env'), '/home/appowner', reader)
+            self.assertIn('~/db.env', caught.exception.issues[0].message)
+
+    def test_what_ends_the_whole_job_is_not_taken_for_a_file_that_cannot_be_read(self):
+        def read(rel, max_bytes=None):
+            raise haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。'))
+
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.Live(self.quadlets('EnvironmentFile=%h/db.env'), '/home/appowner', read)
+        self.assertTrue(haissues.is_job_wide(caught.exception))
+
+    def test_without_an_environment_file_nothing_is_read(self):
+        read = self.reader({})
+        live = ha_odoo.Live(QUADLETS, '/home/appowner', read)
+        self.assertEqual((read.asked, live.db_env_files), ([], []))
+
+    def test_the_target_hands_its_runners_reader_over(self):
+        read = self.reader({'.config/odoo18/db.env': f'POSTGRES_PASSWORD={self.CANARY}\nPOSTGRES_USER=filedb\n'.encode()})
+        runner = types.SimpleNamespace(home='/home/appowner', read_file=read)
+        work = types.SimpleNamespace(runner=lambda _app: runner, quadlets=lambda _app: self.quadlets('EnvironmentFile=%h/.config/odoo18/db.env'))
+        app = types.SimpleNamespace(id='odoo', name='Odoo 18', volumes=[{'name': 'odoo18-db-data-isolated'}, {'name': 'odoo18-web-data'}],
+                                    data_dirs=[{'path': '.local/share/odoo18/addons'}], postgres=[])
+        target = ha_odoo.Target(work, app, haissues.Sink('odoo'))
+        self.assertEqual((target.live.db_user, target.live.db_env_files), ('filedb', ['/home/appowner/.config/odoo18/db.env']))
 
 
 class DatabaseNameTests(unittest.TestCase):
@@ -1595,14 +1752,14 @@ class GapTests(unittest.TestCase):
             self.assertIn('缺少映像或設定檔機密', caught.exception.message)
 
     def test_a_database_container_with_no_password_provider_at_all_is_left_to_the_cluster_to_say(self):
-        """OD-57: only a password in an environment file or a plain variable is said at once; no password anywhere is not."""
+        """OD-57: only a password written plainly in Environment= is said at once; no password anywhere is not."""
         db = (QUADLETS['odoo-db.container']
               .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', b'')
               .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,'
                        b'mode=0400\n', b''))
         self.assertEqual(ha_odoo.Live(self.quadlets(db=db), '/home/appowner').db_secrets, [])
-        self.assertFalse(ha_odoo._password_elsewhere(db))
-        self.assertFalse(ha_odoo._password_elsewhere(db + b'Environment=TZ=Asia/Taipei\n'))
+        self.assertFalse(ha_odoo._plain_password(db))
+        self.assertFalse(ha_odoo._plain_password(db + b'Environment=TZ=Asia/Taipei\n'))
 
     def test_an_environment_line_that_cannot_be_read_is_not_a_secret_in_a_message(self):
         db = QUADLETS['odoo-db.container'] + b'Environment="POSTGRES_PASSWORD=never-in-a-message\n'
@@ -1610,7 +1767,7 @@ class GapTests(unittest.TestCase):
             ha_odoo.Live(self.quadlets(db=db), '/home/appowner')
         self.assertEqual(caught.exception.code, 'incompatible')
         self.assertNotIn('never-in-a-message', caught.exception.message + repr(caught.exception.details))
-        self.assertFalse(ha_odoo._password_elsewhere(db), 'the reader of the layout does not guess: it says no')
+        self.assertFalse(ha_odoo._plain_password(db), 'the reader of the layout does not guess: it says no')
 
     def test_odoos_data_that_is_not_mounted_at_var_lib_odoo_stops_only_this_app(self):
         web = QUADLETS['odoo.container'].replace(b':/var/lib/odoo\n', b':/srv/odoo\n')
