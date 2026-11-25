@@ -7,6 +7,7 @@ containers paused) -- see the classes ParityCheckTests .. ParityLiveTests."""
 import gzip
 import io
 import json
+import os
 import sqlite3
 import tarfile
 import tempfile
@@ -14,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, haimport, haissues, hacommon, ha_opendesign as od, hasqlite, hatarget
+from woowbackup import habackup, haimport, haissues, hacommon, ha_opendesign as od, hasecuretar, hasqlite, hatarget, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -1037,6 +1038,46 @@ class ParityLiveTests(ParityCase):
         self.world.needs_stopped = {DATA: self.UNITS}
         self.assertTrue(self.row(self.upload_od())['importable'])
         self.assertEqual((self.export_calls(), self.world.owner.systemd), ([], []))
+
+
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_B2_FIXTURES') and os.environ.get('WOOWBK_HA_KEY'),
+                     'set WOOWBK_HA_B2_FIXTURES (the folder with x86/) and WOOWBK_HA_KEY to read the real OpenDesign backup')
+class RealOpenDesignBackupTests(unittest.TestCase):
+    """The real x86 OpenDesign add-on (0.2.15, encrypted, made 2026-11-23 by Supervisor 2026.11.0) through the walk and the
+    issue collection of this module: no device, no container; what is checked is what the file says. Nothing is printed."""
+
+    def test_the_real_backup_is_walked_and_says_what_a_check_would_say(self):
+        path = Path(os.environ['WOOWBK_HA_B2_FIXTURES']) / 'x86' / 'woow-b2-opendesign-x86-enc' / 'woow-b2-opendesign-x86-enc-20261123.tar'
+        if not path.exists():
+            self.skipTest('the real OpenDesign backup is not in WOOWBK_HA_B2_FIXTURES')
+        keys = hasecuretar.Keys(os.environ['WOOWBK_HA_KEY'])
+        before = dict(jobs._MASK_COUNTS)
+        with habackup.open_backup(path) as backup, tempfile.TemporaryDirectory() as tmp:
+            member = next(m for m in backup.layout.members if m.role == 'addon' and m.slug.split('_', 1)[-1] == 'woow_ha_opendesign')
+            report = habackup.Report(names=haissues.Names)
+            out = od._Count(report)
+            with backup.open_member(member.name, keys) as stream:
+                src = od.scan_member(stream, report, Path(tmp), out, machine=0x3E)
+            od.finish_configs(src, out, None)
+            self.assertTrue(report.complete)
+            self.assertEqual(src.addon.version, '0.2.15')
+            answers = od.hasqlite.run([{'db': od.DATABASE, 'check': 'quick', 'counts': list(od.COUNTS),
+                                        'queries': ['opendesign.project_folders', 'opendesign.routines_active']}],
+                                      dict(src.dbs), Path(tmp) / 'sqlite')
+            sink = haissues.Sink('open-design')
+            sink.extend(od.version_issues(src.addon.version, od.VERSIONS['0.2.15'][1], '0.24.1'))
+            details = od.collect(sink, src, {k: v for k, v in answers.items() if k is not None}, report)
+            od.skip_line(sink, report)
+        for value, count in list(jobs._MASK_COUNTS.items()):
+            for _ in range(count - before.get(value, 0)):
+                self.addCleanup(jobs.unmask_secret, value)
+        self.assertTrue(src.tree and od.DATABASE in src.dbs)
+        self.assertGreater(out.counts['files'], 100)
+        self.assertGreater(details['projects'], 0)
+        self.assertEqual([item.id for item in sink.found if item.level == 'stop'], [], 'the real backup is importable')
+        self.assertEqual(report.skip_count('device', 'fifo', 'secret', 'large', 'name'), 0)
+        self.assertEqual(src.configs_skipped, set())
+        self.assertTrue(set(src.left_out) >= {'home'}, 'the agents\' home stays in HA')
 
 
 def _names(data):

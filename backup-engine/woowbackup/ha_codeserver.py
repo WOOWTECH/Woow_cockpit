@@ -158,7 +158,8 @@ ISSUES = {
     'codeserver.links-copied': 'auto',            # CS-10, CS-13: hard links to files that do not move got the content
     'codeserver.kept-links-copied': 'auto',       # CS-15: this device's kept links to replaced files got the content
     'codeserver.service-paused': 'auto',          # CS-14, CS-16: the app's container was paused for one read
-    'codeserver.databases-skipped': 'notice',     # CS-12 (and damaged ones): VS Code databases that are not moved
+    'codeserver.databases-skipped': 'notice',     # damaged VS Code databases are not moved (as it was)
+    'codeserver.databases-unchecked': 'confirm',  # CS-12: the sandboxed reader did not finish (twice): healthy ones may be left behind
     'codeserver.extensions-skipped': 'notice',    # CS-17, CS-11: HA's extensions are not moved (list too large, staging unreadable)
     'codeserver.files-kept': 'notice',            # CS-11: a settings file of HA is too large, this device's stays
     'codeserver.no-workspace-folder': 'notice',
@@ -1183,10 +1184,15 @@ def collect(sink, src, ws, target, db_problems):
                         '要一起搬，請在 HA 建立備份時勾選 share，或自行複製。')
         elif not ws.projects:
             sink.notice('codeserver.no-projects', 'HA 備份的 share 資料夾裡沒有 projects 資料夾（HA 的工作區可能設在別處），工作區不會搬過來。')
-    bad = sorted(rel for (_area, rel), why in db_problems.items() if why)
+    bad = sorted(rel for (_area, rel), why in db_problems.items() if why and why != READER_FAILED)
     if bad:
         sink.notice('codeserver.databases-skipped',
-                    f'HA 的 VS Code 資料中有 {len(bad)} 個資料庫損毀或讀取沒有完成，不會搬過來（多半只是畫面狀態，少了也能用）。', bad)
+                    f'HA 的 VS Code 資料中有 {len(bad)} 個資料庫損毀，不會搬過來（多半只是畫面狀態，少了也能用）。', bad)
+    unchecked = sorted(rel for (_area, rel), why in db_problems.items() if why == READER_FAILED)
+    if unchecked:
+        sink.confirm('codeserver.databases-unchecked',
+                     f'無法確認 HA 的 VS Code 資料中有 {len(unchecked)} 個資料庫是否完好（讀取它們的獨立程式沒有完成，已自動再試一次），'
+                     '這次不會搬它們；多半只是畫面狀態，少了也能用。', unchecked)
     unknown = unknown_names(src)
     if unknown:
         sink.notice('codeserver.unknown-entries',

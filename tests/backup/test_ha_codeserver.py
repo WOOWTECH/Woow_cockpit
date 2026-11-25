@@ -8,6 +8,7 @@ paused, the extra volumes of this device are carried -- see the classes Parity*.
 import gzip
 import io
 import json
+import os
 import sqlite3
 import tarfile
 import tempfile
@@ -15,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, haimport, haissues, hacommon, ha_codeserver as cs, hasqlite, hatarget
+from woowbackup import habackup, haimport, haissues, hacommon, ha_codeserver as cs, hasecuretar, hasqlite, hatarget, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -1103,20 +1104,41 @@ class ParityLiveTests(ParityCase):
         self.assertEqual((row['importable'], row['ok'], len(calls)), (True, True, 2))
         self.assertNotIn('codeserver.databases-skipped', [item['id'] for item in row['issues']])
 
-    def test_cs12_a_reader_that_does_not_finish_counts_the_databases_as_damaged_and_the_rest_moves(self):
+    def reader_that_never_finishes(self, make_error=None):
+        run, calls = self.flaky(99, make_error or self.timeout)
+        patcher = mock.patch.object(hasqlite, 'run', run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+
+    def two_databases(self):
+        return self.upload_cs(extra=[{'name': 'data/vscode/User/globalStorage/second.db', 'data': sqlite_bytes()}])
+
+    def test_cs12_a_reader_that_does_not_finish_not_confirmed_stops_only_this_app(self):
         for label, make_error in (('time', self.timeout), ('died', lambda: BackupError('corrupt-archive', 'HA 備份中的VS Code 的資料庫無法讀取。'))):
-            run, calls = self.flaky(99, make_error)
-            with self.subTest(label=label), mock.patch.object(hasqlite, 'run', run):
-                self.world.volume_data.clear()
-                backup = self.upload_cs()
-                row = self.row(backup)
-                self.assertEqual((row['importable'], levels(row, 'stop'), len(calls)), (True, [], 2))
-                issue = issue_of(row, 'codeserver.databases-skipped')
-                self.assertEqual((issue['level'], issue['items']), ('notice', ['globalStorage/agent-host.db']))   # Codex's state stays in HA
-                result = self.convert(backup, [APP])
-                self.assertEqual(result['results'][0]['status'], 'converted')
-                self.assertNotIn('globalStorage/agent-host.db', self.volume(IDE))
-                self.assertIn('sessions/--share-projects--/2026-11-20_a.jsonl', self.volume(PI), 'everything else moved')
+            with self.subTest(label=label), mock.patch.object(hasqlite, 'run', self.flaky(99, make_error)[0]):
+                self.assert_not_confirmed(self.upload_cs(), 'codeserver.databases-unchecked', ['globalStorage/agent-host.db'],
+                                          '無法確認 HA 的 VS Code 資料中有 1 個資料庫是否完好')
+
+    def test_cs12_confirmed_goes_on_without_those_databases_and_the_rest_moves(self):
+        calls = self.reader_that_never_finishes()
+        row = self.row(self.upload_cs())
+        self.assertEqual((row['importable'], levels(row, 'stop'), len(calls)), (True, [], 2), 'two tries, then it counts as unchecked')
+        result = self.assert_confirmed(self.upload_cs(), 'codeserver.databases-unchecked', ['globalStorage/agent-host.db'])
+        self.assertNotIn('globalStorage/agent-host.db', self.volume(IDE))
+        self.assertIn('sessions/--share-projects--/2026-11-20_a.jsonl', self.volume(PI), 'everything else moved')
+        self.assertEqual(result['results'][0]['status'], 'converted')
+
+    def test_cs12_one_more_name_asks_again(self):
+        self.reader_that_never_finishes()
+        self.assert_one_more_name_asks_again(self.upload_cs(), self.two_databases(), 'codeserver.databases-unchecked')
+
+    def test_cs12_a_damaged_database_is_still_only_a_reminder(self):
+        bad = [{'name': 'data/vscode/User/globalStorage/broken.vscdb', 'data': b'SQLite format 3\x00' + b'\xff' * 4000}]
+        row = self.row(self.upload_cs(extra=bad))
+        self.assertEqual((row['ok'], issue_of(row, 'codeserver.databases-skipped')['level']), (True, 'notice'))
+        self.assertNotIn('codeserver.databases-unchecked', [item['id'] for item in row['issues']])
 
     def test_cs12_what_ends_the_whole_job_is_not_swallowed(self):
         run, _calls = self.flaky(99, lambda: haissues.job_wide(BackupError('insufficient-space', '磁碟空間不足。')))
@@ -1219,6 +1241,43 @@ class ParityLiveTests(ParityCase):
                 Path(tmp, name).write_bytes(data)
             self.assertEqual({name: cs._staging_readable(Path(tmp) / name) for name in (*files, 'missing')},
                              {'good': True, 'torn': False, 'garbage': False, 'missing': False})
+
+
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_B2_FIXTURES') and os.environ.get('WOOWBK_HA_KEY'),
+                     'set WOOWBK_HA_B2_FIXTURES (the folder with x86/) and WOOWBK_HA_KEY to read the real code-server backup')
+class RealCodeServerBackupTests(unittest.TestCase):
+    """The real x86 code-server add-on (0.1.14, encrypted, without share, made 2026-11-23) through the walk and the issue
+    collection of this module: no device, no container; what is checked is what the file says. Nothing is printed."""
+
+    def test_the_real_backup_is_walked_and_says_what_a_check_would_say(self):
+        path = Path(os.environ['WOOWBK_HA_B2_FIXTURES']) / 'x86' / 'woow-b2-codeserver-x86-enc' / 'woow-b2-codeserver-x86-enc-20261123.tar'
+        if not path.exists():
+            self.skipTest('the real code-server backup is not in WOOWBK_HA_B2_FIXTURES')
+        keys = hasecuretar.Keys(os.environ['WOOWBK_HA_KEY'])
+        before = dict(jobs._MASK_COUNTS)
+        stub = mock.Mock(checkpoint=lambda: None, abort=lambda: None, log=lambda _text: None)
+        with habackup.open_backup(path) as backup, tempfile.TemporaryDirectory() as tmp:
+            member = next(m for m in backup.layout.members if m.role == 'addon' and m.slug.split('_', 1)[-1] == 'woow_ha_code_server')
+            report = habackup.Report(names=haissues.Names)
+            outs = {key: cs.Volume(None, (0, 0), {}, key, report) for key in ('pi', 'ide', 'ext')}
+            with backup.open_member(member.name, keys) as stream:
+                src = cs.scan_member(stream, report, Path(tmp), outs, machine=0x3E)
+            problems = cs.check_dbs(stub, src, Path(tmp)) if src.dbs else {}
+            sink = haissues.Sink('woow-code-server')
+            target = mock.Mock(workspace='Desktop', conflict=[])
+            cs.collect(sink, src, cs.Workspace(), target, problems)
+            cs.skip_line(sink, report)
+        for value, count in list(jobs._MASK_COUNTS.items()):
+            for _ in range(count - before.get(value, 0)):
+                self.addCleanup(jobs.unmask_secret, value)
+        self.assertTrue(report.complete)
+        self.assertEqual(src.addon.version, '0.1.14')
+        self.assertTrue({'pi', 'user', 'ext'} <= src.trees)
+        self.assertEqual([item.id for item in sink.found if item.level == 'stop'], [], 'the real backup is importable')
+        self.assertEqual([item.id for item in sink.found if item.level == 'confirm'], [], 'and asks for nothing')
+        self.assertEqual(report.skip_count(*cs.od.SKIPS), 0)
+        self.assertEqual(src.large, [])
+        self.assertNotIn('pi:logins', src.left, 'the login files are never handed out')
 
 
 class PureTests(unittest.TestCase):
