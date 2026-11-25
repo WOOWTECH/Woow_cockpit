@@ -2440,13 +2440,13 @@ def check_listing(text):
     """The `pg_restore -l` listing is whole when its entries are the ones its own header says the archive has, less the
     few a plain listing keeps back (pg-stdin follow-up F4: a listing that came back short would restore only the part it
     names, and nothing would notice). What a plain listing keeps back is no exact number: a REAL listing (PostgreSQL
-    16.15, the Nextcloud lane's probe of 2026-11-24) has 1131 entry lines under `TOC Entries: 1136`, so it holds back
-    the three archive settings ENCODING, STDSTRINGS and SEARCHPATH and two more entries (such as the public schema's,
-    which has no definition). The lines may be short of the header by the settings not shown, plus LISTING_SLACK; a
-    listing without the header, with more lines than the header or with a larger gap is refused. A gap inside the slack
-    goes unnoticed (a listing that was cut short loses a stretch of its end, for an Odoo database hundreds of entries;
-    the real run, FOR-REAL.txt 1, brings the numbers of an Odoo listing and the slack can then be tightened). Returns
-    the number of entries."""
+    16.15, the Nextcloud lane's probe of 2026-11-24) has 1131 entry lines under `TOC Entries: 1136`, so it keeps back
+    five: the three archive settings ENCODING, STDSTRINGS and SEARCHPATH (none of them is listed) and two more of a
+    kind nobody looked at. The lines may be short of the header by the settings not shown, plus LISTING_SLACK; a
+    listing without the header, with more lines than the header or with a larger gap is refused. A gap inside the
+    slack goes unnoticed (a listing that was cut short loses a stretch of its end, for an Odoo database hundreds of
+    entries; the real run, FOR-REAL.txt 1, brings the numbers of an Odoo listing and the slack can then be
+    tightened). Returns the number of entries."""
     entries, declared, shown = toc_entries(text)
     held_back = None if declared is None else declared - entries
     lowest = len(ARCHIVE_SETTINGS) - shown
