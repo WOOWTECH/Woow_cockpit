@@ -2324,6 +2324,38 @@ class RowTests(LiteLLMCase):
         self.assertTrue(self.convert(self.upload_litellm(extra=[fifo]), ['litellm'],
                                      acknowledged={'litellm': [line['key']]})['backup_id'])
 
+    def test_l33_a_version_that_the_running_proxy_cannot_tell_is_read_from_its_image(self):
+        self.world.app_version = None      # the proxy does not run: `podman exec` fails
+        asked = []
+        run = self.world.run
+
+        def image_says(role, image, command, options, data):
+            if role == 'version':
+                asked.append((image, options.get('--entrypoint'), command))
+                return Result(0, b'1.104.0\n', b'')
+            return run(role, image, command, options, data)
+
+        self.world.run = image_says
+        found = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertEqual(found['target_version'], '1.104.0')
+        self.assertNotIn('version.target-unknown', [i['id'] for i in found['issues']])
+        self.assertEqual(asked[0][0], 'localhost/woow-litellm:1.104.0-0.3.16', "this device's own proxy image, in a throwaway container")
+        self.assertEqual(asked[0][1], ['python'])
+
+    def test_the_lab_drivers_old_verdict_is_judge_on_a_collecting_sink(self):
+        src = types.SimpleNamespace(symlinks=0, recovery_files=0, pg_version='18')
+        found = {'objects': {'schemas': ['woow_platform', 'evil'], 'large_objects': 2, 'encoding': 'UTF8'}, 'databases': ['litellm'],
+                 'migrations': list(MIGRATIONS), 'superuser': ['CAST']}
+        blockers, warnings = ha_litellm.verdict(src, found, ha_major=18, live_migrations_value=list(MIGRATIONS), binding='match',
+                                                target_major=99)
+        self.assertEqual(len(blockers), 2, 'the two lines to confirm are what stands in the way for an older page')
+        self.assertEqual(len(warnings), 1)
+        blockers, _w = ha_litellm.verdict(src, dict(found, migrations=MIGRATIONS[:1]), ha_major=17, live_migrations_value=list(MIGRATIONS),
+                                          binding='mismatch')
+        self.assertTrue(any('不是預期的 PostgreSQL 18' in b for b in blockers))
+        self.assertTrue(any('資料庫結構版本不同' in b for b in blockers))
+        self.assertIn(ha_litellm.SALT_MISMATCH, blockers)
+
 
 class CandidateStillGuarded(unittest.TestCase):
     def test_the_lab_candidate_never_converts(self):

@@ -97,7 +97,6 @@ SALT_FILE = 'data/secrets/salt_key'
 STATE_FILE = 'data/woow/state.json'
 SALT_SECRET = 'litellm-salt-key'
 SALT_ENV = 'LITELLM_SALT_KEY'
-APP_CONTAINER = 'litellm'
 # The add-on versions whose LiteLLM and PostgreSQL were verified (HA build-info.json / CHANGELOG; facts section 3).
 VERSIONS = hacommon.VersionTable('LiteLLM', {'0.1.15': '1.104.0'})
 HA_PG_MAJOR = 18
