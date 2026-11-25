@@ -451,7 +451,7 @@ def main():
         cred_cols = columns("credentials_entity")
         credentials = []
         if "name" in cred_cols:
-            for row in conn.execute('SELECT name FROM credentials_entity ORDER BY name LIMIT %(creds)d').fetchall():
+            for row in conn.execute('SELECT substr(name, 1, %(name)d) AS n FROM credentials_entity ORDER BY n LIMIT %(creds)d').fetchall():
                 credentials.append((row[0] if isinstance(row[0], str) else "")[:%(name)d])
         emit({"tables": tables, "owner": owner, "migration": migration, "workflows": readable, "credentials": credentials})
         if readable:

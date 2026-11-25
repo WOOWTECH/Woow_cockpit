@@ -696,6 +696,49 @@ class LargeFileTests(unittest.TestCase):
             Sink('n8n', []).skipped(report)
         self.assertEqual(caught.exception.code, 'confirmation-required')
 
+    def test_what_streams_is_still_counted_by_the_space_guard_and_a_full_disk_stops_the_job(self):
+        """Nothing stops n8n for the size of a file, but the disk still does: the bytes are counted while they are written."""
+        class Guard:
+            def __init__(self):
+                self.total = 0
+
+            def wrote(self, n):
+                self.total += n
+                if self.total > 100_000:
+                    from woowbackup import haissues as issues
+                    raise issues.job_wide(BackupError('insufficient-space', '空間不足'))
+
+        guard = Guard()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        files = ha_n8n.FileTar(root / 'files.tar', guard)
+        big = elf(glibc=True) + b'\x00' * 300_000
+        entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': ADDON_JSON}, {'name': 'config', 'type': 'dir'},
+                   {'name': 'config/.n8n', 'type': 'dir'}, {'name': 'config/.n8n/nodes', 'type': 'dir'},
+                   {'name': 'config/.n8n/nodes/node_modules/n8n-nodes-big/b.node', 'data': big}]
+        with contextlib_patch({'NATIVE_HEAD': 64 * 1024}), self.assertRaises(BackupError) as caught:
+            ha_n8n.scan_member(io.BytesIO(hx.tar_bytes(entries)), habackup.Report(), root, files=files, guard=guard)
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertTrue(haissues.is_job_wide(caught.exception))
+        files.close()
+
+    def test_a_truncated_native_file_still_stops_the_app_with_the_member_named_in_the_error(self):
+        big = elf(glibc=True) + b'\x00' * 300_000
+        entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': ADDON_JSON}, {'name': 'config', 'type': 'dir'},
+                   {'name': 'config/.n8n', 'type': 'dir'}, {'name': 'config/.n8n/nodes', 'type': 'dir'},
+                   {'name': 'config/.n8n/nodes/node_modules/n8n-nodes-big/b.node', 'data': big}]
+        data = hx.tar_bytes(entries)
+        cut = data[:len(data) - 200_000]    # the end of the archive and the second half of the file are gone
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        files = ha_n8n.FileTar(root / 'files.tar')
+        self.addCleanup(files.close)
+        with contextlib_patch({'NATIVE_HEAD': 64 * 1024}), self.assertRaises(BackupError) as caught:
+            ha_n8n.scan_member(io.BytesIO(cut), habackup.Report(), root, files=files)
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+
     def test_the_old_limits_are_raised_not_removed(self):
         self.assertGreaterEqual(ha_n8n.MAX_KEY_FILE, 1024 * 1024)
         self.assertGreaterEqual(ha_n8n.NATIVE_HEAD, 64 * 1024 * 1024)
