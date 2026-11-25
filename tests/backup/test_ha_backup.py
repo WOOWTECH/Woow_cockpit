@@ -57,17 +57,22 @@ def say_file(test, error):
     test.assertEqual((error.details.get('scope'), error.message), (None, FILE_MESSAGES[error.code]))
 
 
-def count_lines(function, *args):
-    """(result, the number of source lines `function` executed while it ran): a cost that does not depend on the machine,
-    for code whose cost is the point (a crafted input must not make it loop once per byte)."""
-    code, lines = function.__code__, [0]
+def count_lines(watched, function, *args):
+    """(result, the number of source lines that the code of the `watched` functions -- and the generators and lambdas inside
+    them -- executed while `function(*args)` ran): a cost that does not depend on the machine, for code whose cost is the point
+    (a crafted input must not make it loop once per byte, nor once per byte of every block)."""
+    codes, pending, lines = set(), [fn.__code__ for fn in watched], [0]
+    while pending:
+        code = pending.pop()
+        codes.add(code)
+        pending.extend(const for const in code.co_consts if hasattr(const, 'co_code'))
 
     def local(_frame, event, _arg):
         lines[0] += event == 'line'
         return local
 
     def trace(frame, _event, _arg):
-        return local if frame.f_code is code else None
+        return local if frame.f_code in codes else None
     previous = sys.gettrace()
     sys.settrace(trace)
     try:
@@ -1507,11 +1512,12 @@ class EntryTests(WalkCase):
                                          ('a word in every block', in_step * blocks, blocks),
                                          ('a word in half of the blocks', (in_step + bytes(block)) * (blocks // 2), blocks // 2),
                                          ('zeros', bytes(blocks * block), 0), ('rubbish', os.urandom(blocks * block), 0)):
-            with self.subTest(filler=label), mock.patch.object(habackup, '_checksum_ok',
-                                                                wraps=habackup._checksum_ok) as checked:
-                answer, lines = count_lines(habackup._Reader.another_header, habackup._Reader(io.BytesIO(filler)))
+            real = habackup._checksum_ok
+            with self.subTest(filler=label), mock.patch.object(habackup, '_checksum_ok', wraps=real) as checked:
+                answer, lines = count_lines((habackup._Reader.another_header, real), habackup._Reader.another_header,
+                                            habackup._Reader(io.BytesIO(filler)))
                 self.assertIs(answer, False, 'no header in it')
-                self.assertLessEqual(lines, 16 * blocks + 100, 'a few steps per block')
+                self.assertLessEqual(lines, 40 * blocks + 100, 'a few steps per block, the sum of the header included')
                 if checksums is not None:
                     self.assertEqual(checked.call_count, checksums, 'a checksum for each place a header can begin, once')
                 self.assertLessEqual(checked.call_count, blocks)
