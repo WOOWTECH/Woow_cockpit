@@ -509,7 +509,8 @@ class ScopeTests(unittest.TestCase):
 
         case = Case()
         case.setUp()
-        self.addCleanup(case.tearDown)
+        self.addCleanup(case.doCleanups)     # setUp registered patcher.stop on the case: without this the patch of
+        self.addCleanup(case.tearDown)       # flows.running_reserve outlives the test and breaks test_flows run after this file
         runner = FakeRunner({('volume', 'rm'): Result(125, b'', b'busy'), ('volume', 'exists'): Result(0, b'', b'')})
         runner.home = str(case.root)
         adapter = hi.FakeHaAdapter(hi.app('odoo', 'Odoo 18'), case.world)
