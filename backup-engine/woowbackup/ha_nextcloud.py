@@ -107,6 +107,7 @@ ISSUES = {
     'nextcloud.shape-unreadable': 'stop',         # NC-37
     'nextcloud.db-objects': 'stop',               # NC-38: objects that cannot be left out
     'nextcloud.db-objects-skipped': 'confirm',    # NC-38, NC-45: functions and triggers of other apps are left out
+    'nextcloud.db-objects-known': 'notice',       # NC-38, NC-45: ... and they are only those a known app (Memories) makes again by itself
     'nextcloud.extension-enabled': 'auto',        # NC-39: an extension this device's database image has is enabled
     'nextcloud.extension-missing': 'stop',        # NC-39: ... and one it has not
     'nextcloud.schemas-skipped': 'confirm',       # NC-40: only the schema public is moved
@@ -247,6 +248,15 @@ SELECT json_build_object(
 SKIPPABLE = ('functions', 'triggers')
 # pg_proc holds functions, procedures and aggregates (SHAPE_SQL counts all of them as `functions`); pg_dump lists them as three kinds
 SKIPPED_TOC = ('FUNCTION', 'PROCEDURE', 'AGGREGATE', 'TRIGGER')
+# The objects of an app this module knows, by the names OBJECTS_SQL gives. Memories (pulsejet/memories lib/Db/FilecacheTriggers.php,
+# read on 2026-11-25) makes one function and one trigger on oc_filecache. Without them it runs in its compatibility mode:
+# lib/Db/TimelineQueryDays.php joins the file cache when `memories.db.triggers.fcu` is false, which is its default, and HA's
+# value of that setting is not carried (merge_config). Its repair step (appinfo/info.xml: post-migration and install; the
+# `maintenance:repair` command runs the post-migration steps of the enabled apps) makes them again. Leaving exactly these
+# out loses nothing, so they alone are no line to confirm. They are NOT carried over as HA had them: code that comes out of
+# a backup is never restored, a known name or not (the vendor's own repair step is the way back).
+KNOWN_OBJECTS = {'Memories': frozenset({'public.memories_fcu_fun', 'oc_filecache.memories_fcu_trg'})}
+REPAIR_COMMAND = 'podman exec -u www-data {container} php occ maintenance:repair'
 OBJECTS_SQL = """WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'),
  ext AS (SELECT classid, objid FROM pg_depend WHERE deptype = 'e')
 SELECT json_build_object(
@@ -269,7 +279,14 @@ DEFAULT_RE = re.compile(rf"(?:nextval\('(?:public\.)?[a-z0-9_]{{1,63}}'::regclas
                         rf"|-?[0-9]{{1,20}}(?:\.[0-9]{{1,20}})?|true|false|NULL::{_PG_TYPE})")
 MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立、這台也無法略過的資料庫物件（{kinds}），無法安全地搬過來。'
 MSG_SKIPPED = ('HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的程式（{kinds}）。它們不會搬過來，資料表和資料照搬；'
-               '用到它們的應用（例如 Memories 相簿）匯入後部分功能可能要重新設定或重新安裝。')
+               '用到它們的應用匯入後如果不正常，請在這台更新或重新安裝那個應用，讓它自己把程式建回來。')
+# What a known app's objects need (NC-38, NC-45): nothing to confirm, a reminder after the import with the command.
+MSG_KNOWN_LEFT = ('HA 的 Nextcloud 資料庫有 {apps} 建立的函式與觸發程序。它們不會搬過來；沒有它們時 {apps} 會自動改用相容模式（查詢較慢），'
+                  '資料不受影響。匯入後執行一次 maintenance:repair，{apps} 就會把它們建回來。')
+MSG_REPAIR = ('HA 的 Nextcloud 資料庫裡 {apps} 建立的函式與觸發程序沒有搬過來；{apps} 目前改用相容模式（查詢較慢）。'
+              '要讓它建回來，請在匯入後執行一次：' + REPAIR_COMMAND)
+MSG_LEFT_OUT = ('HA 的 Nextcloud 資料庫裡其他應用建立的程式（函式、觸發程序）沒有搬過來；如果有應用匯入後不正常，'
+                '請在這台更新或重新安裝那個應用，讓它自己把程式建回來。')
 MSG_SCHEMAS = ('HA 的 Nextcloud 資料庫除了 Nextcloud 用的 public 之外還有其他 schema（資料庫裡的分組）。'
                '只搬 public，其他 schema 不會搬過來，Nextcloud 本身不受影響。')
 MSG_SHAPE_UNREAD = '無法讀取 HA 的 Nextcloud 資料庫結構，無法確認可以安全地搬過來。'
@@ -1450,6 +1467,21 @@ def object_names(doc):
     return names
 
 
+def known_objects(names, shape):
+    """(apps, others): the known apps (KNOWN_OBJECTS) whose objects are among `names` (object_names), and whether any other
+    object is left out as well (`others`). A list that is not whole (OBJECTS_SQL cuts it at 100 names; `shape` counts them all)
+    cannot say that nothing else is there: `others` is then True. Nothing a backup names can make something be restored."""
+    count = sum(shape.get(key) for key in SKIPPABLE if isinstance(shape.get(key), int)) if isinstance(shape, dict) else None
+    apps, others = set(), count is None or count != len(names)
+    for name in names:
+        owner = next((app for app, objects in KNOWN_OBJECTS.items() if name.split(' ', 1)[-1] in objects), None)
+        if owner is None:
+            others = True
+        else:
+            apps.add(owner)
+    return sorted(apps), others
+
+
 def _counts_sql(tables):
     parts = [f"'{key}', (SELECT count(*) FROM public.{table})" for table, key in COUNTED if table in tables]
     return 'SELECT json_build_object(' + ', '.join(parts) + ')'
@@ -1616,8 +1648,13 @@ def database_issues(sink, src, data, details, target):
             sink.stop('nextcloud.db-objects', MSG_SHAPE.format(kinds=hacommon.names(split[1])))
         else:
             if split[0]:
-                sink.confirm('nextcloud.db-objects-skipped', MSG_SKIPPED.format(kinds=hacommon.names(split[0])),
-                             details.get('skipped') or split[0])
+                names = details.get('skipped') or []
+                apps, others = known_objects(names, details.get('shape'))
+                if apps and not others:       # only what a known app makes again by itself: nothing is lost, nothing to confirm
+                    sink.notice('nextcloud.db-objects-known', MSG_KNOWN_LEFT.format(apps=hacommon.names(apps)), names)
+                else:
+                    sink.confirm('nextcloud.db-objects-skipped', MSG_SKIPPED.format(kinds=hacommon.names(split[0])),
+                                 names or split[0])
             extra = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK]
             enable = [e for e in extra if e in target.db.get('available', ())]
             if enable:
@@ -1789,6 +1826,11 @@ def import_texts(data):
     if data.get('lists_differ'):
         reminders.append('HA 備份時有人在使用 Nextcloud，有些使用者的檔案清單和實際檔案不一致；匯入後請執行一次檔案掃描：'
                          + SCAN_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
+    apps = [a for a in data.get('left_out_apps') or [] if a in KNOWN_OBJECTS]       # NC-38, NC-45: the programs left out
+    if apps:
+        reminders.append(MSG_REPAIR.format(apps=hacommon.names(apps), container=data.get('app_container') or 'nextcloud-app'))
+    if data.get('left_out_others'):
+        reminders.append(MSG_LEFT_OUT)
     if not data.get('office'):
         reminders.append('HA 的 Nextcloud 沒有啟用 Office（richdocuments），需要的話請在這台 Nextcloud 的應用程式頁面啟用。')
     elif len(data.get('office_cache') or []) < len(OFFICE_CACHE):
@@ -2401,9 +2443,12 @@ def convert(work, app, test_mode, out_dir):
                         ('data', '使用者檔案資料夾')):
         check_dir_tar(paths[role], ids, label)
     moved = userfiles_moved(data)
+    left_apps, left_others = known_objects(details.get('skipped') or [], details.get('shape'))
+    left_any = bool((shape_objects(details.get('shape')) or ([], []))[0])      # programs were left out at all
     return {'dirs': {live.rels[role]: paths[role] for role in paths}, 'custom_apps': sorted(src.apps),
             'policy': carried, 'counts': built['counts'], 'datadir_files': data.files if moved else 0,
             'datadir_bytes': data.bytes if moved else 0, 'userfiles': moved,
+            'left_out_apps': left_apps if left_any else [], 'left_out_others': left_any and left_others,
             'mail': any(isinstance(k, str) and k.startswith('mail_') for k in src.config),
             'office': 'richdocuments' in (details.get('enabled') or []),
             'office_cache': sorted(office_cache),
