@@ -1022,6 +1022,38 @@ class OdooDatabaseTests(OdooCase):
         self.assertEqual([(i['id'], i['level']) for i in row['issues']], [('odoo.layout-unsupported', 'stop')])
         self.assertIn('應用設定', row['issues'][0]['action'])
 
+    def test_what_the_reader_leaves_out_of_the_backup_is_one_line_to_confirm_again_at_the_conversion(self):
+        """IN-27 and the other reading rows of READ, for this importer: a device file in a module is left out, listed,
+        confirmed once with its name; one more such name needs the confirmation again."""
+        entries = [{'name': 'data/addons/woow_import_probe/node0', 'type': 'chr'}]
+        ha_id = self.upload_odoo(entries)
+        row = self.check(ha_id)
+        (line,) = [i for i in row['issues'] if i['id'] == 'files.skipped']
+        self.assertEqual((line['level'], line['items']), ('confirm', ['data/addons/woow_import_probe/node0']))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'], acknowledged={'odoo': []})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.storage.list_backups(), [])
+        self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line['key']]})
+        with tarfile.open(fileobj=io.BytesIO(self.world.dir_data['.local/share/odoo18/addons'])) as tar:
+            self.assertNotIn('./woow_import_probe/node0', tar.getnames())
+            self.assertIn('./woow_import_probe/__manifest__.py', tar.getnames())
+        more = self.upload_odoo(entries + [{'name': 'data/addons/woow_import_probe/node1', 'type': 'chr'}])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(more, ['odoo'], acknowledged={'odoo': [line['key']]})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_a_manifest_that_is_too_large_is_listed_and_its_module_stays_behind(self):
+        """IN-19 for the module manifests: it no longer stops the whole add-on."""
+        big = [{'name': 'data/addons/big_manifest', 'type': 'dir'},
+               {'name': 'data/addons/big_manifest/__manifest__.py', 'data': b'#' * (ha_odoo.MAX_MANIFEST + 1)}]
+        self.world.ha_modules = [*self.world.ha_modules, ['big_manifest', '18.0.1.0.0', 'installed']]
+        row = self.check(self.upload_odoo(big))
+        self.assertTrue(row['importable'])
+        self.assertEqual({i['id'] for i in row['issues'] if i['level'] == 'confirm'}, {'files.skipped', 'odoo.modules-missing'})
+        (missing,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-missing']
+        self.assertEqual(missing['items'], ['big_manifest'])
+
     def test_a_big_backup_is_given_the_time_and_room_it_needs(self):
         """OD-28, OD-73: the exports, the module scan and the dump wait longer; the module list gets more room."""
         with mock.patch.object(ha_odoo.hatarget, 'size_hint', lambda _ha: 200 * 1024 ** 3):

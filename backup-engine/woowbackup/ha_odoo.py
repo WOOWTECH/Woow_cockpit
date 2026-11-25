@@ -450,9 +450,9 @@ def scan_member(stream, report, *, pg=None, filestore_db=None, filestore=None, m
             src.module_bytes += entry.size
             _note_native(info, tail, entry)
             if tail == '__manifest__.py':
-                data = entry.read_all(MAX_MANIFEST)
-                info['manifest'] = parse_manifest(data)
-                if modules is not None:
+                data = entry.read_or_skip(MAX_MANIFEST)     # too large: the module has no manifest, and the name is listed
+                info['manifest'] = parse_manifest(data) if data is not None else None
+                if modules is not None and data is not None:
                     modules.add_member(_info(f'{prefix}/{module}/{tail}', 'file', mode=entry.mode & 0o777, uid=0,
                                              gid=0, mtime=entry.mtime, size=len(data)), io.BytesIO(data))
                 continue
@@ -490,9 +490,9 @@ def scan_share(stream, report, *, modules=None, checkpoint=None):
             info['bytes'] += entry.size
             _note_native(info, tail, entry)
             if tail == '__manifest__.py':
-                data = entry.read_all(MAX_MANIFEST)
-                info['manifest'] = parse_manifest(data)
-                if modules is not None:
+                data = entry.read_or_skip(MAX_MANIFEST)
+                info['manifest'] = parse_manifest(data) if data is not None else None
+                if modules is not None and data is not None:
                     modules.add_member(_info(target, 'file', mode=entry.mode & 0o777, uid=0, gid=0,
                                              mtime=entry.mtime, size=len(data)), io.BytesIO(data))
                 continue
@@ -1637,7 +1637,7 @@ def member_pass(work, app, tmp, pg_ids, *, filestore_db=None, filestore=None, mo
     """Stream the add-on's cluster into the throwaway volume `hapg` (and, for a conversion, the filestore and the
     custom module candidates into staging); then HA's share folder modules. Returns (Source, candidates)."""
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)   # what the reader leaves out is listed, and the customer confirms it once
     holder = {}
 
     def produce(out):
@@ -1652,13 +1652,16 @@ def member_pass(work, app, tmp, pg_ids, *, filestore_db=None, filestore=None, mo
     src = holder['src']
     for note in report.warnings():
         work.log(note)
+    sink = _sink(work, app)
+    sink.skipped(report)                              # IN-19, IN-27, IN-28, IN-35, IN-38, IN-39: the same line in the check and here
     candidates = dict(src.modules)
     share = work.share_member()
     if share is not None:
-        share_report = habackup.Report()
+        share_report = habackup.Report(names=haissues.Names)
         with work.open(share) as stream:
             for name, info in scan_share(stream, share_report, modules=modules, checkpoint=work.checkpoint).items():
                 candidates.setdefault(name, info)  # data/addons comes before /share/odoo_addons on HA's path
+        sink.skipped(share_report)
     work.log(f'HA 的 Odoo：PostgreSQL {src.pg_version or "?"}，{src.pg_files} 個資料庫檔案'
              f'（{_mib(src.pg_bytes)}），{len(src.filestore)} 個附件資料夾，{len(candidates)} 個自訂模組')
     return src, candidates
@@ -2140,6 +2143,12 @@ def convert(work, app, database, test_mode, out_dir):
     image16 = pick_pg16(work, app)
     pg_ids = tmp.user_ids('ids-pg', image16, 'postgres')
     odoo_ids = tmp.user_ids('ids-odoo', live.web_image, 'odoo')
+    carried = {'volumes': {}, 'dirs': {}}
+    if items.extra_volumes or items.extra_dirs:   # OD-12, OD-13: this device's own other data goes along as it is (cheap, first)
+        report = habackup.Report(names=haissues.Names)
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=items.extra_volumes, dirs=items.extra_dirs,
+                                 report=report, size=size)
+        sink.skipped(report)
 
     # The live data dir and custom modules folder, read while Odoo runs (only what the import keeps of them).
     live_web = staging / 'live-web.tar'
@@ -2273,14 +2282,8 @@ def convert(work, app, database, test_mode, out_dir):
     tmp.remove_volume('odoo-db')
     check_volume_tar(web_path, ids)
     check_volume_tar(db_path, ids)
-    volumes = {items.db_volume: db_path, items.web_volume: web_path}
-    if items.extra_volumes or items.extra_dirs:   # OD-12, OD-13: this device's own other data goes along as it is
-        report = habackup.Report(names=haissues.Names)
-        carried = hatarget.carry(work, app, out_dir, ids, volumes=items.extra_volumes, dirs=items.extra_dirs,
-                                 report=report, size=size)
-        sink.skipped(report)
-        volumes.update(carried['volumes'])
-        dirs.update(carried['dirs'])
+    volumes = {items.db_volume: db_path, items.web_volume: web_path, **carried['volumes']}
+    dirs.update(carried['dirs'])
     return {'volumes': volumes, 'dirs': dirs, 'database': database,
             'custom_modules': entry['custom_modules'], 'website_domains': list(details.get('website_domains') or []),
             'left_databases': [db['name'] for db in databases if db['name'] != database][:100],
