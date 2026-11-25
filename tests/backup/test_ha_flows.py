@@ -5,6 +5,7 @@ block (C-19) and the row counts refuse more than 100 function arguments (C-11). 
 import gzip
 import io
 import json
+import os
 import re
 import sqlite3
 import tarfile
@@ -1334,6 +1335,55 @@ class OdooGapTests(OdooCase):
         self.assertEqual({i['id'] for i in row['issues'] if i['level'] == 'confirm'}, {'files.skipped', 'odoo.modules-missing'})
         (missing,) = [i for i in row['issues'] if i['id'] == 'odoo.modules-missing']
         self.assertEqual(missing['items'], ['big_share'])
+
+
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_FIXTURES'), 'set WOOWBK_HA_FIXTURES to read the real HA backups made for this feature')
+class RealOdooFlowTests(OdooCase):
+    """A REAL HA backup (Supervisor 2026.11.0, plain, never committed) of the Odoo add-on through the check and the conversion:
+    its bytes are real, what PostgreSQL would answer is the double's (no PostgreSQL tool is on this host). Only structure is
+    asserted; nothing of the backup is printed."""
+
+    def real_backup(self):
+        path = Path(os.environ['WOOWBK_HA_FIXTURES']) / 'woow-import-test-plain' / 'woow-import-test-plain.tar'
+        if not path.exists():
+            self.skipTest('the plain real backup is not in WOOWBK_HA_FIXTURES')
+        from woowbackup import habackup
+        with habackup.open_backup(path) as ha:
+            member = next(m for m in ha.layout.members if m.role == 'addon' and m.name.endswith('odoo18ce.tar.gz'))
+            with ha.open_member(member.name, None) as stream:
+                src = ha_odoo.scan_member(stream, habackup.Report())
+        return path.read_bytes(), src
+
+    def test_the_real_odoo_addon_is_checked_and_converted_and_carries_its_filestore_and_modules(self):
+        data, src = self.real_backup()
+        database = sorted(src.filestore)[0]
+        module, info = sorted(src.modules.items())[0]
+        self.world.ha_databases = [[database, 9000000, 'C', 'C']]
+        self.world.ha_modules = [['base', '18.0.1.3', 'installed'], [module, info['manifest']['version'], 'installed']]
+        self.world.ha_extensions = [['plpgsql', '1.0'], ['pg_trgm', '1.6']]
+        ha_id = self.upload(data)
+        row = self.check(ha_id, odoo_database=database)
+        self.assertTrue(row['importable'], row['blockers'])
+        (shown,) = row['odoo']['databases']
+        self.assertEqual([m['name'] for m in shown['custom_modules']], [module])
+        result = self.convert(ha_id, ['odoo'], odoo_database=database)
+        self.assertEqual(result['ha_import']['apps'], ['odoo'])
+        items = self.world.manifests['odoo']
+        self.assertEqual(sorted(items['volumes']), ['odoo18-db-data-isolated', 'odoo18-web-data'])
+        hapg = next(blob for name, blob in self.world.imported.items() if name.endswith('-hapg'))
+        with tarfile.open(fileobj=io.BytesIO(hapg)) as tar:
+            members = tar.getnames()
+        self.assertIn('PG_VERSION', members)
+        self.assertFalse(any(name.startswith('/') or '..' in name.split('/') for name in members))
+        web = self.world.volume_data['odoo18-web-data']
+        with tarfile.open(fileobj=io.BytesIO(web)) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith('filestore/odoo/') for name in names), 'the filestore of the chosen database')
+        self.assertTrue(any(name == 'sessions' for name in names))
+        addons = self.world.dir_data['.local/share/odoo18/addons']
+        with tarfile.open(fileobj=io.BytesIO(addons)) as tar:
+            names = tar.getnames()
+        self.assertTrue(any(name.startswith(f'./{module}/') for name in names), 'the custom module of the backup')
 
 
 class VerifyConvertedTests(unittest.TestCase):

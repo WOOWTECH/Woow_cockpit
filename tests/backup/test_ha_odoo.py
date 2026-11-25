@@ -3,6 +3,7 @@ strict pass over the add-on tar (cluster, filestore, custom modules), the rewrit
 the restore list filter, settings and marker handling, and the live Quadlet parsing. Team E2."""
 import io
 import json
+import os
 import tarfile
 import tempfile
 import unittest
@@ -1635,6 +1636,49 @@ class _EntryOf:
 def nested_ids():
     from woowbackup import nested
     return nested.IdMap('0 1013 1\n1 100000 65536\n')
+
+
+@unittest.skipUnless(os.environ.get('WOOWBK_HA_FIXTURES'), 'set WOOWBK_HA_FIXTURES to read the real HA backups made for this feature')
+class RealOdooBackupTests(unittest.TestCase):
+    """The Odoo add-on of a REAL HA backup (Supervisor 2026.11.0, plain, never committed; only structure is asserted, nothing is
+    printed) through the strict pass: the cluster tar that the throwaway PostgreSQL volume is made of."""
+
+    def test_the_cluster_of_the_real_odoo_addon_becomes_a_volume_the_import_accepts(self):
+        from woowbackup import nested
+        path = Path(os.environ['WOOWBK_HA_FIXTURES']) / 'woow-import-test-plain' / 'woow-import-test-plain.tar'
+        if not path.exists():
+            self.skipTest('the plain real backup is not in WOOWBK_HA_FIXTURES')
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out_path = Path(tmp.name) / 'pg.tar'
+        with habackup.open_backup(path) as ha:
+            member = next(m for m in ha.layout.members if m.role == 'addon' and m.name.endswith('odoo18ce.tar.gz'))
+            with open(out_path, 'wb') as out:
+                sink = ha_odoo.PgSink(out, 70, 70)
+                report = habackup.Report(names=haissues.Names)
+                with ha.open_member(member.name, None) as stream:
+                    src = ha_odoo.scan_member(stream, report, pg=sink)
+                sink.close()
+        self.assertTrue(report.complete)
+        self.assertEqual(report.skip_count(), 0, 'nothing of a real Odoo add-on is left out')
+        self.assertEqual((src.addon.slug, src.addon.arch, src.pg_version), ('odoo18ce', 'amd64', '16'))
+        self.assertGreater(src.pg_files, 100)
+        self.assertTrue(src.filestore and all(isinstance(name, str) for name in src.filestore))
+        self.assertTrue(all(ha_odoo.MODULE_RE.fullmatch(name) for name in src.modules))
+        names = set()
+        with tarfile.open(out_path, 'r|') as tar:
+            for entry in tar:
+                names.add(entry.name)
+                self.assertEqual((entry.uid, entry.gid), (70, 70), entry.name)
+                self.assertTrue(entry.isdir() or entry.isreg(), f'only folders and files: {entry.name}')
+                self.assertEqual(entry.mode, 0o700 if entry.isdir() else 0o600, entry.name)
+                self.assertFalse(entry.name.startswith('/') or '..' in entry.name.split('/'), entry.name)
+                if entry.name in ha_odoo.REPLACED_PG_FILES:
+                    self.assertEqual(tar.extractfile(entry).read(), ha_odoo.REPLACED_PG_FILES[entry.name], entry.name)
+        self.assertTrue({'.', 'PG_VERSION', 'base', 'global', *ha_odoo.REPLACED_PG_FILES} <= names)
+        self.assertFalse(names & set(ha_odoo.SKIPPED_PG_FILES), 'no pid, options or recovery file of HA')
+        ids = nested.IdMap('0 1013 1\n1 100000 65536\n')
+        nested.check_volume(out_path, ids=(ids, ids))        # the check the import runs before `podman volume import`
 
 
 def details_base(**extra):
