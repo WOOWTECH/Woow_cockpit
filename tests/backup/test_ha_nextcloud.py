@@ -142,7 +142,7 @@ def toc_of(*lines):
     """A `pg_restore -l` listing of these entry lines with the header's `TOC Entries:` that fits them."""
     text = ''.join(f'{line}\n' for line in lines)
     entries = len([line for line in lines if re.match(r'\d+; ', line)])
-    return f';\n; Archive created at 2026-11-24\n;     TOC Entries: {entries + 3}\n;\n'.encode() + text.encode()
+    return f';\n; Archive created at 2026-11-24\n;     TOC Entries: {entries + 5}\n;\n'.encode() + text.encode()   # a real listing keeps back 5
 
 
 def issue_of(row, issue_id):
@@ -1634,19 +1634,30 @@ class ConvertTests(NextcloudCase):
                 self.assertEqual(restores, [], 'nothing of HA is restored')
 
     def test_a_listing_that_came_back_short_stops_the_conversion(self):
-        # pg-stdin follow-up F4: the listing must have as many entries as its own header says the archive has
-        good = toc_of('201; 1259 16390 TABLE public oc_users nextcloud', '202; 0 16390 TABLE DATA public oc_users nextcloud')
-        self.assertEqual(nc.check_listing(good.decode()), 2)
-        for text in (good.decode().replace('202; 0 16390 TABLE DATA public oc_users nextcloud\n', ''),
-                     good.decode().replace('TOC Entries: 5', 'TOC Entries: 6'),
-                     ''.join(line for line in good.decode().splitlines(True) if 'TOC Entries' not in line), ''):
-            with self.subTest(text=text), self.assertRaises(BackupError) as caught:
+        # pg-stdin follow-up F4: the listing must have about as many entries as its own header says the archive has; a plain
+        # listing keeps back the archive settings and a few more entries (a REAL PostgreSQL 16.15 one: 1131 lines under 1136)
+        lines = [f'{n}; 1259 {16000 + n} TABLE public oc_t{n} nextcloud' for n in range(1, 41)]
+        good = toc_of(*lines)
+        self.assertEqual(nc.check_listing(good.decode()), 40)
+        real = toc_of(*[f'{n}; 1259 {16000 + n} TABLE public oc_t{n} nextcloud' for n in range(1, 1132)])
+        self.assertIn('TOC Entries: 1136', real.decode())
+        self.assertEqual(nc.check_listing(real.decode()), 1131, 'the real numbers pass')
+        for hidden in (3, nc.LISTING_SLACK + 3):
+            self.assertEqual(nc.check_listing(good.decode().replace('TOC Entries: 45', f'TOC Entries: {40 + hidden}')), 40)
+        for name, text in (('twenty lines lost', ''.join(good.decode().splitlines(True)[:-20])),
+                           ('one more than the slack', good.decode().replace('TOC Entries: 45', f'TOC Entries: {40 + nc.LISTING_SLACK + 4}')),
+                           ('more lines than the header', good.decode().replace('TOC Entries: 45', 'TOC Entries: 39')),
+                           ('no header', ''.join(line for line in good.decode().splitlines(True) if 'TOC Entries' not in line)),
+                           ('nothing', '')):
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
                 nc.check_listing(text)
             self.assertEqual(caught.exception.code, 'job-failed')
-        # the archive settings a plain listing may show count as the entries they are
+        # the archive settings a plain listing may show count as the entries they are, and are not among those kept back
         shown = good.decode() + '1; 0 0 ENCODING - ENCODING\n'
-        self.assertEqual(nc.check_listing(shown), 3)
-        self.world.toc = good[:-len(b'202; 0 16390 TABLE DATA public oc_users nextcloud\n')]
+        self.assertEqual(nc.check_listing(shown), 41)
+        with self.assertRaises(BackupError):
+            nc.check_listing(shown.replace('TOC Entries: 45', 'TOC Entries: 42'))     # two settings are still kept back
+        self.world.toc = good[:len(good) - len(b''.join(line.encode() + b'\n' for line in lines[20:]))]
         seen = len(self.world.execs)
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(), ['nextcloud'])
