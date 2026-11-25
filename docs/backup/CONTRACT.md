@@ -967,7 +967,7 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   (`{container: unit}` of what `hatarget.ensure_running` started), `scale_to(nbytes)` / `size` (every wait of `run`, `exec`,
   `volume_import`, `volume_export` is `podman.scaled_timeout(wait, size)`: the value a call asks for is the floor).
 * `ha_odoo` / `ha_n8n` (part B): `check(work, app)` and `convert(work, app, …, out_dir)` (the app steps of the jobs,
-  driven by `haimport.Work`), the pure parts the tests use (`database_verdict`, `parse_manifest`, `same_version`,
+  driven by `haimport.Work`), the pure parts the tests use (`database_issues` (2026-11-25; replaces `database_verdict`), `parse_manifest`, `same_version`,
   `filter_toc`, `superuser_kinds`, `settings_to_carry`, `split_list_setting`, `alter_system_sql`, `carry_settings`,
   `restore_dump`, `verify_converted`, `marker_ok`, `role_sql`, `scan_member`, `PgSink`, `ha_server_args`, `web_data_tar`,
   `addons_dir_tar`, `Live`; `inspect_sqlite(path, *, checkpoint)` -> workflows `[(name, active, reasons)]`,
@@ -1210,6 +1210,7 @@ Shapes:
   the backup, a node that is not in it, this device's settings that keep changing and a different version stop the app; the admin/public
   Dashboard account, a node to choose and MQTT passwords stored with `plain` are notices, choices or lines to confirm), different Headscale prefixes
   or a node outside them, Headscale migrations this release does not know, a missing Noise key).
+  Odoo section (lane ODOO, 2026-11-25): `odoo.databases[]` is as it was (`name, ok, blockers[], warnings[], partners, users, attachments, attachment_bytes, modules, custom_modules[], crons_active, mail_servers_active, size, filestore_files, filestore_bytes`) and `choices.database` is returned by the module; the sentences of `blockers` are the stop and confirm lines of the database, those of `warnings` its automatic and notice lines. `ha_import.left_databases` and the registry's `left_databases` hold the names of the HA databases that were not moved.
 * `HaImport` (part B; `result.ha_import` and `BackupMeta.from_ha`): `ha_backup_id, name, date, apps[app_id],
   odoo_database|null, test_mode(bool), workflows_to_fix[{name, active, reasons[]}], reminders[zh-TW],
   reminders_by_app{app_id: [zh-TW]}, notes[zh-TW], addons[{app_id, slug, name}]` (every text at most 500 characters,
@@ -2093,50 +2094,110 @@ secret and mounts); an entry of another shape is `incompatible`.
    module candidates are read from `data/addons/<m>` (before `data/odoo/addons/18.0/<m>` and `share.tar[.gz]`
    `odoo_addons/<m>`, HA's addons_path order; `__pycache__` skipped) with their manifests parsed by
    `ast.literal_eval`. A conversion also writes the chosen database's filestore and every candidate to staging.
-2. The live upgrade marker and role `odoo` are checked first, as the conversion checks them (step 4). A throwaway
-   PostgreSQL 16 (`pgvector:0.8.6-pg16`, else `postgres:16.15-alpine`, else the pinned official image, pulled) serves
-   the cluster on its socket only, started with every library, archive, restore, recovery and listen setting overridden
-   on the command line (`shared_preload_libraries=` … `restore_command=`, `dynamic_library_path=$libdir`, `ssl=off`,
-   `jit=off`), its data volume mounted `rw,noexec,nosuid,nodev` and a read-only root; per connectable, non-template
-   database other than `postgres`: installed modules (and pending ones), partners, internal active users, attachments
-   and their bytes, active crons and mail servers, size, extensions, objects only a superuser can create (event
-   triggers, FDWs, servers, subscriptions, languages, C functions, access methods, casts, operator classes, text search
-   parsers/templates that no extension owns) and the website domains (when `website` exists). Odoo itself in the live image (network none, the configuration secret and the live
-   module folders mounted read-only, `python3 -I` fed a scanner on stdin) lists the target's modules with their adapted
-   versions in addons_path order and checks the candidates' `external_dependencies` (`check_python_external_dependency`,
-   `find_in_path`).
-3. Verdict per database (`database_verdict`): every installed module present on the target with the identical version
-   (verify-modules.py's comparison), or a candidate with that version that the target lacks or holds in another
-   version only in the custom modules folder (it is copied); nothing pending; extensions ⊆ plpgsql, pg_trgm, unaccent,
-   vector (vector only with the pgvector image); no object only a superuser can create; HA's major ≤ the target's;
-   the copied modules installable and their Python packages and programs present. Warnings: active mail servers and
-   crons, and the website domains that will change to this device's address.
-4. Conversion of the chosen database: `pg_dump -Fc` in the PostgreSQL 16 container; a new cluster in a throwaway
-   volume from the live database image with the live environment and secret mount (initdb sets the live superuser
-   password); role `odoo` with the attributes and the password verifier of the live role (read from the live cluster
-   as its superuser, checked against a strict pattern, masked, sent on stdin); `createdb -O odoo --template=template0
-   --encoding=UTF8 --lc-collate=C odoo`; pg_trgm, vector (+ unaccent when HA has it), `ALTER EXTENSION vector UPDATE`;
-   the dump's list without its EXTENSION and `COMMENT - EXTENSION` entries (matched on the entry type field), refused
-   (`incompatible`, naming the kind) when it lists an object only a superuser can create; the dump streamed on stdin into
-   `pg_restore -U odoo --no-owner --no-acl --exit-on-error --single-transaction -L <list> -d odoo` (as the role
-   itself: what HA's server wrote never runs with superuser rights);
-   `web.base.url` and `web.base.url.freeze` as the live database has them, `website.domain` cleared on every website
-   row (the target keeps its own address); the live `woow_paas_platform.upgrade_done`
-   (it must name the live Odoo image ID) copied and `…upgrade_attempt` deleted (HA's core date never reaches the
-   marker); test mode: `odoo neutralize -c /etc/odoo/odoo.conf -d odoo --db_host <cluster>` in a throwaway container of
-   the live Odoo image on an internal network with the cluster and the custom modules folder as it will be after the
-   import (step 5, in a throwaway volume: a module copied from HA runs its own `neutralize.sql`), and a new
-   `database.uuid`; the modules (installed, versions equal), partner and attachment counts, marker, address, cleared
-   website domains and uuid verified; settings the live cluster sets in its configuration that differ (not locations,
-   ports, commands or build constants) carried with `ALTER SYSTEM`, one statement per `psql` call outside any
-   transaction block (list settings such as `search_path` one literal per element), then `pg_reload_conf()` and every
-   carried setting read back from `pg_file_settings` without an error; `CHECKPOINT`, stop, exit 0 and `pg_controldata
-   <PGDATA>` "shut down" (PGDATA when the Quadlet sets it, a folder of the volume); `podman volume export`.
+2. This device is made ready and read first, as the conversion needs it (review C-05; HAOS parity: what HAOS sets up itself, this
+   device sets up and says, instead of refusing). Everything below that is "made" is an `auto` line of the app; what cannot be made stops
+   only Odoo and changes nothing.
+   * Images: the Odoo web image, the database image and the PostgreSQL 16 image that opens HA's cluster are downloaded when this device
+     lacks them (`hatarget.ensure_image`, as the app's owner, one more try; a `localhost/` image that is gone cannot be: the text says so).
+     PostgreSQL 16: `pgvector:0.8.6-pg16`, else `postgres:16.15-alpine` (both only when already here), else the pinned official image
+     (downloaded). When a database of HA uses `vector` and the image that read it cannot, the check downloads the pgvector image and reads
+     HA's cluster again; the conversion fetches it for the next try (only the databases that use vector stop while it is not here).
+   * `odoo.conf` (the configuration secret of the live Odoo) is read in a throwaway container of the live Odoo image (network none, read-only
+     root, only the secret mounted, `python3 -I -`): of the file only `db_name` (first name of a list), `db_user` and `db_password` are
+     printed; the password is masked in every log at once and never put into a message, an argument or a log. A file that cannot be read gives
+     the tenant's own names (`odoo`, `odoo`) and no password. A name that is not letters, digits, `_` (`.` `-` in the database name) stops Odoo
+     (`odoo.layout-unsupported`).
+   * The live database container is read through `hacommon.live_json` (a stopped one is started through its Quadlet unit, waited for and put
+     back: `target.service-started`), as its superuser, under the database name of the configuration. `ir_config_parameter` that is not
+     there (or an answer that is no document): default address, one reminder (`odoo.settings-unreadable`); an address that is no text or
+     longer than 2048: the default, a reminder (`odoo.base-url-invalid`); the converted database then has no `web.base.url` row and Odoo makes
+     its own at the first login.
+   * The upgrade marker `woow_paas_platform.upgrade_done` must name the live image; when it is missing or names another one the engine
+     writes `{"digest": <image ID>, "core_date": <release>}` (the shape of the tenant install, whose real marker holds `18.0.20260926`;
+     `odoo.marker-written`, `auto`). `<release>`: the version of the image's `odoo` package (`dpkg-query -W -f '${Version}' odoo` in a
+     throwaway container without a network and with a read-only root), else `ODOO_VERSION.ODOO_RELEASE` of the image (the official image
+     installs that package). An image that says neither has no honest marker: `odoo.marker-unwritable` stops Odoo.
+   * The role of the configuration (`db_user`, default `odoo`): its SCRAM or md5 verifier is taken over as before; a role that does not
+     exist (`odoo.role-created`) or has no such verifier (`odoo.role-password-reset`) is made with `db_password` of the configuration (sent on
+     psql stdin; the new cluster hashes it); none there: `odoo.role-unusable` stops Odoo. A superuser role is never copied with its powers: the
+     new role is `LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` (`odoo.role-normalised`).
+   * Mounts of the two live containers that are no Odoo data (a path outside the home, `%h/..`, another `%` specifier, e.g. `/etc/localtime`)
+     are left out and never mounted into a throwaway container (`odoo.mount-skipped`); `quadlet_mounts(..., skipped=None)` still refuses
+     them for every other caller. The data volume of the database is the mount that holds PGDATA's folder (else the image's own folder); a cluster in a mount that was
+     left out stops Odoo (`odoo.layout-unsupported`). The superuser's name (`POSTGRES_USER`) may be any text of at most 63 bytes without a
+     control character: it is one argument, never SQL or a shell word.
+   * What the app settings hold beyond the tenant layout (other volumes, other host folders, `Target.extra_volumes/extra_dirs`) is carried as
+     this device has it (`hatarget.carry`, before HA is read; `odoo.extras-carried`); a link of that data that leaves its volume is left out and
+     listed in the `files.skipped` line. A custom modules folder that is mounted but not in the app settings is not filled
+     (`odoo.addons-folder-undeclared`; a module only the backup has then counts as missing). A web volume that is not mounted at
+     `/var/lib/odoo`, a data volume the settings do not declare, or `postgres` items in the settings stop Odoo (`odoo.layout-unsupported`;
+     wave 2: LAYOUT).
+   A throwaway PostgreSQL 16 serves HA's cluster as before (every wait grows with the data: `podman.scaled_timeout`). Per connectable,
+   non-template database other than `postgres` HA's server is asked as before; **the name of the database goes to psql and pg_dump through
+   `PGDATABASE`, never as the argument of `-d`** (a name with `=` or a URI start would be read as a connection string); a plain name of
+   another caller of `Cluster` still gets `-d`; a name PostgreSQL cannot have (control character) is `odoo.database-name` of that database.
+   The extensions HA's database uses are asked of this device's PostgreSQL (`pg_available_extension_versions`: name, `trusted`). Odoo itself
+   in the live image lists the target's modules (a module whose manifest cannot be read is left out and named: `odoo.target-modules-partial`;
+   only a list without any module stops Odoo) and checks the custom modules' Python packages and programs.
+3. Every database has its own issues (`database` = its name) and one that cannot move never keeps another from moving; `choices.database`
+   `{value, label, ok}` is returned by the module (`ok`: no stop and a name the tools take), `odoo.databases[]` keeps `ok`, `blockers[]`,
+   `warnings[]` (the same sentences) for older pages. App-wide: no database at all `odoo.no-database`, none that can move
+   `odoo.no-movable-database` (stops). Per database:
+   | id | level | when |
+   |---|---|---|
+   | odoo.not-odoo | stop | no Odoo tables (OD-32) |
+   | odoo.db-unreadable | stop | its module list or content cannot be read (OD-33, OD-34) |
+   | odoo.database-name | stop | the name has a control character |
+   | odoo.module-version-different | stop | an installed module has another version than the device's (or the custom copy) |
+   | odoo.pg-newer | stop | HA's PostgreSQL is newer than this device's, or a version is unknown |
+   | odoo.extension-unsupported | stop | an extension this device's image lacks or PostgreSQL does not call trusted (not on the old list plpgsql, pg_trgm, unaccent, vector) (OD-39) |
+   | odoo.vector-image-missing | stop | vector is used and the pgvector image could not be had (OD-40) |
+   | odoo.modules-missing | confirm | installed in HA, not on the device and not in the backup (OD-37; the text says the next Odoo update is stopped by the package's upgrade-gate.sh, exit 4) |
+   | odoo.modules-skipped-deps | confirm | a custom module needs a Python package the device lacks: it stays behind, the rest moves (OD-44) |
+   | odoo.superuser-objects | confirm | objects only a superuser can create (OD-41): they are left out of the restore |
+   | odoo.databases-left | confirm | the other databases of HA stay on HA (UI-20, S6; items = their names) |
+   | odoo.modules-pending, odoo.dependency-unreadable, odoo.module-not-installable, odoo.program-missing, odoo.module-foreign-native, odoo.mail-servers-active, odoo.crons-active, odoo.website-domains, odoo.filestore-missing | notice | reminders (OD-36, OD-43, OD-44, OD-45, OD-46) |
+   Pending modules (to install / upgrade / remove) move in the state HA has them in. The custom modules that would be copied are copied
+   also when installation is marked impossible, a program is missing or the code is for another processor (reminders). When this device
+   has no custom modules folder in its app settings nothing can be copied and such a module counts as missing.
+   What the reader left out of the add-on (devices, FIFOs, links outside, names that cannot be shown, a manifest over 256 KiB, hard links
+   it could not copy) is the one `files.skipped` line (`Sink.skipped`), in the check and again in the conversion; a manifest over 256 KiB
+   makes its module a module without manifest (not copied), no longer a stop of the add-on.
+4. Conversion of the chosen database: the same reading and the same rules again (OD-50): a stop stops Odoo (`incompatible`, the issue in
+   `error.issues`), a line to confirm that was not confirmed, or confirmed with other names, is `confirmation-required`; nothing is kept.
+   Then: `pg_dump -Fc` in the PostgreSQL 16 container (database by PGDATABASE); a new cluster in a throwaway volume from the live database
+   image; the role and database of the configuration (`createdb -O <role> --template=template0 --encoding=UTF8 --lc-collate=C <db_name>`);
+   `pg_trgm` and `vector` only when this device's image offers them or HA uses them (`CREATE EXTENSION IF NOT EXISTS "<name>"` for the
+   others HA uses, after the check above), `ALTER EXTENSION vector UPDATE` only when vector was created; `pg_restore -l` of the dump,
+   **cross-checked against its own header** (`TOC Entries:` = the lines plus the three archive settings ENCODING, STDSTRINGS and SEARCHPATH
+   that a plain listing keeps back; any other number, or no header, stops with `INCOMPLETE_LIST` before anything is written or restored: pg-stdin
+   follow-up F4); the list without the EXTENSION entries and **without the objects only a superuser can create** (their lines, and their COMMENT and
+   SECURITY LABEL lines, are commented out with `;`; they are named in `odoo.superuser-skipped`; a restore that still fails is
+   `odoo.restore-failed` and stops Odoo); the list written by `Cluster.write_file` whose retry note now reaches the job log (pg-stdin follow-up
+   F3); `pg_restore -U <role> --no-owner --no-acl --exit-on-error --single-transaction -L <list> -d <db_name>` as the role itself. Then
+   `web.base.url` (and its freeze flag) as the live database has them, the upgrade marker (the live one, or the engine's), no attempt marker, the
+   website domains cleared; test mode as before (`odoo neutralize -d <db_name>`, a new `database.uuid`). The check after the conversion
+   stays (modules of the converted database = HA's modules in the state HA had, installed ones at the version of the device or the copy,
+   partner and attachment counts, marker, uuid in test mode; anything else stops this conversion). What was only a reminder is no longer
+   a stop: an address that is not the device's (`odoo.url-differs`, OD-66), website domains that are still HA's (`odoo.website-domain-kept`,
+   OD-67), modules left in HA's state (`odoo.modules-pending`, OD-61). PostgreSQL settings of the live cluster are carried as before; one
+   the new cluster refuses is taken out again (`ALTER SYSTEM RESET`) and listed (`odoo.settings-not-carried`, OD-69); one that still has
+   an error after that stops the conversion. The result has `left_databases` (the other databases of HA, at most 100 names), which the
+   registry row and `from_ha` carry (UI-20).
 5. `odoo18-web-data`: the live export (read while Odoo runs) without `filestore/odoo/**` and `sessions/**`, an empty
    `sessions/` owned like the live one, HA's filestore of the database as `filestore/odoo/**` (the image's odoo
    uid/gid, dirs 0700, files 0600). The custom modules folder: the live folder (DIR_HELPER pack) without the modules
    being replaced, plus the copied modules owned by the app owner, dirs 0755, files 0644 (0755 when executable). Every
    tar passes `nested.check_volume`/`check_dir` with the owner's ids.
+6. Time and room (OD-28, OD-73): the waits of the live exports, the scan, the dump, the restore, the new cluster and `odoo neutralize`
+   and the room for the target's module list (`SCAN_OUTPUT`), the module list of a database (`SQL_OUTPUT`) and the dump list
+   (`TOC_OUTPUT`) grow with the data (`podman.scaled_timeout`, `scaled_limit`): the old values are the floor; the room grows by a share of
+   the data (1 % of a database, 5 % of a dump) up to 256 MiB and 512 MiB (what HA's untrusted server and dump may make the engine hold).
+   `odoo.layout-unsupported` stop, `odoo.extras-carried` auto, `odoo.addons-folder-undeclared` notice, `odoo.mount-skipped` notice,
+   `odoo.marker-written` auto, `odoo.marker-unwritable` stop, `odoo.settings-unreadable` notice, `odoo.base-url-invalid` notice,
+   `odoo.role-created` auto, `odoo.role-password-reset` auto, `odoo.role-normalised` auto, `odoo.role-unusable` stop,
+   `odoo.superuser-skipped` notice, `odoo.restore-failed` stop, `odoo.url-differs` notice, `odoo.website-domain-kept` notice,
+   `odoo.settings-not-carried` notice, `odoo.target-modules-partial` notice.
 
 **n8n** (add-on `woow-n8n` → app `n8n`: database `main`, volumes `n8n_n8n_data` and `n8n_valkey_data`).
 1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the
