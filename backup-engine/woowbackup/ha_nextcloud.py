@@ -224,10 +224,14 @@ SELECT json_build_object(
             AND contype NOT IN ('p', 'u', 'f', 'n')),
  'generated', (SELECT count(*) FROM pg_attribute WHERE attrelid IN (SELECT oid FROM rel) AND attgenerated <> ''),
  'inherits', (SELECT count(*) FROM pg_inherits),
- 'others', (SELECT count(*) FROM pg_collation WHERE collnamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_conversion WHERE connamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_ts_config WHERE cfgnamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_ts_dict WHERE dictnamespace IN (SELECT oid FROM ns))
+ 'others', (SELECT count(*) FROM pg_collation WHERE collnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_collation'::regclass))
+           + (SELECT count(*) FROM pg_conversion WHERE connamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_conversion'::regclass))
+           + (SELECT count(*) FROM pg_ts_config WHERE cfgnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_ts_config'::regclass))
+           + (SELECT count(*) FROM pg_ts_dict WHERE dictnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_ts_dict'::regclass))
            + (SELECT count(*) FROM pg_opclass WHERE opcnamespace IN (SELECT oid FROM ns)
               AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_opclass'::regclass))
            + (SELECT count(*) FROM pg_opfamily WHERE opfnamespace IN (SELECT oid FROM ns)

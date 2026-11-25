@@ -2250,6 +2250,21 @@ class ShapeTests(unittest.TestCase):
             self.assertIsNone(nc.shape_problems(bad), bad)
 
 
+    def test_what_an_extension_made_is_not_counted_as_another_object(self):
+        # NC-39: an extension this device's image has is enabled with its own objects (unaccent makes a text search dictionary, a
+        # collation or a conversion can come with another): the check counts them like the functions, operators and types of an
+        # extension, never as something HA's database added. They are this device's own code and are never in the dump.
+        for catalog, column in (('pg_collation', 'collnamespace'), ('pg_conversion', 'connamespace'),
+                                ('pg_ts_config', 'cfgnamespace'), ('pg_ts_dict', 'dictnamespace')):
+            with self.subTest(catalog=catalog):
+                self.assertRegex(nc.SHAPE_SQL, rf"FROM {catalog} WHERE {column} IN \(SELECT oid FROM ns\)\s+"
+                                               rf"AND oid NOT IN \(SELECT objid FROM ext WHERE classid = '{catalog}'::regclass\)\)")
+        self.assertEqual(nc.SHAPE_SQL.count('('), nc.SHAPE_SQL.count(')'))
+        # and a database that has one of them that is not an extension's still stops (the count is not 0)
+        self.assertIn('others', [key for key, _label in nc.SHAPE_LABELS])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, others=1)), [dict(nc.SHAPE_LABELS)['others']])
+
+
 class TargetTests(unittest.TestCase):
     def test_shape_checks(self):
         app = fk.app('nextcloud', 'Nextcloud', data_dirs=[{'path': p} for p in DIRS])
