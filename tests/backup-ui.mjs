@@ -7290,6 +7290,40 @@ try {
       await copy.waitFor();
       assert.match(await copy.textContent(), /複本裡的資料庫：「analytics」、「crm_old」/);
       assert.doesNotMatch(await page.locator('.ha-reminders').textContent(), /完整複本（/, 'the to-dos name a copy only when the converted backup does');
+      // The job view of the last job of the import (also after a reload) lists the copy once: with the import, not again under the restore result.
+      const last = requestOf((await calls(page, 'job-status')).at(-1)).job_id;
+      await page.evaluate(id => { window.location.hash = `#/jobs/${id}`; }, last);
+      await page.locator('.ha-job-group').waitFor();
+      await page.locator(`.ha-job-group [data-kept="${KEPT_ID}"][data-state="present"]`).waitFor();
+      assert.equal(await page.locator('[data-section="kept"]').count(), 1);
+      assert.equal(await page.locator(`[data-kept="${KEPT_ID}"]`).count(), 1);
+    });
+
+  await check('HAOS 一次確認: the result of a restore of a converted backup lists the copy kept before it, and the notes of the restore (S4)',
+    (() => {
+      const data = haFixture();
+      const copy = v2Kept('n8n');
+      data.backups.unshift(convertedMeta(), copy);
+      data.downloads[copy.id] = { path: `/var/lib/woowtech-backup/archives/${copy.id}.tar`, filename: copy.filename, size: copy.size };
+      const script = haRestoreScript();
+      Object.assign(script[1].job.result, { kept: { n8n: { backup_id: copy.id, ...V2_KEPT_DETAIL } }, warnings: [V2_PAUSE_WARNING] });
+      data.scripts.restore = script;
+      return data;
+    })(), async page => {
+      await ready(page);
+      await page.evaluate(id => { window.location.hash = `#/restore/${id}`; }, B_HA);
+      await page.locator('.app-preflight').first().waitFor();
+      await page.locator('[data-focus="pf-next"]').click();
+      await page.locator('#confirm-restore').check();
+      await page.locator('[data-focus="confirm-start"]').click();
+      await page.locator('#result-heading').filter({ hasText: '還原完成' }).waitFor({ timeout: 30000 });
+      const copy = page.locator(`[data-section="kept"] [data-kept="${KEPT_ID}"][data-state="present"]`);
+      await copy.waitFor();
+      assert.match(await copy.textContent(), /複本裡的資料庫：「analytics」、「crm_old」，另有 3 個沒有列出。/);
+      assert.match(await copy.textContent(), /crm_old：資料庫擁有者的角色在新的資料庫服務裡已經存在，沒有放回。/);
+      assert.equal(await page.locator('[data-section="kept"]').count(), 1);
+      // The warnings of the restore are listed as for any restore.
+      assert.match(await page.locator('.job-result').textContent(), /注意事項[\s\S]*匯入時暫停的服務沒有重新啟動：filebrowser/);
     });
 
   await check('HAOS 一次確認 in the dark theme: the kept copies and their delete dialog keep WCAG AA contrast and fit every width',

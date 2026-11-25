@@ -5190,12 +5190,12 @@
   }
 
   // 保留的複本: what the customer can do with each copy: read what is in it, download it, delete it after a confirmation.
-  function keptSection(entries) {
+  function keptSection(entries, scope) {
     if (!entries.length) return null;
     const loaded = Array.isArray(state.backups);
     const busy = Boolean(activeJob());
-    return h("section", { class: "ha-kept", "aria-labelledby": "ha-kept-title", dataset: { section: "kept" } },
-      h("h4", { id: "ha-kept-title", class: "subheading", text: "保留的複本" }),
+    return h("section", { class: "ha-kept", "aria-labelledby": `ha-kept-title-${scope}`, dataset: { section: "kept" } },
+      h("h4", { id: `ha-kept-title-${scope}`, class: "subheading", text: "保留的複本" }),
       h("p", { class: "muted", text: "匯入前，這台的資料庫服務裡有這次沒有搬走的其他資料，所以系統先把整個資料庫服務存成完整複本。複本不會自動刪除；"
         + "確定用不到時可以下載保存，再刪除它。刪除後，複本裡的資料就沒有了。" }),
       h("ul", { class: "ha-group-list ha-kept-list", "aria-label": "保留的複本" }, entries.map(item => {
@@ -5251,7 +5251,7 @@
           : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查；失敗只退回它自己，其他應用照常。" }),
         haGroupRows(info, { actions: info.over }),
         info.over ? keptSection(keptEntries({ jobs: info.results.map(item => item.restore_job_id).filter(Boolean),
-          backups: info.results.map(item => item.backup_id).filter(Boolean) })) : null,
+          backups: info.results.map(item => item.backup_id).filter(Boolean) }), "group") : null,
         info.next ? h("p", null, link(next ? `接著：${jobLabel(next)}` : "查看下一個作業", ["jobs", info.next], { class: "button small", dataset: { focus: "job-group-next" } })) : null))];
   }
 
@@ -5274,7 +5274,7 @@
       wizard.keyCreated || state.status?.key?.kit_confirmed === false ? haKeyCreatedNotice() : null,
       info ? haGroupRows(info, { excluded: haExcludedRows(wizard) }) : null,
       info ? keptSection(keptEntries({ jobs: [...list(wizard.groupJobs), ...info.results.map(item => item.restore_job_id).filter(Boolean)],
-        backups: info.results.map(item => item.backup_id).filter(Boolean) })) : null,
+        backups: info.results.map(item => item.backup_id).filter(Boolean) }), "import") : null,
       info && done.length && !converted ? haAfterGroup(wizard, info, done) : null,
       h("div", { class: "form-footer button-group" },
         button("回到這份 HA 備份", () => closeHaWizard({ rerender: true }), { focus: "result-ha" }),
@@ -5567,7 +5567,8 @@
       // 從 HA 匯入: what to do next comes first (DESIGN §0: stop the HA add-on, MCP logins, workflows to fix).
       const fromHa = restoreFromHa(job);
       if (fromHa) body.push(...haAfterImport(fromHa, list(params.apps).filter(isString)));
-      const keptCopies = keptSection(keptEntries({ jobs: [job.id], backups: backupId ? [backupId] : [] }));
+      // A restore that is one step of an import shows its copies with the whole import (the job view above), not twice.
+      const keptCopies = groupOf(job) ? null : keptSection(keptEntries({ jobs: [job.id], backups: backupId ? [backupId] : [] }), "restore");
       if (keptCopies) body.push(keptCopies);
       if (result?.safety_skipped) {
         body.push(infoNotice("這次還原沒有建立還原前備份（無法建立，而你還原的是還原前備份，或已選擇直接還原）。", "warn", "alert-outline"));
