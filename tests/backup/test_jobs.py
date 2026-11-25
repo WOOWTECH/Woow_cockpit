@@ -145,6 +145,16 @@ class StoreTests(JobCase):
         for line in log:
             self.assertRegex(line, r'\A\S+ 檢查 HA 備份「WOOW TLIAF」\Z')
 
+    def test_a_record_may_name_the_unit_that_runs_it(self):
+        """The next job of an import's chain runs in the unit of the first one; a record without one names its own."""
+        own = self.store.create('backup', {})
+        self.assertEqual(own['unit'], jobs.unit_name(own['id']))
+        shared = self.store.create('backup', {}, unit='woowtech-backup-j20261113T020000Z-0123abcd.service')
+        self.assertEqual(self.store.get(shared['id'])['unit'], 'woowtech-backup-j20261113T020000Z-0123abcd.service')
+        for bad in (None, '', 5):
+            record = self.store.create('backup', {}, unit=bad)
+            self.assertEqual(record['unit'], jobs.unit_name(record['id']))
+
     def test_unencrypted_backup_package_phase_says_so(self):
         labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
                   for encrypt in (True, False)}
@@ -1429,6 +1439,40 @@ class RetentionTests(JobCase):
 
     def listed(self):
         return {record['id'] for record in self.store.list(limit=None)}
+
+    def test_the_stop_request_of_an_import_is_swept_once_the_import_is_over(self):
+        """`<group>.stop` (CONTRACT section 8, HA import chain): kept while a job of the import is active, else removed once it
+        is an hour old; a young one stays."""
+        from woowbackup import hachain
+        live, over, young = 'g0123456789abcdef', 'gfedcba987654321a'[:17], 'g00000000000000aa'
+        params = hachain.convert_params('ha-' + '0' * 20, ['odoo'], database=None, test_mode=False, encrypt=True, key_provided=False,
+                                        acknowledged={}, choices={})
+        params['group'] = hachain.group_params(live, 'ha-import', 'convert', 'odoo', 0, 2)
+        params['chain'] = hachain.new_chain(['odoo', 'n8n'], ha_backup_id='ha-' + '0' * 20)
+        alive = self.make('backup', 'running', 100, params=params)
+        self.active_units.add(jobs.unit_name(alive))
+        old = time.time() - jobs.ORPHAN_MAX_AGE - 60
+        for group in (live, over, young):
+            self.store.request_stop(group)
+        for group in (live, over):
+            os.utime(self.store.stop_path(group), (old, old))
+        self.assertEqual(jobs.recover_interrupted(self.paths, unit_active=self.unit_active), [])
+        self.assertEqual([self.store.stop_requested(group) for group in (live, over, young)], [True, False, True])
+        os.utime(self.store.stop_path(live), (old, old))
+        record = self.store.get(alive)
+        record['state'] = 'succeeded'
+        self.store.save(record)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertFalse(self.store.stop_requested(live), 'the import is over: nothing asks for it any more')
+        self.assertTrue(self.store.stop_requested(young))
+
+    def test_a_stop_file_name_is_never_taken_for_a_job_side_file(self):
+        self.store.ensure()
+        for name in ('g0123456789abcdef.stop', 'j20261113T020000Z-0123abcd.stop', 'g0123456789abcdef.stop.tmp'):
+            Path(self.paths.jobs, name).write_text('')
+        self.assertIsNotNone(jobs.STOP_FILE_RE.fullmatch('g0123456789abcdef.stop'))
+        self.assertIsNone(jobs.STOP_FILE_RE.fullmatch('j20261113T020000Z-0123abcd.stop'))
+        self.assertIsNone(jobs.SIDE_FILE_RE.fullmatch('g0123456789abcdef.stop'))
 
     def test_keeps_newest_finished_records_and_everything_still_needed(self):
         safety = '20261101T000000Z-00000001'

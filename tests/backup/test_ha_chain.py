@@ -6,6 +6,7 @@ missing app, preflight, health) stop one app of a chain, never the others. Team 
 Most tests run the real `jobs.run_job` loop with fake job handlers; `RestoreSideTests` runs the real `flows.run_restore`
 (fake adapters, the nested-archive checks of nested.py on hostile tars) as the chain's restore step."""
 import contextlib
+import copy
 import errno
 import io
 import json
@@ -20,10 +21,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from woowbackup import catalog as catalogmod
 from woowbackup import flows, hachain, haissues, jobs, nested
 from woowbackup.errors import BackupError
 
 from . import hafixtures as hx
+from .tarfixtures import volume_tar
+from .test_ha_import import FlowCase as HaFlowCase
+from .test_flows import FakeAdapter, FakeArchive, FakeKeys, FakeStorage, HOST, World, demo_entry, make_catalog, user_lookup
 from .test_jobs import JobCase
 
 HA_ID = 'ha-' + '0' * 20
@@ -100,12 +105,12 @@ class ChainCase(JobCase):
         self.script = Script(self)
         self.group = None
 
-    def start_chain(self, apps=APPS, *, then_restore=True, key=None, results=(), kind='ha-import', **chain):
+    def start_chain(self, apps=APPS, *, then_restore=True, key=None, results=(), kind='ha-import', restore_backup=None, **chain):
         ChainCase.counter += 1
         self.group = hachain.new_group_id()
         step = 'restore' if kind == 'ha-restore' else 'convert'
         if kind == 'ha-restore':
-            params = hachain.restore_params(backup_id(90), apps[0])
+            params = hachain.restore_params(restore_backup or backup_id(90), apps[0])
         else:
             params = hachain.convert_params(HA_ID, [apps[0]], database=None, test_mode=False, encrypt=True,
                                             key_provided=key is not None, acknowledged={}, choices={})
@@ -1202,6 +1207,406 @@ class TerminationTests(ChainCase):
         thread.start()
         thread.join(5)
         self.assertEqual(seen, [False])
+
+
+
+THREE = ['woowbk-demo', 'woowbk-two', 'woowbk-three']
+
+
+def good_tar(app_id):
+    return volume_tar([{'name': 'files/', 'kind': tarfile.DIRTYPE, 'mode': 0o755},
+                       {'name': 'files/a.txt', 'data': f'{app_id}-from-ha'.encode(), 'mode': 0o644}])
+
+
+class TarAdapter(FakeAdapter):
+    """The fake adapter whose restore check runs the REAL nested-archive check of nested.py on the volume tar, as the real
+    adapter's preflight does before any app is stopped or any safety backup is taken."""
+
+    def preflight(self, app_manifest, *, mode, entry_sizes=None, extracted_dir=None):
+        checks = super().preflight(app_manifest, mode=mode, entry_sizes=entry_sizes, extracted_dir=extracted_dir)
+        nested.check_volume(Path(extracted_dir) / app_manifest['volumes'][0]['entry'])
+        return checks
+
+    def health(self):
+        if self.run == 'restore' and self.app.id in self.world.start_fails:  # the restore's units do not come up
+            return [{'id': f'{self.app.id}/start', 'status': 'fail', 'message': '無法啟動服務：woowbk-demo-app.service 沒有在執行。'}]
+        return super().health()
+
+
+class TarWorld(World):
+    def __init__(self):
+        super().__init__()
+        self.start_fails = set()
+        for app_id in THREE:
+            self.data[app_id] = good_tar(app_id)
+            self.mode[app_id] = 'inplace'
+            self.deployed[app_id] = True
+
+    def factory(self, app, *, log, phase=None, checkpoint=None, writers_hook=None, imported_hook=None):
+        adapter = TarAdapter(app, self, log, phase, checkpoint, writers_hook, imported_hook)
+        self.adapters.append(adapter)
+        return adapter
+
+
+class RestoreSideCase(ChainCase):
+    """The chain with the REAL restore flow (flows.run_restore: preflight, safety backup, restore, health, automatic rollback)
+    and fake adapters; the conversion step makes an ordinary backup of the app (the conversions themselves are
+    test_ha_import / test_ha_flows). What the device held when its app was converted is `marker(app)`: it differs from what
+    the backup holds, so the data after the chain shows which apps were imported and which were left or rolled back."""
+
+    @staticmethod
+    def marker(app_id):
+        return f'{app_id}-on-this-device'.encode()
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(hachain, '_outer_file_damaged', lambda ctx, chain: False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.build()
+
+    def fresh(self):
+        super().fresh()
+        self.build()
+
+    def build(self):
+        root = Path(self.tmp.name)
+        self.storage = FakeStorage(root / 'data')
+        self.storage.pending = Path(self.paths.pending)
+        self.keys = FakeKeys(root)
+        self.archive = FakeArchive()
+        self.world = TarWorld()
+        self.catalog = make_catalog(self.paths)
+        third = copy.deepcopy(demo_entry(self.paths))
+        third.update(id='woowbk-three', name='第三個應用', config_files=[{'path': '.config/woowbk-three/app.env', 'mode': '0600'}])
+        self.catalog['woowbk-three'] = catalogmod.validate_entry(third, paths=self.paths, user_lookup=user_lookup)
+        self.deps = flows.Deps(storage=self.storage, keys=self.keys, archive=self.archive, load_catalog=lambda: self.catalog,
+                               adapter_factory=self.world.factory, host_info=lambda: dict(HOST))
+
+    def convert(self, ctx, params):
+        app_id = params['apps'][0]
+        ctx.phase('prepare')
+        result = flows.run_backup(ctx, {'apps': [app_id], 'include_images': False, 'note': f'由 HA 備份轉換：{app_id}'})
+        self.script.events.append(('convert', app_id))
+        self.world.data[app_id] = self.marker(app_id)  # the device moves on after the conversion
+        return {'backup_id': result['backup_id'], 'size': result['size'], 'apps': result['apps'],
+                'encrypted': result['encrypted'], 'ha_import': {}, 'results': [convert_row(app_id)]}
+
+    def run_real(self, **kwargs):
+        return self.run_chain(deps=self.deps, handlers={'backup': self.convert, 'restore': flows.run_restore}, **kwargs)
+
+    def restores(self):
+        """The apps whose restore the (fake) adapters ran, and those they rolled back."""
+        return ([e[1] for e in self.world.events if e[0] == 'restore' and e[3] == 'restore'],
+                [e[1] for e in self.world.events if e[0] == 'restore' and e[3] == 'rollback'])
+
+    def safeties(self):
+        return {m['apps'][0]['id']: m for m in self.storage.list_backups() if m['type'] == 'safety'}
+
+    def assert_imported(self, *apps):
+        for app_id in apps:
+            self.assertEqual(self.world.data[app_id], good_tar(app_id), f'{app_id} holds what the backup held')
+
+    def assert_untouched(self, *apps):
+        for app_id in apps:
+            self.assertEqual(self.world.data[app_id], self.marker(app_id), f'{app_id} is as the device had it')
+
+
+class RestoreSideTests(RestoreSideCase):
+    """The restore side of the chain with the real restore flow."""
+
+    def test_three_apps_each_with_its_own_safety_backup(self):
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {app: 'imported' for app in THREE})
+        self.assertEqual(self.restores(), (THREE, []))
+        self.assert_imported(*THREE)
+        safeties = self.safeties()
+        self.assertEqual(sorted(safeties), sorted(THREE), 'one pre-restore backup per app')
+        for app_id, row in self.last_results().items():
+            self.assertEqual(row['safety_backup_id'], safeties[app_id]['id'])
+            self.assertEqual([item['id'] for item in self.storage.get(row['backup_id'])['apps']], [app_id],
+                             'every converted backup holds one app')
+        self.assertEqual(len({row['backup_id'] for row in self.last_results().values()}), 3)
+
+    def test_a_restore_check_that_does_not_pass_leaves_that_app_and_restores_the_others(self):
+        """FL-09: the restore check (any item) does not pass for one app: only that app is refused, the others are restored."""
+        self.world.preflight_fail.add('woowbk-two')
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'failed', 'woowbk-three': 'imported'})
+        row = self.last_results()['woowbk-two']
+        self.assertEqual(row['code'], 'incompatible')
+        self.assertIn('相容性檢查未通過', row['message'])
+        self.assertTrue(row['message'].endswith(hachain.UNCHANGED_TAIL))
+        self.assertEqual((row['safety_backup_id'], self.restores()), (None, (['woowbk-demo', 'woowbk-three'], [])))
+        self.assert_imported('woowbk-demo', 'woowbk-three')
+        self.assert_untouched('woowbk-two')
+        self.assertNotIn('woowbk-two', self.safeties(), 'refused before the safety backup: nothing was taken, nothing stopped')
+        self.assertTrue(self.storage.get(row['backup_id']), 'the converted backup stays')
+
+    def test_a_restore_that_fails_after_it_started_is_rolled_back_for_that_app_only(self):
+        """FL-20: an error in the middle of one restore rolls that app back from its own safety backup; the others stay imported."""
+        self.world.fail_restore_after['woowbk-two'] = 1
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'rolled-back', 'woowbk-three': 'imported'})
+        self.assertEqual(self.restores(), (THREE, ['woowbk-two']))
+        self.assert_imported('woowbk-demo', 'woowbk-three')
+        self.assert_untouched('woowbk-two')
+        row = self.last_results()['woowbk-two']
+        self.assertEqual((row['code'], row['safety_backup_id']), ('job-failed', self.safeties()['woowbk-two']['id']))
+        self.assertTrue(row['message'].endswith(hachain.ROLLED_BACK_TAIL))
+        record = self.records()[3]
+        self.assertEqual((record['state'], record['result']['rolled_back']), ('rolled-back', True))
+
+    def test_a_service_that_does_not_start_is_rolled_back_for_that_app_only(self):
+        """X-AD-33: an app that is not healthy after its restore is taken back; the next app is imported all the same."""
+        self.world.start_fails.add('woowbk-demo')
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'rolled-back', 'woowbk-two': 'imported', 'woowbk-three': 'imported'})
+        self.assertEqual(self.restores(), (THREE, ['woowbk-demo']))
+        self.assert_untouched('woowbk-demo')
+        self.assert_imported('woowbk-two', 'woowbk-three')
+        self.assertIn('無法啟動服務', self.last_results()['woowbk-demo']['message'])
+
+    def test_a_backup_that_misses_a_file_is_rolled_back_for_that_app_only(self):
+        """X-AD-30: the extracted backup lacks an item (the adapter says so after its restore began): that app only."""
+        self.world.raise_in['woowbk-three'] = BackupError('job-failed', '備份內容缺少項目 volumes/data.tar。')
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'imported', 'woowbk-three': 'rolled-back'})
+        self.assertIn('備份內容缺少項目', self.last_results()['woowbk-three']['message'])
+        self.assert_untouched('woowbk-three')
+
+    def test_a_rollback_that_fails_needs_a_person_and_the_other_apps_are_still_imported(self):
+        self.world.fail_restore_after['woowbk-demo'] = 1
+        self.world.fail_rollback_restore.add('woowbk-demo')
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'failed', 'woowbk-two': 'imported', 'woowbk-three': 'imported'})
+        row = self.last_results()['woowbk-demo']
+        self.assertIn('需人工處理', row['message'])
+        self.assertEqual(row['safety_backup_id'], self.safeties()['woowbk-demo']['id'])
+        self.assertIn(row['safety_backup_id'], row['message'], 'the message names the backup to restore from')
+        self.assertEqual(self.records()[1]['state'], 'failed')
+        self.assert_imported('woowbk-two', 'woowbk-three')
+
+    def test_a_backup_that_does_not_hold_the_app_leaves_that_app_and_restores_the_others(self):
+        """FL-08, X-AR-12: of the apps asked for, one is not in the backup (restore chain of a converted backup)."""
+        ids = []
+
+        def two_of_three(ctx, params):
+            app_ids = ['woowbk-demo', 'woowbk-three']
+            result = flows.run_backup(ctx, {'apps': app_ids, 'include_images': False, 'note': '兩個應用'})
+            ids.append(result['backup_id'])
+            return {'backup_id': result['backup_id']}
+
+        job = self.start()  # a plain backup job to make the one backup the chain restores
+        jobs.run_job(self.paths, job['job_id'], deps=self.deps, handlers={'backup': two_of_three})
+        self.world.data.update({app: self.marker(app) for app in THREE})
+        self.start_chain(THREE, kind='ha-restore', restore_backup=ids[0])
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'failed', 'woowbk-three': 'imported'})
+        row = self.last_results()['woowbk-two']
+        self.assertEqual(row['code'], 'incompatible')
+        self.assertIn('此備份不包含應用「woowbk-two」', row['message'])
+        self.assertEqual(self.restores(), (['woowbk-demo', 'woowbk-three'], []))
+        self.assert_untouched('woowbk-two')
+        self.assert_imported('woowbk-demo', 'woowbk-three')
+
+    def test_a_converted_backup_that_cannot_be_read_is_that_apps_alone(self):
+        original = self.convert
+
+        def convert(ctx, params):
+            result = original(ctx, params)
+            if params['apps'] == ['woowbk-two']:
+                self.archive.corrupt.add(self.storage.archive_path(result['backup_id']).name)
+            return result
+
+        self.convert = convert
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'failed', 'woowbk-three': 'imported'})
+        self.assertEqual(self.last_results()['woowbk-two']['code'], 'corrupt-archive')
+        self.assert_untouched('woowbk-two')
+
+
+
+def pax_global():
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode='w', format=tarfile.PAX_FORMAT, pax_headers={'path': 'x'}) as tar:
+        tar.addfile(tarfile.TarInfo('a'))
+    return buffer.getvalue()
+
+
+# The hostile nested archives of the restore check, by the rows of the owner's list that name them (nested.py refuses each;
+# the restore side's checks are not relaxed: only the one app whose backup carries it is left out).
+HOSTILE = {
+    'X-NS-01': {
+        'an absolute name': [{'name': '/etc/cron.d/x', 'data': b'x'}],
+        'a name with ..': [{'name': 'a/../../x', 'data': b'x'}],
+        'an empty component': [{'name': 'a//b', 'data': b'x'}],
+        'a name that is too long': [{'name': 'a/' + 'b' * 5000, 'data': b'x'}]},
+    'X-NS-05': {
+        'a device file': [{'name': 'dev', 'kind': tarfile.CHRTYPE}],
+        'a block device': [{'name': 'disk', 'kind': tarfile.BLKTYPE}],
+        'a name twice': [{'name': 'a', 'data': b'1'}, {'name': 'a', 'data': b'2'}],
+        'a file where a directory was': [{'name': 'd/x', 'data': b'1'}, {'name': 'd', 'data': b'2'}],
+        'a link where a directory was': [{'name': 'd/', 'kind': tarfile.DIRTYPE},
+                                         {'name': 'd', 'kind': tarfile.SYMTYPE, 'linkname': '/etc'}]},
+    'X-NS-06': {
+        'a file below a file': [{'name': 'f', 'data': b'x'}, {'name': 'f/x', 'data': b'x'}],
+        'a file below a link that leaves the volume': [{'name': 'esc', 'kind': tarfile.SYMTYPE, 'linkname': '/home/appowner'},
+                                                       {'name': 'esc/containers.conf', 'data': b'[engine]\n'}],
+        'a file below a fifo': [{'name': 'pipe', 'kind': tarfile.FIFOTYPE}, {'name': 'pipe/x', 'data': b'x'}],
+        'a file below a hard link': [{'name': 'f', 'data': b'x'}, {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'f'},
+                                     {'name': 'l/x', 'data': b'x'}]},
+    'X-NS-07': {
+        'a hard link to nothing': [{'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'missing'}],
+        'a hard link outside': [{'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': '/etc/shadow'}],
+        'a hard link with ..': [{'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': '../x'}],
+        'a hard link through a link': [{'name': 'esc', 'kind': tarfile.SYMTYPE, 'linkname': '/home/appowner'},
+                                       {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'esc/.bashrc'}],
+        'a hard link to a directory': [{'name': 'd/', 'kind': tarfile.DIRTYPE},
+                                       {'name': 'l', 'kind': tarfile.LNKTYPE, 'linkname': 'd'}]},
+}
+RAW = {
+    'X-NS-02': {'bytes that are no tar': b'\x1f\x8b' + b'\0' * 2000, 'random bytes': bytes(range(256)) * 12, 'nothing at all': b''},
+    'X-NS-04': {'a global PAX header': pax_global()},
+}
+
+
+class NestedArchiveTests(RestoreSideCase):
+    """X-NS-01, 02, 04, 05, 06, 07, 10 and X-AD-20: the nested-archive checks of the restore (nested.py, the real code on hostile
+    tars) are not loosened: a chain whose second app carries a hostile or damaged archive restores the first and the third
+    as usual, and the second is left exactly as the device had it, with nothing stopped and no safety backup taken."""
+
+    def chain_with(self, data):
+        self.fresh()
+        self.world.data['woowbk-two'] = data
+        self.start_chain(THREE)
+        self.run_real()
+
+    def assert_only_the_second_is_left_out(self, label):
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'failed', 'woowbk-three': 'imported'}, label)
+        row = self.last_results()['woowbk-two']
+        self.assertEqual(row['code'], 'corrupt-archive', label)
+        self.assertIn('這台設備沒有任何變更', row['message'], label)
+        self.assertEqual(self.restores(), (['woowbk-demo', 'woowbk-three'], []), label)
+        self.assert_imported('woowbk-demo', 'woowbk-three')
+        self.assert_untouched('woowbk-two')
+        self.assertNotIn('woowbk-two', self.safeties(), 'refused before the safety backup: nothing was taken, nothing stopped')
+        self.assertTrue(self.storage.get(row['backup_id']), 'the converted backup of the app stays')
+        self.assertEqual(self.records()[3]['state'], 'failed')
+        self.assertEqual(self.records()[3]['result']['changed'], False)
+        self.assertEqual(self.records()[-1]['state'], 'succeeded')
+
+    def test_every_hostile_tar_of_the_list_leaves_only_its_app(self):
+        for row_id, samples in HOSTILE.items():
+            for label, members in samples.items():
+                with self.subTest(row=row_id, sample=label):
+                    self.chain_with(volume_tar(members))
+                    self.assert_only_the_second_is_left_out(f'{row_id} {label}')
+
+    def test_what_is_no_tar_and_the_global_pax_header_leave_only_their_app(self):
+        for row_id, samples in RAW.items():
+            for label, data in samples.items():
+                with self.subTest(row=row_id, sample=label):
+                    self.chain_with(data)
+                    self.assert_only_the_second_is_left_out(f'{row_id} {label}')
+
+    def test_the_checks_are_the_real_ones(self):
+        """The tars above are refused by nested.py itself (so the chain test is about the real refusal), and a good one is not."""
+        tmp = Path(self.tmp.name)
+        for samples in HOSTILE.values():
+            for label, members in samples.items():
+                (tmp / 'x.tar').write_bytes(volume_tar(members))
+                with self.assertRaises(BackupError, msg=label) as caught:
+                    nested.check_volume(tmp / 'x.tar')
+                self.assertEqual(caught.exception.code, 'corrupt-archive', label)
+        (tmp / 'x.tar').write_bytes(good_tar('woowbk-two'))
+        nested.check_volume(tmp / 'x.tar')
+
+    def test_data_that_is_cut_short_while_it_is_prepared_rolls_back_only_its_app(self):
+        """X-NS-10: a member's data ends early, or preparing it fails: found while the restore streams it, after the app was
+        stopped. That app is rolled back from its own safety backup; the others stay imported."""
+        whole = volume_tar([{'name': 'files/', 'kind': tarfile.DIRTYPE}, {'name': 'files/a.bin', 'data': b'A' * 5000}])
+        path = Path(self.tmp.name) / 'cut.tar'
+        path.write_bytes(whole[:1024 + 2500])
+        with self.assertRaises(BackupError) as caught, nested.pipe_from(lambda out: nested.stream_volume(path, out)) as reader:
+            reader.read()
+        error = caught.exception
+        self.assertEqual((error.code, error.message), ('internal-error', '準備還原資料時發生錯誤。'))
+        for label, raised in (('data cut short', error), ('preparing fails', BackupError('internal-error', '準備還原資料時發生錯誤。'))):
+            with self.subTest(label):
+                self.fresh()
+                self.world.raise_in['woowbk-two'] = raised
+                self.start_chain(THREE)
+                self.run_real()
+                self.assertEqual(self.statuses(), {'woowbk-demo': 'imported', 'woowbk-two': 'rolled-back', 'woowbk-three': 'imported'})
+                self.assertEqual(self.restores(), (THREE, ['woowbk-two']))
+                self.assert_untouched('woowbk-two')
+                self.assert_imported('woowbk-demo', 'woowbk-three')
+                self.assertIn('準備還原資料時發生錯誤', self.last_results()['woowbk-two']['message'])
+
+    def test_a_second_hostile_app_and_a_first_one_are_both_left_out_and_the_third_still_goes(self):
+        self.fresh()
+        self.world.data['woowbk-demo'] = volume_tar([{'name': '/etc/x', 'data': b'x'}])
+        self.world.data['woowbk-two'] = volume_tar([{'name': 'dev', 'kind': tarfile.CHRTYPE}])
+        self.start_chain(THREE)
+        self.run_real()
+        self.assertEqual(self.statuses(), {'woowbk-demo': 'failed', 'woowbk-two': 'failed', 'woowbk-three': 'imported'})
+        self.assertEqual(self.restores(), (['woowbk-three'], []))
+        self.assert_untouched('woowbk-demo', 'woowbk-two')
+        self.assert_imported('woowbk-three')
+
+
+
+class OuterFileTests(HaFlowCase):
+    """hachain._outer_file_damaged on a real stored HA file: the file itself is what ends an import; one damaged add-on never."""
+
+    def setUp(self):
+        super().setUp()
+        self.ha_id = self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member()), (f'{hx.N8N}.tar.gz', hx.addon_member(
+            'woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64'))], hx.ha_doc(addons=(hx.ODOO, hx.N8N))))
+        self.path = hastore_path(self.paths, self.ha_id)
+        self.ctx = types.SimpleNamespace(paths=self.paths)
+        self.chain = {'ha_backup_id': self.ha_id}
+
+    def test_the_file_as_it_was_uploaded_is_fine(self):
+        self.assertFalse(hachain._outer_file_damaged(self.ctx, self.chain))
+
+    def test_an_add_on_that_is_damaged_inside_its_member_is_no_reason_to_stop(self):
+        data = bytearray(self.path.read_bytes())
+        with tarfile.open(self.path) as outer:
+            member = next(m for m in outer.getmembers() if m.name.endswith(f'{hx.ODOO}.tar.gz'))
+        start = member.offset_data + 16  # inside the add-on's own data, past its header: the outer layout is intact
+        data[start:start + 32] = bytes(b ^ 0xFF for b in data[start:start + 32])
+        self.path.write_bytes(bytes(data))
+        self.assertFalse(hachain._outer_file_damaged(self.ctx, self.chain), 'same size, same layout: one member is that app\'s')
+
+    def test_a_file_that_changed_is_one(self):
+        self.path.write_bytes(self.path.read_bytes() + b'\0' * 512)
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
+        self.path.write_bytes(self.path.read_bytes()[:-2048])
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
+
+    def test_a_file_that_is_no_longer_a_backup_is_one(self):
+        self.path.write_bytes(b'x' * self.path.stat().st_size)
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
+
+    def test_a_file_that_is_gone_is_one(self):
+        self.path.unlink()
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, self.chain))
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, {'ha_backup_id': 'ha-' + '1' * 20}))
+        self.assertTrue(hachain._outer_file_damaged(self.ctx, {'ha_backup_id': None}))
+
+
+def hastore_path(paths, ha_id):
+    from woowbackup import hastore
+    return hastore.HaStore(paths).file_path(ha_id)
 
 
 if __name__ == '__main__':
