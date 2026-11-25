@@ -832,6 +832,22 @@ class RetryAndWaitTests(unittest.TestCase):
         self.assertIs(caught.exception, verdict)
 
 
+class LiveExportTests(Case):
+    """hacommon.live_export: the 3 hours it always had are the floor, a big volume gets more (X-PD-05)."""
+
+    def test_the_wait_grows_with_the_volume(self):
+        seen = []
+        self.owner.relay = lambda args, *, stdout, timeout=None, max_output=None, check=True, abort=None: (
+            seen.append(timeout), stdout.write(b'tar'))
+        path = Path(self.tmpdir.name)
+        hacommon.live_export(self.work, APP, 'odoo-db', path / 'a.tar')
+        hacommon.live_export(self.work, APP, 'odoo-db', path / 'b.tar', size=5 * 1024 ** 4)
+        self.assertEqual(seen[0], 3 * 3600)
+        self.assertEqual(seen[1], podman.scaled_timeout(3 * 3600, 5 * 1024 ** 4))
+        self.assertGreater(seen[1], 3 * 3600)
+        self.assertEqual(oct((path / 'a.tar').stat().st_mode & 0o777), '0o600')
+
+
 class CarryTests(Case):
     """OD-12/13, N8-02/27, O-07, HS-04, CS-04: this device's own volumes and folders go into the backup as they are."""
 

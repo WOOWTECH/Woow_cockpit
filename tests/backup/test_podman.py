@@ -551,6 +551,9 @@ class LineStreamTests(unittest.TestCase):
         runner = self.local()
         result = runner.stream_lines(['/bin/sh', '-c', 'seq 1 200000'], got.append, timeout=60)
         self.assertEqual((result.returncode, result.stdout, len(got), got[-1]), (0, None, 200000, b'200000'))
+        tail = []
+        runner.stream_lines(['/bin/sh', '-c', 'printf "a\\nb"'], tail.append, timeout=60)
+        self.assertEqual(tail, [b'a', b'b'], 'the last line has no newline: it is handed over when the command ends')
         started = time.monotonic()
         with self.assertRaises(BackupError) as caught:
             runner.stream_lines(['/bin/sh', '-c', 'head -c 50000000 /dev/zero; sleep 30'], got.append, timeout=60,
@@ -583,6 +586,15 @@ class UserManagerTests(unittest.TestCase):
 
         self.runner = Runner('appowner', runner=Recorder(), user_lookup=owner_lookup())
         self.calls, self.notes, self.slept = [], [], []
+        # Whatever the code under test decides, the real executor (a root command on this host) is never reached here.
+        patcher = mock.patch.object(podman, 'default_runner', self.never_the_real_one)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.real_calls = []
+
+    def never_the_real_one(self, argv, **kwargs):
+        self.real_calls.append(argv)
+        return podman.Result(1, None, b'refused by the test: the real executor must not run')
 
     def root(self, code=0, stderr=b'', start=True, exc=None):
         def run(argv, **kwargs):
@@ -663,6 +675,7 @@ class UserManagerTests(unittest.TestCase):
         # a runner made with another executor (every test, every lab double) never touches the device
         self.assertFalse(self.runner.ensure_user_manager(trusted=lambda _path: True))
         self.assertFalse(self.runner.user_manager_ready())
+        self.assertEqual(self.real_calls, [], 'no root command was tried')
         calls = []
 
         def fake_default(argv, **kwargs):
