@@ -460,8 +460,9 @@ class ImportStartTests(HaCliCase):
         self.assertEqual(params['group'], {'id': response['group'], 'index': 0, 'count': 2, 'kind': 'ha-import',
                                            'step': 'convert', 'app_id': 'odoo'})
         self.assertEqual(params['chain'], {
-            'apps': ['odoo', 'n8n'], 'test_mode': True, 'then_restore': True, 'encrypt': True,
-            'acknowledged': {'n8n': [self.KEY]}, 'choices': {'odoo': {'database': '客戶 a'}}, 'results': []})
+            'apps': ['odoo', 'n8n'], 'test_mode': True, 'then_restore': True, 'encrypt': True, 'key_provided': False,
+            'ha_backup_id': self.ha_id, 'acknowledged': {'n8n': [self.KEY]}, 'choices': {'odoo': {'database': '客戶 a'}},
+            'results': []})
         record = jobs.JobStore(self.paths).get(response['job_id'])
         self.assertEqual((record['type'], [p['id'] for p in record['phases']]),
                          ('backup', ['prepare', 'decrypt', 'convert', 'package', 'verify']))
@@ -555,7 +556,8 @@ class ImportStartTests(HaCliCase):
         self.assertNotIn('check_job_id', self.params(response), 'the audit only')
 
     def run_first_job(self, response, convert):
-        """The first job in this process, as its unit runs it (stubbed app step and adapter)."""
+        """The first job alone in this process (`chain=False`: what follows it is hachain's, tested in test_ha_chain), as its
+        unit runs it (stubbed app step and adapter)."""
         from .test_ha_import import HaWorld, app
         world = HaWorld()
         self.deps.adapter_factory = world.factory
@@ -566,7 +568,7 @@ class ImportStartTests(HaCliCase):
             stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
             stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
-            return jobs.run_job(self.paths, response['job_id'], deps=self.deps)
+            return jobs.run_job(self.paths, response['job_id'], deps=self.deps, chain=False)
 
     def test_the_first_job_runs_and_reports_itself(self):
         key = Issue('odoo.modules', 'confirm', 'x', ['m'], database='客戶 a').key('odoo')

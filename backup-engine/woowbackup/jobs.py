@@ -26,6 +26,11 @@
 * Cancellation is a request file, accepted only while the record says the job is cancellable and honoured
   at the job's next checkpoint. Leaving the cancellable window is itself such a checkpoint, checked under
   the record lock, so an accepted cancel is never followed by a destructive step.
+* A Home Assistant import is a chain of jobs (hachain.py): `run_job` runs the job it is given and then, in the same
+  process, under the same engine lock, every job the chain adds. The next job's record is written (queued, with the
+  unit of the first job) before the finished job's record is, so the import never has a moment without an active job;
+  `cancel_job` of any job of the import means its live job, and `after_this` asks the chain to stop after the app it is
+  working on (a side file named after the import's group, `<group id>.stop`).
 """
 import calendar
 import contextlib
@@ -91,6 +96,8 @@ KEY_FILE_MAX_AGE = 15 * 60  # an inspect takes seconds; older key-inspect-* file
 KEEP_TERMINAL = 200  # finished records kept (with their logs) besides the ones that are still needed
 ORPHAN_MAX_AGE = 3600  # a log / lock / cancel request / temp file without its record is removed after this
 SIDE_FILE_RE = re.compile(r'(j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8})\.(?:log|lock|cancel)\Z')
+GROUP_ID_RE = re.compile(r'g[0-9a-f]{16}\Z')
+STOP_FILE_RE = re.compile(r'(g[0-9a-f]{16})\.stop\Z')
 TEMP_FILE_RE = re.compile(r'\.j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.json\.[0-9a-f]+\.tmp\Z')
 # The job unit is bounded independently of the containers it talks to (review finding SEC-3).
 UNIT_LIMITS = ('--property=MemoryMax=50%', '--property=TasksMax=512')
@@ -353,7 +360,9 @@ class JobStore:
         finally:
             os.close(fd)
 
-    def create(self, job_type, params, *, request_id=None, now=None):
+    def create(self, job_type, params, *, request_id=None, now=None, unit=None):
+        """A queued record. `unit`: the systemd unit that runs it, when it is not the one named after this job (the next
+        job of an import's chain runs in the unit of the first one; recovery asks that unit whether the job is alive)."""
         if job_type not in PHASES:
             raise BackupError('invalid-request', '不支援的作業類型。')
         now = time.time() if now is None else now
@@ -367,7 +376,7 @@ class JobStore:
                         'state': 'pending'} for pid, label in phases],
             'progress': {'percent': 0, 'message': '等待開始'}, 'created': utc_iso(now), 'started': None,
             'finished': None, 'params': params, 'result': None, 'error': None, 'cancellable': True,
-            'request_id': request_id, 'unit': unit_name(job_id),
+            'request_id': request_id, 'unit': unit if isinstance(unit, str) and unit else unit_name(job_id),
         }
         self.save(record)
         return record
@@ -463,6 +472,24 @@ class JobStore:
     def clear_cancel(self, job_id):
         with contextlib.suppress(FileNotFoundError):
             os.unlink(self.cancel_path(job_id))
+
+    def stop_path(self, group_id):
+        """The side file that asks an import's chain to stop after the app it is working on (named after the import's group,
+        so any job of the import can reach it)."""
+        if not isinstance(group_id, str) or not GROUP_ID_RE.fullmatch(group_id):
+            raise BackupError('invalid-request', '匯入的識別碼格式不正確。')
+        return Path(self.paths.jobs) / f'{group_id}.stop'
+
+    def request_stop(self, group_id):
+        fd = os.open(self.stop_path(group_id), os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        os.close(fd)
+
+    def stop_requested(self, group_id):
+        return os.path.lexists(self.stop_path(group_id))
+
+    def clear_stop(self, group_id):
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self.stop_path(group_id))
 
 
 # ---------------------------------------------------------------- reporter
@@ -1182,6 +1209,8 @@ def _mark_interrupted(paths, store, record, now, restart_writers, cleanup_fresh,
     """Finish a dead job's fresh record as `interrupted`; the state is committed before any clean-up runs, so a
     helper killed during the clean-up leaves a finished record whose leftovers the next pass completes."""
     message, result = interrupted_details(record)
+    from . import hachain
+    message, result = hachain.interrupted(record, message, result)  # a job of an import's chain: which apps are done
     if result is not None:
         record['result'] = result
     for item in record.get('phases') or []:
@@ -1257,9 +1286,10 @@ def pinned_safety_records(records):
     return pinned
 
 
-def _sweep_orphans(store, now):
-    """Remove side files whose record is gone (a log, lock or cancel request) and temp files of interrupted
-    writes, once they are ORPHAN_MAX_AGE old."""
+def _sweep_orphans(store, now, live_groups=frozenset()):
+    """Remove side files whose record is gone (a log, lock or cancel request), the stop request of an import none of
+    whose jobs is active (`live_groups`: the groups of the active records) and temp files of interrupted writes, once they
+    are ORPHAN_MAX_AGE old."""
     try:
         names = os.listdir(store.paths.jobs)
     except (FileNotFoundError, NotADirectoryError):
@@ -1267,7 +1297,9 @@ def _sweep_orphans(store, now):
     present = {name[:-5] for name in names if name.endswith('.json')}
     for name in names:
         side = SIDE_FILE_RE.fullmatch(name)
-        if not (side and side.group(1) not in present) and not TEMP_FILE_RE.fullmatch(name):
+        stop = STOP_FILE_RE.fullmatch(name)
+        if not (side and side.group(1) not in present) and not (stop and stop.group(1) not in live_groups) \
+                and not TEMP_FILE_RE.fullmatch(name):
             continue
         path = Path(store.paths.jobs) / name
         try:
@@ -1277,6 +1309,18 @@ def _sweep_orphans(store, now):
         if stat.S_ISREG(st.st_mode) and now - st.st_mtime >= ORPHAN_MAX_AGE:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(path)
+
+
+def _live_groups(records):
+    """The ids of the imports that have a queued or running job (hachain.group_of; a stop request of any other is stale)."""
+    from . import hachain
+    groups = set()
+    for record in records:
+        if record.get('state') in ACTIVE:
+            group = hachain.group_of(record.get('params'))
+            if group is not None:
+                groups.add(group['id'])
+    return groups
 
 
 def _retain(store, records, now, keep=KEEP_TERMINAL):
@@ -1299,7 +1343,7 @@ def _retain(store, records, now, keep=KEEP_TERMINAL):
             pinned = pinned_safety_records(records)
         if job_id not in pinned:
             store.remove(job_id)
-    _sweep_orphans(store, now)
+    _sweep_orphans(store, now, _live_groups(records))
 
 
 def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanup_fresh=None, settle_dirs=None,
@@ -1361,16 +1405,35 @@ def active_job(paths):
     return None
 
 
-def cancel_job(paths, job_id, *, wait_seconds=3.0, sleep=time.sleep, clock=time.monotonic):
+def cancel_job(paths, job_id, *, after_this=False, wait_seconds=3.0, sleep=time.sleep, clock=time.monotonic):
     """Request cancellation; honoured at the job's next safe checkpoint. Returns {'state'}.
 
     Checked and requested under the record lock: the job cannot close its cancellable window or finish in
     between, so an accepted request is honoured before any destructive step, and a finished job never keeps
     a request file.
+
+    A job of a Home Assistant import (hachain.py) stands for the whole import: its live job, queued or running, is the one
+    cancelled (also when `job_id` names a job of the import that is over already, a moment ago), and the import stops with
+    it. `after_this` instead lets the app the import is working on finish -- its restore still follows its conversion --
+    and stops the import after it (a side file named after the group; accepted also while the job cannot be cancelled any
+    more); the answer then has `after_this: true`. A job that belongs to no import refuses `after_this`.
     """
+    from . import hachain
     store = JobStore(paths)
     with start_lock(paths):
-        store.get(job_id)  # not-found before a lock file is created for an unknown id
+        record = store.get(job_id)  # not-found before a lock file is created for an unknown id
+        group = hachain.group_of(record.get('params'))
+        if after_this and group is None:
+            raise BackupError('invalid-request', '只有匯入作業可以要求「做完這個應用就停止」。', field='after_this')
+        if group is not None:
+            member = hachain.active_member(store, group['id'])
+            if member is None:
+                return {'state': record.get('state')}  # the import is over: nothing to cancel or stop
+            job_id = member['id']
+            if after_this:
+                store.request_stop(group['id'])
+                store.append_log(job_id, hachain.STOP_REQUESTED_LOG)
+                return {'state': member.get('state'), 'after_this': True}
         with store.locked(job_id):
             record = store.get(job_id)
             if record.get('state') in TERMINAL:
@@ -1460,12 +1523,149 @@ def signals_as_exceptions():
             signal.signal(sig, old)
 
 
-def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handlers=None):
-    """Execute a queued job in this process (the systemd-run unit). Never replays finished jobs."""
+class _Deferred:
+    """What `_termination_deferred` noted: a termination signal that arrived inside its block."""
+    pending = False
+    signum = None
+
+
+@contextlib.contextmanager
+def _termination_deferred():
+    """Inside the block SIGTERM, SIGINT and SIGHUP are only noted (`.pending`), nothing is raised and nothing is lost: the
+    short section that writes the next job of a chain and finishes this one must not be cut in half, and the caller still
+    ends the process once it is done. Main thread only; elsewhere nothing changes."""
+    state = _Deferred()
+    if threading.current_thread() is not threading.main_thread():
+        yield state
+        return
+    previous = {}
+
+    def note(signum, _frame):
+        state.pending, state.signum = True, signum
+
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[sig] = signal.signal(sig, note)
+        yield state
+    finally:
+        for sig, old in previous.items():
+            signal.signal(sig, old)
+
+
+class _Run:
+    """The jobs one run-job process executes: the one it was given and, for an import (hachain.py), every job the chain adds
+    to it. They share the engine lock, the masks of the HA key and the key itself, which from the first job's end on lives
+    in this memory and nowhere else (its file goes); a restore chain keeps its first job's key file (an age key) for the
+    jobs that follow, until the run ends."""
+
+    def __init__(self, paths, store, lock_fd, masks, deps, handlers, follow):
+        self.paths, self.store, self.lock_fd, self.masks = paths, store, lock_fd, masks
+        self.deps, self.handlers, self.follow = deps, handlers, follow
+        self.ha_key = None
+        self.key_file = None   # the first job's key file while a restore chain still needs it
+        self.taken = []        # the ids of the jobs this run took: a cancel request of each is cleared at the end
+
+    def go(self, job_id):
+        """Run `job_id` and what follows it; returns the record of `job_id` (the job this process was started for)."""
+        record, next_id = self.execute(job_id, first=True)
+        first = record
+        while next_id is not None:
+            record, next_id = self.execute(next_id, first=False)
+        return first
+
+    def execute(self, job_id, *, first):
+        """One job, from queued to finished: (its record, the id of the job that follows or None)."""
+        from . import flows, hachain
+        store = self.store
+        os.ftruncate(self.lock_fd, 0)
+        os.pwrite(self.lock_fd, f'{job_id}\n'.encode(), 0)
+        reporter = JobReporter(store, store.get(job_id))
+        outcome = reporter.begin()
+        self.taken.append(job_id)
+        if outcome == 'not-queued':
+            store.append_log(job_id, '作業不是等待中的狀態，不重新執行')
+        if outcome != 'started':
+            if outcome == 'cancelled' and self.follow and hachain.in_chain(reporter.record):
+                with contextlib.suppress(Exception):  # the record is finished: only what the import did so far is added
+                    hachain.unstarted(self.paths, store, reporter.record)
+            return reporter.record, None
+        key_file = store.key_path(job_id) if first else self.key_file
+        ctx = flows.FlowContext(self.paths, job_id, self.deps, reporter,
+                                key_file=key_file if key_file is not None and os.path.lexists(key_file) else None)
+        if first:
+            # The HA key of an import job is masked before the job writes its first log line (haimport.py).
+            self.ha_key = _ha_key(reporter.record, ctx.key_file)
+            if self.ha_key is not None:
+                self.masks.enter_context(masked(self.ha_key))
+        if self.ha_key is not None:
+            ctx.ha_key = self.ha_key
+        if first:
+            _adopt_orphans(ctx)
+        _sweep_finished_temp(ctx)
+        table = self.handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify,
+                                  'export': flows.run_export}
+        handler = table[reporter.record['type']]
+        chained = self.follow and hachain.in_chain(reporter.record)
+        state, result, error, exc, next_id = 'succeeded', None, None, None, None
+        with signals_as_exceptions():
+            try:
+                result = handler(ctx, reporter.record.get('params') or {})
+            except flows.Cancelled as caught:
+                state, exc = 'cancelled', caught
+            except flows.RolledBack as rolled:
+                state, result, error, exc = 'rolled-back', rolled.result, rolled.error.as_dict(), rolled
+            except Terminated as caught:
+                _restart_after_termination(ctx)
+                message, partial = interrupted_details(reporter.record)
+                state, result, error, exc = 'interrupted', partial, {'code': 'job-failed', 'message': message}, caught
+            except BackupError as caught:
+                state, result, error, exc = 'failed', getattr(caught, 'result', None), caught.as_dict(), caught
+            except Exception as caught:  # noqa: BLE001 - recorded generically, details go to the journal only
+                traceback.print_exc(file=sys.stderr)
+                state, error, exc = 'failed', {'code': 'internal-error', 'message': '作業發生未預期的內部錯誤，請查看系統日誌。'}, caught
+            if chained:
+                next_id = self._finish_chained(ctx, reporter, state, result, error, exc, first)
+            else:
+                reporter.finish(state, result=result, error=error)
+        return reporter.record, next_id
+
+    def _finish_chained(self, ctx, reporter, state, result, error, exc, first):
+        """Finish a job of an import's chain: decide what comes next, write that job (queued), and only then write this
+        job's final record, all under this record's lock (a `job-cancel` is either seen here or finds the live next job)
+        and with termination signals only noted. Returns the id of the next job or None."""
+        from . import hachain
+        created = None
+        with _termination_deferred() as deferred, self.store.locked(reporter.job_id):
+            try:
+                final, created = hachain.conclude(ctx, reporter.record, hachain.Outcome(state, result, error, exc))
+            except Exception:  # noqa: BLE001 - the job's own outcome is recorded all the same; the import ends here
+                traceback.print_exc(file=sys.stderr)
+                final, created = result, None
+            reporter.finish(state, result=final, error=error)
+        if first and self.key_file is None and hachain.group_of(reporter.record.get('params'))['kind'] == 'ha-restore':
+            self.key_file = ctx.key_file
+        elif first:
+            _remove_key_file(self.store, reporter.job_id)  # the HA key lives in memory from here on
+        if created is not None and deferred.pending:
+            hachain.abandon(self.paths, self.store, created)  # told to end meanwhile: the next job never starts
+            created = None
+        return created['id'] if created is not None else None
+
+    def cleanup(self):
+        for job_id in self.taken:
+            with contextlib.suppress(BackupError, OSError):
+                self.store.clear_cancel(job_id)
+
+
+def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handlers=None, chain=True):
+    """Execute a queued job in this process (the systemd-run unit). Never replays finished jobs. Returns the record of
+    `job_id`. A job of a Home Assistant import (`params.group`, hachain.py) is followed by the jobs its chain adds, in this
+    process and under the same engine lock (`chain=False` runs only the given job: the tests of one step)."""
     from . import flows
     store = JobStore(paths)
     lock_fd = None
     masks = contextlib.ExitStack()
+    run = None
     try:
         store.ensure()
         store.get(job_id)  # not-found before waiting for the engine lock
@@ -1476,50 +1676,14 @@ def run_job(paths, job_id, *, deps=None, lock_timeout=LOCK_WAIT_SECONDS, handler
                 if reporter.record.get('state') == 'queued':
                     reporter.finish('failed', error={'code': 'busy', 'message': '另一個作業仍在執行，此作業未啟動。'})
             return reporter.record
-        os.ftruncate(lock_fd, 0)
-        os.write(lock_fd, f'{job_id}\n'.encode())
-        reporter = JobReporter(store, store.get(job_id))
-        outcome = reporter.begin()
-        if outcome == 'not-queued':
-            store.append_log(job_id, '作業不是等待中的狀態，不重新執行')
-        if outcome != 'started':
-            return reporter.record
-        key_file = store.key_path(job_id)
-        ctx = flows.FlowContext(paths, job_id, deps or flows.default_deps(paths), reporter,
-                                key_file=key_file if os.path.lexists(key_file) else None)
-        # The HA key of an import job is masked before the job writes its first log line (haimport.py).
-        ha_key = _ha_key(reporter.record, ctx.key_file)
-        if ha_key is not None:
-            masks.enter_context(masked(ha_key))
-            ctx.ha_key = ha_key
-        _adopt_orphans(ctx)
-        _sweep_finished_temp(ctx)
-        table = handlers or {'backup': flows.run_backup, 'restore': flows.run_restore, 'verify': flows.run_verify,
-                             'export': flows.run_export}
-        handler = table[reporter.record['type']]
-        with signals_as_exceptions():
-            try:
-                result = handler(ctx, reporter.record.get('params') or {})
-            except flows.Cancelled:
-                reporter.finish('cancelled')
-            except flows.RolledBack as rolled:
-                reporter.finish('rolled-back', result=rolled.result, error=rolled.error.as_dict())
-            except Terminated:
-                _restart_after_termination(ctx)
-                message, partial = interrupted_details(reporter.record)
-                reporter.finish('interrupted', result=partial, error={'code': 'job-failed', 'message': message})
-            except BackupError as error:
-                reporter.finish('failed', result=getattr(error, 'result', None), error=error.as_dict())
-            except Exception:  # noqa: BLE001 - recorded generically, details go to the journal only
-                traceback.print_exc(file=sys.stderr)
-                reporter.finish('failed', error={'code': 'internal-error', 'message': '作業發生未預期的內部錯誤，請查看系統日誌。'})
-            else:
-                reporter.finish('succeeded', result=result)
-        return reporter.record
+        run = _Run(paths, store, lock_fd, masks, deps or flows.default_deps(paths), handlers, chain)
+        return run.go(job_id)
     finally:
         _remove_key_file(store, job_id)
         with contextlib.suppress(BackupError, OSError):
             store.clear_cancel(job_id)
+        if run is not None:
+            run.cleanup()
         if lock_fd is not None:
             with contextlib.suppress(OSError):
                 os.ftruncate(lock_fd, 0)
