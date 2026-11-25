@@ -625,6 +625,16 @@ class LiveJsonTests(Case):
         self.assertFalse([c for c in self.world.calls if c[0] == 'systemctl'], 'it ran: nothing is started')
         self.assertEqual(self.issues(), [])
 
+    def test_a_database_that_needs_its_recovery_gets_the_time_of_a_big_backup(self):
+        self.world.not_ready = 10 ** 6
+        self.world.exec_results = [podman.Result(125, b'', b'Error: no such container')]
+        self.work.ha = types.SimpleNamespace(layout=types.SimpleNamespace(size=200 * 1024 ** 3))
+        with self.assertRaises(BackupError) as caught:
+            self.read()
+        limit = podman.scaled_timeout(hatarget.READY_TIMEOUT, 800 * 1024 ** 3)
+        self.assertGreater(limit, hatarget.READY_TIMEOUT)
+        self.assertIn(f'{limit} 秒內', caught.exception.message)
+
     def test_it_is_started_only_once_a_second_failure_is_the_answer(self):
         dead = podman.Result(125, b'', b'Error: no such container')
         self.world.exec_results = [dead]

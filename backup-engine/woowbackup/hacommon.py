@@ -161,7 +161,8 @@ def live_json(work, app, container, user, database, sql, *, size=None):
     runner = work.runner(app)
     limit = podman.scaled_limit(LIVE_JSON_OUTPUT, size, ratio=2, ceiling=LIVE_JSON_CEILING)
     from . import hatarget
-    wait = podman.scaled_timeout(120, size if size is not None else hatarget.size_hint(getattr(work, 'ha', None)))
+    data = size if size is not None else hatarget.size_hint(getattr(work, 'ha', None))   # the waits follow the HA backup
+    wait = podman.scaled_timeout(120, data)
     started = False
     while True:
         try:
@@ -175,7 +176,7 @@ def live_json(work, app, container, user, database, sql, *, size=None):
             reason = podman.reason_code(error)
             if not started and reason in ('no-container', 'db-not-ready'):
                 from . import hatarget
-                hatarget.ensure_running(work, app, container, ready='postgres', size=size)
+                hatarget.ensure_running(work, app, container, ready='postgres', size=data)
                 started = True
                 continue
             sentence = podman.SENTENCES.get(reason)
