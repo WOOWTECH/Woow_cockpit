@@ -794,6 +794,31 @@ class ParityLinksTests(ParityCase):
             extra.append(self.link('projects/p0/key2', 'home/.claude/.credentials.json'))
         return self.upload_od(extra=extra)
 
+    def test_op11_several_links_to_one_file_cost_one_copy(self):
+        extra = [{'name': 'data/opendesign/home/.bun/big.bin', 'data': b'bun-cache-bytes'}] + [
+            self.link(f'projects/p0/l{i}', 'home/.bun/big.bin') for i in range(8)]
+        backup = self.upload_od(extra=extra)
+        self.assertEqual(self.row(backup)['open-design']['links_copied'], 1)
+        self.convert(backup, ['open-design'])
+        data = self.volume(DATA)
+        self.assertEqual((data['projects/p0/l0'][0].isfile(), data['projects/p0/l0'][1]), (True, b'bun-cache-bytes'))
+        for i in range(1, 8):
+            self.assertEqual((data[f'projects/p0/l{i}'][0].islnk(), data[f'projects/p0/l{i}'][0].linkname), (True, 'projects/p0/l0'))
+
+    def test_op11_what_is_copied_still_counts_against_the_readers_budget(self):
+        # four cache files with a link each: without copies the walk is 4 MiB, with them 8 MiB; the budget of the reader is 5 MiB
+        size = 1 << 20
+        extra = []
+        for i in range(4):
+            extra += [{'name': f'data/opendesign/home/.bun/f{i}.bin', 'data': bytes([65 + i]) * size},
+                      self.link(f'projects/p0/l{i}', f'home/.bun/f{i}.bin')]
+        real = habackup.Select
+        with mock.patch.object(od.habackup, 'Select', lambda **kwargs: real(**kwargs, max_bytes=5 * size)):
+            row = self.row(self.upload_od(extra=extra))
+            self.assertEqual((row['importable'], levels(row, 'stop')), (False, ['failure.limit-exceeded']))
+            row = self.row(self.upload_od(extra=extra[:2]))     # one file, one link: 2 MiB
+            self.assertEqual((row['importable'], row['open-design']['links_copied']), (True, 1))
+
     def test_op11_a_link_that_is_left_out_not_confirmed_stops_only_this_app(self):
         self.assert_not_confirmed(self.secret_link(), 'files.skipped', ['projects/p0/key'], '取不到內容的硬連結 1 個')
 

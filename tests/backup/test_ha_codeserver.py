@@ -979,6 +979,32 @@ class ParityLinksTests(ParityCase):
             extra.append(pi_link('sessions/--share-projects--/key2', 'claude/.claude.json'))
         return self.upload_cs(extra=extra)
 
+    def test_cs10_several_links_to_one_file_cost_one_copy(self):
+        extra = [{'name': f'{P_TREE}/home/.npm/big.bin', 'data': b'npm-cache-bytes'}] + [
+            pi_link(f'sessions/--share-projects--/l{i}', 'home/.npm/big.bin') for i in range(8)]
+        backup = self.upload_cs(extra=extra)
+        self.assertEqual(self.row(backup)[APP]['links_copied'], 1)
+        self.convert(backup, [APP])
+        pi = self.volume(PI)
+        self.assertEqual((pi['sessions/--share-projects--/l0'][0].isfile(), pi['sessions/--share-projects--/l0'][1]),
+                         (True, b'npm-cache-bytes'))
+        for i in range(1, 8):
+            link = pi[f'sessions/--share-projects--/l{i}'][0]
+            self.assertEqual((link.islnk(), link.linkname), (True, 'sessions/--share-projects--/l0'))
+
+    def test_cs10_what_is_copied_still_counts_against_the_readers_budget(self):
+        size = 1 << 20
+        extra = []
+        for i in range(4):
+            extra += [{'name': f'{P_TREE}/home/.npm/f{i}.bin', 'data': bytes([65 + i]) * size},
+                      pi_link(f'sessions/--share-projects--/l{i}', f'home/.npm/f{i}.bin')]
+        real = habackup.Select
+        with mock.patch.object(cs.habackup, 'Select', lambda **kwargs: real(**kwargs, max_bytes=5 * size)):
+            row = self.row(self.upload_cs(extra=extra))
+            self.assertEqual((row['importable'], levels(row, 'stop')), (False, ['failure.limit-exceeded']))
+            row = self.row(self.upload_cs(extra=extra[:2]))
+            self.assertEqual((row['importable'], row[APP]['links_copied']), (True, 1))
+
     def test_cs10_a_link_that_is_left_out_not_confirmed_stops_only_this_app(self):
         self.assert_not_confirmed(self.secret_link(), 'files.skipped', ['sessions/--share-projects--/key'], '取不到內容的硬連結 1 個')
 
