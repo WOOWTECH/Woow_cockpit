@@ -19,18 +19,18 @@ class OmnigentTrustedSchemaContractTest(unittest.TestCase):
         for name in ('restore_dump', 'carry_accounts', 'SECURITY_BLOCKER'):
             self.assertFalse(hasattr(ha_omnigent, name), name)
 
-    def test_convert_touches_nothing_before_the_secrets_are_registered(self):
-        for test_mode in (False, True):
-            with self.subTest(test_mode=test_mode):
-                work = Mock()
-                work.quadlets.return_value = {'omnigent-server.container':
-                                              '[Container]\nSecret=omnigent-database-url,type=env,target=DATABASE_URL\n'}
-                app = SimpleNamespace(id='omnigent', secrets=[])
-                with self.assertRaises(BackupError) as caught:
-                    ha_omnigent.convert(work, app, test_mode, Mock())
-                self.assertEqual(caught.exception.code, 'incompatible')
-                self.assertIn('機密未完整登記', caught.exception.message)
-                self.assertEqual([c[0] for c in work.mock_calls], ['quadlets'], 'nothing but the Quadlet files read')
+    def test_the_quadlet_secrets_are_read_by_name_only_and_are_no_refusal(self):
+        """O-48 (HAOS parity 2026-11-25): a Quadlet secret that the app settings do not list is a notice (the secret is
+        there on this device; it only matters when the backup is restored on a new one), no longer a refusal before anything
+        runs. What stays true: only the Quadlet files are read, and only the names of secrets come out of them."""
+        work = Mock()
+        work.quadlets.return_value = {'omnigent-server.container':
+                                      '[Container]\nSecret=omnigent-database-url,type=env,target=DATABASE_URL\n'}
+        for declared, names in (([], ['omnigent-database-url']), ([{'name': 'omnigent-database-url'}], []),
+                                ([{'name': 'omnigent-database-url'}] * 2, ['omnigent-database-url'])):
+            work.reset_mock()
+            self.assertEqual(ha_omnigent.unregistered_secrets(work, SimpleNamespace(id='omnigent', secrets=declared)), names)
+            self.assertEqual([c[0] for c in work.mock_calls], ['quadlets'], 'nothing but the Quadlet files read')
 
     def test_has_dump_is_only_ever_loaded_as_data_by_the_restricted_role(self):
         listing = (b'1; 0 0 TABLE public users owner\n2; 0 0 DEFAULT public users x owner\n'

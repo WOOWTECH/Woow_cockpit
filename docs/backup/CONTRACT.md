@@ -2321,19 +2321,34 @@ refused before anything changes; amd64 and aarch64 backups are both accepted. Fa
 emqx,headscale,mcp-admin}.md` of the design notes.
 
 **Omnigent** (`woow-omnigent` → `omnigent`, cold PostgreSQL mode: volumes `omnigent-postgres-data` (a whole PostgreSQL
-16 cluster whose bootstrap superuser is the app role), `omnigent-server-data`, `omnigent-pi-data`).
-1. Versions: add-on 0.1.20–0.1.23 → Omnigent 0.21.0 (0.1.19 → 0.20.0, ≤ 0.1.18 → 0.12.0) must equal the live server's
-   `GET http://127.0.0.1:<port>/v1/info` `server_version` (the port of the catalog's health URL); HA's `alembic_version`
-   must equal the live database's (read as the app owner, `podman exec <db> psql`); HA's PostgreSQL major ≤ the live one.
+16 cluster whose bootstrap superuser is the app role), `omnigent-server-data`, `omnigent-pi-data`). Revised 2026-11-25 (HAOS
+parity, lane OMNIGENT; rows O-01..O-61): what HAOS would restore as it is no longer a refusal -- each finding is a stop of this
+app only, ONE line to confirm, an automatic step or a notice (`ha_omnigent.ISSUES`, section 6/7 `HaIssue`); this device keeps its
+own schema, so what it cannot take over is left out and listed, never executed (items 2 and 3).
+1. Versions only inform (O-23, O-24, O-25, O-49): add-on 0.1.20–0.1.23 → Omnigent 0.21.0 (0.1.19 → 0.20.0, ≤ 0.1.18 → 0.12.0).
+   An add-on version the table does not know (`version.addon-unknown`), a live server whose `GET http://127.0.0.1:<port>/v1/info`
+   `server_version` cannot be read (`version.target-unknown`; loopback only) and two different versions
+   (`omnigent.version-different`) are notices. What decides is the data: HA's `alembic_version` must equal the live database's (read
+   as the app owner, `podman exec <db> psql`, read again up to 3 times, the database started when it is stopped: O-40, O-41;
+   `omnigent.alembic-different`, `omnigent.target-unreadable`: stops of this app) and HA's tables and columns must equal this
+   device's (`omnigent.schema-different`); HA's PostgreSQL major must not be newer than the image that opens it (`omnigent.pg-newer`;
+   an image without PG_MAJOR is asked through the database it runs here: O-18).
 2. One pass: `data/postgres/**` into a throwaway volume exactly like Odoo's (PgSink: HA's configuration files replaced,
    recovery/pid files dropped; a hard link or a tablespace link there is refused); the artifact store
    `data/omnigent-home/.omnigent/artifacts/**` (where omnigent 0.21.0 keeps it: HOME is /data/omnigent-home and the
    add-on's ARTIFACT_DIR is never read) staged, `.cache/` never; HA's runtime setting files in /data (sharing, admins,
    allowed domains, config.yaml) only named. The cluster is opened by a throwaway of the LIVE PostgreSQL 16 image,
-   hardened exactly like Odoo's (`ha_odoo.start_ha_cluster`). Blockers: tables other than Omnigent's, any function,
-   trigger, view, rule, policy or other schema, an object only a superuser can create, extensions beyond plpgsql and
-   pg_trgm, not UTF8, a missing `accounts-cookie-secret`, an agent bundle or file blob the database names that is not
-   in the staged store, a malformed artifact key.
+   hardened exactly like Odoo's (`ha_odoo.start_ha_cluster`). A hard link in the cluster folder is copied as an ordinary file
+   (O-02, `omnigent.hardlinks-copied`, auto); one of the artifact store to a file outside it is never carried, nor copied (O-03);
+   `PG_VERSION` is read by its start only (O-61); an `accounts-cookie-secret` that is missing, empty or larger than 4096 bytes is
+   not carried and Omnigent makes a new one (`omnigent.cookie-missing`, notice: everyone signs in again; O-20). Still stops
+   (this app only): no `omnigent` database (`omnigent.no-database`), not UTF8 (`omnigent.encoding`), a tablespace or symlink in
+   the cluster. ONE line to confirm, `omnigent.skipped` (O-03, O-12, O-14, O-15, O-16, O-21, O-28; the key covers every name of
+   every kind): HA's tables other than Omnigent's, functions, triggers, views, rules, policies and other schemas (counted, by kind),
+   objects only a superuser can make, extensions beyond plpgsql and pg_trgm, the artifact store's links to outside files and the
+   agent bundle locations that could leave the store (not empty, no `.`/`..` part, not absolute, no backslash, control or invisible
+   character, at most 512 characters and 16 parts: `key_ok`); and `omnigent.files-missing` (O-22): agent bundles or file blobs the
+   database names that the staged store lacks. Nothing of it is moved: the new cluster has this device's tables only.
 3. **Trusted schema (B1-01; owner decision 2026-11-23 replaced the security hold).** HA's backup provides DATA only:
    no DDL, default, check, domain, index or function written by HA ever runs. The check reads this device's live
    schema (as the owner, read only) and names every table whose columns differ (a blocker). Conversion: HA's cluster
@@ -2348,8 +2363,9 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    ones -- else `incompatible` 「這台 Omnigent 的資料庫結構在轉換期間改變了…」, nothing changed. HA's columns (in order),
    sequences (type, owning column) and types must equal the trusted ones (else `incompatible`, naming them); HA's
    defaults, checks and indexes are not compared because they are never used. From HA's dump only TABLE DATA and
-   SEQUENCE SET entries are restored (`pg_restore -L`), and each selected entry must name a table or sequence of the
-   trusted schema exactly once (pg_restore reads only a line's dump id: a name with a line break cannot add an entry);
+   SEQUENCE SET entries are restored (`pg_restore -L`), and an entry is selected only when it names a table or sequence of the
+   trusted schema, each exactly once (pg_restore reads only a line's dump id: a name with a line break cannot add an entry; an
+   entry of another table or sequence is not selected and told, `omnigent.entries-skipped`, notice, O-28; a trusted name twice stops);
    they are loaded by `woowbk_restore` (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, only
    `USAGE` on public, `INSERT` on its tables, `SELECT` on users/scheduled_tasks, `UPDATE` on scheduled_tasks,
    sequence values; `--no-owner --no-acl --exit-on-error --single-transaction`). The new cluster's signature must
@@ -2359,9 +2375,20 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    Quadlet's `OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME` and `OMNIGENT_RUNNER_USERNAME` (default admin, operator) -- are
    read from the live database as the owner (password hashes masked in every log line) and added back by
    `woowbk_restore` (`json_populate_recordset` on its stdin, never an argv; `ON CONFLICT DO NOTHING`: a same-named HA
-   user wins, with a note); test mode pauses every active scheduled task (`state` 1 → 2) as `woowbk_restore`; every
+   user wins, with a note; accounts that cannot be read, also after trying again, are not kept: `omnigent.accounts-unreadable`,
+   notice, O-09); test mode pauses every active scheduled task (`state` 1 → 2) as `woowbk_restore`; every
    table's rows equal HA's (users plus the accounts added), alembic unchanged; `CHECKPOINT`, stop, `pg_controldata`
-   "shut down", export. Every Quadlet `Secret=` of the app must be declared in its catalog entry before anything runs.
+   "shut down" (the stop's exit code alone is no refusal: O-54), export. A Quadlet `Secret=` of the app that its catalog entry
+   does not list is a notice (`omnigent.secrets-unregistered`, in the check too: O-48). The agent bundle locations that could
+   leave the artifact store are cleared in the new cluster, after the answers were compared, by `woowbk_restore`, which gets
+   `SELECT` and `UPDATE` on `agents.bundle_location` for that one statement (the names travel as one JSON text on stdin; the
+   privilege goes with the role's `DROP OWNED`); a location still unsafe afterwards stops the job (O-21). A different version of an
+   extension both clusters have (the new cluster has the image's) is no difference (`omnigent.extension-version`, auto: O-44).
+   This device's other volumes of the app settings (beyond the three) are carried as they are (`hatarget.carry`; O-07,
+   `omnigent.extras-carried`). `capture_consistent_target_schema` is tried again up to 3 times with a longer wait for the
+   columns (60, 120, 180 s; O-32, O-33, O-58, O-59) and `trusted_schema` waits for a structure that is still moving and reads
+   again (3 tries; O-42, O-43); `_convert_candidate` needs no promise about DDL (O-56); the server volume's top folder takes the
+   owner and mode read last (O-57).
    HA's cluster is hostile code, not only hostile data (security review 2026-11-23, `tests/backup/evidence/
    omnigent-product-security-review-20261123/`): its catalog and its own per-role/per-database settings (which win over
    the command line) can make every answer lie and can run commands inside the throwaway container, whose boundary
@@ -2373,7 +2400,7 @@ emqx,headscale,mcp-admin}.md` of the design notes.
    pg_restore itself (`-f - -L`) before anything is restored and must be exactly one
    `SELECT pg_catalog.setval('public.<trusted sequence>', <integer>, true|false);` each (SR-3).
    HA's `pg_dump` runs as an OS user that is not the HA server's (`dump_user`: the first of `DUMP_IDS` 65534, 32767,
-   9999, 999 that the owner's uid AND gid maps hold, never root and never the image's postgres ids; none ->
+   9999, 999 that the owner's uid AND gid maps hold, else the highest other id both maps hold (O-01), never root and never the image's postgres ids; none ->
    `job-failed` before anything is exported), over the socket directory as the database user postgres: code HA's
    catalog runs inside its server can then neither open pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it
    cannot write the archive the conversion restores (SR-2b). A fixed 65534 failed in the real product flow on dev-d,
