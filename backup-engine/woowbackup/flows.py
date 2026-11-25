@@ -1463,12 +1463,12 @@ def resume_paused(ctx, plans, result=None):
     """Start again the other services the restore of a converted HA backup paused (D10: X-AD-14, X-AD-50) -- done, failed or
     refused. What does not start stays listed in the job's record (`stopped_writers`), so the recovery tries again, and
     the result says which (`warnings`). A machine that is shutting down starts them with the user manager at boot."""
-    if _shutting_down(ctx):
+    waiting = [plan for plan in plans if getattr(plan.adapter, 'paused', None)
+               and getattr(plan.adapter, 'resume_paused', None) is not None]
+    if not waiting or _shutting_down(ctx):  # (an ordinary restore pauses nothing: no question about the machine either)
         return
-    for plan in plans:
-        resume = getattr(plan.adapter, 'resume_paused', None)
-        if resume is None or not getattr(plan.adapter, 'paused', None):
-            continue
+    for plan in waiting:
+        resume = plan.adapter.resume_paused
         try:
             started, failed = resume()
         except BaseException as exc:  # noqa: BLE001 - a signal: the record keeps them for the recovery

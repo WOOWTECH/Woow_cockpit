@@ -403,6 +403,19 @@ class KeptClusterTests(AdapterKeptCase):
         self.assertLess(dumped, stopped, 'read while the database runs')
         self.assertLess(stopped, exported, 'the volume is exported only after the database stopped: a cold copy')
 
+    def test_the_section_of_the_copy_is_one_the_real_archive_format_accepts(self):
+        """The kept copy is packaged by the ordinary archive writer: its app section and entries pass the real validators."""
+        from woowbackup import archive
+        from .test_archive_v2 import small_inner
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        section, entries, _info = self.adapter.keep_cluster(self.work)
+        inner = small_inner('woowbk-demo', 'AAAA-BBBB-CCCC-DDDD', {'apps/woowbk-demo/secrets/x': b'x'})
+        inner['app'] = section
+        inner['entries'] = [{'path': entry.path, 'size': entry.size, 'sha256': entry.sha256} for entry in entries]
+        archive.validate_app_manifest(inner)
+        self.assertEqual(len({entry.path for entry in entries}), len(entries), 'no entry twice')
+        self.assertEqual({entry.path.split('/')[2] for entry in entries}, {'postgres', 'volumes'})
+
     def test_the_other_databases_are_put_back_into_the_new_cluster_without_touching_what_is_there(self):
         self.adapter.preflight(self.manifest(), mode='inplace')
         _section, _entries, info = self.adapter.keep_cluster(self.work)
