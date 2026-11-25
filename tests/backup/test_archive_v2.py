@@ -968,6 +968,100 @@ class DeepVerifyTests(unittest.TestCase):
 # ---------------------------------------------------------------------------- v1 forever
 
 @needs_age
+class DeepCheckRowsTests(unittest.TestCase):
+    """DC-01..DC-07 (RESTORE lane; they behave as the owner wants, these tests say it): the verify job reads the content a
+    restore would refuse -- volumes, host directories, images, data digests, role scripts, dumps, secrets -- and marks the
+    backup 未通過 (`corrupt-archive`, `check` names the kind); it never blocks a restore by itself (the restore's own checks
+    decide, `flows` tests: a backup marked failed is still restored when its content passes)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def entry(self, kind_item, path, data):
+        """The app section holding `kind_item` ({'volumes': [...]} ...) checked for the entry `path` carrying `data`."""
+        app = {'id': 'a', 'name': '示範', 'volumes': [], 'data_dirs': [], 'images': [], 'verify_digests': [], 'postgres': [],
+               'secrets': []}
+        app.update(kind_item)
+        check = DeepCheck()
+        check.start([app])
+        file = self.root / f'e{len(list(self.root.iterdir()))}'
+        file.write_bytes(data)
+        return check, (path, data[:64], file, len(data))
+
+    def refused(self, kind_item, path, data, kind):
+        check, args = self.entry(kind_item, path, data)
+        with self.assertRaises(BackupError) as caught:
+            check.entry(*args)
+        self.assertEqual((caught.exception.code, caught.exception.details['check']), ('corrupt-archive', kind))
+        self.assertIn('這份備份無法還原', caught.exception.message)
+        return caught.exception
+
+    def accepted(self, kind_item, path, data, kind):
+        check, args = self.entry(kind_item, path, data)
+        check.entry(*args)
+        self.assertEqual(check.counts['a'][kind], 1)
+
+    def test_dc_01_a_volume_with_content_a_restore_would_refuse(self):
+        item = {'volumes': [{'name': 'files', 'entry': 'apps/a/volumes/files.tar'}]}
+        escape = tarfixtures.volume_tar([{'name': 'f/', 'kind': tarfile.DIRTYPE}, {'name': 'f/x', 'kind': tarfile.SYMTYPE,
+                                                                                   'linkname': '../../../etc'}])
+        self.refused(item, 'apps/a/volumes/files.tar', escape, 'volumes')
+        self.refused(item, 'apps/a/volumes/files.tar', tarfixtures.volume_tar(
+            [{'name': 'dev', 'kind': tarfile.CHRTYPE}]), 'volumes')
+        self.refused(item, 'apps/a/volumes/files.tar', tarfixtures.volume_tar(
+            [{'name': 'a', 'data': b'x'}, {'name': 'a', 'data': b'y'}]), 'volumes')
+        self.accepted(item, 'apps/a/volumes/files.tar', tarfixtures.volume_tar(), 'volumes')
+
+    def test_dc_02_a_host_directory_with_content_a_restore_would_refuse(self):
+        item = {'data_dirs': [{'path': 'srv/data', 'entry': 'apps/a/dirs/0.tar'}]}
+        error = self.refused(item, 'apps/a/dirs/0.tar', tarfixtures.volume_tar([{'name': './', 'kind': tarfile.DIRTYPE},
+                                                                               {'name': 'dev', 'kind': tarfile.CHRTYPE}]),
+                             'dirs')
+        self.assertEqual(error.details['item'], '~/srv/data')
+        self.refused(item, 'apps/a/dirs/0.tar', b'not a tar' * 100, 'dirs')
+        self.accepted(item, 'apps/a/dirs/0.tar', tarfixtures.volume_tar([{'name': './', 'kind': tarfile.DIRTYPE},
+                                                                         {'name': 'f', 'data': b'x'}]), 'dirs')
+
+    def test_dc_03_an_image_a_restore_would_refuse(self):
+        ref = 'docker.io/library/postgres:16-alpine'
+        item = {'images': [{'ref': ref, 'id': tarfixtures.image_id(ref), 'entry': 'apps/a/images/0.oci.tar'}]}
+        self.refused(item, 'apps/a/images/0.oci.tar', tarfixtures.oci_archive('docker.io/library/redis:7'), 'images')
+        self.accepted(item, 'apps/a/images/0.oci.tar', tarfixtures.oci_archive(ref), 'images')
+
+    def test_dc_04_a_data_digest_that_differs_from_its_record(self):
+        from woowbackup import digests
+        item = {'verify_digests': [{'id': 'db', 'type': 'postgres-digest', 'entry': 'apps/a/verify/db.txt',
+                                    'digest': 'a' * 64, 'summary': {}}]}
+        error = self.refused(item, 'apps/a/verify/db.txt', b'not a listing line\n', 'digests')
+        self.assertEqual(error.details['item'], 'db')
+        self.assertTrue(hasattr(digests, 'read_pg_detail'))
+
+    def test_dc_05_a_roles_script_that_is_too_large_or_has_dangerous_syntax(self):
+        item = {'postgres': [{'id': 'main', 'scope': 'instance', 'entry': 'apps/a/postgres/main.globals.sql',
+                              'databases': []}]}
+        self.refused(item, 'apps/a/postgres/main.globals.sql', b'CREATE ROLE a;\n\\! id\n', 'globals')
+        self.refused(item, 'apps/a/postgres/main.globals.sql', b'SELECT 1;\n', 'globals')
+        check, args = self.entry(item, 'apps/a/postgres/main.globals.sql', b'CREATE ROLE a;\n')
+        check.entry(*args)
+        check, (path, head, file, _size) = self.entry(item, 'apps/a/postgres/main.globals.sql', b'CREATE ROLE a;\n')
+        with self.assertRaises(BackupError) as caught:
+            check.entry(path, head, file, 16 * 1024 * 1024 + 1)
+        self.assertEqual(caught.exception.details['reason'], '檔案過大')
+
+    def test_dc_06_a_dump_that_is_not_in_pg_dump_custom_format(self):
+        item = {'postgres': [{'id': 'main', 'database': 'notes', 'entry': 'apps/a/postgres/main.dump'}]}
+        self.refused(item, 'apps/a/postgres/main.dump', b'-- plain SQL\n', 'dumps')
+        self.accepted(item, 'apps/a/postgres/main.dump', b'PGDMP' + b'\0' * 64, 'dumps')
+
+    def test_dc_07_a_secret_podman_would_not_take(self):
+        item = {'secrets': [{'name': 'pw', 'entry': 'apps/a/secrets/pw'}]}
+        self.refused(item, 'apps/a/secrets/pw', b'', 'secrets')
+        self.refused(item, 'apps/a/secrets/pw', b'x' * 512000, 'secrets')
+        self.accepted(item, 'apps/a/secrets/pw', b'x' * 511999, 'secrets')
+
+
 class V1CompatibilityTests(unittest.TestCase):
     def setUp(self):
         self.ws = Workspace(self)

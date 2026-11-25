@@ -2155,6 +2155,46 @@ class WideningIdsTests(HaRestoreCase):
         self.assertEqual(runner.widen_subids({'uid': 1, 'gid': 1}), {'uid': None, 'gid': None})
 
 
+class PreRestoreCopyAdapterRefusalTests(AdapterCase):
+    """X-AD-52, X-AD-53, X-AD-54 (they behave as the owner wants): what the adapter refuses while it makes the pre-restore copy,
+    each before anything of the app changed (the flow then offers to restore without one; the flows tests say that)."""
+
+    def test_x_ad_52_a_database_that_does_not_run_is_started_first_and_refused_only_when_it_cannot_be(self):
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        with self.assertRaises(BackupError) as caught:
+            self.run_backup()
+        self.assertIn('資料庫服務 woowbk-demo-db.service 未執行，無法匯出資料庫', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active', 'nothing was stopped')
+        self.assertEqual(self.adapter.ensure_databases_running(), ['woowbk-demo-db.service'])
+        manifest, _entries = self.run_backup()
+        self.assertEqual(manifest['id'], 'woowbk-demo')
+        self.owner.units['woowbk-demo-db.service'] = 'inactive'
+        self.owner.fail_units.add('woowbk-demo-db.service')
+        with self.assertRaises(BackupError):
+            self.adapter.ensure_databases_running()
+
+    def test_x_ad_53_a_database_size_that_cannot_be_read_is_refused_before_anything_stops(self):
+        self.owner.fail.append(('pg_database_size', 2))
+        with self.assertRaises(BackupError) as caught:
+            self.adapter.estimate_bytes()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('無法讀取資料庫', caught.exception.message)
+        self.assertIn('請確認資料庫服務正在執行', caught.exception.message)
+        self.assertFalse(any(a[:3] == [SYSTEMCTL, '--user', 'stop'] for a in self.owner.argvs()))
+
+    def test_x_ad_54_an_export_that_is_not_whole_is_refused_and_the_writers_run_again(self):
+        self.owner.volumes['woowbk-demo-files'] = b'x'  # a volume export of a few bytes: the tar is cut
+        with self.assertRaises(BackupError) as caught:
+            self.run_backup()
+        self.assertIn('資料卷 woowbk-demo-files 匯出結果不完整', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+        owner = FakeOwner()
+        owner.dump_readable = False  # the dump's table of contents is intact but its data is cut off
+        with self.assertRaises(BackupError):
+            self.make_adapter(owner).backup(self.staging / 'second', include_images=False)
+        self.assertEqual(owner.units['woowbk-demo-app.service'], 'active')
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         if self.path == '/json':
