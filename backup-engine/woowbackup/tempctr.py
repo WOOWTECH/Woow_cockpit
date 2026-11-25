@@ -19,6 +19,17 @@ containers of their own, made from images that are already on the device, and re
   never read into Python;
 * `TempObjects` removes every object it created in `finally` (containers, then volumes, then networks), also when the
   job fails or is cancelled.
+
+HAOS parity (2026-11-25, lane F3-helpers):
+
+* `scope` (SCOPES = True): the throwaway objects of one app of a check are named `woowbk-<job>-<scope>-<role>`, so two
+  apps of one job never meet the same name and what one app could not remove never stands in the way of the next one's
+  (X-TC-05; the label stays the job id, so `sweep` and the recovery keep matching).
+* An object that cannot be removed only takes space: `remove` / `remove_volume` say so in the log, keep it listed for
+  `cleanup` and the sweeps and go on instead of stopping the app (X-TC-05). A list of objects that cannot be read stops
+  nothing either (X-TC-07: `sweep` raises, its callers report it).
+* `put_back_later(label, action)`: what a job changed on the device for its reading (a service it started) and puts
+  back: run by `cleanup` first, retried while it fails (hatarget.ensure_running).
 """
 import contextlib
 import io
@@ -50,6 +61,11 @@ SECRET_NAME_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,252}\Z')
 SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,255}|uid=[0-9]{1,10}|gid=[0-9]{1,10}'
                               r'|mode=0?[0-7]{3,4})\Z')
 SECRETS_TMPFS = '/run/secrets:rw,noexec,nosuid,nodev,mode=0755'
+SCOPES = True    # TempObjects takes `scope` (haimport.Work.temp passes the app's place in the job)
+SCOPE_RE = re.compile(r'[a-z0-9]{1,3}\Z')
+REMOVE_ARGS = {'container': ('rm', '--force', '--time', '10'), 'volume': ('volume', 'rm', '--force'),
+               'network': ('network', 'rm', '--force')}
+KIND_LABELS = {'container': '容器', 'volume': '資料卷', 'network': '網路'}
 
 
 def secret_mount_path(spec):
@@ -185,10 +201,13 @@ class TempObjects:
     """The throwaway objects of one job for one owner (`runner`, an OwnerRunner). Use as a context manager: every
     container, volume and network it created is removed on exit. `log(text)` receives short zh-TW notes."""
 
-    def __init__(self, runner, job_id, *, log=None, memory=MEMORY, pids=PIDS, cpus='auto', abort=None):
+    def __init__(self, runner, job_id, *, log=None, memory=MEMORY, pids=PIDS, cpus='auto', abort=None, scope=None):
         object_name(job_id, 'x')  # checks the job id
+        if scope is not None and (not isinstance(scope, str) or not SCOPE_RE.fullmatch(scope)):
+            raise BackupError('internal-error', '暫用物件的範圍名稱格式不正確。')
         self.runner = runner
         self.job_id = job_id
+        self.scope = scope     # None, or the app's place in the job: `woowbk-<job>-<scope>-<role>`
         self.log = log or (lambda _text: None)
         self.memory = memory
         self.pids = int(pids)
@@ -199,6 +218,8 @@ class TempObjects:
         self.containers = []   # names, in creation order
         self.volumes = []
         self.networks = []
+        self._noted = set()    # objects whose removal failed once (one log line each: X-TC-05)
+        self._puts_back = []   # [(label, action)] what cleanup() puts back first (put_back_later)
 
     def _long(self, kwargs):
         """kwargs of a long podman call: the job's abort hook when there is one."""
@@ -213,7 +234,7 @@ class TempObjects:
             raise error
 
     def name(self, role):
-        return object_name(self.job_id, role)
+        return object_name(self.job_id, role if self.scope is None else f'{self.scope}-{role}')
 
     @property
     def label(self):
@@ -224,7 +245,7 @@ class TempObjects:
         """Create the volume `woowbk-<job>-<role>`; returns its name."""
         name = self.name(role)
         if name in self.volumes:
-            raise BackupError('internal-error', '暫用資料卷名稱重複。')
+            self._free_name('volume', name, '暫用資料卷名稱重複。')
         self.volumes.append(name)
         self.runner.podman('volume', 'create', '--label', self.label, name, timeout=SHORT_TIMEOUT,
                            max_output=64 * 1024)
@@ -234,7 +255,7 @@ class TempObjects:
         """Create the internal network `woowbk-<job>-<role>` (no route out, DNS between its containers)."""
         name = self.name(role)
         if name in self.networks:
-            raise BackupError('internal-error', '暫用網路名稱重複。')
+            self._free_name('network', name, '暫用網路名稱重複。')
         self.networks.append(name)
         self.runner.podman('network', 'create', '--internal', '--label', self.label, name, timeout=SHORT_TIMEOUT,
                            max_output=64 * 1024)
@@ -327,7 +348,7 @@ class TempObjects:
         with the runner's budgets). A container that ran to its end is removed with `--rm`."""
         name = self.name(role)
         if name in self.containers:
-            raise BackupError('internal-error', '暫用容器名稱重複。')
+            self._free_name('container', name, '暫用容器名稱重複。')
         self._stopped()
         remove = (not detach) if remove is None else remove
         argv = self.run_argv(role, image, args, detach=detach, interactive=input is not None, remove=remove,
@@ -391,22 +412,40 @@ class TempObjects:
         return result.returncode == 0 and (result.stdout or b'').strip() == b'true'
 
     def remove(self, role):
-        """Remove one container now (it is no longer needed)."""
-        name = self.name(role)
-        result = _quiet(self.runner, 'rm', '--force', '--time', '10', name)
-        if (result is None or result.returncode != 0) and _exists(self.runner, 'container', name):
-            raise BackupError('job-failed', '無法移除暫用容器，將在清理時重試。')
-        with contextlib.suppress(ValueError):
-            self.containers.remove(name)
+        """Remove one container now (it is no longer needed); True when it is gone. One that cannot be removed only
+        takes space (X-TC-05): it stays listed for cleanup() and the sweeps, the log says so once, and the job goes on."""
+        return self._drop_or_note('container', self.name(role))
 
     def remove_volume(self, role):
-        """Remove one volume now (frees its space before the job goes on)."""
-        name = self.name(role)
-        result = _quiet(self.runner, 'volume', 'rm', '--force', name)
-        if (result is None or result.returncode != 0) and _exists(self.runner, 'volume', name):
-            raise BackupError('job-failed', '無法移除暫用資料卷，將在清理時重試。')
+        """Remove one volume now (frees its space before the job goes on); True when it is gone. Like `remove`: a
+        volume that cannot be removed is no reason to stop the app."""
+        return self._drop_or_note('volume', self.name(role))
+
+    def _drop(self, kind, name):
+        """Remove one object of this job now; True when it is gone (then it is no longer listed). Podman's own answer
+        is only trusted when it says the object is not there (`_exists`)."""
+        result = _quiet(self.runner, *REMOVE_ARGS[kind], name)
+        if (result is None or result.returncode != 0) and _exists(self.runner, kind, name):
+            return False
         with contextlib.suppress(ValueError):
-            self.volumes.remove(name)
+            getattr(self, kind + 's').remove(name)
+        return True
+
+    def _drop_or_note(self, kind, name):
+        if self._drop(kind, name):
+            return True
+        if (kind, name) not in self._noted:
+            self._noted.add((kind, name))
+            self.log(f'提示：有一個暫用{KIND_LABELS[kind]}暫時移除不了（它只佔用空間，不影響資料），作業結束時會再試一次。')
+        return False
+
+    def _free_name(self, kind, name, duplicate_message):
+        """A role is used again while its object is still listed: fine when an earlier removal failed and works now; a
+        leftover that stays stops the app that needs its name; a name that was never let go is a programming error."""
+        if (kind, name) not in self._noted:
+            raise BackupError('internal-error', duplicate_message)
+        if not self._drop(kind, name):
+            raise BackupError('job-failed', f'先前的暫用{KIND_LABELS[kind]}還沒能移除，無法再用同一個名稱建立新的。')
 
     def user_ids(self, role, image, user):
         """(uid, gid) of `user` in `image` (a throwaway `id` run)."""
@@ -507,8 +546,30 @@ class TempObjects:
             _quiet(self.runner, 'kill', '--signal', 'KILL', *names)
 
     # ------------------------------------------------------------ clean-up
+    def put_back_later(self, label, action):
+        """`action()` puts back something this job changed on the device for its reading (a service it started so a
+        database could be read; hatarget.ensure_running): `cleanup` runs it before anything is removed, and again at the
+        next `cleanup` while it raises. `label`: what it is, as a short name (it reaches the log)."""
+        self._puts_back.append((str(label)[:120], action))
+
+    def _put_back(self):
+        """Run what is to be put back (newest first); returns the labels of what could not be (they stay listed)."""
+        pending, failed = list(reversed(self._puts_back)), []
+        self._puts_back = []
+        for label, action in pending:
+            try:
+                action()
+            except Exception:  # noqa: BLE001 - cleanup never raises; the label stays for the next try
+                failed.append((label, action))
+        self._puts_back = list(reversed(failed))
+        return [label for label, _action in failed]
+
     def cleanup(self):
-        """Remove every object this job created (never raises); returns the names that could not be removed."""
+        """Remove every object this job created (never raises); returns the names that could not be removed (and
+        `service:<label>` for what could not be put back)."""
+        back = self._put_back()
+        if back:
+            self.log(f'警告：這個作業為了讀取資料而啟動的服務沒能恢復原狀：{"、".join(back[:5])}；請在匯入後確認它們的狀態。')
         left = []
         for name in reversed(self.containers):
             result = _quiet(self.runner, 'rm', '--force', '--time', '10', name)
@@ -531,7 +592,7 @@ class TempObjects:
         left.extend(network_left)
         if left:
             self.log(f'警告：有 {len(left)} 個暫用容器或資料卷沒有移除，下次作業開始時會再清除。')
-        return left
+        return left + [f'service:{label}' for label in back]
 
     def __enter__(self):
         return self

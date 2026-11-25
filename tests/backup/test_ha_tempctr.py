@@ -2,6 +2,7 @@
 Quadlet parsing that decides secrets/environment/images, clean-up and the sweep of a dead job's objects. Team E2."""
 import json
 import threading
+import types
 import unittest
 
 from woowbackup import tempctr
@@ -195,8 +196,7 @@ class CleanupTests(unittest.TestCase):
                     tmp.volume('item')
                     tracked, remove = tmp.volumes, tmp.remove_volume
                 name = tmp.name('item')
-                with self.assertRaises(BackupError):
-                    remove('item')
+                self.assertFalse(remove('item'), 'X-TC-05: a leftover that cannot be removed stops nothing')
                 self.assertIn(name, tracked)
                 self.assertEqual(tmp.cleanup(), [name])
                 self.assertIn(name, getattr(tmp, kind + 's'))
@@ -217,11 +217,10 @@ class CleanupTests(unittest.TestCase):
                 else:
                     tmp.volume('item')
                     remove = tmp.remove_volume
-                with self.assertRaises(BackupError):
-                    remove('item')
+                self.assertFalse(remove('item'))
                 self.assertIn(tmp.name('item'), getattr(tmp, kind + 's'))
                 runner.answers[(kind, 'exists')] = Result(1, b'', b'')
-                remove('item')
+                self.assertTrue(remove('item'))
                 self.assertNotIn(tmp.name('item'), getattr(tmp, kind + 's'))
 
     def test_everything_is_removed_containers_first(self):
@@ -401,6 +400,206 @@ class SweepTests(unittest.TestCase):
         runner = FakeRunner({('ps',): Result(0, b'not json', b'')})
         with self.assertRaises(BackupError):
             tempctr.sweep(runner, lambda _job: False)
+
+
+class ScopeTests(unittest.TestCase):
+    """DESIGN C2 (lane F3): one name for every object an app of a check makes, so two apps never meet the same one."""
+
+    def test_the_scope_is_part_of_the_name_the_label_stays_the_job(self):
+        self.assertIs(tempctr.SCOPES, True)
+        runner = FakeRunner()
+        tmp = tempctr.TempObjects(runner, JOB, scope='0')
+        name = tmp.name('hapg')
+        self.assertEqual(name, f'woowbk-{JOB}-0-hapg')
+        argv = tmp.run_argv('hapg', 'img:1', [], detach=True)
+        self.assertEqual(argv[argv.index('--name') + 1], name)
+        self.assertEqual(argv[argv.index('--label') + 1], f'{tempctr.LABEL}={JOB}')
+        self.assertEqual(tempctr.NAME_RE.fullmatch(name).group(1), JOB, 'sweep and the recovery still find it')
+        self.assertEqual(tempctr.TempObjects(runner, JOB).name('hapg'), f'woowbk-{JOB}-hapg', 'no scope: as before')
+
+    def test_two_apps_use_the_same_role_without_meeting(self):
+        runner = FakeRunner()
+        first, second = (tempctr.TempObjects(runner, JOB, scope=scope) for scope in ('0', '1'))
+        names = {tmp.volume('hapg') for tmp in (first, second)}
+        self.assertEqual(names, {f'woowbk-{JOB}-0-hapg', f'woowbk-{JOB}-1-hapg'})
+        first.run('hapg', 'img:1', [], detach=True)
+        second.run('hapg', 'img:1', [], detach=True)   # the same role in the same job: no "name used twice"
+        self.assertEqual(first.cleanup(), [])
+        self.assertEqual(second.volumes, [f'woowbk-{JOB}-1-hapg'], 'one app removes only its own objects')
+
+    def test_a_bad_scope_or_a_role_too_long_for_it_is_refused(self):
+        runner = FakeRunner()
+        for scope in ('', 'A', '1234', 'a b', 'a-b', 5, b'0'):
+            with self.subTest(scope=scope), self.assertRaises(BackupError):
+                tempctr.TempObjects(runner, JOB, scope=scope)
+        tmp = tempctr.TempObjects(runner, JOB, scope='12')
+        with self.assertRaises(BackupError):
+            tmp.name('r' * 29)    # `<scope>-<role>` has to fit the role's 31 characters
+        self.assertEqual(tmp.name('r' * 28), f'woowbk-{JOB}-12-' + 'r' * 28)
+
+    def test_the_sweep_finds_scoped_objects_of_a_dead_job(self):
+        listing = [{'Names': [f'woowbk-{OTHER}-0-hapg'], 'Labels': {tempctr.LABEL: OTHER}},
+                   {'Names': [f'woowbk-{OTHER}-1-odoo-db'], 'Labels': {tempctr.LABEL: OTHER}}]
+        runner = FakeRunner({('ps',): Result(0, json.dumps(listing).encode(), b''),
+                             ('volume', 'ls'): Result(0, b'[]', b''), ('network', 'ls'): Result(0, b'[]', b'')})
+        removed, left = tempctr.sweep(runner, lambda _job: False, only_job=OTHER)
+        self.assertEqual((removed, left), ([f'woowbk-{OTHER}-0-hapg', f'woowbk-{OTHER}-1-odoo-db'], []))
+
+
+class LeftoverTests(unittest.TestCase):
+    """X-TC-05: an object that cannot be removed takes space and nothing more: the app goes on, the log says so once, the
+    object stays listed for cleanup() and the sweeps."""
+
+    def failing(self, kind):
+        remove = {'container': ('rm',), 'volume': ('volume', 'rm')}[kind]
+        runner = FakeRunner({remove: Result(125, b'', b'busy'), (kind, 'exists'): Result(0, b'', b'')})
+        notes = []
+        tmp = tempctr.TempObjects(runner, JOB, log=notes.append)
+        return runner, tmp, notes, remove
+
+    def test_a_container_or_volume_that_stays_is_a_note_not_a_stop(self):
+        for kind, make, drop in (('container', lambda t: t.run('x', 'img:1', [], detach=True), 'remove'),
+                                 ('volume', lambda t: t.volume('x'), 'remove_volume')):
+            with self.subTest(kind=kind):
+                runner, tmp, notes, _remove = self.failing(kind)
+                make(tmp)
+                self.assertFalse(getattr(tmp, drop)('x'))
+                self.assertFalse(getattr(tmp, drop)('x'))
+                self.assertEqual(len(notes), 1, 'one line however often it is tried')
+                self.assertIn('暫用', notes[0])
+                self.assertIn('不影響資料', notes[0])
+                self.assertNotIn(JOB, notes[0], 'no job or object name in a line the customer reads')
+                self.assertIn(tmp.name('x'), getattr(tmp, kind + 's'))
+
+    def test_the_other_work_of_the_app_goes_on_and_cleanup_tries_again(self):
+        stuck = {'on': True}
+        runner = FakeRunner({
+            ('volume', 'rm'): lambda args, _data: Result(125 if stuck['on'] and args[-1].endswith('-old') else 0, b'', b''),
+            ('volume', 'exists'): lambda args, _data: Result(0 if stuck['on'] and args[-1].endswith('-old') else 1, b'', b'')})
+        tmp = tempctr.TempObjects(runner, JOB, log=[].append)
+        tmp.volume('old')
+        self.assertFalse(tmp.remove_volume('old'))
+        tmp.volume('next')                    # a second object, made after the failed removal
+        tmp.run('db', 'img:1', [], detach=True)
+        self.assertEqual(tmp.cleanup(), [tmp.name('old')], 'only the one that cannot go is left')
+        self.assertEqual((tmp.containers, tmp.volumes), ([], [tmp.name('old')]))
+        stuck['on'] = False
+        self.assertEqual(tmp.cleanup(), [])
+        self.assertEqual((tmp.containers, tmp.volumes), ([], []))
+
+    def test_a_role_used_again_works_when_the_leftover_can_go_now_and_stops_the_app_when_not(self):
+        runner, tmp, _notes, remove = self.failing('volume')
+        tmp.volume('hapg')
+        self.assertFalse(tmp.remove_volume('hapg'))
+        with self.assertRaises(BackupError) as caught:
+            tmp.volume('hapg')                # the old one is still there: this app cannot have the name
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('同一個名稱', caught.exception.message)
+        runner.answers[remove] = Result(0, b'', b'')
+        self.assertEqual(tmp.volume('hapg'), tmp.name('hapg'), 'removed now: the name is free again')
+        self.assertEqual(tmp.volumes, [tmp.name('hapg')])
+
+    def test_a_name_that_was_never_let_go_is_still_a_programming_error(self):
+        tmp = tempctr.TempObjects(FakeRunner(), JOB)
+        tmp.volume('hapg')
+        tmp.run('db', 'img:1', [], detach=True)
+        tmp.network('net')
+        for call in (lambda: tmp.volume('hapg'), lambda: tmp.run('db', 'img:1', [], detach=True),
+                     lambda: tmp.network('net')):
+            with self.assertRaises(BackupError) as caught:
+                call()
+            self.assertEqual(caught.exception.code, 'internal-error')
+
+    def test_an_object_podman_does_not_know_is_gone_not_left(self):
+        runner = FakeRunner({('rm',): Result(125, b'', b'no such container'), ('container', 'exists'): Result(1, b'', b'')})
+        notes = []
+        tmp = tempctr.TempObjects(runner, JOB, log=notes.append)
+        tmp.run('x', 'img:1', [], detach=True)
+        self.assertTrue(tmp.remove('x'))
+        self.assertEqual((tmp.containers, notes), ([], []))
+
+
+class PutBackTests(unittest.TestCase):
+    """What a job changed on the device for its reading is put back first, also when it takes more than one try."""
+
+    def test_it_runs_before_anything_is_removed_and_once(self):
+        runner = FakeRunner()
+        tmp = tempctr.TempObjects(runner, JOB)
+        tmp.run('hapg', 'img:1', [], detach=True)
+        tmp.put_back_later('db', lambda: runner.calls.append(('put-back', 'db')))
+        runner.calls.clear()
+        self.assertEqual(tmp.cleanup(), [])
+        self.assertEqual(runner.calls, [('put-back', 'db'), ('rm', '--force', '--time', '10', f'woowbk-{JOB}-hapg')])
+        runner.calls.clear()
+        self.assertEqual(tmp.cleanup(), [])
+        self.assertEqual(runner.calls, [], 'a finished put-back is not run again')
+
+    def test_a_put_back_that_fails_is_reported_kept_and_never_raises(self):
+        tmp = tempctr.TempObjects(FakeRunner(), JOB, log=(notes := []).append)
+        calls = []
+
+        def action():
+            calls.append(1)
+            if len(calls) < 3:
+                raise BackupError('job-failed', 'cannot stop')
+
+        tmp.put_back_later('Odoo 的資料庫', action)
+        self.assertEqual(tmp.cleanup(), ['service:Odoo 的資料庫'])
+        self.assertTrue(any('沒能恢復原狀' in note and 'Odoo 的資料庫' in note for note in notes), notes)
+        self.assertEqual(tmp.cleanup(), ['service:Odoo 的資料庫'])
+        self.assertEqual(tmp.cleanup(), [])
+        self.assertEqual(tmp.cleanup(), [])
+        self.assertEqual(len(calls), 3)
+
+    def test_the_context_exit_puts_back_also_when_the_job_failed(self):
+        undone = []
+        with self.assertRaises(RuntimeError):
+            with tempctr.TempObjects(FakeRunner(), JOB) as tmp:
+                tmp.put_back_later('db', lambda: undone.append('db'))
+                raise RuntimeError('the app failed')
+        self.assertEqual(undone, ['db'])
+
+    def test_the_newest_change_is_put_back_first(self):
+        order = []
+        tmp = tempctr.TempObjects(FakeRunner(), JOB)
+        for label in ('a', 'b', 'c'):
+            tmp.put_back_later(label, lambda label=label: order.append(label))
+        tmp.cleanup()
+        self.assertEqual(order, ['c', 'b', 'a'])
+
+
+class SweepListingTests(unittest.TestCase):
+    """X-TC-07: a list of throwaway objects that cannot be read only leaves old objects in place; it never stops an
+    import (the sweep says so, its callers turn it into a line or ignore it)."""
+
+    def test_the_sweep_says_it_could_not_read_and_removes_nothing(self):
+        for answer in (Result(0, b'not json', b''), Result(0, b'{"a": 1}', b''), Result(125, b'', b'storage error')):
+            with self.subTest(answer=answer):
+                runner = FakeRunner({('ps',): answer})
+                with self.assertRaises(BackupError) as caught:
+                    tempctr.sweep(runner, lambda _job: False)
+                self.assertEqual(caught.exception.code, 'job-failed')
+                self.assertFalse([call for call in runner.calls if call[:1] == ('rm',)])
+
+    def test_the_recovery_reports_it_as_a_line_and_the_job_start_ignores_it(self):
+        from unittest import mock
+
+        from woowbackup import haimport
+
+        class Owner:
+            def __init__(self, _name):
+                pass
+
+            def podman(self, *_args, **_kwargs):
+                raise BackupError('job-failed', 'podman ps 執行失敗（結束碼 125）。')
+
+        with mock.patch('woowbackup.podman.OwnerRunner', Owner):
+            problems = haimport.sweep_job(JOB, ['appowner'])
+        self.assertEqual(len(problems), 1)
+        self.assertTrue(problems[0].startswith('appowner：'), problems)
+        with mock.patch('woowbackup.podman.OwnerRunner', Owner), \
+                mock.patch.object(haimport, '_importable_owners', lambda _paths: ['appowner']):
+            self.assertIsNone(haimport.sweep_finished(types.SimpleNamespace()), 'never fails the job that starts')
 
 
 if __name__ == '__main__':
