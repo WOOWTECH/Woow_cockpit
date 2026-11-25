@@ -19,6 +19,7 @@ from woowbackup import podman
 from woowbackup.errors import BackupError
 
 OWNER = types.SimpleNamespace(pw_name='appowner', pw_uid=1001, pw_gid=1001, pw_dir='/home/appowner')
+REAL_DEFAULT_RUNNER = podman.default_runner   # the executor itself: UserManagerTests replace the module's name for it
 EXPECTED_PREFIX = ['/usr/sbin/runuser', '-u', 'appowner', '--', '/usr/bin/env', '-i',
                    'PATH=/usr/sbin:/usr/bin:/sbin:/bin', 'HOME=/home/appowner', 'LANG=C.UTF-8',
                    'XDG_RUNTIME_DIR=/run/user/1001', 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1001/bus']
@@ -672,6 +673,21 @@ class UserManagerTests(unittest.TestCase):
             self.runner.ensure_user_manager(root_run=lambda *a, **k: calls.append(a), trusted=lambda _path: False)
         self.assertEqual(calls, [])
         self.assertIn('找不到可以信任的 loginctl', caught.exception.message)
+
+    def test_the_real_executor_runs_the_fixed_command_with_a_sanitized_environment(self):
+        # A stand-in program takes the place of loginctl (the path is a module constant): what the real executor is given.
+        script = self.run_dir / 'fake-loginctl'
+        script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$0" "$@" "cwd=$(pwd)" > {self.run_dir}/seen\nenv >> {self.run_dir}/seen\n'
+                          f': > {self.run_dir}/bus\n')
+        script.chmod(0o755)
+        with mock.patch.object(podman, 'LOGINCTL', str(script)):
+            self.assertTrue(self.runner.ensure_user_manager(root_run=REAL_DEFAULT_RUNNER, trusted=lambda _path: True))
+        seen = (self.run_dir / 'seen').read_text().splitlines()
+        self.assertEqual(seen[:4], [str(script), 'enable-linger', 'appowner', 'cwd=/'])
+        environment = {line.split('=', 1)[0] for line in seen[4:] if '=' in line}
+        self.assertLessEqual(environment, {'PATH', 'LANG', 'LC_ALL', 'PWD', 'SHLVL', '_', 'OLDPWD'}, environment)
+        self.assertTrue(self.runner.user_manager_ready())
+        self.assertEqual(self.real_calls, [])
 
     def test_only_the_real_runner_acts_as_root(self):
         # a runner made with another executor (every test, every lab double) never touches the device

@@ -8,10 +8,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, hacommon, hatarget, haissues, nested, podman, tempctr
+from woowbackup import habackup, hacommon, haimport, hatarget, haissues, nested, podman, tempctr
 from woowbackup.errors import BackupError
 
 from . import hafixtures as hx
+from . import test_ha_import as hi
 
 
 class ScanTests(unittest.TestCase):
@@ -913,6 +914,66 @@ class CarryTests(Case):
         with self.assertRaises(BackupError):
             self.carried(volumes=['odoo-extra'])
         self.assertEqual(list(Path(self.tmpdir.name).glob('carry-*')), [])
+
+
+class RealWorkTests(hi.FlowCase):
+    """The put-back through the real haimport.Work: a service started for a read is stopped again when the app's throwaway
+    objects are cleaned (`Work.reset_app`, `Work.close`), also when that cannot be done at once (CM-07)."""
+
+    def setUp(self):
+        super().setUp()
+        self.owner_world = World()
+        self.owner = Owner(self.owner_world)
+        self.app = hi.app('odoo', 'Odoo 18')
+        adapter = hi.FakeHaAdapter(self.app, self.world)
+        adapter.runner = self.owner
+        adapter.read_quadlets = lambda: {'odoo-db.container': QUADLET}
+        self.deps.adapter_factory = lambda _app, **_kwargs: adapter
+        self.work = haimport.Work(self.ctx(), None, None, self.root)
+        self.work.guard.folders = []
+        patcher = mock.patch.object(hatarget, '_sleep', lambda _seconds: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def read_with_a_stopped_database(self):
+        stopped = podman.Result(125, b'', b'Error: no container with name or ID "odoo-db" found: no such container')
+        self.owner_world.exec_results = [stopped, podman.Result(0, b'{"a": 1}\n', b'')]
+        return hacommon.live_json(self.work, self.app, 'odoo-db', 'odoo', 'odoo', 'select 1')
+
+    def stops(self):
+        return [call for call in self.owner_world.calls if call[:2] == ('systemctl', 'stop')]
+
+    def test_the_app_is_read_and_the_service_is_stopped_again_when_the_app_is_done(self):
+        self.assertEqual(self.read_with_a_stopped_database(), {'a': 1})
+        self.assertEqual(self.owner_world.running, {'odoo-db'}, 'running while the app is worked on')
+        self.assertEqual(self.stops(), [])
+        self.work.reset_app(self.app)
+        self.assertEqual(self.stops(), [('systemctl', 'stop', '--', 'odoo-db.service')])
+        self.assertEqual(self.owner_world.running, set())
+        self.assertEqual(self.work.close(), [])
+        self.assertEqual(len(self.stops()), 1, 'put back once')
+
+    def test_a_job_that_ends_without_reset_still_puts_it_back_at_close(self):
+        self.read_with_a_stopped_database()
+        self.assertEqual(self.work.close(), [])
+        self.assertEqual(self.owner_world.running, set())
+
+    def test_a_put_back_that_could_not_be_done_is_tried_again_at_the_end(self):
+        self.read_with_a_stopped_database()
+        self.owner_world.stop = podman.Result(1, b'', b'Failed to stop odoo-db.service: Access denied')
+        self.work.reset_app(self.app)
+        self.assertEqual(self.owner_world.running, {'odoo-db'})
+        self.assertTrue(any('沒能恢復原狀' in line for line in self.reporter.logs), self.reporter.logs)
+        self.owner_world.stop = None
+        self.assertEqual(self.work.close(), [], 'the end of the job tries again and succeeds')
+        self.assertEqual(self.owner_world.running, set())
+
+    def test_the_apps_result_says_what_was_done(self):
+        self.read_with_a_stopped_database()
+        found = [(issue.id, issue.level) for issue in self.work.sink(self.app).found]
+        self.assertEqual(found, [('target.service-started', 'auto')])
+        self.assertTrue(any('自動處理：' in line and '暫時啟動' in line for line in self.reporter.logs), self.reporter.logs)
+        self.work.close()
 
 
 class NotDeployedTests(unittest.TestCase):
