@@ -979,7 +979,7 @@ def cmd_restore_start(svc, req):
     acknowledged = {app_id: list(keys) for app_id, keys in (req.get('acknowledged') or {}).items()
                     if keys and app_id in req['apps']}
     group = None
-    if len(apps) > 1 and _from_ha(svc, req['backup_id']):
+    if 1 < len(apps) <= hachain.MAX_APPS and _from_ha(svc, req['backup_id']):
         # A converted HA backup restores one app after the other, each with its own pre-restore backup and its own automatic
         # rollback: one app's problem never takes back or stops the others (HAOS parity; hachain.py). Any other backup keeps
         # its all-or-nothing restore.

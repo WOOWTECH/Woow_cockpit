@@ -1070,6 +1070,13 @@ class RestoreSplitTests(HaCliCase):
         self.assertNotIn('group', self.first_params(many))
         self.assertNotIn('chain', self.first_params(many))
 
+    def test_more_apps_than_a_chain_can_name_are_never_cut_to_the_first(self):
+        """A chain names at most hachain.MAX_APPS apps; a request with more would run as its first app alone: it stays one job."""
+        with mock.patch.object(hachain, 'MAX_APPS', 2):
+            response = self.call(['restore-start'], self.request)
+        self.assertNotIn('group', response)
+        self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
+
     def test_an_unreadable_registry_never_splits_and_never_breaks_a_restore(self):
         haimport.registry_path(self.paths).write_text('{')
         with contextlib.redirect_stderr(io.StringIO()):
