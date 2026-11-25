@@ -1274,7 +1274,8 @@ class EntryTests(WalkCase):
         self.assertEqual((habackup.CHECK_BYTES, habackup.CHECK_ENTRIES), (64 << 20, 1024))
 
     def test_the_checkpoint_of_the_entries_is_called_every_so_many_headers(self):
-        """IN-20: many tiny entries read little but cost the walk time: a call every CHECK_ENTRIES headers, apart from the bytes."""
+        """IN-20: many tiny entries read little but cost the walk time: a call every CHECK_ENTRIES headers, apart from the
+        bytes."""
         data = hx.tar_bytes([{'name': f'f{i}', 'data': b''} for i in range(40)])
         at, raised = self.checkpoints(data, entries_every=16)
         self.assertEqual((len(at), raised), (2, None), 'after the 16th and the 32nd')
@@ -1486,8 +1487,8 @@ class EntryTests(WalkCase):
             except BackupError:
                 written_out = False
             else:
-                written_out = stored == sum(block[:148]) + 256 + sum(block[156:]) or stored == (
-                    sum(b - 256 if b > 127 else b for b in block[:148]) + 256 + sum(b - 256 if b > 127 else b for b in block[156:]))
+                signed = [b - 256 if b > 127 else b for b in block]
+                written_out = stored in (sum(block[:148]) + 256 + sum(block[156:]), sum(signed[:148]) + 256 + sum(signed[156:]))
             self.assertIs(habackup._checksum_ok(block), written_out, kind)
             counts[kind] += 1
         self.assertGreater(min(counts.values()), 40, counts)
