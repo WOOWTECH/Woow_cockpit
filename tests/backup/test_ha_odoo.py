@@ -1824,6 +1824,48 @@ class GapTests(unittest.TestCase):
         self.assertFalse(any('big_mod' in name or '__pycache__' in name or 'bad-name' in name for name in names))
 
 
+class MoreGapTests(unittest.TestCase):
+    """The rest of the places no test ran (iteration 2, second pass): versions that cannot be read, a converted volume the import
+    would refuse, a list setting with text before a quote, the old result shape."""
+
+    def test_a_postgresql_version_that_cannot_be_read_is_unknown_not_an_error(self):
+        for version, wanted in (('16', 16), ('16.4', 16), ('17.11', 17), ('', None), ('x', None), (None, None), ('.5', None)):
+            with self.subTest(version=version):
+                self.assertEqual(ha_odoo._ha_major(types.SimpleNamespace(pg_version=version)), wanted)
+        for env, wanted in ((['PG_MAJOR=17'], 17), (['PG_MAJOR=16.4'], 16), (['PG_MAJOR=abc'], None), ([], None), ([5, 'X=1'], None)):
+            adapter = types.SimpleNamespace(image_inspect=lambda image, env=env: {'env': env})
+            with self.subTest(env=env):
+                self.assertEqual(ha_odoo.target_pg_major(types.SimpleNamespace(adapter=lambda _app: adapter), None, 'img'), wanted)
+        gone = types.SimpleNamespace(adapter=lambda _app: types.SimpleNamespace(image_inspect=lambda image: None))
+        self.assertIsNone(ha_odoo.target_pg_major(gone, None, 'img'))
+        issues, _copy, _unavailable = ha_odoo.database_issues('woowtest', details_base(), target({'base': ('18.0.1.3', True, CORE)}), {},
+                                                              ha_major=None, target_major=17)
+        self.assertEqual([(i.id, i.level) for i in issues], [('odoo.pg-newer', 'stop')], 'an unknown version is a stop of that database')
+
+    def test_a_converted_volume_that_the_import_would_refuse_is_this_jobs_failure(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bad = Path(tmp.name) / 'volume.tar'
+        bad.write_bytes(hx.tar_bytes([{'name': './', 'type': 'dir'}, {'name': 'dev', 'type': 'chr'}]))
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.check_volume_tar(bad, (nested_ids(), nested_ids()))
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('無法匯入', caught.exception.message)
+
+    def test_a_list_setting_with_text_before_a_quote_or_missing_parts_is_not_split(self):
+        for text in ('abc"def"', '"a" b', '"a", , "b"', ',a', '"unfinished', ''):
+            with self.subTest(text=text):
+                self.assertIsNone(ha_odoo.split_list_setting(text))
+        self.assertEqual(ha_odoo.split_list_setting('"$user", public'), ['$user', 'public'])
+        self.assertEqual(ha_odoo.split_list_setting('"a ""quoted"" name"'), ['a "quoted" name'])
+
+    def test_a_result_of_the_old_shape_says_what_the_databases_say(self):
+        self.assertEqual(ha_odoo.check_blockers({'odoo': {'databases': []}}), ['HA 的 Odoo 沒有任何資料庫。'])
+        self.assertEqual(ha_odoo.check_blockers({'odoo': {'databases': [{'ok': False}]}}), ['HA 的 Odoo 資料庫都不能搬過來（原因見各資料庫）。'])
+        self.assertEqual(ha_odoo.check_blockers({'odoo': {'databases': [{'ok': False}, {'ok': True}]}}), [])
+        self.assertEqual(ha_odoo.check_blockers({'choices': {}, 'odoo': {'databases': []}}), [], 'a result with choices says it itself')
+
+
 class _EntryOf:
     """What a FileTar takes of a backup entry: kind, size, mode, mtime and a read."""
 
