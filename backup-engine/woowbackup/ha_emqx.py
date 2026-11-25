@@ -1493,13 +1493,16 @@ def access_roots(after, original, readings, lost_paths):
     This device's bootstrap file (its own MQTT accounts, e.g. woow) is attached to HA's built-in database authenticator
     of the same identity when that one is enabled and, for a `hash` file, hashes the same way (E-68, E-69); every other
     case leaves it off and says why. Returns ({root: value to load}, {'bootstrap': [reasons], 'removed_builtin':
-    bool}). `lost_paths`: bootstrap files that could not be followed at all (E-48, E-49): left off."""
-    changed, facts = {}, {'bootstrap': [], 'removed_builtin': False}
+    bool, 'absent': [HA's authenticators and authorization sources the candidate does not hold]}). `lost_paths`: bootstrap
+    files that could not be followed at all (E-48, E-49): left off."""
+    changed, facts = {}, {'bootstrap': [], 'removed_builtin': False, 'absent': []}
     rows = after.get('authentication')
     rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
     held = {}
     for row in rows:
         held.setdefault((row.get('mechanism'), row.get('backend')), row)
+    facts['absent'] += [f"{item['mechanism']}／{item['backend']}" for item in readings['authn']
+                        if (item['mechanism'], item['backend']) not in held]
     want = [dict(held[(item['mechanism'], item['backend'])]) for item in readings['authn']
             if (item['mechanism'], item['backend']) in held]
     originals = original.get('authentication')
@@ -1528,6 +1531,7 @@ def access_roots(after, original, readings, lost_paths):
     for source in sources:
         by_type.setdefault(source.get('type'), source)
     ha_types = [item['type'] for item in readings['authz']]
+    facts['absent'] += [kind for kind in dict.fromkeys(ha_types) if kind not in by_type]
     wanted = [dict(by_type[kind]) for kind in dict.fromkeys(ha_types) if kind in by_type]
     flags = {item['type']: item['enable'] for item in readings['authz']}
     for source in wanted:
@@ -1551,6 +1555,12 @@ def apply_ha_access(tmp, read_candidate, readings, original, lost_paths, *, obse
     stay (the row counts check it)."""
     after = read_effective_config(read_candidate, allow_authz_omission=True)
     changed, facts = access_roots(after, original, readings, lost_paths)
+    if facts['absent']:
+        # Access control is not one of the items E-67 lets an import skip: when one of HA's authenticators or sources is not in
+        # the candidate, the list that would be loaded is not HA's, and cutting this device's own to it could leave nobody to
+        # log in or everybody in (S2 is HA's own choice, confirmed by name; this is a failed import). Stops only this app.
+        raise BackupError('incompatible', 'EMQX 匯入後，HA 的帳號驗證或授權設定（' + hacommon.names(facts['absent'], 8)
+                          + '）沒有出現在暫用的 EMQX 裡，已停止；這台沒有任何改變。')
     if changed:
         if observe is not None:
             observe('access_apply')

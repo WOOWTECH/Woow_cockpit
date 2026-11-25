@@ -58,6 +58,21 @@ class Transport:
         self.override_reads = 0
         self.logs = []
 
+    def merge_ha_authentication(self):
+        """HA's authenticators are merged into this device's by mechanism and backend (emqx_utils:merge_lists), so every one of
+        them is in the candidate: what the readings of HA's broker say HA has."""
+        readings = getattr(self, 'ha_readings', None)
+        if readings and readings['authn']:
+            rows = copy.deepcopy(self.running_config.get('authentication') or [])
+            for item in readings['authn']:
+                for row in rows:
+                    if (row.get('mechanism'), row.get('backend')) == (item['mechanism'], item['backend']):
+                        row['enable'] = item['enable']
+                        break
+                else:
+                    rows.append({'mechanism': item['mechanism'], 'backend': item['backend'], 'enable': item['enable']})
+            self.running_config['authentication'] = rows
+
     def podman(self, *args, **kwargs):
         if args == ('container', 'inspect', '--format', '{{.State.Running}}', 'lab-target'):
             self.events.append('inspect-live')
@@ -149,6 +164,7 @@ class Transport:
         if command[:4] == ['emqx', 'ctl', 'data', 'import']:
             self.events.append('import')
             self.running_config['authorization'] = copy.deepcopy(self.ha_authorization)
+            self.merge_ha_authentication()
             return Result(0, b'imported successfully', b'')
         if command[:2] == ['sh', '-c']:
             assert 'umask 077' in command[2]
@@ -175,6 +191,7 @@ class CandidateFlowTests(unittest.TestCase):
     def invoke(self, transport, readings=True, notes=None):
         """The conversion's candidate from a generated transport. `readings`: HA's broker's (True: ha_readings())."""
         readings = ha_readings() if readings is True else readings
+        transport.ha_readings = readings
         with tempfile.TemporaryDirectory() as directory:
             staging = Path(directory)
             export = staging / 'source.tar.gz'
@@ -192,8 +209,10 @@ class CandidateFlowTests(unittest.TestCase):
         transport = Transport()
         self.assertEqual(len(self.invoke(transport)), 4)
         self.assertEqual(transport.running_config['authorization'], HA_AUTHORIZATION)
-        self.assertEqual({k: v for k, v in transport.running_config.items() if k != 'authorization'},
-                         {k: v for k, v in transport.config.items() if k != 'authorization'})
+        self.assertEqual({k: v for k, v in transport.running_config.items() if k not in ('authorization', 'authentication')},
+                         {k: v for k, v in transport.config.items() if k not in ('authorization', 'authentication')})
+        self.assertEqual([(r['mechanism'], r['backend']) for r in transport.running_config['authentication']],
+                         [('password_based', 'built_in_database')], "HA's authenticator is in the candidate")
         self.assertEqual(transport.seed['authz/custom.acl'], b'{deny, all}.')
         for first, second in [('export', 'seed'), ('seed', 'start'), ('start', 'check-export'), ('check-export', 'import')]:
             self.assertLess(transport.events.index(first), transport.events.index(second))

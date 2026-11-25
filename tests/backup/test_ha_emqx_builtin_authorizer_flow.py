@@ -87,6 +87,7 @@ class BuiltinProductFlowTests(unittest.TestCase):
                     ha['sources'] += [s for s in mine['sources'] if s['type'] not in kinds]
                     self.events.append('import')
                     self.running_config['authorization'] = ha
+                    self.merge_ha_authentication()
                     return flow.Result(0, b'imported successfully', b'')
                 result = super().exec(role, command, **kwargs)
                 if command[:4] == ['emqx', 'ctl', 'conf', 'load']:

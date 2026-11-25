@@ -556,6 +556,63 @@ class HaReadingTests(base.EmqxCase):
                 self.assertNotIn('無法讀取 HA 的 EMQX 帳號驗證設定', ' '.join(result['blockers']))
 
 
+class AccessMustBeWholeTests(base.EmqxCase):
+    """D0, S2: this device's authenticators and authorization sources are cut to HA's -- and only when everything HA has is in
+    the candidate. An import that did not bring one of them (it said so or not: E-67 skips rules and connectors, not access
+    control) must not end with a list that is not HA's, which could leave nobody able to log in or everybody in."""
+
+    def no_load_of_access(self):
+        loads = [c for c in self.world.ctl_calls if c[1][:2] == ['conf', 'load']]
+        self.assertEqual(loads, [], 'nothing of the candidate was changed after the import')
+
+    def test_an_authenticator_of_ha_that_the_import_did_not_bring_stops_the_app(self):
+        self.world.import_changes = {'authentication': []}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+        self.assertIn('password_based／built_in_database', result['blockers'][0])
+        self.no_load_of_access()
+
+    def test_a_source_of_ha_that_the_import_did_not_bring_stops_the_app(self):
+        self.world.import_changes = {'authorization': {'no_match': 'allow', 'deny_action': 'ignore', 'sources': [
+            {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'}]}}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+        self.assertIn('built_in_database', result['blockers'][0])
+        self.no_load_of_access()
+
+    def test_a_partial_import_that_lost_the_access_settings_is_no_line_to_confirm_but_a_stop(self):
+        self.world.import_output = b'imported, but errors in authentication\n'
+        self.world.import_changes = {'authentication': []}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertNotIn('emqx.import-partial', ids_of(result))
+        self.assertIn('沒有出現在暫用的 EMQX 裡', result['blockers'][0])
+
+    def test_a_partial_import_of_something_else_still_goes_on_as_a_line_to_confirm(self):
+        self.world.import_output = b'imported, but errors in rule_engine\n'
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertIn('emqx.import-partial', ids_of(result))
+
+    def test_access_roots_names_what_is_absent_and_ha_with_nothing_is_not_absent(self):
+        readings = {'authn': [{'mechanism': 'password_based', 'backend': 'built_in_database', 'enable': True},
+                              {'mechanism': 'jwt', 'backend': 'none', 'enable': True}],
+                    'authz': [{'type': 'file', 'enable': True}, {'type': 'http', 'enable': True}], 'strict': ('allow', 'ignore')}
+        after = {'authentication': [{'mechanism': 'password_based', 'backend': 'built_in_database'}],
+                 'authorization': {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [{'type': 'file', 'enable': True}]}}
+        _changed, facts = ha_emqx.access_roots(after, {}, readings, [])
+        self.assertEqual(facts['absent'], ['jwt／none', 'http'])
+        empty = {'authn': [], 'authz': [], 'strict': ('deny', 'ignore')}   # HA asks nobody and has no source: nothing is absent
+        _changed, facts = ha_emqx.access_roots(after, {}, empty, [])
+        self.assertEqual(facts['absent'], [])
+
+
+def ids_of(result):
+    return [issue['id'] for issue in result['issues']]
+
+
 class ImportTextsTests(unittest.TestCase):
     """D0 (4), DESIGN H-c: HA's add-on options (env_vars) are never read, so the customer is told once, after the import, that
     they did not move -- whatever else the conversion found, and without a value of any kind."""
