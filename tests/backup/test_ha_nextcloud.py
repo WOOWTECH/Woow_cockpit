@@ -1819,10 +1819,12 @@ class StopsHoldTests(NextcloudCase):
 
     def test_a_stop_of_the_add_on_stops_the_conversion(self):
         config = HA_CONFIG.replace(b"'installed' => true,", b"'installed' => false,")
-        with self.collecting(), self.assertRaises(BackupError) as caught:
+        with self.collecting(), mock.patch.object(nc, 'datadir_pass', wraps=nc.datadir_pass) as walked, \
+                self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(config=config), ['nextcloud'])
         self.assertEqual([i.id for i in caught.exception.issues], ['nextcloud.not-installed'])
         self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'nothing is built')
+        walked.assert_not_called()      # the stop comes before HA's data directory (gigabytes) is read, not after it
 
     def test_a_stop_of_the_data_directory_stops_the_conversion(self):
         config = HA_CONFIG.replace(b"'datadirectory' => '/share/nextcloud',", b'')
