@@ -342,7 +342,8 @@ class TreeTar:
         """Write a hard link to a regular file this tar already holds ('link'). Any other: the file is copied instead when
         the walk's `entry` can say so (`entry.copy_later()`: the reader hands the same name out again, after the walk, as a
         regular file with the content: 'copy'; CM-11), else left out and listed in the report ('skip'), else the import
-        stops as it always did."""
+        stops as it always did. Never pass `entry` for a link to a file the importer leaves out on purpose to keep it secret
+        (a login, a key): `copy_later` would copy exactly that content (the reader itself never copies its NEVER_READ files)."""
         if target in self.files:
             self.tar.add_member(info(name, 'hardlink', mode=0o644, uid=self.uid, gid=self.gid, mtime=mtime,
                                      linkname=target))
