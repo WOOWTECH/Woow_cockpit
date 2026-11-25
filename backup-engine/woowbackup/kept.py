@@ -15,16 +15,16 @@ neighbour in that folder). So, before anything is touched and only when the chec
 * after a successful restore `put_back` puts the other databases and roles back into the new cluster (the app's own
   database and what the HA data brought are never touched); one that cannot go back is named and stays in the copy.
 
-The page's list needs nothing new: the copy is a backup of type `safety` with `from_ha.kept` on its converted backup.
+The page's list: the backup list marks such a backup `kept: true` (`cli.backup_view`), and `from_ha.kept` on the converted
+backup names the copy (cleared again when the administrator deletes it: `forget_pointer`).
 
 API for other lanes (LITELLM, L-38 "other schemas in the same database"): the pre-restore backup of an app already holds
 the whole database, every schema of it. A converted backup whose app section has `keep_safety: true`
 (`adapter.import_manifest(..., keep_safety=True)`) makes the restore write that pre-restore backup with NOTE_PREFIX, so it
 is pinned like a kept copy (`flows._take_safety_copy`, `wants_pin`); the importer lists its own line to confirm.
 """
-import contextlib
-import traceback
 import sys
+import traceback
 from pathlib import Path
 
 from .errors import BackupError
