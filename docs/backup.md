@@ -334,7 +334,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 | WOOWTECH Headscale 附加元件（`*_woow-headscale`） | 「Headscale VPN 控制伺服器」 | 使用者、裝置、預先授權金鑰、DNS 額外記錄與伺服器身分金鑰一起搬；這台的伺服器網址、IP 位址範圍與 API 金鑰保留 |
 | WOOWTECH OpenDesign 附加元件（`*_woow_ha_opendesign`） | 「OpenDesign 設計工具」 | 專案、對話、執行紀錄、設計系統、品牌、技能、外掛、記憶、偏好設定與在 OpenDesign 裡設定的外部 MCP 伺服器、連接器、媒體服務金鑰一起搬；這台的登入密碼（API 權杖）、MCP 權杖、代理程式登入、Omnigent 連線與 Paseo 配對保留 |
 | WOOWTECH code-server 附加元件（`*_woow_ha_code_server`） | 「code-server 開發環境」（目錄項目 `woow-code-server`） | VS Code 設定（合併）、快捷鍵、程式碼片段、HA 自己安裝的延伸模組、Pi／Claude Code／Codex 的對話記錄與技能、共用 MCP 伺服器一起搬；HA 的工作區（`/share/projects`，備份有包含 share 資料夾時）放進這台工作區的新資料夾。這台的密碼、代理程式的登入、Omnigent／Paseo 連接器與主機的 `.ssh`、`.gitconfig` 保留 |
-| WOOWTECH Nextcloud Office 附加元件（`*_woow-nextcloud-office`） | 「Nextcloud」 | 使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與自訂應用一起搬；使用者的檔案放在 HA 的 share 資料夾，HA 備份**一定要勾選 share 資料夾**，沒有就不能匯入；這台的網址、資料庫密碼、郵件設定與 Office（Collabora）連線設定保留 |
+| WOOWTECH Nextcloud Office 附加元件（`*_woow-nextcloud-office`） | 「Nextcloud」 | 使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與自訂應用一起搬；使用者的檔案放在 HA 的 share 資料夾，HA 備份最好勾選 share 資料夾（沒有的話使用者檔案不會搬）；這台的網址、資料庫密碼、郵件設定與 Office（Collabora）連線設定保留 |
 | Cloudflare Tunnel（`*_cloudflared`）、WOOWTECH MCP 管理附加元件（`*_woow_mcp_*`） | — | **不會搬過來**：HA 備份頁與匯入第一步會寫出要在這台做的事（Cloudflare Tunnel：在這台的 Cloudflare Tunnel 重新加入每一條路由、重新連結 WOOW PaaS；MCP 管理附加元件：在這台的「<產品> MCP 管理」重新設定連線，停掉 HA 的附加元件並用這台的 MCP 網址重建 MCP 連接器） |
 | WOOWTECH LiteLLM 附加元件（`*_woow-litellm`，WOOWTECH 內部 HA 才有） | 「LiteLLM 閘道」 | 虛擬金鑰、使用者、團隊、模型、儲存的供應商憑證、用量紀錄與 ChatGPT 訂閱登入一起搬，HA 的加密金鑰（salt）取代這台的；這台的主金鑰、管理介面密碼、資料庫密碼與網址保留 |
 | 其他附加元件、Home Assistant 本身的設定 | — | 不會匯入；HA 備份頁列為「這台沒有對應的應用」（Cloudflare Tunnel 與各 MCP 管理附加元件不搬，只有頁面提醒） |
@@ -360,7 +360,7 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 - **Omnigent**：只搬 HA 的**資料**：資料庫結構（資料表、欄位、預設值、檢查與索引）用這台 Omnigent 自己的，HA 備份裡的資料庫結構不會執行；轉換時會確認這台的結構在讀取期間沒有改變，並在完成前檢查新的資料庫只含這台的結構與 HA 的資料。使用者帳號、工作階段、代理程式、排程、上傳的檔案和檔案區換成 HA 的；HA 的登入金鑰（accounts-cookie-secret）一起搬過來，所以這台目前登入的瀏覽器與裝置要重新登入。這台的管理者與 runner 帳號會保留、密碼不變；HA 也有同名帳號時以 HA 的為準。HA 的分享與管理者執行期設定不會搬過來，這台維持自己的設定。
 - **Hermes**：對話、記憶、技能、排程、外掛與 HA 的設定檔（`config.yaml`）換成 HA 的。這台的 Dashboard 密碼、API 金鑰、Webhook 與工作階段金鑰以及 `hermes.env` 保持不變，`hermes.env` 中的金鑰會蓋過 HA 的同名金鑰。HA 的外掛會取代這台的外掛與配對（例如 Omnigent、Paseo）。HA 的 `/media` 資料夾不會搬過來。
 - **EMQX**（和 HAOS 還原一樣，以 HA 的為準）：MQTT 帳號、ACL 規則、Dashboard 帳號（含預設的 admin／public）、API 金鑰、封鎖名單、PSK、保留訊息，以及帳號驗證、授權來源（含 ACL 檔案）、「沒有符合規則的主題時」要允許或拒絕的處理、規則和連接器設定，都換成 HA 的；HA 的 API 金鑰會取代這台的，HA 的 EMQX 外掛不會搬過來。這台的節點名稱、連接埠、位址和其他設定保持不變；這台 bootstrap 帳號檔建立的 MQTT 帳號（例如 woow）會接到 HA 的內建資料庫認證上（接不上時會在提醒裡說，匯入後可能要重新建立）；這台自己的 ACL 檔案不會寫回，匯入前的自動備份裡還有。檢查時會先在暫用的 EMQX 裡試做一次完整匯入（多花約 1～2 分鐘），所以下列事項在「匯入前請確認」就看得到，確認一次就好：HA 的設定裡有能讀取這台檔案或環境變數的項目（用「file://」讀檔當密碼的設定、使用 jq 的規則）、會收到每個連線用戶端帳號與密碼的項目（HTTP、LDAP、SQL 等外部帳號驗證與外部授權來源、ExHook 伺服器），都會照 HA 原樣啟用，頁面列出它們的名稱，請只匯入你信任的備份；HA 的 EMQX 沒有啟用帳號驗證時，匯入後連得到這台 MQTT 的人不用帳號就能連線（頁面會寫這台的 MQTT 埠目前只有本機能連或整個區網都能連；公開網址或 ngrok 無法從這台查出，一律提醒）；HA 的 Dashboard 還在用預設的 admin／public，而這台的管理頁開在區網或有對外通道時，也要確認；EMQX 匯入時有部分設定無法匯入也要確認（名稱會列出來）。HA 用「plain」（不加密）保存 MQTT 密碼、或有沒有以目前雜湊方式保存的帳號時，會照 HA 匯入並提醒：明文密碼會留在這台和之後每一份備份裡。備份裡有好幾個 EMQX 資料庫又沒有記錄用的是哪一個時，自動選最後寫入的那個，可以在頁面改選。還原後會再核對 MQTT 帳號、ACL 規則和金鑰都和轉換時相同，不同就自動回復；只有設定不同（例如轉換之後這台改過設定）時只提醒，不回復。這台自己設的 EMQX_AUTHORIZATION__*／EMQX_AUTHENTICATION__* 環境變數在匯入後的下一次啟動會蓋過 HA 的設定，檢查會列出變數名稱（不列內容）。MQTT 密碼的保存方式（密碼雜湊）也以 HA 的為準：和這台不同時，這台現有的 MQTT 帳號匯入後無法再用原本的密碼登入，檢查會先列出這些帳號（只列名稱），匯入後要重新設定。這台在 EMQX 管理頁自己建立的 MQTT 帳號，匯入後會被 HA 的帳號取代（只保留這台 bootstrap 帳號檔的帳號），這是預期的行為。
-- **Nextcloud**：使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與 HA 的自訂應用（custom_apps）換成 HA 的；Nextcloud 的身分資料（instanceid 與加密用的 secret）也一起搬，所以 HA 的應用程式密碼和驗證碼式的雙重驗證（TOTP）可以繼續使用；綁定 HA 網址的通行金鑰或安全金鑰（WebAuthn）換網址後要重新登記。使用者的檔案放在 HA 的 share 資料夾（預設 `/share/nextcloud`）：做 HA 備份時沒勾 share 資料夾，檢查會說「這份 HA 備份沒有包含 share 資料夾…」並拒絕匯入（只搬資料庫會讓檔案遺失）。這台的網址、信任網域、資料庫密碼、郵件與快取設定保持不變；Office 會改用這台的 Collabora（HA 暫存的 Collabora 設定會換成這台的，匯入後馬上可以開文件）。團隊資料夾（Team folders）的檔案和儲存空間記錄也會一起搬並改成這台的路徑。HA 的伺服器端加密、物件儲存（S3）與使用者檔案裡的符號連結目前不支援。這台的使用者檔案放在網站資料夾裡，所以匯入時一定會寫入 Nextcloud 自己的保護檔（`.htaccess`，禁止直接從網址下載檔案）；使用者檔案裡如果另外有 `.htaccess`，檢查會列出位置並拒絕匯入（請先在 HA 改名或刪除）。HA 先備份資料庫、Nextcloud 重新啟動後才備份 share 資料夾，如果備份當時有人在上傳或刪除檔案，檢查會提醒「檔案清單…和實際檔案不一致」，匯入後請照提醒執行一次檔案掃描（`podman exec -u www-data nextcloud-app php occ files:scan --all`）。為了安全，HA 的 Nextcloud 資料庫裡如果有 Nextcloud 本身不會建立的東西（例如自訂函式、觸發程序、檢視表），檢查會說「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件…」並拒絕匯入；Nextcloud 本身和一般的應用不會建立這些東西，目前已知的例外是相簿應用 Memories（它會在資料庫建立一個函式和一個觸發程序），裝過它的 HA 目前不能匯入。匯入後請把 HA 的 Nextcloud 附加元件永久停用，並把同步用戶端、行事曆與聯絡人改連到這台的網址。
+- **Nextcloud**：使用者、檔案、分享、行事曆、聯絡人、應用程式密碼與 HA 的自訂應用（custom_apps）換成 HA 的；Nextcloud 的身分資料（instanceid 與加密用的 secret）也一起搬，所以 HA 的應用程式密碼和驗證碼式的雙重驗證（TOTP）可以繼續使用；綁定 HA 網址的通行金鑰或安全金鑰（WebAuthn）換網址後要重新登記。使用者的檔案放在 HA 的 share 資料夾（預設 `/share/nextcloud`）；備份裡沒有它時照常匯入（使用者檔案不會搬），處理方式見下方「Nextcloud 匯入」。這台的網址、信任網域、資料庫密碼、郵件與快取設定保持不變；Office 會改用這台的 Collabora（HA 暫存的 Collabora 設定會換成這台的，匯入後馬上可以開文件）。團隊資料夾（Team folders）的檔案和儲存空間記錄也會一起搬並改成這台的路徑。HA 的物件儲存（S3）不支援（Nextcloud 不匯入，其他應用照常）；伺服器端加密、使用者檔案裡的符號連結和 `.htaccess` 的處理見下方「Nextcloud 匯入」。這台的使用者檔案放在網站資料夾裡，所以匯入時一定會寫入 Nextcloud 自己的保護檔（`.htaccess`，禁止直接從網址下載檔案）。HA 先備份資料庫、Nextcloud 重新啟動後才備份 share 資料夾，如果備份當時有人在上傳或刪除檔案，檢查會提醒「檔案清單…和實際檔案不一致」，匯入後請照提醒執行一次檔案掃描（`podman exec -u www-data nextcloud-app php occ files:scan --all`）。HA 的 Nextcloud 資料庫裡 Nextcloud 本身不會建立的函式與觸發程序（例如相簿應用 Memories 建立的）不會搬，改列在「匯入前請確認」；其他種類的物件（檢視表、自訂類型等）仍會讓 Nextcloud 不匯入，見下方「Nextcloud 匯入」。匯入後請把 HA 的 Nextcloud 附加元件永久停用，並把同步用戶端、行事曆與聯絡人改連到這台的網址。
 - **Headscale**：使用者、裝置、預先授權金鑰與 DNS 額外記錄換成 HA 的，HA 的伺服器身分金鑰（noise）也一起搬過來。這台的伺服器網址、IP 位址範圍、存取政策與 API 金鑰保持不變：HA 的 API 金鑰不會搬過來，這台的 Headplane 與 MCP 管理工具照常可用。
 - **OpenDesign**：專案、對話與訊息（`app.sqlite`）、執行紀錄、成品、設計系統與範本、品牌、資料庫、記憶、技能、外掛、偏好設定，以及在 OpenDesign 裡設定的外部 MCP 伺服器、連接器與媒體服務金鑰換成 HA 的；偏好設定與外部 MCP 伺服器設定裡指向 HA 資料夾（`/data/opendesign`）的路徑會改成這台的（`/app/.od`）；Paseo 自己登記的 MCP 項目（`woow-paseo`）不會從 HA 搬過來，維持這台的。這台的登入密碼（API 權杖）、MCP 權杖與工具設定、代理程式（Claude Code、Codex、Pi、OpenCode）的登入、Omnigent 連線、Paseo 配對、安裝識別與 `open-design.env` 保持不變。HA 專用的共用工作區與共用技能會原樣放進這台的資料夾，但這台不會自動使用。兩邊的 OpenDesign 核心必須是同一個版本（附加元件 0.2.15 = 核心 `05b23f5a`，OpenDesign 0.24.1），否則檢查會說明版本不同。
 - **code-server**（目錄項目 `woow-code-server`；三個資料卷，目錄有列出時加上工作區資料夾）：
@@ -486,6 +486,31 @@ Cockpit「備份與還原」頁為 rootless Podman Quadlet 應用建立備份，
 **只是提醒（匯入後請留意）**：資料庫有尚未完成的模組安裝或升級（照 HA 的狀態搬過來，請到「應用程式」套用或取消）、自訂模組標示不可安裝、需要這台沒有的程式、含有別種處理器的程式、啟用中的寄信伺服器與排程、網站網域會改成這台的網址、網址沒有換成這台的、這台 PostgreSQL 調整過但新叢集不接受的設定（回到預設值，資料不受影響）。
 
 **仍然會停下的情形（只有 Odoo 或那一個資料庫）**：不是 Odoo 的資料庫、模組清單或內容讀不出來、模組版本和這台不同、HA 的 PostgreSQL 比這台新、HA 的擴充功能這台沒有、HA 沒有任何資料庫、這台的 Odoo 資料沒有掛在 /var/lib/odoo 、應用設定缺少它的資料卷，或這台資料庫的超級使用者密碼放在環境檔或環境變數裡（標準做法是 podman secret，請改用 POSTGRES_PASSWORD_FILE）。
+
+### Nextcloud 匯入：哪些會自動處理、哪些要你確認
+
+和 HAOS 還原一樣，Nextcloud 不會因為「兩邊設定不一樣」或「備份少了某樣東西」就整個拒絕；做不到的，只有 Nextcloud 不匯入、其他應用照常，並寫出原因，這台的 Nextcloud 不會有任何變更。
+
+**這台會自動處理（結果頁寫「系統會自動做」，不用勾）**
+
+- 這台的 Nextcloud、資料庫或 Redis 停著：暫時啟動來讀，讀完恢復原狀；啟動不了才停下並說明。
+- 這台的 `config.php` 不是 Nextcloud 自己寫的樣子（含有函式或變數）：改由這台 Nextcloud 自己的 PHP 讀出設定值（只讀，不改檔案）。
+- 這台的資料庫裡沒有 `config.php` 寫的資料庫帳號，或它沒有可用的密碼：用 `config.php` 裡的帳號與密碼在新的資料庫建立（密碼不會出現在任何指令或紀錄）；`config.php` 裡也沒有可用的密碼時才會停下。
+- 這台 Nextcloud 用的資料庫帳號是超級使用者：放入 HA 的資料時改用權限低的暫時帳號，放完再把資料交回原帳號（HA 來的內容不能以超級使用者權限執行）；匯入後帳號仍和這台原本一樣。
+- HA 的資料庫用了這台的資料庫映像也有的擴充功能：自動啟用後再放資料；這台的映像沒有時才停下，並寫出名稱。
+- 使用者檔案裡有硬連結指到沒有搬的檔案（更新程式暫存、Office 暫存）：改成複製檔案內容。
+- HA 的 Nextcloud 版本讀不到：改用附加元件版本推算；HA 備份時在維護模式但兩邊版本相同：照常匯入，匯入後這台不在維護模式（版本不同才停下，因為可能升級到一半）。
+- HA 的 PostgreSQL 比這台的新：不事先擋，直接試著放進去；放不進去才停下，並說明請先把這台的資料庫更新到同一版，不會只放一半。
+
+**要你在「匯入前請確認」勾一次的**
+
+- HA 備份沒有包含 share 資料夾、share 裡找不到使用者檔案資料夾（或缺少 `.ncdata` 標記，可能當時沒有掛上）、或使用者檔案放在備份不會包含的位置（網路磁碟、其他路徑）：帳號、設定、行事曆、聯絡人與分享照常搬，**使用者檔案不會搬**，Nextcloud 的檔案列表看得到名稱但打不開；這台原本的使用者檔案會先存進匯入前備份。匯入後請把檔案複製到這台的使用者檔案資料夾，再執行 `podman exec -u www-data nextcloud-app php occ files:scan --all`。
+- 使用者檔案裡的符號連結（捷徑）和網站設定檔 `.htaccess`：不會搬（連結可能指到這台資料夾外；這台的使用者檔案在網站資料夾裡，`.htaccess` 可能讓檔案被公開），其他檔案照常搬，名單會列出來；匯入後請執行一次檔案掃描。
+- HA 開了伺服器端加密：金鑰和檔案會一起搬，但這種備份還沒有實測過；匯入後如果檔案打不開，請用匯入前自動做的備份退回。
+- HA 的資料庫有 Nextcloud 不會建立的函式或觸發程序（例如相簿應用 Memories 建立的）：這些程式不會搬，資料表和資料照搬，名單會列出來；用到它們的應用匯入後部分功能可能要重新設定。其他種類的資料庫物件（自訂型別、檢視表、規則…）目前仍然不能匯入。
+- HA 的資料庫除了 Nextcloud 用的 `public` 之外還有其他 schema：只搬 `public`，其他不會搬，Nextcloud 本身不受影響。
+
+**匯入後請留意（提醒，不用勾）**：讀不到這台的 Office 設定時，匯入後 Office 設定會是 HA 的，需要重新設定；這台 PostgreSQL 自己的設定放不進新資料庫時改用預設值，資料沒有影響。
 
 ### 匯入 HA 備份時，這台會自動處理的事（還原步驟）
 

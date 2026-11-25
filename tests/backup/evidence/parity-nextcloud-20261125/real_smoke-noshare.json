@@ -1,0 +1,1 @@
+{"config_found": true, "config_parsed": true, "datadir_source": ["share", "nextcloud"], "issues": [["nextcloud.no-share", "confirm"]], "skipped": 0, "pg_files": 2158, "complete": true}

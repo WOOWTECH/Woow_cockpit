@@ -2561,74 +2561,73 @@ name, or install it), stop HA's add-on and re-create the MCP connectors with thi
 
 **Batch 2: Nextcloud** (`woow-nextcloud-office` → `nextcloud`: data dirs `.local/share/nextcloud-office/{postgres,redis,
 html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied with their recommended answers).
-1. Where the data is: the add-on member holds the PostgreSQL 16 cluster (`data/postgres`), `data/nextcloud/config/config.php`
-   and the app-store apps (`data/nextcloud/custom_apps/<id>`); the users' files are Nextcloud's `datadirectory` (default
-   `/share/nextcloud`): `/share/<p>` is read from the share folder member (`share.tar[.gz]`, only `<p>/**`), `/data/<p>` and
-   `/config/<p>` from the add-on member (never overlapping the add-on's own items); anything else (a network mount, /media)
-   is a blocker. No share folder in the backup → blocker 「這份 HA 備份沒有包含 share 資料夾，Nextcloud 的使用者檔案（…）不在
-   備份裡…」; a data directory missing from it or without its `.ncdata` → blocker. Never read: `data/options.json`, HA's
-   `apps.config.php`, Redis and Collabora data, `config/**`, everything of the share folder outside the data directory.
-2. config.php is PHP code and is never run by the engine: a strict parser accepts only what Nextcloud's var_export writes
-   (one `$CONFIG = array (...)`; arrays, single-quoted strings, numbers, booleans, null; comments skipped); anything else is
-   a blocker. Versions: HA's `version` (4 parts) must equal the live config.php's and its first three parts the live
-   image's `NEXTCLOUD_VERSION`; both `installed`; HA not in maintenance; `dbtype` pgsql; table prefix `oc_` on both sides;
-   no object storage; server-side encryption (an `oc_appconfig` flag or `files_encryption` folders: decision D4),
-   symlinks in the data directory and a `.htaccess` anywhere below its top (「HA 的 Nextcloud 使用者檔案裡有 … 個網站伺服器
-   設定檔 .htaccess…」: here the data dir is inside Apache's web root with `AllowOverride All`, so one could publish a folder
-   or run files as programs; Nextcloud never creates nor accepts one) are blockers. The add-on version (0.2.3/0.2.4 →
-   35.0.1) is shown only.
-3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's
-   (§9 Odoo 1; the files of an online backup, `backup_label` and `tablespace_map`, are never streamed: blocker 「HA 的
-   Nextcloud 資料庫不是在停止狀態下備份的…」, the cluster is not started); the database named by HA's `dbname` must hold Nextcloud's
-   tables, only the plpgsql extension, no other schema, and the root storage `local::<HA datadirectory>/`
-   (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes → its md5), and no row may already have an id this
-   device's data directory needs (blocker 「HA 的 Nextcloud 資料庫裡已經有這台使用者檔案資料夾（…）的儲存空間記錄…」). Every session in
-   HA's cluster carries
-   PGOPTIONS `-c search_path=pg_catalog` (a client setting: above HA's per-database and per-role settings; no function,
-   operator or table of HA's can stand in for a built-in). HA's catalogs are read first (`SHAPE_SQL`, extension members
-   not counted): any function, procedure, aggregate, operator, type or domain, trigger, rule, policy or row security,
-   event trigger, view or other relation kind than table/sequence/index, CHECK or exclusion constraint, generated
-   column, inheritance, collation, conversion, text search object, operator class/family, cast, foreign server, user
-   mapping, publication, large object, default privilege, transform, extended statistics or tablespace, or a column
-   default that is neither a constant nor `nextval()` → blocker 「HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的資料庫物件（…），無法安全地搬過來。」
-   and HA's tables are not read at all (an unreadable shape → blocker too); a genuine Nextcloud 35.0.1 database has none
-   of them (dev-e, 2026-11-24). Known app that creates some: Memories (pulsejet/memories lib/Db/FilecacheTriggers.php:
-   function `memories_fcu_fun`, trigger `memories_fcu_trg` on `oc_filecache`): an HA Nextcloud that had it is refused. Counts (users, file cache, shares, tokens, calendar objects, contacts, storages, mounts,
-   external mounts) are read; per user the database's file list (home storages, `files/**`: number, bytes and an
-   order-free md5 digest of size and path, `FILES_SQL`) is compared with the files in the backup (HA archives the share
-   folder after the add-on runs again): a difference is a warning and a reminder with the command `podman exec -u
-   www-data <app container> php occ files:scan --all`, not a blocker (not compared when the data directory holds hard
-   links). This device's own database is read as its superuser with `search_path = pg_catalog` (nothing the Nextcloud
-   role could create in `public` stands in for a built-in). Warnings besides: apps HA enables that exist nowhere here,
-   HA custom apps whose info.xml excludes this Nextcloud or PHP version or that hold programs for another processor,
-   local external storages (outside the data directory), HA config keys that do not move (names).
-4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's
-   `dbuser` role (e.g. `oc_admin`) with the LIVE attributes and password verifier (stdin, masked) and the grants
-   Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: `GRANT CONNECT`, `REVOKE ALL … FROM PUBLIC`, `GRANT
-   CREATE ON SCHEMA public`), the live extensions (`vector`); the dump restored as that role (`--no-owner --no-acl
-   --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused, and refused before
-   anything is restored when its `pg_restore -l` list holds a kind outside TABLE, TABLE DATA, SEQUENCE, SEQUENCE SET,
-   SEQUENCE OWNED BY, DEFAULT, CONSTRAINT, FK CONSTRAINT, INDEX, COMMENT, ACL, EXTENSION, unknown kinds included: 「HA 的
-   Nextcloud 資料庫匯出檔含有 Nextcloud 不會建立的物件（…）」). From the restore on every session in the new cluster is pinned the same
-   way; its superuser reads catalogs only (the `SHAPE_SQL` refusal again, now also any per-role or per-database setting)
-   and every statement on HA's tables (the fix-ups, the counts, the kept settings) runs as the Nextcloud role itself, so
-   nothing of HA's ever runs with more rights than Nextcloud has. Fix-ups in one transaction: the root storage id →
-   `local::<target datadirectory>/`, and the id of every local storage below HA's data directory the same way (the Team
-   folders app keeps one per folder, `local::<datadirectory>/__groupfolders/<id>/`, and names it by its number:
-   groupfolders 23.0.2 lib/Mount/FolderStorageManager.php; ids over 64 bytes are stored as their md5); `richdocuments` `wopi_url`, `public_wopi_url`, `wopi_callback_url`,
-   `wopi_allowlist`, `disable_certificate_verification` and `core.backgroundjobs_mode` exactly as the live database has
-   them (Office uses this device's Collabora); HA's cached Collabora answers
-   (`appdata_<instanceid>/richdocuments/remoteData`, `discovery` and `capabilities`) are replaced by this device's own
-   cached files (their file cache rows deleted; Nextcloud adds files it finds), because the Office app never fetches
-   them on demand (12.0.1 lib/Service/CachedRequestService.php `get`; without them every document is an HTTP 500), and
-   the hourly job that refreshes them (`OCA\Richdocuments\Backgroundjobs\ObtainCapabilities`) is made due at once in
-   `oc_jobs`; this device without those files → a reminder with `occ richdocuments:activate-config`. Verified: every
-   count (file cache minus those rows), table owners = the role, the role's attributes (never superuser) and password
-   verifier, the root storage id and every moved storage id, roles, extensions, database and public-schema grants and
-   the kept settings equal the live ones, no database besides `postgres`, `template0`, `template1` and Nextcloud's, no per-role or per-database setting,
-   no table or column grant (the dump is restored with --no-acl, so one can only come from SQL hidden in it). Live
-   PostgreSQL settings are carried (§9 Odoo); clean stop, `pg_controldata` "shut down"; the PostgreSQL dir is the volume
-   export with its top folder owned like the live one.
+1. Where the data is: the add-on member holds the PostgreSQL 16 cluster (`data/postgres`), `data/nextcloud/config/config.php` and the
+   app-store apps (`data/nextcloud/custom_apps/<id>`); the users' files are Nextcloud's `datadirectory` (default `/share/nextcloud`):
+   `/share/<p>` is read from the share folder member (`share.tar[.gz]`, only `<p>/**`), `/data/<p>` and `/config/<p>` from the add-on member
+   (never overlapping the add-on's own items); every folder name is accepted that a person can type (spaces, Chinese ...: no control
+   character, no `..`). Users' files that are NOT in the backup (no share folder: `nextcloud.no-share`; no data folder, or one without
+   its `.ncdata` marker, which may not have been mounted: `nextcloud.no-datadir`; a location no HA backup holds, a network mount or
+   /media: `nextcloud.datadir-elsewhere`) are no refusal (owner rule 3, HAOS parity): ONE line to confirm, whose item is the folder, then
+   the import goes on. The accounts, settings, calendars, contacts and shares move; the converted data folder is empty except for
+   Nextcloud's own `.htaccess`, a `.ncdata` marker made here and this device's Office cache; a reminder says to copy the files and run
+   `occ files:scan --all`; this device's own user files are in the restore's safety backup. A folder that is there but has no marker is not
+   moved (it is started again empty when the walk finds this out). Never read: `data/options.json`, HA's `apps.config.php`, Redis and
+   Collabora data, `config/**`, everything of the share folder outside the data directory.
+2. config.php is PHP code and is never run by the engine: a strict parser accepts what Nextcloud's var_export writes and, since the HAOS
+   parity work (NC-12), the other ways a hand-edited file writes a VALUE: a double-quoted text without a variable (`$` is never accepted
+   unescaped; escapes only `\n \r \t \\ \" \$`), a dot between texts, and the constants `PHP_EOL DIRECTORY_SEPARATOR PATH_SEPARATOR PHP_INT_SIZE
+   PHP_INT_MAX PHP_INT_MIN E_ERROR E_WARNING E_NOTICE E_DEPRECATED E_STRICT E_ALL`; a variable, a function call, another constant or another
+   escape is `nextcloud.config-unreadable` (a stop of Nextcloud only), a missing file `nextcloud.config-missing`. THIS device's config.php
+   that the strict parser cannot read is evaluated by this device's own PHP in its own container (`php -r`, read only; `nextcloud.live-config-php`
+   auto) and the output (`var_export`) is parsed strictly; when that fails too: `nextcloud.live-config-unreadable`. Versions: HA's `version`
+   (4 parts) must equal the live config.php's and its first three parts the live image's `NEXTCLOUD_VERSION` (NC-21, NC-11: stops that stay);
+   a `version` HA's file cannot give is taken from the add-on's version (`VERSIONS`, `nextcloud.version-unreadable` notice; an unknown add-on
+   version `version.addon-unknown` notice, another version `version.different` stop); HA in maintenance mode with the same version is a notice
+   (`nextcloud.maintenance-mode`; the merged file keeps this device's `maintenance`), with another or unknown version a stop
+   (`nextcloud.maintenance-upgrading`); not installed `nextcloud.not-installed` (stops Nextcloud only), `dbtype` pgsql, table prefix `oc_` on both
+   sides, no object storage stay stops. Server-side encryption (an `oc_appconfig` flag or `files_encryption` folders; owner decision D8/S5) is
+   one line to confirm, `nextcloud.server-side-encryption` (items `files_encryption`, `encryption_enabled`: "never tested here"), no refusal.
+   Symlinks in the data directory (`nextcloud.symlinks-skipped`) and `.htaccess` files below its top (`nextcloud.htaccess-skipped`: here the data
+   dir is inside Apache's web root with `AllowOverride All`) are left out and listed (one line to confirm each, every name in the key), the
+   other files move; a hard link to a file that is not moved (the updater's folder, the cached Collabora answers, an `.htaccess`) is copied as
+   a file (`nextcloud.hardlinks-copied` auto). What the reader leaves out of the add-on member and of the data directory (device files, FIFOs,
+   unusable names, too large files, unresolvable hard links) is the one line `files.skipped`.
+3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9 Odoo 1; the files
+   of an online backup are never streamed: `nextcloud.online-backup`); the database named by HA's `dbname` must hold Nextcloud's tables and
+   the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes → its md5), and no row may
+   already have an id this device's data directory needs. HA's PostgreSQL being NEWER than this device's is not asked (NC-32): the restore
+   tries and a refused restore says so (see 4). Every session in HA's cluster carries PGOPTIONS `-c search_path=pg_catalog`. HA's catalogs
+   are read first (`SHAPE_SQL`, extension members not counted). What it finds beyond Nextcloud's tables, sequences and indexes is split
+   (`shape_objects`): functions (procedures and aggregates included) and triggers (what Memories makes: `memories_fcu_fun`, `memories_fcu_trg`) are LEFT OUT, one line to confirm
+   `nextcloud.db-objects-skipped` names them (`函式 <schema>.<name>`, `觸發程序 <table>.<name>`, from `OBJECTS_SQL`, names only) and the
+   tables of HA are read as before; any other kind (operator, type, rule, policy, event trigger, view or other relation kind, CHECK constraint,
+   generated column, inheritance, other custom objects, tablespace, a default that is neither a constant nor `nextval()`) stops Nextcloud
+   (`nextcloud.db-objects`) and HA's tables are not read at all. NOT built: the allow-list of known apps whose objects are copied verbatim
+   (the vendor definitions are needed). An extension HA's database uses that this device's database image offers (`pg_available_extensions`
+   of the live database) is enabled before the data goes in (`nextcloud.extension-enabled` auto), one it does not offer stops
+   (`nextcloud.extension-missing`); other schemas than `public` are one line to confirm (`nextcloud.schemas-skipped`, the dump is then
+   `pg_dump -n public`). Counts, per-user file lists, Warnings: as before.
+4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's `dbuser` role with the
+   LIVE attributes and password verifier (stdin, masked) and the grants Nextcloud's installer gives it. A role that is not in the live database,
+   or has no usable verifier, is made from `dbuser` and `dbpassword` of config.php with a SCRAM-SHA-256 verifier computed here (the password
+   itself is in no statement; `nextcloud.db-role-created` auto; none usable: `nextcloud.db-role-unusable` stop). A SUPERUSER role (NC-08,
+   `nextcloud.db-role-hand-over` auto) is never the role that loads HA's data: the plain role `woowbk_load` (LOGIN NOSUPERUSER, CONNECT and CREATE on
+   public) restores the dump and runs the fix-ups and the reads of HA's tables, then `REASSIGN OWNED BY woowbk_load TO <role>; DROP OWNED BY
+   woowbk_load; DROP ROLE woowbk_load` (as the cluster's superuser, pinned) before the catalogs are verified: the role must have exactly this
+   device's attributes (superuser included) and own every table. The live extensions (`vector`) and the enabled ones of 3 are created first;
+   the dump is restored (`--no-owner --no-acl --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused) after
+   its `pg_restore -l` list was cross-checked against its own header (`TOC Entries:`; pg-stdin follow-up F4) and written into the container with
+   the retry note in the job log (F3); the list leaves out the entries of the confirmed kinds (FUNCTION, PROCEDURE, AGGREGATE, TRIGGER: what pg_proc holds, and triggers) and the comments on them
+   (`skip_toc`), and the restore is refused before anything is restored when it still holds a kind outside TABLE, TABLE DATA, SEQUENCE, SEQUENCE
+   SET, SEQUENCE OWNED BY, DEFAULT, CONSTRAINT, FK CONSTRAINT, INDEX, COMMENT, ACL, EXTENSION (unknown kinds included: the second gate, NC-45). A
+   restore PostgreSQL refuses says why (NC-32, NC-46): HA's major newer than this device's means "update this device's database first"; nothing is
+   half done. From the restore on every session in the new cluster is pinned the same way; its superuser reads catalogs only (the `SHAPE_SQL`
+   refusal again: NOTHING foreign may be left, now also any per-role or per-database setting) and every statement on HA's tables runs as the
+   Nextcloud role (or the plain loader of a superuser role). Fix-ups in one transaction: the storage ids as before; `richdocuments` and
+   `core.backgroundjobs_mode` as the live database has them (when they cannot be read: `nextcloud.office-settings-unread` notice, HA's stay and
+   are not compared); PostgreSQL settings of this device that the new cluster refuses are reset (or all of them: `RESET ALL`) with
+   `nextcloud.settings-not-carried` notice, the data is untouched. A stopped Nextcloud, database or Redis of this device is started to be read
+   and put back (`target.service-started` auto, `hatarget.ensure_running`; one that cannot be: `target.service-failed` stop).
 5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
    maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
    `app_install_overwrite` (D1; the three two-factor keys are one policy, MandatoryTwoFactor.php: all of HA's, or all of
