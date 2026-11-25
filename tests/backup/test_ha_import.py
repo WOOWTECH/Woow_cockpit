@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import errors, flows, ha_n8n, ha_odoo, haapps, habackup, haimport, haissues, jobs, tempctr
+from woowbackup import errors, flows, ha_n8n, ha_odoo, haapps, habackup, haimport, haissues, hatarget, jobs, tempctr
 from woowbackup.errors import BackupError
 from woowbackup.haissues import Issue
 from woowbackup.paths import Paths
@@ -837,10 +837,10 @@ class IsolationTests(FlowCase):
         checks = {app_id: check for app_id in ('odoo', 'n8n', 'hermes')}
         with mock.patch.object(tempctr, 'TempObjects', temp_objects):
             self.run_check(ha_id, list(checks), checks)
-            self.assertEqual(made, [None, None, None])
-            with mock.patch.object(tempctr, 'SCOPES', True, create=True):
+            self.assertEqual(made, ['0', '1', '2'], 'F3: tempctr knows scopes (SCOPES): the app\'s place in the job is passed')
+            with mock.patch.object(tempctr, 'SCOPES', False):
                 self.run_check(ha_id, list(checks), checks)
-        self.assertEqual(made[3:], ['0', '1', '2'])
+        self.assertEqual(made[3:], [None, None, None])
 
     def test_a_successful_app_is_reset_too(self):
         ha_id = self.upload(self.all_addons())
@@ -1492,9 +1492,11 @@ class ImageVersionTests(FlowCase):
 
     def test_what_is_not_a_missing_version_is_not_hidden(self):
         self.answers['labels'] = (125, b'')
-        with self.assertRaises(BackupError) as caught:
+        self.answers['env'] = (125, b'')   # CM-05: an image that is not here is looked for again and downloaded: neither works
+        with self.assertRaises(BackupError) as caught, mock.patch.object(hatarget, '_sleep', lambda _seconds: None):
             self.version()
-        self.assertEqual(caught.exception.code, 'incompatible', 'the image is not here')
+        self.assertEqual(caught.exception.code, 'incompatible', 'the image is not here and cannot be had')
+        self.assertEqual(caught.exception.issues[0].id, 'target.image-missing')
         self.answers['labels'] = (0, b'null')
         wide = haissues.job_wide(BackupError('insufficient-space', 'x'))
         with self.assertRaises(BackupError) as caught:

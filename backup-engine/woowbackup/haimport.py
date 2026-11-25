@@ -43,7 +43,7 @@ import time
 import traceback
 from pathlib import Path
 
-from . import haapps, habackup, haissues, hasecuretar, hastore, tempctr, util
+from . import haapps, habackup, haissues, hasecuretar, hastore, hatarget, tempctr, util
 from .errors import BackupError
 from .haissues import Issue
 
@@ -412,7 +412,11 @@ class Work:
     # ---------------------------------------------------------- the target
     def adapter(self, app):
         if app.id not in self._adapters:
-            self._adapters[app.id] = self.ctx.adapter(app, phases=False)
+            adapter = self.ctx.adapter(app, phases=False)
+            # X-AD-01: the owner's user manager runs (linger is enabled when it did not), else nothing of the app can be read
+            # and the adapter calls it "not deployed". Kept only once it works: the app's own step stops, with the reason.
+            hatarget.ensure_user_manager(self, app, adapter.runner)
+            self._adapters[app.id] = adapter
         return self._adapters[app.id]
 
     def runner(self, app):
@@ -431,6 +435,7 @@ class Work:
             scope = {'scope': str(self._app[0])} if self._app and getattr(tempctr, 'SCOPES', False) else {}
             self._temps[owner] = tempctr.TempObjects(self.runner(app), self.job_id, log=self.log,
                                                      abort=self.watchdog.abort, **scope)
+            hatarget.scale_waits(self._temps[owner], self.ha)  # X-PD-05: a big backup is given the time it needs
             for folder in self.storage_folders(app):
                 if folder not in self.guard.folders:
                     self.guard.folders.append(folder)
@@ -1133,6 +1138,7 @@ def _convert_apps(ctx, params, app_ids, sinks):
             converted[app.id] = data
             item_args = {key: data[key] for key in ITEM_KEYS if key in data}
             work.checkpoint()
+            hatarget.ensure_app_images(work, app)  # X-AD-60: an image of this device that is not there is downloaded first
             app_manifest, app_entries = work.adapter(app).import_manifest(out_dir, **item_args)
             if data.get(CHECK_KEY) is not None:
                 from .archive import validate_import_check

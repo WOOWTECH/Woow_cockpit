@@ -879,6 +879,13 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `summary_text()`, `notes`.
 * `catalog`: `load_catalog(paths) -> dict[str, App]`.
 * `podman`: `OwnerRunner(owner)` — runs as the owner via `runuser`, user systemd, safe file I/O.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `OwnerRunner.run` raises `CommandError(.., reason=)` with one fixed zh-TW sentence per kind of failure
+  (`podman.REASONS`, `classify(stderr, returncode)`, `reason_code(error)`, `SENTENCES`): never the command's own words (stderr can
+  hold a password, an SQL statement or a row of the customer's data); `scaled_timeout(base, nbytes)` and `scaled_limit(base, nbytes,
+  ratio=, ceiling=)` (the floor is what a call had, the ceiling keeps a runaway out); `LineSink` and `OwnerRunner.stream_lines(argv,
+  on_line, ...)` read a listing line by line (a line is at most 1 MiB, the stream 16 GiB); `OwnerRunner.user_manager_ready()` and
+  `ensure_user_manager(*, log, wait, root_run, trusted)` (`loginctl enable-linger <owner>` as root, then wait for the manager's
+  socket; only a runner made with the real executor acts, a runner made with any other never touches the device).
 * `adapters.quadlet_postgres.QuadletPostgresAdapter` — implements `adapters.base.Adapter`; `unavailable(info)`
   (2026.11.17.1) gives the zh-TW reason why `backup()` cannot run in the app's current state (`info` from `probe()`:
   a database it dumps is not running — 「應用「<name>」已停止，無法備份：備份時它的資料庫必須在執行中。」, or 「應用「<name>」的資料庫沒有在
@@ -948,6 +955,17 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   job's watchdog, handed to every long podman call); `sweep(runner, alive, *, log, only_job) -> (removed, left)`,
   `default_cpus(uid)`,
   `quadlet_secrets(text)`, `quadlet_image(text)`, `quadlet_environment(text, allowed)`, `parse_unit(text)`, `LABEL`.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): after `user_ids(role, image, user)`: `TempObjects(..., scope=None)` (haimport.Work.temp passes the app's place in
+  the job while `tempctr.SCOPES` is true; an object is then named `woowbk-<job>-<scope>-<role>` instead of `woowbk-<job>-<role>` only
+  when another TempObjects of the same job and owner still lists the plain name -- what an earlier app could not remove, or a sibling
+  that is alive: `tempctr.stuck(job, owner)`; every other name is as it was, the label stays the job id, `sweep` and the recovery match
+  both), `remove(role)` / `remove_volume(role)` return whether the object
+  is gone and never stop the app (X-TC-05: an object that cannot be removed takes space only: one log line, it stays listed for
+  `cleanup` and the sweeps; a role that is needed again retries the removal first, and an app whose name is still taken stops with
+  `job-failed`), `put_back_later(label, action)` (what a job changed on the device for its reading, e.g. a service it started: run first
+  by `cleanup`, kept and retried while it fails, reported as `service:<label>` in the list `cleanup` returns), `services`
+  (`{container: unit}` of what `hatarget.ensure_running` started), `scale_to(nbytes)` / `size` (every wait of `run`, `exec`,
+  `volume_import`, `volume_export` is `podman.scaled_timeout(wait, size)`: the value a call asks for is the floor).
 * `ha_odoo` / `ha_n8n` (part B): `check(work, app)` and `convert(work, app, …, out_dir)` (the app steps of the jobs,
   driven by `haimport.Work`), the pure parts the tests use (`database_verdict`, `parse_manifest`, `same_version`,
   `filter_toc`, `superuser_kinds`, `settings_to_carry`, `split_list_setting`, `alter_system_sql`, `carry_settings`,
@@ -974,6 +992,23 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `semver`, `image_labels(work, app, ref)`, `container_file`, `mounted`, `environment`, `live_json`, `live_export`,
   `copy_live`, `top_only`, `TreeTar(path, uid, gid, guard)` (`root`, `dir`, `file`, `data`, `symlink`, `hardlink`,
   `close`, `files`, `counts`), `ha_hosts(text)`, `scalars(yaml_text)`, `network`, `host_elf_machine`, `foreign_elf`.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `image_labels(work, app, ref, *, pull=True)` (an image this device does not have is downloaded first through
+  `hatarget.ensure_image`; the happy path is still one `image inspect`), `live_json(work, app, container, user, database, sql, *,
+  size=None)` (64 MiB of answer instead of 4, more with `size`; a database that is not running or still starting is started through
+  `hatarget.ensure_running` and read once more; a wrong account or database name is told as such), `live_export(..., *, size=None)`,
+  `copy_live(src, out, *, drop, what, report=None, label='')` and `TreeTar(path, uid, gid, guard=None, report=None)`: with a
+  `habackup.Report` a customer's symlink that leaves the volume (`link_escapes(name, target)`, the restore's own rule) and a hard link
+  whose file is not in the copy are left out and listed in `report.skips` (`symlink`, `hardlink`; the importer's one confirmation
+  line `Sink.skipped(report)` names them, full count, 20 names); `TreeTar.hardlink(name, target, mtime, *, entry=None)` returns
+  `'link'` (a hard link to a file the tar holds), `'copy'` (`entry.copy_later()`: the reader hands the file out again, after the walk,
+  as a regular file) or `'skip'` (listed in the report); without an entry and without a report it stops as before.
+* `hatarget` (HAOS parity; `ISSUES`: `target.image-pulled` auto, `target.image-missing` stop, `target.service-started`
+  auto, `target.service-failed` stop, `target.linger-enabled` auto, `target.linger-failed` stop): `ensure_image(work, app, ref)`,
+  `ensure_app_images(work, app)`, `ensure_running(work, app, container, *, ready='running'|'postgres'|callable, size, timeout)` ->
+  `Service`, `ensure_user_manager(work, app, runner=None)`, `retry(action, *, attempts, pause_first, factor, longest, retry_if, abort,
+  log, what)`, `wait_until(condition, *, timeout, interval, abort)`, `pause`, `transient`, `extras(app, handled_volumes,
+  handled_dirs)`, `carry(work, app, out_dir, ids, *, volumes, dirs, report, size)`, `scale_waits(tmp, ha)`,
+  `not_deployed_error(app, info)`. Every function takes the `work` of haimport and needs of it only `runner(app)`.
 * `hasqlite` (batch 1): `run(specs, files, work_dir, *, outputs, out_dir, checkpoint, timeout, what)` -> `{db name:
   answer, None: {output name: path}}`, `problem(answer)`, `QUERIES`, `CHILD`; a spec is `{db, check: 'quick'|
   'integrity'|None, schema, counts[table], queries[QUERIES key], replace_api_keys_from: db|None}`.
@@ -1109,6 +1144,14 @@ Shapes:
   shown as text only. What the reader left out of an add-on (`habackup.Report.skips`: names no file can have, device nodes, FIFOs,
   links that cannot be handed out, files too large for the caller) is ONE `confirm` line `files.skipped` (`Sink.skipped(report)`): their
   number and kinds in the message, the first 20 names, a key in which every name of every kind stands (`MergedNames`).
+  The shared target helpers (`hatarget.ISSUES`, §6) add these ids: `auto` -- `target.image-pulled` (an image this device lacked was
+  downloaded; items: the image reference), `target.service-started` (a stopped container was started to be read and is put back;
+  items: its name), `target.linger-enabled` (the owner's user manager was started; items: the account); `stop` --
+  `target.image-missing` (the image cannot be had: no network, a registry that refuses, no space, a locally built image that is gone),
+  `target.service-failed` (the container cannot be started, is not ready in time, or no Quadlet file defines it),
+  `target.linger-failed` (the user manager cannot be started): each with the reason in one fixed sentence (`podman.SENTENCES`) and
+  what to do (`action`); the app on this device is unchanged. The links a conversion leaves out of a copy of this device's own
+  volume (`copy_live`, `TreeTar`, `carry`: kinds `symlink` and `hardlink` of `Report.skips`) are part of the one `files.skipped` line.
 * `HaCheck` (part B; schema 2 since 2026-11-25): `schema(2), ha_backup_id, shared[HaIssue]` (what belongs to no single app,
   keys under `_shared`: `shared.device-key`, the device key the import will create, and what the apps' checks found that is no
   single app's, each line once), `apps[{app_id, slug, name (the
@@ -1640,8 +1683,7 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   `io.woowtech.backup.job=<job>`; `--network none`, or an internal network of the job when two containers must talk
   (Odoo's `odoo neutralize` with its database; n8n's import with its database); no published ports;
   `--security-opt no-new-privileges`, `--pids-limit 1024`, `--memory 2g`, half the CPUs (`--cpus`, when the owner's user
-  manager has the cpu controller), `--pull=never` (the only download is the pinned PostgreSQL 16 image when the device
-  has none), `--log-driver none`; secrets mounted exactly as the live Quadlet file's `Secret=` lines say; environment
+  manager has the cpu controller), `--pull=never` (a throwaway container never downloads; the downloads are named at the end of this item), `--log-driver none`; secrets mounted exactly as the live Quadlet file's `Secret=` lines say; environment
   only for the keys the job names. HA's PostgreSQL 16 runs with a read-only root file system, its data volume mounted
   `noexec,nosuid,nodev`, HA's configuration files replaced and every library/command setting overridden (§9); batch 1:
   Omnigent's HA cluster the same way (the live PostgreSQL 16 image), HA's EMQX broker with a read-only root, a
@@ -1654,6 +1696,15 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   next try waits 10 minutes (`temp_retry_at`). At its start an HA job (only an HA job: other jobs never wait for podman
   listings) also removes the labelled objects of jobs that are not queued or running, for the owners of every importable app (`haimport.APPS`)
   and every owner a job record still lists; each listing has a 30-second limit.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `--pull=never` stays: a throwaway container never downloads. The only downloads are the pinned PostgreSQL 16 image when the device
+  has none and, since 2026-11-25 (CM-05, X-AD-60), an image of the app's own Quadlet files that this device does not have: `podman
+  pull` run as the app owner (`hatarget.ensure_image`), by the reference that Quadlet file names, tried once more when it failed for a
+  reason that may pass, watched by the job's watchdog (a full disk or a cancel ends it at once); a refusal, a missing network, no
+  space or a locally built image that is gone stops only that app (`target.image-missing`). A service or database of this device that
+  is stopped is started to be read (`hatarget.ensure_running`: `systemctl --user start` of the unit its own Quadlet file defines,
+  waited for) and put back by the app's `TempObjects.cleanup` -- the end of the app's check, the end of the conversion, also when
+  the job fails or is cancelled (the put-back is never ended by the watchdog); a killed process leaves it running, which loses
+  nothing.
 * **Space**: the floor is the running reserve (`flows.running_reserve`) plus 512 MiB. Up front the free space must
   exceed three times the selected members plus the floor; after streaming, each app asks again with what it measured
   (Odoo: twice HA's cluster plus 1 GiB, before the dump; n8n: four times the SQLite files; Omnigent: twice HA's cluster
@@ -1947,6 +1998,14 @@ them become automatic, a line to confirm, a notice or nothing at all is decided 
 describes the block as it still is. Versions: `haissues.version_issues` replaces `VersionTable.blocker` there (an add-on version
 the table does not know and a version that cannot be read here are told, the data's own structure decides; known and
 different versions still stop).
+
+What the import does by itself before it refuses (HAOS parity, lane F3-helpers): an image this device lacks is downloaded; a
+stopped database or service is started for the reading and put back; the owner's user manager is started when it is not running
+(`loginctl enable-linger`, which stays: the account's apps then run without a login); a hard link whose file does not move becomes a
+copy; a link out of a volume that the customer made is left out and listed, the rest of the volume goes on; waits and the room for
+an answer grow with the data (the old values are the floor); a command that fails says why in one fixed sentence; an object that
+cannot be removed is a log line. Every one of these that cannot be done stops that app only, with its reason, and the app on this
+device is unchanged. What an importer has to do to use them is in the `hatarget` bullet of §6.
 
 **Odoo** (add-on `odoo18ce` → app `odoo`, cold PostgreSQL mode: volumes `odoo18-db-data-isolated` (a whole cluster)
 and `odoo18-web-data`, host directory `.local/share/odoo18/addons`). The live Quadlet files describe the target (the
@@ -2678,6 +2737,10 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
    a hard link only to an earlier file of the same tree that moves; the HA-side secrets of the new add-ons are never
    read, and Omnigent's account hashes, Headscale's Noise key and Hermes's `.env` values are masked as soon as they are
    read.
+19. The only root command the engine added is `loginctl enable-linger <owner>` (`OwnerRunner.ensure_user_manager`): a fixed argv[0]
+   (`podman.LOGINCTL`, root-owned like the other tools, `root_only`), the owner name checked by `OWNER_RE`, a sanitized environment,
+   60 seconds, run only by a runner made with the real executor. A failed command's message holds only a sentence of `podman.REASONS`
+   and the command's name and exit code, never what it printed.
 
 ## 11. UI (`backup/`) requirements
 

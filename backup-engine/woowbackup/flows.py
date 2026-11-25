@@ -806,7 +806,8 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         info = adapter.probe()
         problem = None
         if not info['deployed']:
-            problem = BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
+            from .hatarget import not_deployed_error  # FL-11: the adapter's own reason (no linger) before "not deployed"
+            problem = not_deployed_error(app, info)
         elif info['problems']:
             problem = BackupError('job-failed', f'應用「{app.name}」狀態異常：{info["problems"][0]}', app=app.id)
         elif skipped is not None:
