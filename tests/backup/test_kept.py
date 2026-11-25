@@ -233,6 +233,18 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
         self.assertFalse(self.pending().exists(), 'the pre-restore copy is dropped, nothing changed')
 
+    def test_a_copy_that_fails_after_it_stopped_the_database_starts_everything_again(self):
+        self.world.fail_keep_after_stop.add('woowbk-demo')
+        self.converted()
+        with self.assertRaises(BackupError):
+            flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        started = [e for e in self.world.events if e[0] == 'start_units' and e[1] == 'woowbk-demo']
+        self.assertTrue(started)
+        self.assertTrue(set(self.world.adapters[-1].app.units) <= {u for e in started for u in e[2]},
+                        'every unit the copy stopped (the database too) is started again')
+        self.assertEqual([e for e in self.world.events if e[0] in ('restore', 'put-back')], [])
+        self.assertEqual(self.reporter.partial.get('stopped_writers', {}), {})
+
     def test_too_little_space_refuses_before_anything_is_stopped(self):
         self.storage.free = 10 * 1024 ** 2
         self.world.kept_estimate = 100 * 1024 ** 2

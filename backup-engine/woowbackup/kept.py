@@ -120,11 +120,15 @@ def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
             take_over(left.get('units') or [], left.get('first_stop'))
         ctx.log(f'保留「{plan.app.name}」資料庫服務的完整複本…')
         work = Path(staging) / 'kept' / plan.app.id
-        section, entries, info = adapter.keep_cluster(work)
-        stopped = handover.setdefault(plan.app.id, {'units': [], 'first_stop': None})
-        stopped['units'] = list(dict.fromkeys([*stopped.get('units', []), *getattr(adapter, 'kept_stopped', [])]))
-        if stopped.get('first_stop') is None:
-            stopped['first_stop'] = adapter.timing.get('first_stop')
+        try:
+            section, entries, info = adapter.keep_cluster(work)
+        finally:
+            # What the copy stopped is handed to the restore (or, when the copy fails half-way, to the refusal that starts it
+            # again): also when it fails after it stopped the database
+            stopped = handover.setdefault(plan.app.id, {'units': [], 'first_stop': None})
+            stopped['units'] = list(dict.fromkeys([*stopped.get('units', []), *getattr(adapter, 'kept_stopped', [])]))
+            if stopped.get('first_stop') is None:
+                stopped['first_stop'] = getattr(adapter, 'timing', {}).get('first_stop')
         packaged = flows._package(ctx, [plan.app], staging, include_images=False, note=note_for(plan.app), backup_type='safety',
                                   key=key, phases=False, manifest_apps=[section], entries=entries, downtime=0.0)
         copy = Kept(packaged['backup_id'], info)

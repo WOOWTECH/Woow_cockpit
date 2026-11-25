@@ -408,6 +408,7 @@ class World:
         self.paused_started = []  # units start_paused() was asked for (the recovery of a dead job)
         self.kept_wanted = {}     # app id -> pg ids whose whole database service the restore keeps a copy of first (S4)
         self.fail_keep = set()    # app ids whose keep_cluster() fails
+        self.fail_keep_after_stop = set()  # app ids whose keep_cluster() fails AFTER it stopped the app's units
         self.put_back_failed = {}  # app id -> [(database, reason)] put_back_databases() cannot put back
         self.put_back_raises = {}  # app id -> exception put_back_databases() raises
         self.keep_safety = set()  # app ids whose backups carry keep_safety (L-38)
@@ -584,6 +585,9 @@ class FakeAdapter:
         """Like the real adapter: stops the app's units, writes the cold copy and the dumps under `work`."""
         self.world.events.append(('keep', self.app.id))
         if self.app.id in self.world.fail_keep:
+            raise BackupError('job-failed', '無法匯出資料庫服務的資料卷。', app=self.app.id)
+        if self.app.id in self.world.fail_keep_after_stop:
+            self.kept_stopped = list(self.app.units)  # the database is stopped for the cold copy, then the export fails
             raise BackupError('job-failed', '無法匯出資料庫服務的資料卷。', app=self.app.id)
         (Path(work) / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
         (Path(work) / 'postgres').mkdir(mode=0o700, exist_ok=True)
