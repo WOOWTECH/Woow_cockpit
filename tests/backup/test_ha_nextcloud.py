@@ -8,6 +8,7 @@ import json
 import re
 import tarfile
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1740,6 +1741,20 @@ class LiveTargetTests(NextcloudCase):
         self.assertEqual(self.world.down, {'nextcloud-redis'})
         self.assertTrue(result['results'][0]['status'] == 'converted')
         self.assertIn(('systemctl', 'stop', '--', 'nextcloud-redis.service'), self.world.owner.calls)
+
+    def test_a_work_without_a_sink_still_works_for_the_lab_scripts(self):
+        class Bare:        # the stand-in of tests/e2e/lab: no sink, no temp
+            def runner(self, _app):
+                return self.owner
+
+        work = Bare()
+        sink = nc._sink(work, fk.app('nextcloud', 'Nextcloud'))
+        sink.auto('nextcloud.live-config-php', 'x')
+        self.assertEqual([i.id for i in sink.found], ['nextcloud.live-config-php'])
+        self.assertIs(nc._sink(self.work_with_sink(), fk.app('nextcloud', 'Nextcloud')).app_id, 'nextcloud')
+
+    def work_with_sink(self):
+        return types.SimpleNamespace(sink=lambda app: haissues.Sink(app.id))
 
     def test_what_cannot_be_started_stops_only_nextcloud(self):
         self.world.down = {'nextcloud-app'}

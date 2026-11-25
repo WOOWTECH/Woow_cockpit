@@ -1200,7 +1200,7 @@ def live_config(work, app, live):
                 '也無法請這台 Nextcloud 自己讀出它的設定值。',
                 action='請先在這台確認 Nextcloud 能正常運作、config.php 是 Nextcloud 自己寫的樣子，再匯入。'),
                 'incompatible', app=app.id) from None
-        work.sink(app).auto('nextcloud.live-config-php',
+        _sink(work, app).auto('nextcloud.live-config-php',
                             '這台 Nextcloud 的 config.php 不是 Nextcloud 自己寫的樣子（含有函式或變數），'
                             '已改由這台 Nextcloud 自己的 PHP 讀出設定值。')
     mask_config(config)
@@ -1318,6 +1318,12 @@ def database_role(work, app, doc, role, config, sink):
     return doc
 
 
+def _sink(work, app):
+    """The app's sink of the job; a `work` that has none (the stand-in of the lab scripts) gets one that only collects."""
+    sink = getattr(work, 'sink', None)
+    return sink(app) if callable(sink) else haissues.Sink(app.id)
+
+
 def office_unread(sink):
     """NC-09: this device's Office settings (or its cached Collabora answers) could not be read: the converted Nextcloud keeps
     HA's, a reminder says so (once)."""
@@ -1366,7 +1372,7 @@ class Target:
         self.image_version = image_env(work, app, self.live.app_image, 'NEXTCLOUD_VERSION')
         self.php_version = image_env(work, app, self.live.app_image, 'PHP_VERSION')
         self.role = self.config['dbuser']
-        self.db = live_database(work, app, self.live, self.role, self.config, work.sink(app))
+        self.db = live_database(work, app, self.live, self.role, self.config, _sink(work, app))
         self.shipped, self.custom = live_apps(work, app, self.live)
         self.index = {d['path']: i for i, d in enumerate(app.data_dirs)}
 
@@ -2078,7 +2084,7 @@ def carry_settings(work, app, live, cluster, sink):
 def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, moves, remote, majors=None):
     """The new cluster in the throwaway volume `nc-db` (stopped cleanly); returns the verified document."""
     live, db, role = target.live, target.db, target.role
-    sink = work.sink(app)
+    sink = _sink(work, app)
     # NC-08: a superuser role never loads HA's data: a plain role does and owns it until the fix-ups and the reads of the
     # tables are done, then everything goes to the role and the plain one is dropped
     plain = db['role'].get('super') is not True
