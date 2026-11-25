@@ -399,6 +399,11 @@ class KeptOwner(strength.StrengthOwner):
     """The instance model of test_strengthen plus the one question put-back asks that no other test does."""
 
     def podman(self, args, data, stdout):
+        if args[0] == 'exec' and 'pg_restore' in args and '--create' in args and self.instance is not None and data:
+            name = bytes(data).split(b':', 2)[1].decode()
+            if name in self.partial_restore:  # created, then failed: what is left is for put-back to drop again
+                self.instance[name] = {'owner': 'restored', 'data': bytes(data), 'extensions': []}
+                return podman.Result(1, b'', b'pg_restore: error: could not execute query')
         if args[0] == 'exec' and args[-2:-1] == ['-c'] and args[-1].startswith('DROP DATABASE IF EXISTS "'):
             name = args[-1][len('DROP DATABASE IF EXISTS "'):-1]
             if name not in (self.instance or {}):
@@ -410,6 +415,7 @@ class KeptOwner(strength.StrengthOwner):
         return super().podman(args, data, stdout)
 
     cut_script = False  # a script arrives short: psql exits 0 but never reaches the end mark
+    partial_restore = frozenset()  # databases whose `pg_restore --create` creates them and then fails half-way
 
     def psql_file(self, database, sql, stdout):
         if sql.startswith("SELECT coalesce(json_agg(rolname), '[]'::json) FROM pg_roles"):
@@ -582,6 +588,18 @@ class KeptClusterTests(AdapterKeptCase):
         self.assertEqual(done, [])
         self.assertEqual(sorted(name for name, _reason in failed), ['nextcloud', 'tmpl_custom'])
         self.assertNotIn('nextcloud', self.owner.instance)
+
+    def test_what_a_failed_put_back_half_created_is_dropped_again(self):
+        """pg_restore --create makes the database first: when it then fails, the half-made database must not stay behind."""
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        self.owner.reinit()
+        self.owner.units['woowbk-demo-db.service'] = 'active'
+        self.owner.partial_restore = frozenset({'nextcloud'})
+        done, failed = self.adapter.put_back_databases(self.app.postgres[0], info['logical']['main'])
+        self.assertEqual((done, [name for name, _reason in failed]), (['tmpl_custom'], ['nextcloud']))
+        self.assertNotIn('nextcloud', self.owner.instance, 'the half-made database was dropped again')
+        self.assertIn('tmpl_custom', self.owner.instance)
 
     def test_the_roles_script_needs_its_end_mark(self):
         """pg-stdin follow-up F1: one transaction and an end mark, so a script that arrived short is never half applied."""

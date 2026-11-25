@@ -2820,6 +2820,15 @@ class ConfirmedPausesTests(ConvertedRestoreCase):
         for adapter in self.world.adapters:
             self.assertEqual(adapter.acknowledged, frozenset({mine}) if adapter.app.id == 'woowbk-demo' else frozenset())
 
+    def test_a_malformed_key_among_the_keys_confirms_nothing(self):
+        """The keys a request carries are checked before any adapter gets them: one that is not a key spoils the whole list for
+        that app (fail closed), so the line is not confirmed by the good key next to it."""
+        self.converted()
+        with self.assertRaises(BackupError) as caught:
+            self.restore_with({'woowbk-demo': [self.key('woowbk-files'), 'not a key']})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'restore')], [])
+
     def test_an_ordinary_restore_has_no_lines_to_confirm(self):
         result = self.restore_with()  # the backup is not a converted one (H6)
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
