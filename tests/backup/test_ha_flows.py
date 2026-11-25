@@ -797,6 +797,37 @@ class OdooTargetTests(OdooCase):
         self.assertTrue(row['importable'])
         self.assertEqual(self.ids(row)['odoo.base-url-invalid'], 'notice')
 
+    def new_cluster_statements(self):
+        """The statements the newest new cluster ran (a conversion of this test has its own job, so its own container)."""
+        db = [c for c in self.world.owner.psql if c.endswith('-odoo-db')][-1]
+        return [s for _db, s, _tx in self.world.owner.psql[db].executed]
+
+    def test_an_address_with_a_control_character_is_replaced_by_the_default_at_the_check_not_refused_at_the_end_of_the_conversion(self):
+        """OD-19: sql_literal refuses control characters; the address (and the freeze flag) of this device's own database are
+        checked for the same characters when they are read, so that the conversion never ends in a late 'internal error'."""
+        for address in ('https://cockpit.example/\x0c', 'https://a.example/\x00', '\x1fhttps://a.example', 'https://a.example/' + 'x' * 2049):
+            with self.subTest(address=address[:30]):
+                self.world.live_base_url = address
+                ha_id = self.upload_odoo()
+                row = self.check(ha_id)
+                self.assertTrue(row['importable'], row['blockers'])
+                self.assertEqual(self.ids(row)['odoo.base-url-invalid'], 'notice')
+                done = self.convert(ha_id, ['odoo'])
+                self.assertEqual(done['ha_import']['apps'], ['odoo'])
+                statements = self.new_cluster_statements()
+                self.assertIn("DELETE FROM ir_config_parameter WHERE key = 'web.base.url'", statements,
+                              'the default address: Odoo sets its own on the first login')
+                self.assertFalse(any(s.startswith("INSERT INTO ir_config_parameter") and "'web.base.url'," in s for s in statements))
+        # a tab, a newline and a carriage return are no reason (sql_literal takes them)
+        self.world.live_base_url = 'https://cockpit.example/\t'
+        self.assertNotIn('odoo.base-url-invalid', self.ids(self.check()))
+        self.world.live_base_url = 'https://cockpit.example'
+        self.world.live_freeze = 'Tr\x00ue'
+        row = self.check()
+        self.assertTrue(row['importable'])
+        self.convert(self.upload_odoo(), ['odoo'])
+        self.assertIn("DELETE FROM ir_config_parameter WHERE key = 'web.base.url.freeze'", self.new_cluster_statements())
+
     def test_a_mount_that_is_no_odoo_data_is_left_out_and_said(self):
         """OD-08, OD-09: a time zone file or another host path is no reason to refuse; it is never mounted anywhere."""
         quadlets = dict(QUADLETS)

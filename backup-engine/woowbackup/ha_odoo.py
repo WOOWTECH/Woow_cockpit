@@ -759,9 +759,12 @@ def _is_web(data):
 
 # ====================================================================== PostgreSQL in a throwaway container
 
+SQL_UNSAFE_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')   # what sql_literal refuses: every control character but tab, newline, return
+
+
 def sql_literal(value):
     """A standard-conforming SQL string literal (checked text: no NUL or control characters)."""
-    if not isinstance(value, str) or re.search(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', value):
+    if not isinstance(value, str) or SQL_UNSAFE_RE.search(value):
         raise BackupError('internal-error', '資料庫設定值格式不正確。')
     return "'" + value.replace("'", "''") + "'"
 
@@ -2201,11 +2204,11 @@ def live_settings(work, app, live, image_id, sink=None):
                     '匯入後請確認 Odoo 的網址是否正確。')
         doc = {}
     base_url = doc.get('base_url')
-    if base_url is not None and (not isinstance(base_url, str) or len(base_url) > 2048):
+    if base_url is not None and (not isinstance(base_url, str) or len(base_url) > 2048 or SQL_UNSAFE_RE.search(base_url)):
         sink.notice('odoo.base-url-invalid', '這台 Odoo 的網址設定格式不正確，改用預設網址；匯入後請確認 Odoo 的網址是否正確。')
         base_url = None
     freeze = doc.get('freeze')
-    if freeze is not None and (not isinstance(freeze, str) or len(freeze) > 64):
+    if freeze is not None and (not isinstance(freeze, str) or len(freeze) > 64 or SQL_UNSAFE_RE.search(freeze)):
         freeze = None
     marker = doc.get('marker')
     if not marker_ok(marker, image_id):
