@@ -461,10 +461,12 @@ class Target:
             if name == broker:
                 continue
             other_body = other.decode('utf-8', 'replace') if isinstance(other, bytes) else str(other)
-            if re.search(r'(?i)ngrok|cloudflared|tunnel', name + other_body):
+            section = tempctr.parse_unit(other_body).get('Container', [])
+            # a tunnel to the outside is told by what the file is (its name, its container, its image), never by a word in a comment
+            names = [name] + [value for key, value in section if key in ('ContainerName', 'Image')]
+            if any(re.search(r'(?i)ngrok|cloudflared|tunnel', text) for text in names):
                 self.tunnels.append(name.rsplit('.', 1)[0][:60])
-            self.other_publish += [row for row in (parse_publish(value) for key, value in
-                                                   tempctr.parse_unit(other_body).get('Container', [])
+            self.other_publish += [row for row in (parse_publish(value) for key, value in section
                                                    if key == 'PublishPort') if row]
         self.access_env = []   # names of EMQX_AUTHORIZATION__* / EMQX_AUTHENTICATION__* settings of this device (H1)
         self.skipped_env = []  # EnvironmentFile= paths the candidate does not get (E-53), for the log
@@ -1551,17 +1553,31 @@ def apply_ha_access(tmp, read_candidate, readings, original, lost_paths, *, obse
             load_roots(tmp, {'authorization': switched})
         load_roots(tmp, changed)
     final = read_effective_config(read_candidate, allow_authz_omission=True)
-    authn = final.get('authentication')
-    want = changed.get('authentication', after.get('authentication'))
     authorization = final.get('authorization') if isinstance(final.get('authorization'), dict) else {}
     kinds = [(s.get('type'), s.get('enable', True)) for s in authorization.get('sources') or [] if isinstance(s, dict)]
     ha_kinds = [(item['type'], item['enable']) for item in readings['authz'] if
                 item['type'] in {s.get('type') for s in authorization.get('sources') or [] if isinstance(s, dict)}]
     strict = (authorization.get('no_match'), authorization.get('deny_action'))
-    if ((authn or []) != (want or []) or kinds != ha_kinds
+    # What is compared is what was meant -- which authenticators, enabled or not, and where this device's bootstrap file is
+    # attached -- not whole rows: `conf load` stores a root with its schema defaults filled (emqx_conf_cli.erl:541-546).
+    want = changed.get('authentication', after.get('authentication'))
+    if (_authenticators(final.get('authentication')) != _authenticators(want)
+            or _bootstraps(final.get('authentication')) != _bootstraps(want) or kinds != ha_kinds
             or (readings.get('strict') and strict != tuple(readings['strict']))):
         raise BackupError('incompatible', 'EMQX 匯入後，帳號驗證或授權沒有成為 HA 的設定，已停止；這台沒有任何改變。')
     return facts
+
+
+def _authenticators(rows):
+    """[(mechanism, backend, enabled)] of a list of authenticators, in order."""
+    return [(row.get('mechanism'), row.get('backend'), row.get('enable', True)) for row in rows or ()
+            if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _bootstraps(rows):
+    """{(mechanism, backend): bootstrap file} of the authenticators that have one."""
+    return {(row.get('mechanism'), row.get('backend')): row.get('bootstrap_file') for row in rows or ()
+            if isinstance(row, dict) and row.get('bootstrap_file')} if isinstance(rows, list) else {}
 
 
 def load_roots(tmp, settings):

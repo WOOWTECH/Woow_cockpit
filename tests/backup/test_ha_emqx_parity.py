@@ -549,6 +549,25 @@ class MarkerTests(base.EmqxCase):
         self.assertEqual(self.storage.list_backups(), [])
 
 
+class TunnelReadingTests(unittest.TestCase):
+    def target(self, files):
+        quadlets = dict(base.QUADLETS)
+        quadlets.update(files)
+        runner = SimpleNamespace(home='/home/appowner', read_file=lambda rel, max_bytes=None: b'')
+        work = SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: runner)
+        return ha_emqx.Target(work, fk.app('emqx', 'EMQX', volumes=[{'name': 'woow_emqx_data'}, {'name': 'woow_emqx_log'}]))
+
+    def test_a_tunnel_is_told_by_the_file_its_container_or_its_image_not_by_a_comment(self):
+        self.assertEqual(self.target({}).tunnels, [])
+        comment = b'[Container]\n# the PROXY protocol listener of the ngrok tunnel is in the broker\nContainerName=woow-emqx-entrance\nImage=docker.io/nginx:1\n'
+        self.assertEqual(self.target({'emqx-entrance.container': comment}).tunnels, [])
+        self.assertEqual(self.target({'emqx-ngrok.container': b'[Container]\nContainerName=x\nImage=docker.io/y:1\n'}).tunnels, ['emqx-ngrok'])
+        self.assertEqual(self.target({'emqx-out.container': b'[Container]\nContainerName=woow-cloudflared\nImage=docker.io/y:1\n'}).tunnels, ['emqx-out'])
+        self.assertEqual(self.target({'emqx-out.container': b'[Container]\nContainerName=out\nImage=docker.io/ngrok/ngrok:3\n'}).tunnels, ['emqx-out'])
+        found = self.target({'emqx-entrance.container': b'[Container]\nContainerName=e\nImage=i:1\nPublishPort=0.0.0.0:8080:80\n'})
+        self.assertEqual(found.other_publish, [('0.0.0.0', '8080', '80')])
+
+
 class DeviceAccessWorld(base.World):
     """This device keeps its settings in an EnvironmentFile that also holds access settings (H1)."""
 
