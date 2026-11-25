@@ -1,7 +1,7 @@
 {
  "lane": "EMQX-A",
  "branch": "parity/emqx-a-20261125",
- "tip": "d5ddf6a",
+ "tip": "b9ec458",
  "base": "3db6988",
  "rows": {
   "done": 48,
@@ -10,7 +10,7 @@
  },
  "unit_tests": {
   "modules": 19,
-  "tests": 305,
+  "tests": 322,
   "skipped": 3,
   "failures": 0,
   "errors": 0
@@ -30,10 +30,25 @@
   "fixed_smoke_after_import": "11 passed, 0 failed, 2 warnings, exit 0",
   "fixed_without_marker_equals_unmodified": true,
   "leak_scan_hits": 0,
-  "package_fix": "Woow_podman_emqx fix/smoke-after-ha-import-20261125@5c748a6 (local, not pushed)"
+  "package_fix": "Woow_podman_emqx fix/smoke-after-ha-import-20261125@5c748a6 (local, not pushed)",
+  "final_tip_rerun": "2026-11-25 20:43-21:00 on b9ec458: 24/24 + 23/23 + 1/1 checks, the same smoke answers, no false stop of the new rules"
  },
  "heavy_runs": {
-  "full_suite_b1_top_ha118": "not run in iteration 2 (host overloaded; the integrator runs the combined tip)",
-  "mutation_sweep": "not run on the final tip (38 mutants + 2 controls prepared)"
+  "full_suite_b1_top_ha118": "queued: chain fin2 on b9ec458 (not run when written)",
+  "mutation_sweep": "queued: chain fin2 on b9ec458, 44 mutants + 2 controls (not run when written)"
+ },
+ "iteration3": {
+  "commits": [
+   "c818352",
+   "0d875b9",
+   "5f8f05c",
+   "7eed024",
+   "b9ec458"
+  ],
+  "safety": [
+   "exact reading of HA authenticators (S2)",
+   "absent access settings stop the app (E-67 tightened for access control)"
+  ],
+  "reminder": "env_vars did not move (D0 4)"
  }
 }

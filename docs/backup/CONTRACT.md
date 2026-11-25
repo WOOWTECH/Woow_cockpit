@@ -2440,12 +2440,18 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
    H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
    `EnvironmentFile=` lines: names only) win over HA's after the next start: `emqx.env-wins` (notice, names).
    `emqx ctl data import` then runs. Output that does not say "imported successfully" names, as far as it names roots or tables, what EMQX could
-   not import: `emqx.import-partial` (confirm, E-67; the rest goes on and the row counts decide the tables).
+   not import: `emqx.import-partial` (confirm, E-67; the rest goes on and the row counts decide the tables). HA's own access control is not one of
+   the items E-67 lets an import skip: see D0 below.
    D0 (HAOS parity): then HA's `authentication` and `authorization` are made exactly HA's in the candidate (`apply_ha_access`): the authenticators
    and the authorization sources are cut to HA's, in HA's order, each as the import left it; HA's no-match rule and deny action are set
    explicitly; HA without any authenticator is an explicit empty list; a built-in database source HA does not have is first disabled and then removed
    (EMQX 5.8.9 clears the ACL rules of a source it destroys, not of a disabled one); this device's bootstrap file is attached to HA's built-in database
    authenticator of the same identity when it is enabled and, for a `hash` file, hashes the same way (otherwise `emqx.bootstrap-lost`: E-68, E-69).
+   HA's list of authenticators is read exactly (an answer that is not the list stops the app: never read as "no authentication", S2) and
+   every authenticator (mechanism and backend) and authorization source type HA has must be in the candidate after the import: when one is
+   missing (`access_roots` facts `absent`) only this app stops (`incompatible`, names only, before anything is loaded or packaged) rather than
+   cutting this device's own lists to a shorter list than HA's. After the import the reminders (`import_texts`) say that HA's add-on options
+   (`env_vars`) were never read and did not move (D0 4: the reader hands out neither `addon.json` nor `data/options.json`).
    The result is read back and must be what was meant (E-80). HA's ACL file replaces this device's: `emqx.acl-replaced` (notice, D3, E-75), nothing is
    written back; any other data-volume file of this device's snapshot (a certificate) must still be byte-identical. Every other root that is not HA data
    (`DATA_ROOTS`) is loaded back exactly as it was (`emqx ctl conf load --replace`, E-72, E-74); node, rpc and cluster never change.

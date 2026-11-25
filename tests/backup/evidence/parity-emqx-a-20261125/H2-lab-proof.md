@@ -67,3 +67,29 @@ fixture and the lab-made variants.
 `scratchpad/parity-emqx-a/h2/run_h2.sh TAG steps...` (a scratch driver outside the repository that reuses `tests/e2e/lab/emqx_product_real_ha.py` of a clean detached worktree of the tip):
 `setup before smoke-base check convert` (24 min hold at most), then `restore smoke-after baseline smoke-fixed-base cleanup leaks`, then `cleanup-baseline`. Each call takes dev-d's
 mutation lock itself and goes through `team/heavy.sh` with `HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock`. dev-d was left as found (B0 and the test's backups deleted).
+
+## Final-tip run (iteration 3, 2026-11-25 20:43-21:00 by date): the same proof on tip b9ec458
+
+Why again: iteration 3 changed three things of the product that touch what a real EMQX answers or does and that no unit test over a generated transport can prove:
+HA's list of authenticators is now matched EXACTLY (`AUTHN_ANSWER`; an unreadable answer stops the app instead of being read as "no authentication", S2), the import must have brought
+every authenticator and authorization source HA has (`apply_ha_access`, facts `absent`; otherwise only this app stops before anything is loaded), and the reminders after the import
+got one more line. The run is the same driver and the same real inputs as r3-r5 (a real EMQX 5.8.9 on dev-d, the real x86 cold HA backup, the package's own tests/smoke.sh; the draft fix
+fix/smoke-after-ha-import-20261125@1ea37da), three calls through heavy.sh under dev-d's mutation lock, started by the lane's chain `final_heavy2.sh` as soon as the host was calm
+(load5 14.6): call a `setup before smoke-base check convert` (lock held 613 s, 24/24 checks), call b `restore smoke-after baseline smoke-fixed-base cleanup leaks` (353 s, 23/23),
+call c `cleanup-baseline` (2 s, 1/1). `owner.sh d --verify-isolation` (the harness's own assertion): `true none {}` before and after every call.
+
+| question | answer on b9ec458 (real) | iteration 2 (d5ddf6a) |
+|---|---|---|
+| the check (it builds the candidate: H7) | importable, ok, 0 blockers, 232 s (host load ~15) | 269 s |
+| the exact reading of HA's authenticators and the "everything HA has is there" rule | no false stop: the check and the conversion went through (convert 261 s) | (not in the code) |
+| restore with the safety backup | succeeded in 66 s, not rolled back, the readback 「核對一致」 | 81 s |
+| the package's tests/smoke.sh after the import, unmodified | 14 passed, 2 FAILED (A4 HTTP 401, A10 cross-user subscription not denied), 1 warning; `--quick` 9 passed 1 failed; the same after a restart | the same |
+| with the draft package fix (marker file in the data volume) | 11 passed, 0 failed, 2 warnings (A4, A5/A6/A10 said, not failed); `--quick` 8 passed 0 failed | the same |
+| the fixed script on the restored baseline (no marker) | 16 passed, 0 failed, 1 warning: exactly the lines of the unmodified script | the same |
+| rollback to B0 | state digest equal to the one before the import, marker gone | the same |
+| leak scan of the harness (device files, journal, issued Dashboard tokens) | 0 hits; the evidence folder of this lane (9 files) 0 hits | 0 hits |
+
+So the real answer to H2 stands (the package's own self-check fails after an import, upgrade.sh would roll an upgrade back, the draft fix turns it round), and the real EMQX accepted the
+new code on the real backup. NOT shown by this run: the reminder text after an import (the harness does not print it; unit-tested), the stops of the two new safety rules (they need an
+import that does not bring HA's access settings: unit-tested with generated transports only), and everything listed under "NOT proven" above. The harness's status lines of the three calls:
+`h2/final-tip-fin2-status-lines.txt`.
