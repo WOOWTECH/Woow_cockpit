@@ -521,6 +521,26 @@ class LineStreamTests(unittest.TestCase):
         self.assertEqual(len(got), 5, 'closed twice: nothing again')
         self.assertIsNone(sink.flush())
 
+    def test_however_the_stream_is_cut_the_lines_are_the_same(self):
+        import random
+        rnd = random.Random(20261125)
+        for round_ in range(300):
+            lines = [bytes(rnd.choice(b'abc \x00\xff\r') for _ in range(rnd.randint(0, 12))) for _ in range(rnd.randint(0, 25))]
+            data = b'\n'.join(lines) + (b'\n' if rnd.random() < 0.5 and lines else b'')
+            expected = data.split(b'\n')
+            if expected and expected[-1] == b'':
+                expected.pop()
+            got = []
+            sink = podman.LineSink(got.append)
+            position = 0
+            while position < len(data):
+                step = rnd.randint(1, 9)
+                sink.write(data[position:position + step])
+                position += step
+            sink.close()
+            self.assertEqual(got, expected, (round_, data))
+            self.assertEqual(sink.total, len(data))
+
     def test_the_memory_is_one_line_not_the_listing(self):
         count = []
         sink = podman.LineSink(count.append)

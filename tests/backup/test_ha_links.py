@@ -315,6 +315,79 @@ class LeftOutLinksTests(unittest.TestCase):
         self.assertTrue(plain.symlink('deep/x', '../../../etc', 0), 'without a report: written as before')
         plain.close()
 
+    def test_random_trees_lose_nothing_silently(self):
+        """CM-11, X-NS-08 with the reader (READ): over random trees every hard link, symlink and file is either in the
+        volume (a link, a copy with the content of the file it names, the file itself), left out by the importer's own
+        choice, or listed in the report; and what is written is what the restore takes."""
+        import random
+        rnd = random.Random(20261125)
+        for round_ in range(400):
+            files, entries, links, symlinks = {}, [{'name': 'v', 'type': 'dir'}, {'name': 'x', 'type': 'dir'}], {}, []
+            for index in range(rnd.randint(2, 12)):
+                kind = rnd.choice(['file', 'file', 'link', 'link', 'symlink'])
+                area = rnd.choice(['v', 'v', 'x'])
+                name = f'{area}/n{index}'
+                if kind == 'file' or not files:
+                    data = bytes(rnd.getrandbits(8) for _ in range(rnd.randint(0, 40)))
+                    files[name] = data
+                    entries.append({'name': name, 'data': data})
+                elif kind == 'link':
+                    target = rnd.choice(sorted(files))
+                    links[name] = target
+                    entries.append({'name': name, 'type': 'hardlink', 'linkname': target})
+                else:
+                    target = rnd.choice(['f', '../../etc', 'n0', '/abs/target', '../x/n0', 'a/../../up'])
+                    symlinks.append((name, target))
+                    entries.append({'name': name, 'type': 'symlink', 'linkname': target})
+            drop = {name for name in files if rnd.random() < 0.35}
+            report = habackup.Report(names=haissues.Names)
+            path = self.dir / f'r{round_}.tar'
+            out = hacommon.TreeTar(path, 1000, 1000, report=report)
+            out.root(0o755)
+            select = habackup.Select(include=('v',), symlinks=('v',), hardlinks=True)
+            written, copies = {}, 0
+            for entry in habackup.iter_entries(io.BytesIO(hx.tar_bytes(entries)), select, report, addon=False):
+                name = entry.name[2:] or '.'
+                if name == '.':
+                    continue
+                if entry.kind == 'dir':
+                    out.dir(name, entry.mode, entry.mtime)
+                elif entry.kind == 'file':
+                    if f'v/{name}' in drop:
+                        continue
+                    out.file(name, entry, entry.mode)
+                    written[name] = 'file'
+                elif entry.kind == 'hardlink':
+                    written[name] = out.hardlink(name, entry.linkname[2:], entry.mtime, entry=entry)
+                    copies += written[name] == 'copy'
+                elif entry.kind == 'symlink':
+                    written[name] = 'symlink' if out.symlink(name, entry.linkname, entry.mtime) else 'skipped'
+            out.close()
+            with self.subTest(round=round_):
+                nested.check_volume(path, ids=IDS)          # what is written is what the restore takes
+                with tarfile.open(path) as tar:
+                    members = {m.name: (m, tar.extractfile(m).read() if m.isfile() else None) for m in tar.getmembers()}
+                listed = [name for kind in ('hardlink', 'symlink') for name in report.skips.get(kind, habackup.SkipList()).first]
+                for name, target in links.items():
+                    if name.startswith('v/'):
+                        short, original = name[2:], files[target]
+                        self.assertIn(short, members, f'{name} lost')
+                        member, content = members[short]
+                        if member.islnk():                  # a link to a file the volume holds (a copy of an earlier link too)
+                            holder, held = members[member.linkname]
+                            self.assertTrue(holder.isfile(), name)
+                            self.assertEqual(held, original, f'{name}: what it links to has the content of {target}')
+                        else:                               # a copy: the content of the file it names
+                            self.assertEqual(content, original, f'{name}: the copy has the content of {target}')
+                for name, _target in symlinks:
+                    if name.startswith('v/'):
+                        self.assertTrue(name[2:] in members or any(name[2:] in item for item in listed),
+                                        f'{name} lost without a word')
+                for name in drop:
+                    if name.startswith('v/'):
+                        self.assertNotIn(name[2:], members, f'{name} was left out by the importer')
+                self.assertEqual(out.copied, copies)
+
     def test_a_link_is_judged_as_the_restore_judges_it(self):
         cases = (('a', 'b', False), ('a/b', '../c', False), ('a/b', '../../c', True), ('a', '../c', True), ('a', '/etc/x', False),
                  ('a/b', '/../../x', True), ('a', '.', False), ('a', '..', True), ('a/b/c', '../../..', True),
