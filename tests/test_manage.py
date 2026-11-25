@@ -2031,6 +2031,8 @@ class HostToolsContract(HostFixture):
             (fine, download('Cannot initiate the connection to a.example:80 (192.0.2.1). - connect (101: Network is unreachable)'),
              manage.OFFLINE),
             (fine, download('Could not connect to a.example:80 (192.0.2.1), connection timed out'), manage.OFFLINE),
+            (fine, download('Connection timed out [IP: 192.0.2.1 80]'), manage.OFFLINE),
+            (fine, download('Cannot initiate the connection to a.example:80 (192.0.2.1).'), manage.OFFLINE),
             (fine, download('Connection failed [IP: 192.0.2.1 80]'), manage.OFFLINE),
             (fine, download('Connection reset by peer'), manage.OFFLINE),
             (fine, download('Could not connect to a.example:80 (192.0.2.1). - connect (113: No route to host)'), manage.OFFLINE),
