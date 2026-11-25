@@ -97,7 +97,7 @@ def clean(text, limit):
 
 def _redact(text):
     from .jobs import redact  # an HA key never reaches a job record, whatever text it came in (SEC: masked exactly)
-    return redact(text)
+    return redact('' if text is None else text)
 
 
 class Names:
@@ -155,9 +155,9 @@ class Issue:
             raise ValueError(f'bad issue level: {level!r}')
         self.id = issue_id
         self.level = level
-        self.text = clean(message, MAX_TEXT)
+        self.text = clean(_redact(message), MAX_TEXT)  # masked before it is cut: no part of a secret is left either
         self.database = None if database is None else str(database)
-        self.action = clean(action, MAX_ACTION) if level == 'stop' else ''
+        self.action = clean(_redact(action), MAX_ACTION) if level == 'stop' else ''
         names = items if isinstance(items, Names) else None
         items = (items,) if isinstance(items, str) else items
         values = tuple(str(item) for item in (names.first if names is not None else items))
@@ -284,10 +284,11 @@ def check_fields(app_id, issues, choices=None):
     confirm sentences) and `warnings` (the others). Sentences about one Odoo database are in the section already; only
     a line to confirm is repeated here, so an older page never offers it."""
     issues = list(issues)
-    choices = {kind: list(rows) for kind, rows in (choices or {}).items() if rows}
+    choices = {kind: list(rows or ()) for kind, rows in (choices or {}).items()}
     if 'database' in choices:
         choices['database'] = databases_ok(choices['database'], issues)
-    can = importable(issues, choices.get('database'))
+    can = importable(issues, choices.get('database'))  # an empty list: no database that could move
+    choices = {kind: rows for kind, rows in choices.items() if rows}
     to_confirm = any(issue.level == 'confirm' for issue in issues)
 
     def sentences(levels):

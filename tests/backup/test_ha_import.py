@@ -182,8 +182,14 @@ class CheckFlowTests(FlowCase):
         self.catalog = types.SimpleNamespace(get=lambda _id: None, problem_for=lambda app_id: {
             'code': 'owner-missing', 'message': f'應用 {app_id} 的擁有者帳號 odoo 不存在。'})
         row = self.run_check(ha_id, ['odoo'])['ha_check']['apps'][0]
-        self.assertEqual((row['issues'][0]['id'], row['issues'][0]['message']),
-                         ('ha.not-installed', '應用 odoo 的擁有者帳號 odoo 不存在。'), 'the catalog says why')
+        self.assertEqual((row['issues'][0]['id'], row['issues'][0]['message'], row['issues'][0]['action']),
+                         ('ha.not-installed', '應用 odoo 的擁有者帳號 odoo 不存在。', haissues.ACTIONS['owner-missing']),
+                         'the catalog says why')
+        self.catalog = types.SimpleNamespace(get=lambda _id: None, problem_for=lambda app_id: {
+            'code': 'invalid-request', 'message': f'應用設定 {app_id}.json 不是有效的 JSON，已略過。'})
+        row = self.run_check(ha_id, ['odoo'])['ha_check']['apps'][0]
+        self.assertEqual(row['issues'][0]['action'], haimport.SETTINGS_ACTION.format(name='Odoo 18'),
+                         'settings that cannot be used are to be corrected, nothing is to be installed')
 
     def test_not_deployed_and_a_failing_app_step_are_blockers(self):
         ha_id = self.upload(two_addons())
@@ -443,16 +449,56 @@ class ConvertFlowTests(FlowCase):
                 db['ok'] = False
             with self.assertRaises(BackupError) as caught:
                 self.convert(ha_id, ['odoo'], odoo_database=None)
-            self.assertEqual(caught.exception.code, 'incompatible')
-            found['odoo']['databases'][0].update(ok=True, name='客戶 a.b$c')
+            self.assertEqual((caught.exception.code, caught.exception.result['results'][0]['issues'][0]['id']),
+                             ('incompatible', 'legacy.blocker'), 'the check says why none can move')
+            with mock.patch.object(ha_odoo, 'check_blockers', lambda f: []), self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['odoo'], odoo_database=None)
+            self.assertEqual(caught.exception.message, haimport.NO_DATABASE)
+            found.update(issues=[Issue('odoo.modules', 'stop', '缺模組', database='broken')],
+                         blockers=['這台的 Odoo 設定不同。'])
+            for db in found['odoo']['databases']:
+                db['ok'] = True
+            seen.clear()
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['odoo'], odoo_database=None)
+            self.assertEqual((caught.exception.message, seen), ('這台的 Odoo 設定不同。', []),
+                             'what keeps the whole app out counts before the choice')
+            del found['blockers']
+            self.assertEqual(self.convert(ha_id, ['odoo'], odoo_database=None)['ha_import']['odoo_database'],
+                             'woowtest', 'a database one of the returned issues stops is no choice')
+            del found['issues']
+            found['odoo']['databases'][1]['ok'] = False
+            found['odoo']['databases'][0].update(name='客戶 a.b$c')
             self.assertEqual(self.convert(ha_id, ['odoo'], odoo_database=None)['ha_import']['odoo_database'],
                              '客戶 a.b$c', 'a name with other characters moves, too')
+
+    def test_a_choice_in_the_conversion_confirms_nothing(self):
+        """The check's reading for a choice only collects, the shared lines, too: what is to be confirmed is the conversion's
+        own (and the restore's) to ask for."""
+        ha_id = self.upload(two_addons())
+
+        def check(work, app_):
+            self.assertFalse(work.sink(app_).converting or work.sink(haissues.SHARED).converting)
+            work.sink(app_).confirm('odoo.modules', '缺模組', ['m'], database='woowtest')
+            work.sink(haissues.SHARED).confirm('legacy.warning', '匯入時會暫停', ['filebrowser'])
+            return odoo_found()
+
+        def convert(work, app_, database, test_mode, out_dir):
+            self.assertTrue(work.sink(app_).converting and work.sink(haissues.SHARED).converting)
+            self.assertEqual((work.sink(app_).found, work.sink(haissues.SHARED).found), ([], []))
+            return self.stub_odoo(work, app_, database, test_mode, out_dir)
+
+        with mock.patch.object(ha_odoo, 'check', check), mock.patch.object(ha_odoo, 'convert', convert):
+            result = self.convert(ha_id, ['odoo'], odoo_database=None)
+        self.assertEqual((result['ha_import']['odoo_database'], result['results'][0]['issues']), ('woowtest', []))
 
     def test_choices_name_the_database(self):
         ha_id = self.upload(two_addons())
         with mock.patch.object(ha_odoo, 'convert', self.stub_odoo):
             result = self.convert(ha_id, ['odoo'], odoo_database=None, choices={'odoo': {'database': 'prod'}})
-        self.assertEqual(result['ha_import']['odoo_database'], 'prod')
+            self.assertEqual(result['ha_import']['odoo_database'], 'prod')
+            self.convert(ha_id, ['odoo'], odoo_database='prod\u202egnp')
+        self.assertIn('（Odoo 資料庫 prod gnp）', self.reporter.logs[0], 'a name never changes how the log reads')
 
 
 class ConvertResultTests(FlowCase):
@@ -523,6 +569,25 @@ class ConvertResultTests(FlowCase):
         row = caught.exception.result['results'][0]
         self.assertEqual((convert.called, row['status'], row['code'], row['issues'][0]['id']),
                          (False, 'skipped', 'not-deployed', 'ha.not-deployed'))
+
+    @hx.needs_crypto
+    def test_a_member_the_key_does_not_open_is_that_apps_alone(self):
+        """C1: an import only starts with a key that opens one of the selected members (ha-import-start): afterwards a
+        member that does not open never ends it. A conversion of its own has nothing else to go on with."""
+        ha_id = self.upload(hx.fixture('v3_gzip.tar').read_bytes())
+        params = {'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo'], 'odoo_database': 'woowtest', 'test_mode': False,
+                  'encrypt': True, 'key_provided': True}
+        for group, ends in (({}, True), ({'group': {'id': 'g0123456789abcdef'}}, False), ({'group': {'id': 'x'}}, True)):
+            with self.subTest(group=group), self.assertRaises(BackupError) as caught:
+                flows.run_backup(self.ctx(hx.WRONG_PASSWORD), {**params, **group})
+            self.assertEqual((caught.exception.code, haissues.ends_job(caught.exception)), ('wrong-key', ends))
+            row = caught.exception.result['results'][0]
+            self.assertEqual((row['status'], row['code'], row['issues'][0]['id']), ('skipped', 'wrong-key',
+                                                                                    'failure.wrong-key'))
+        with self.assertRaises(BackupError) as caught:
+            flows.run_backup(self.ctx(), {**params, 'group': {'id': 'g0123456789abcdef'}})
+        self.assertEqual((caught.exception.code, haissues.ends_job(caught.exception)), ('key-required', True),
+                         'without a key nothing more can be read')
 
     def test_several_apps_in_one_job_stay_as_they_were(self):
         ha_id = self.upload(two_addons())
@@ -849,6 +914,52 @@ class IsolationTests(FlowCase):
             done = jobs.run_job(self.paths, record['id'], deps=self.deps)
         self.assertEqual((done['state'], done['error']['code']), ('failed', 'insufficient-space'))
         self.assertEqual([row['importable'] for row in done['result']['ha_check']['apps']], [True, False])
+
+    def talkative(self, stops, extra=0, name='n'):
+        """An Odoo check of 200 databases with as much to say as a backup can make it say: every second one has `stops`
+        reasons, every one `extra` modules."""
+        def check(work, app_):
+            databases = [{'name': f'db{i}', 'ok': i % 2 == 0, 'blockers': ['不' * 280] * stops if i % 2 else [],
+                          'warnings': [], 'custom_modules': [{'name': name * 100, 'version': '1'}] * extra}
+                         for i in range(200)]
+            return {'target_version': '18', 'odoo': {'databases': databases}}
+        return check
+
+    def recorded(self, check):
+        """The finished job's record as the page reads it."""
+        ha_id = self.upload(self.all_addons())
+        store = jobs.JobStore(self.paths)
+        record = store.create('verify', {'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo', 'n8n'],
+                                         'key_provided': False})
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'check', check))
+            stack.enter_context(mock.patch.object(ha_odoo, 'check_blockers', lambda found: []))
+            stack.enter_context(mock.patch.object(ha_n8n, 'check', lambda w, a: n8n_found()))
+            stack.enter_context(mock.patch.object(self.deps, 'sweep_temp', None))
+            jobs.run_job(self.paths, record['id'], deps=self.deps)
+        record = store.get(record['id'])  # one above jobs.MAX_RECORD_BYTES could never be read again
+        check = record['result']['ha_check']
+        self.assertLessEqual(len(jobs._json_bytes(check)), haimport.CHECK_BYTES)
+        self.assertLess(haimport.CHECK_BYTES, jobs.MAX_RECORD_BYTES - 64 * 1024)
+        self.assertEqual(record['state'], 'succeeded')
+        odoo_row, n8n_row = check['apps']
+        self.assertEqual((n8n_row['importable'], n8n_row['n8n']), (True, n8n_found()['n8n']), 'the other app is as it was')
+        return odoo_row
+
+    def test_what_a_check_found_always_fits_into_its_record(self):
+        row = self.recorded(self.talkative(1))
+        self.assertEqual((row['importable'], len(row['odoo']['databases']), len(row['choices']['database'])),
+                         (True, 200, haissues.MAX_CHOICES), 'what fits stays as it is')
+        row = self.recorded(self.talkative(1, extra=60))
+        self.assertEqual((row['importable'], 'odoo' in row, len(row['choices']['database'])),
+                         (True, False, haissues.MAX_CHOICES), 'its section goes first: what it found is still said')
+        self.assertEqual(sum(issue['level'] == 'stop' for issue in row['issues']), 100)
+        row = self.recorded(self.talkative(1, extra=60, name='\ud800'))  # written escaped: twice as large
+        self.assertEqual((row['importable'], 'odoo' in row), (True, False))
+        row = self.recorded(self.talkative(12))
+        self.assertEqual((row['importable'], row['ok'], 'odoo' in row, 'choices' in row, self.ids(row)),
+                         (False, False, False, False, ['failure.limit-exceeded']), 'then only its own stop is left')
+        self.assertEqual((row['issues'][0]['message'], row['name']), (haimport.TOO_LARGE, 'Crafted'))
 
     def test_the_outer_file_still_fails_the_job(self):
         ha_id = self.upload(self.all_addons())

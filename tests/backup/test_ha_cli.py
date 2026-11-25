@@ -370,7 +370,7 @@ class ShareKeyTests(HaCliCase):
         def check(work, app):
             with work.open(work.share_member()) as stream:
                 seen.append(len(stream.read(512)))
-            return {'target_version': '18', 'odoo': {'databases': []}}
+            return {'target_version': '18', 'odoo': {'databases': [{'name': 'prod', 'ok': True}]}}
 
         ctx = flows.FlowContext(self.paths, 'j20261118T120000Z-0123abcd', self.deps, FakeReporter())
         ctx.ha_key = hx.PASSWORD

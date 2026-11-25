@@ -56,6 +56,7 @@ ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')  # what a module's conver
 CHECK_KEY = 'import_check'
 IMPORT_CHECKS = {'emqx-readback': 'emqx'}
 CHECK_SCHEMA = 2              # ha_check.schema: issues per app (older pages read ok/blockers/warnings)
+CHECK_BYTES = 900 * 1024      # of the 1 MiB a job record takes (jobs.MAX_RECORD_BYTES); a larger one is never read again
 REGISTRY = 'ha-imports.json'
 REGISTRY_SCHEMA = 2           # what is written
 REGISTRY_READS = (1, 2)       # what is understood (a row of an earlier schema gets the empty values)
@@ -91,6 +92,7 @@ NOTE_PREFIX = '由 HA 備份轉換：'
 NOT_INSTALLED = '這台還沒有「{name}」的應用設定。'
 INSTALL_ACTION = '請先用它的安裝套件在這台安裝並啟動 {name}，再到「應用設定」加入它，然後重新檢查。'
 INSTALL_HINT = NOT_INSTALLED + INSTALL_ACTION
+SETTINGS_ACTION = '請到「應用設定」修正或重新加入 {name} 的設定，再重新檢查。'  # it has settings that cannot be used
 DEPLOY_ACTION = '請先用它的安裝套件完成安裝並啟動它，再重新檢查。'
 ADDON_MISSING = '這份 HA 備份沒有這個附加元件。'
 ADDON_MISSING_ACTION = '請在 HA 建立備份時勾選這個附加元件，再上傳新的備份檔。'
@@ -101,10 +103,13 @@ ADDON_OTHER = '這個附加元件不是 WOOWTECH 的版本（addon.json 不符�
 ADDON_OTHER_ACTION = '請確認 HA 上裝的是 WOOWTECH 商店的附加元件，再重新備份；或不要匯入這個應用。'
 PROBLEM_ACTION = '請先讓它恢復正常，再重新檢查。'
 NOT_CHECKED = '檢查作業在檢查這個應用之前就停止了，這個應用還沒有結果。'
+NOT_CHECKED_ACTION = '請先排除讓檢查停止的原因，再重新檢查。'
+TOO_LARGE = '這個應用的檢查結果太大，作業紀錄放不下，無法匯入這個應用；這台的這個應用沒有任何變更。'
 KEY_CREATED = '這台還沒有加密金鑰，匯入時會自動建立，用來加密匯入前備份和轉換出來的備份；完成後請到「加密金鑰」下載並保存。'
 NO_KEY_CREATED = '無法自動建立這台的加密金鑰，沒有開始匯入，這台沒有任何變更。'
 UNEXPECTED_JOB = '作業發生未預期的內部錯誤，請查看系統日誌。'
 CHOOSE_DATABASE = '請選擇要匯入的 Odoo 資料庫。'
+NO_DATABASE = 'HA 的 Odoo 沒有可以搬的資料庫。'
 
 ISSUES = {
     'ha.addon-missing': 'stop',      # HA-03, X-CLI-03
@@ -331,15 +336,17 @@ class Work:
 
     @contextlib.contextmanager
     def collecting(self, app):
-        """A collecting sink for the block (a conversion that runs the check's reading for a choice)."""
-        kept = self._sinks.pop(app.id, None)
-        self._sinks[app.id] = haissues.Sink(app.id, log=self.log)
+        """Collecting sinks for the block (a conversion that runs the check's reading for a choice), the shared one, too;
+        what they find is not the conversion's."""
+        names = (app.id, haissues.SHARED)
+        kept = {name: self._sinks.pop(name) for name in names if name in self._sinks}
+        self._sinks.update({name: haissues.Sink(name, log=self.log) for name in names})
         try:
             yield self._sinks[app.id]
         finally:
-            self._sinks.pop(app.id, None)
-            if kept is not None:
-                self._sinks[app.id] = kept
+            for name in names:
+                self._sinks.pop(name, None)
+            self._sinks.update(kept)
 
     def choice(self, app_id, kind):
         return (getattr(self, 'choices', None) or {}).get(app_id, {}).get(kind)
@@ -593,7 +600,10 @@ def not_installed(catalog, app_id):
     problem = catalog.problem_for(app_id) if hasattr(catalog, 'problem_for') else None
     name = _app_label(app_id)
     if problem and problem.get('message'):
-        return Issue('ha.not-installed', 'stop', problem['message'], action=INSTALL_ACTION.format(name=name))
+        action = SETTINGS_ACTION.format(name=name)
+        if problem.get('code') == 'owner-missing':
+            action = haissues.ACTIONS['owner-missing']
+        return Issue('ha.not-installed', 'stop', problem['message'], action=action)
     return Issue('ha.not-installed', 'stop', NOT_INSTALLED.format(name=name), action=INSTALL_ACTION.format(name=name))
 
 
@@ -665,9 +675,16 @@ def key_problems(ha, keys, wanted):
     return problems
 
 
-def _require_key(work, members):
-    """A conversion needs every selected member: key-required / wrong-key (or what else keeps one shut)."""
-    problems = key_problems(work.ha, work.keys, needed_members(work.ha.layout, members))
+def _require_key(work, members, *, grouped=False):
+    """A conversion needs every selected member: key-required / wrong-key (or what else keeps one shut). `grouped`: one
+    app of an import (ha-import-start opened at least one of the selected members with this key before it began): a
+    member the key does not open is this app's alone and never ends the import (DESIGN C1)."""
+    try:
+        problems = key_problems(work.ha, work.keys, needed_members(work.ha.layout, members))
+    except BackupError as error:
+        if grouped and error.code == 'wrong-key':
+            error.job_wide = False
+        raise
     if problems:
         raise next(iter(problems.values()))
 
@@ -758,8 +775,28 @@ def _check_view(work, results, shared):
         if line not in seen:
             seen.add(line)
             lines.append(issue)
-    return {'schema': CHECK_SCHEMA, 'ha_backup_id': work.record['id'],
-            'shared': haissues.views(haissues.SHARED, lines), 'apps': results}
+    return _fit_record(work, {'schema': CHECK_SCHEMA, 'ha_backup_id': work.record['id'],
+                              'shared': haissues.views(haissues.SHARED, lines), 'apps': results})
+
+
+def _fit_record(work, view):
+    """The result as one job record can hold it, whatever a backup makes the checks say (a larger record could never be
+    read again, and retention would keep everything because of it): while it is too large, the app with the most to
+    say loses its own section (its issues and choices stay), then it becomes a stop of its own. The others stay."""
+    from .jobs import _json_bytes
+    for _step in range(2 * len(view['apps'])):
+        if len(_json_bytes(view)) <= CHECK_BYTES:
+            break
+        row = max(view['apps'], key=lambda item: len(_json_bytes(item)))
+        name = row['name'] or row['app_id']
+        if row.pop(row['app_id'], None) is not None:
+            work.log(f'「{name}」的檢查結果太大，只保留結論')
+            continue
+        row.pop('choices', None)
+        row.update(haissues.check_fields(row['app_id'], [Issue('failure.limit-exceeded', 'stop', TOO_LARGE,
+                                                               action=haissues.ACTIONS['limit-exceeded'])]))
+        work.log(f'「{name}」不能匯入：{TOO_LARGE}')
+    return view
 
 
 def _check_app(work, app_id, member, problem, index, count):
@@ -815,6 +852,11 @@ def _examine(work, app_id, app, member, problem, result):
     found = module.check(work, app)
     result['target_version'] = found.get('target_version') or ''
     result[app_id] = found[app_id]  # the app's own section (CONTRACT section 7 HaCheck)
+    return _collect(app_id, module, found, sink)
+
+
+def _collect(app_id, module, found, sink):
+    """What a module's check returned, into the app's sink (what it did not put there itself); returns its choices."""
     sink.extend(found.get('issues') or ())
     derived = getattr(module, 'check_blockers', None)
     blockers = list(found.get('blockers') or []) + (list(derived(found)) if derived is not None else [])
@@ -844,7 +886,7 @@ def _not_checked(work, app_id, member, error):
     issues = []
     if isinstance(error, BackupError):
         issues = haissues.from_error(error)
-    issues = issues or [Issue('ha.not-checked', 'stop', NOT_CHECKED)]
+    issues = issues or [Issue('ha.not-checked', 'stop', NOT_CHECKED, action=NOT_CHECKED_ACTION)]
     result.update(haissues.check_fields(app_id, issues))
     return result
 
@@ -1015,18 +1057,19 @@ def _only_database(work, app, module):
     kept = os.listdir(work.staging)  # what the conversion wrote so far
     try:
         with work.collecting(app) as sink:
-            found = module.check(work, app)
-            rows = haissues.databases_ok(_module_choices(app.id, found, sink).get('database'), sink.found)
-            derived = getattr(module, 'check_blockers', None)
-            blockers = derived(found) if derived is not None else []
+            choices = _collect(app.id, module, module.check(work, app), sink)
+            rows = haissues.databases_ok(choices.get('database'), sink.found)
+            stop = next((issue for issue in sink.found if issue.level == 'stop' and issue.database is None), None)
     finally:
         work.reset_app(app, keep=kept)
+    if stop is not None:
+        raise haissues.stopped(stop)  # what keeps the whole app out, whichever database it is
     movable = [row['value'] for row in rows if row['ok']]
     if len(movable) == 1:
         work.log(f'HA 的 Odoo 只有一個能搬的資料庫，自動選擇：{haissues.clean(movable[0], 63)}')
         return movable[0]
     if not movable:
-        raise BackupError('incompatible', (blockers or ['HA 的 Odoo 沒有可以搬的資料庫。'])[0])
+        raise BackupError('incompatible', NO_DATABASE)
     raise BackupError('invalid-request', CHOOSE_DATABASE, field='odoo_database')
 
 
@@ -1054,11 +1097,12 @@ def _convert_apps(ctx, params, app_ids, sinks):
     try:
         work.record = _open(work, ctx, params)
         members = _members(work, app_ids)
-        _require_key(work, members)
+        _require_key(work, members, grouped=_group_id(params) is not None)
         device_key = device_key_for(ctx) if encrypt else None
         record = work.record
         ctx.log(f'轉換 HA 備份「{record["name"]}」：{"、".join(app_ids)}'
-                + (f'（Odoo 資料庫 {database}）' if database else '') + ('，測試匯入' if test_mode else ''))
+                + (f'（Odoo 資料庫 {haissues.clean(database, 63)}）' if database else '')
+                + ('，測試匯入' if test_mode else ''))
         if not encrypt:
             ctx.log('這份備份不加密：應用機密（資料庫密碼、API 金鑰、存取權杖）會以明文存放在備份檔中')
         for app in apps:

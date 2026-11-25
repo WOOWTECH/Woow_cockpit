@@ -69,6 +69,25 @@ class ShapeTests(unittest.TestCase):
             fields = haissues.check_fields(APP, [Issue('emqx.rules', 'stop', f'打不開 {key}')])
         self.assertNotIn(key, json.dumps([view, fields], ensure_ascii=False))
         self.assertNotIn(key, repr(Issue('emqx.rules', 'stop', key, [key])))
+        early = Issue('emqx.rules', 'stop', f'打不開 {key}', [f'x{key}'], action=f'用 {key}')
+        with jobs.masked(key):
+            self.assertNotIn(key, json.dumps(early.view(APP), ensure_ascii=False), 'made before the key was known')
+
+    def test_no_part_of_a_key_is_left_where_a_text_is_cut(self):
+        key = 'Opaque Old Password'
+        with jobs.masked(key):
+            for room in range(1, len(key)):  # the cut falls inside the key
+                issue = Issue('emqx.rules', 'stop', 'x' * (haissues.MAX_MESSAGE - 1 - room) + key,
+                              ['y' * (haissues.MAX_ITEM - room) + key], action='z' * (haissues.MAX_ACTION - room) + key)
+                text = json.dumps([issue.view(APP), issue.message, haissues.check_fields(APP, [issue])], ensure_ascii=False)
+                self.assertNotIn('Opa'[:room], text, room)
+            long = Issue('emqx.rules', 'stop', 'x' * (haissues.MAX_TEXT - 5) + key)
+            self.assertNotIn('Opaq', json.dumps(haissues.check_fields(APP, [long]), ensure_ascii=False))
+
+    def test_a_text_that_is_not_text(self):
+        self.assertEqual(Issue('emqx.rules', 'stop', None, action=None).view(APP),
+                         {'id': 'emqx.rules', 'level': 'stop', 'message': '', 'items': [], 'more': 0, 'action': ''})
+        self.assertEqual(Issue('emqx.rules', 'stop', 5).message, '5')
 
     def test_legacy_sentences_become_stops_and_notices(self):
         found = haissues.from_legacy(['不能搬。'], ['提醒。'], database='prod')
@@ -234,6 +253,9 @@ class CheckFieldTests(unittest.TestCase):
                          'a stop of one database is in the section already')
         fields = haissues.check_fields('odoo', issues, {'database': [rows[1]]})
         self.assertFalse(fields['importable'], 'no database can move')
+        fields = haissues.check_fields('odoo', [], {'database': [], 'addon': None})
+        self.assertEqual((fields['importable'], fields['ok'], 'choices' in fields), (False, False, False),
+                         'there is none at all')
         two = haissues.check_fields('odoo', [], {'database': rows[:2]})['choices']['database']
         self.assertFalse(any('default' in row for row in two), 'two can move: the customer chooses')
         line = Issue('odoo.modules', 'confirm', '缺模組', ['m'], database='prod')

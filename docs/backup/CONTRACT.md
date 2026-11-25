@@ -1105,7 +1105,8 @@ Shapes:
   single app's, each line once), `apps[{app_id, slug, name (the
   add-on's name), arch("amd64"|"aarch64"|"unknown"; only shown, HA-06),
   version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`),
-  importable(bool: no `stop` for the app and, with databases to choose from, at least one that can move), issues[HaIssue],
+  importable(bool: no `stop` for the app and, for an app whose databases are to choose from, at least one that can move),
+  issues[HaIssue],
   choices?{addon?[{value, label}] (the same add-on from two stores: a `stop` until one is chosen), database?[{value, label,
   ok, default?}] (Odoo; `default`: the only one that can move), node?[{value, label, default?}] (EMQX)}, ok(bool: importable
   and nothing to confirm; for older pages, like `blockers` = stop and confirm sentences and `warnings` = the others),
@@ -1141,7 +1142,10 @@ Shapes:
   18), target_pg_major, users, teams, keys (virtual keys without the UI's session keys), models, credentials,
   organizations, spend_logs, chatgpt_accounts, salt_moves(true), key_users[names of this device's other catalog apps
   whose configuration uses LiteLLM today]}}]`
-  (an app the check could not finish has no section of its own; batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
+  (an app the check could not finish has no section of its own, nor has one that would make the result larger than a job record
+  can hold (`haimport.CHECK_BYTES`, 900 KiB; a record above 1 MiB could never be read again): of the app with the most to say the
+  section goes first, its `issues` and `choices` stay, and with still too much it is only a `stop` `failure.limit-exceeded`;
+  batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
   is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (app
@@ -1660,7 +1664,9 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   watchdog's verdict (below the floor), the engine's own disk running full (`insufficient-space`), another job (`busy`), a
   cancel and a termination (for these two the result is on the exception, `error.result`; `jobs.run_job` records it only for
   a `BackupError` so far), and the outer file itself (a damaged `backup.json`, a file that changed; nothing was found then).
-  The conversion fails with the first stop of the chosen database or app instead.
+  The conversion fails with the first stop of the chosen database or app instead; one that belongs to an import (`params.group`)
+  and whose member the key does not open ends nothing else (`wrong-key`, not `job_wide`): `ha-import-start` has opened at least
+  one of the selected members with that key.
 * **Confirmations** (2026-11-25): a conversion finds its lines again (`Work.sink`); one whose key is not in
   `params.acknowledged[app]` -- never confirmed, or with other names than confirmed -- stops that app with
   `confirmation-required` before anything of it is changed; what was confirmed is kept in the row (`confirmed`: ids and up to
