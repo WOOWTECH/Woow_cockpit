@@ -6991,7 +6991,7 @@ try {
       assert.equal(await page.locator('[data-focus="pf-next"]').isDisabled(), false, 'one app failing never stops the page while another can go');
       await page.locator('[data-focus="pf-next"]').click();
       await page.locator('#restore-confirm-list').waitFor();
-      assert.equal(await page.locator('#restore-confirm-list li').count(), 1);
+      assert.equal(await page.locator('#restore-confirm-list > li').count(), 1);
       // The first start is refused: what has to be confirmed is not what was shown. The page checks again and says so.
       await page.evaluate(() => window.__fixture.failures.push({ command: 'restore-start', code: 'confirmation-required', message: '還原 Odoo 18 前還有事情要確認。',
         details: { apps: { odoo: [] } } }));
