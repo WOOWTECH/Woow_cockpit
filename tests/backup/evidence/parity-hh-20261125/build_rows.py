@@ -16,8 +16,18 @@ row('H-01', 'done', {'hermes.links-copied': 'auto', 'files.skipped': 'confirm'},
     [H + 'LinkTests.test_a_hard_link_to_a_runtime_file_is_copied_as_a_file',
      H + 'LinkTests.test_a_hard_link_to_a_file_that_may_never_be_copied_is_left_out_and_listed',
      H + 'LinkTests.test_one_more_hard_link_that_stays_out_is_another_line_to_confirm',
-     H + 'LinkTests.test_the_check_and_the_conversion_judge_a_link_the_same_way'],
-    'copy = hacommon.TreeTar.hardlink(entry=...); a link to something the reader may never copy (a browser profile) is left out and listed (files.skipped)')
+     H + 'LinkTests.test_the_check_and_the_conversion_judge_a_link_the_same_way',
+     H + 'AliasTests.test_a_link_to_a_runtime_file_that_is_a_wal_index_is_copied',
+     H + 'AliasTests.test_a_link_to_an_env_too_large_to_filter_stays_out_with_it',
+     H + 'AliasTests.test_a_link_to_an_env_that_is_filtered_is_a_link_to_the_filtered_file',
+     H + 'AliasTests.test_a_link_to_a_database_moves_with_the_database',
+     H + 'AliasTests.test_a_link_to_a_file_below_a_folder_where_a_file_must_be_stays_out',
+     H + 'AliasTests.test_a_chain_of_links_to_a_file_that_stays_out_stays_out',
+     H + 'AliasTests.test_a_chain_of_links_is_judged_by_what_its_first_link_became',
+     H + 'AliasTests.test_a_link_to_a_name_outside_the_tree_is_left_out_and_listed',
+     H + 'AliasTests.test_settling_twice_lists_a_link_once',
+     H + 'AliasTests.test_any_shape_of_links_never_carries_what_stays_out'],
+    'A hard link follows its file, never more: in the tree = a link; runtime file or wal-index = copied (the only case entry= goes to the tar); known database = follows it (settle_links, same in check and conversion); any other file not in the tree (.env above MAX_ENV, below a folder where a file must be) = left out with it, listed; a chain of links = left out, listed. Code a11b825, 15761e8d')
 row('H-03', 'part', {'hermes.extras-carried': 'auto', 'hermes.layout-unsupported': 'stop'},
     [H + 'LayoutTests.test_a_cold_entry_and_a_folder_are_carried_as_they_are',
      H + 'LayoutTests.test_an_entry_that_dumps_a_whole_instance_stops_only_hermes',
@@ -32,10 +42,14 @@ row('H-02', 'done', {'hermes.entries-skipped': 'confirm', 'hermes.databases-skip
      H + 'EntryTests.test_one_more_entry_is_another_line_to_confirm',
      H + 'DatabaseTests.test_a_secondary_database_whose_wal_is_a_link_stays_out_whole',
      H + 'DatabaseTests.test_a_main_database_that_stands_where_a_link_is_stops_only_hermes',
-     H + 'EntryTests.test_a_folder_where_a_file_must_be_goes_with_what_lies_below_it'])
+     H + 'EntryTests.test_a_folder_where_a_file_must_be_goes_with_what_lies_below_it',
+     H + 'AliasTests.test_a_link_to_a_database_whose_group_has_a_member_that_is_no_file_stays_out',
+     H + 'AliasTests.test_a_link_to_a_file_below_a_folder_where_a_file_must_be_stays_out',
+     H + 'AliasTests.test_a_chain_that_ends_in_a_special_name_is_left_out_like_a_link_there'])
 row('H-10', 'done', {'hermes.no-state-db': 'stop'}, [H + 'DatabaseTests.test_a_backup_without_state_db_stops_only_hermes'])
 row('H-11', 'done', {'hermes.databases-skipped': 'confirm', 'hermes.state-db-unusable': 'stop', 'hermes.db-unchecked': 'notice'},
     [H + 'DatabaseTests.test_a_damaged_secondary_database_is_left_out_with_its_wal',
+     H + 'AliasTests.test_a_link_to_a_damaged_secondary_database_stays_out_with_it',
      H + 'DatabaseTests.test_a_damaged_main_database_stops_only_hermes',
      H + 'DatabaseTests.test_an_index_structure_the_sandbox_does_not_know_moves_unchecked',
      H + 'DatabaseTests.test_the_other_parts_of_a_damaged_group_do_not_reach_the_sandbox'])
@@ -48,8 +62,11 @@ row('H-15', 'done', {}, [H + 'EntryTests.test_an_env_that_is_a_link_is_no_refusa
 row('H-18', 'done', {}, [H + 'SizeTests.test_a_version_record_over_one_kib_is_read_at_its_start_only'])
 row('H-19', 'done', {},
     [H + 'SizeTests.test_an_env_over_the_old_limit_moves_filtered', H + 'SizeTests.test_an_env_too_large_to_filter_is_left_out_and_listed',
-     H + 'SizeTests.test_a_hostile_env_registers_a_bounded_number_of_secrets', H + 'CheckTests.test_a_backup_that_does_not_fit_stops_only_hermes'],
-    'the limit is 8 MiB now (filtered in memory); a larger .env is left out and listed (files.skipped), never moved unfiltered')
+     H + 'SizeTests.test_a_hostile_env_registers_a_bounded_number_of_secrets', H + 'CheckTests.test_a_backup_that_does_not_fit_stops_the_whole_job',
+     H + 'AliasTests.test_a_link_to_an_env_too_large_to_filter_stays_out_with_it',
+     H + 'AliasTests.test_a_link_to_an_env_that_is_filtered_is_a_link_to_the_filtered_file',
+     H + 'AliasTests.test_a_chain_of_links_to_a_file_that_stays_out_stays_out'],
+    'the limit is 8 MiB (filtered in memory); a larger .env is left out and listed and its content is moved under no name: not as .env, not under a hard link, not through a chain of links (AliasTests); a link to a filtered .env is a link to the filtered file. The free space is the only size limit: it stops the whole JOB, not one app')
 row('H-20', 'done', {'hermes.text-unread': 'notice'},
     [H + 'SizeTests.test_a_settings_file_and_a_job_list_over_the_old_limit_move_and_are_read',
      H + 'SizeTests.test_a_text_file_larger_than_what_is_read_is_copied_unread'])
@@ -105,8 +122,8 @@ row('HS-34', 'done', {'headscale.dns-path-conflict': 'confirm'},
      S + 'IdentityKeyTests.test_the_confirmation_of_another_line_is_no_confirmation_of_this_one'])
 row('HS-02', 'done', {}, [S + 'DatabaseTests.test_a_database_larger_than_the_old_limit_is_no_refusal',
                           S + 'DatabaseTests.test_this_devices_database_larger_than_the_old_limit_is_no_refusal',
-                          S + 'DatabaseTests.test_a_backup_that_does_not_fit_stops_only_headscale'],
-    'no size limit: the job watchdog watches the free space; tested with a 5 GiB entry that only claims its size')
+                          S + 'DatabaseTests.test_a_backup_that_does_not_fit_stops_the_whole_job'],
+    'no size limit: the job watchdog watches the free space and a backup that does not fit stops the whole JOB (a disk is shared; no app is imported); tested with a 5 GiB entry that only claims its size')
 row('HS-08', 'done', {}, [S + 'LayoutTests.test_a_path_with_spaces_or_other_letters_is_no_error',
                           S + 'LayoutTests.test_a_path_that_leaves_the_data_volume_still_stops_only_headscale'])
 row('HS-10', 'done', {'version.addon-unknown': 'notice'}, [S + 'VersionTests.test_an_addon_version_the_table_does_not_know_is_a_notice_and_the_data_moves'])

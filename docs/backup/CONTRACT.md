@@ -2434,9 +2434,13 @@ PostgreSQL 15).
    Quadlet's `HERMES_UID`/`HERMES_GID` (10000 when unset; when they are no numbers: the live folder's owner,
    `hermes.owner-from-folder`), permission bits without setuid/setgid, the top folder as the live one; symlinks as link entries
    (relative ones staying in the tree; absolute ones only into `/opt/data`, `/opt/hermes`, `/usr`, clean); hard links as hard links
-   to an earlier file of the tree written to the tar -- one to a file that does not move (a runtime file) is copied as a file
-   (`hermes.links-copied`, CM-11); one the reader may never copy (a browser profile) is left out and listed (`files.skipped`, one
-   confirm line, with the entries the reader left out); left out: `gateway.pid`, `gateway.lock`, `gateway_state.json`,
+   to an earlier file of the tree written to the tar. A hard link follows the file it names, never more: one to a runtime file or
+   a wal-index (a file that does not move only for being runtime state) is copied as a file (`hermes.links-copied`, CM-11); one
+   to a known database moves with it when the database stays and stays out, listed, when the database stays out; one to any other
+   file that is not in the tree (an `.env` above 8 MiB, what lies below a folder where a file must be) stays out with it and is
+   listed, so what such a file holds is in the tree under no name; a chain of links, which the reader follows to the file at its
+   end, is left out and listed; one the reader may never copy (a browser profile) is left out and listed by the reader
+   (`files.skipped`, one confirm line, with the entries the reader left out). Left out: `gateway.pid`, `gateway.lock`, `gateway_state.json`,
    `processes.json`, `cron.pid`, `.backup.lock`, `.woow-image-version` (only its first KiB is read), `.woow-dotenv`, every `-shm`,
    `browser-profile(s)/`, `browser_profiles/`. HA's `.env` (filtered in memory up to 8 MiB; a larger one is left out and listed)
    loses the lines of `API_SERVER_KEY`, `WEBHOOK_SECRET`, `HERMES_DASHBOARD_BASIC_AUTH_*`, `HERMES_DASHBOARD_PUBLIC_URL`,
