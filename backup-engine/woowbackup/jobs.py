@@ -1416,7 +1416,9 @@ def cancel_job(paths, job_id, *, after_this=False, wait_seconds=3.0, sleep=time.
     cancelled (also when `job_id` names a job of the import that is over already, a moment ago), and the import stops with
     it. `after_this` instead lets the app the import is working on finish -- its restore still follows its conversion --
     and stops the import after it (a side file named after the group; accepted also while the job cannot be cancelled any
-    more); the answer then has `after_this: true`. A job that belongs to no import refuses `after_this`.
+    more); the answer then has `after_this: true`. A job that belongs to no import refuses `after_this`. The live job
+    is looked up again when it finished while this call waited for its record lock: the chain writes its successor
+    before it finishes a job, so a request is never lost between two jobs.
     """
     from . import hachain
     store = JobStore(paths)
@@ -1425,24 +1427,32 @@ def cancel_job(paths, job_id, *, after_this=False, wait_seconds=3.0, sleep=time.
         group = hachain.group_of(record.get('params'))
         if after_this and group is None:
             raise BackupError('invalid-request', '只有匯入作業可以要求「做完這個應用就停止」。', field='after_this')
-        if group is not None:
-            member = hachain.active_member(store, group['id'])
-            if member is None:
-                return {'state': record.get('state')}  # the import is over: nothing to cancel or stop
-            job_id = member['id']
-            if after_this:
-                store.request_stop(group['id'])
-                store.append_log(job_id, hachain.STOP_REQUESTED_LOG)
-                return {'state': member.get('state'), 'after_this': True}
-        with store.locked(job_id):
-            record = store.get(job_id)
-            if record.get('state') in TERMINAL:
-                return {'state': record['state']}
-            if not record.get('cancellable'):
-                raise BackupError('not-cancellable', '作業已進入不可中斷的階段，將繼續執行到完成或自動回復。',
-                                  job_id=job_id)
-            store.request_cancel(job_id)
-        store.append_log(job_id, '已收到取消要求，將在安全的檢查點停止')
+        target = job_id
+        for _attempt in range(2 * hachain.MAX_APPS + 2):
+            if group is not None:
+                member = hachain.active_member(store, group['id'])
+                if member is None:
+                    return {'state': record.get('state')}  # the import is over: nothing to cancel or stop
+                target = member['id']
+            with store.locked(target):
+                record = store.get(target)
+                if record.get('state') in TERMINAL:
+                    if group is None:
+                        return {'state': record['state']}
+                    continue  # the import's live job finished meanwhile: its successor is the one to ask
+                if after_this:
+                    store.request_stop(group['id'])
+                    store.append_log(target, hachain.STOP_REQUESTED_LOG)
+                    return {'state': record.get('state'), 'after_this': True}
+                if not record.get('cancellable'):
+                    raise BackupError('not-cancellable', '作業已進入不可中斷的階段，將繼續執行到完成或自動回復。',
+                                      job_id=target)
+                store.request_cancel(target)
+            break
+        else:
+            return {'state': record.get('state')}
+        store.append_log(target, '已收到取消要求，將在安全的檢查點停止')
+    job_id = target
     deadline = clock() + wait_seconds
     while clock() < deadline:
         record = store.get(job_id)
