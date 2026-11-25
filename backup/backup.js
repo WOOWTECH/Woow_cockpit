@@ -5195,7 +5195,7 @@
     const loaded = Array.isArray(state.backups);
     const busy = Boolean(activeJob());
     return h("section", { class: "ha-kept", "aria-labelledby": `ha-kept-title-${scope}`, dataset: { section: "kept" } },
-      h("h4", { id: `ha-kept-title-${scope}`, class: "subheading", text: "保留的複本" }),
+      h("h4", { id: `ha-kept-title-${scope}`, class: "subheading", tabIndex: -1, dataset: { focus: `kept-title-${scope}` }, text: "保留的複本" }),
       h("p", { class: "muted", text: "匯入前，這台的資料庫服務裡有這次沒有搬走的其他資料，所以系統先把整個資料庫服務存成完整複本。複本不會自動刪除；"
         + "確定用不到時可以下載保存，再刪除它。刪除後，複本裡的資料就沒有了。" }),
       h("ul", { class: "ha-group-list ha-kept-list", "aria-label": "保留的複本" }, entries.map(item => {
@@ -5214,7 +5214,7 @@
             h("ul", { class: "bullet-list", "aria-label": "沒有放回的資料庫" }, item.notPutBack.map(row => h("li", { text: row.reason ? `${row.name}：${row.reason}` : row.name })))) : null,
           item.notes.length ? h("ul", { class: "bullet-list", "aria-label": "複本的說明" }, item.notes.map(line => h("li", { text: line }))) : null,
           backup ? h("div", { class: "button-group" }, downloadControl(backup, true),
-            button("刪除複本…", () => deleteBackup(backup), { small: true, icon: "delete-outline", danger: true, disabled: busy, focus: `kept-delete-${backup.id}`,
+            button("刪除複本…", () => deleteBackup(backup, { focusAfter: `kept-title-${scope}` }), { small: true, icon: "delete-outline", danger: true, disabled: busy, focus: `kept-delete-${backup.id}`,
               label: `刪除保留的複本 ${backup.id}`, title: busy ? "有作業進行中，請等它完成後再刪除。" : undefined }))
             : h("p", { class: "secondary", text: loaded ? "這份複本已經刪除。" : "正在載入備份列表…" }));
       })));
@@ -8049,7 +8049,8 @@
     start(null).catch(error => { state.actionError = error; render(); });
   }
 
-  function deleteBackup(backup) {
+  // `focusAfter`: the data-focus key that gets the focus once the backup is deleted (the delete button is gone by then).
+  function deleteBackup(backup, { focusAfter = null } = {}) {
     const warnings = [];
     const kept = isKept(backup);
     if (kept) warnings.push(h("p", { class: "notice-inline", text: KEPT_DELETE_WARNING }));
@@ -8063,6 +8064,7 @@
       confirmLabel: kept ? "刪除複本" : "刪除備份", danger: true,
       action: async () => {
         await call("delete", { backup_id: backup.id });
+        if (focusAfter) returnFocusTo(document.querySelector(`[data-focus="${CSS.escape(focusAfter)}"]`));
         if (state.backups) state.backups = state.backups.filter(item => item.id !== backup.id);
         if (state.detail?.id === backup.id) state.detail = null;
         announce(`已刪除 ${backupTitle(backup)}。`);

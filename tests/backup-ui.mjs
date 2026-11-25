@@ -7252,6 +7252,7 @@ try {
       assert.deepEqual((await calls(page, 'delete')).map(requestOf), [{ backup_id: KEPT_ID }]);
       assert.match(await copy.textContent(), /這份複本已經刪除。/);
       assert.equal(await copy.locator('button').count(), 0, 'nothing left to press on a deleted copy');
+      await page.waitForFunction(() => document.activeElement?.dataset?.focus === 'kept-title-import');
       await page.waitForFunction(() => !document.querySelector('.ha-reminders')?.textContent.includes('完整複本（'));
     });
 
