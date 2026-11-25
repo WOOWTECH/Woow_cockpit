@@ -5019,16 +5019,17 @@
       h("p", { class: "secondary", text: "這台的這個應用沒有任何變更。" })))]);
   }
 
-  // What the customer can do next about one app: confirm again (the names changed since the check), or restore the backup that
-  // was converted (the import stopped before it, or its restore did not succeed).
+  // What the customer can do next about one app: check and confirm it again (its lines changed since the check and nothing was
+  // converted), or restore the backup that was converted (the import stopped before it, its restore did not succeed, or the
+  // restore check has lines the customer did not see: the restore steps show and confirm them).
   function haGroupActions(info, result, { reconfirm }) {
     const buttons = [];
-    if (reconfirm && info.haId) {
+    if (reconfirm && info.haId && !result.backup_id) {
       buttons.push(button("重新檢查並確認這個應用", () => haReimport(info, result.app_id), { small: true, focus: `group-recheck-${result.app_id}` }));
     }
-    if (["converted", "failed", "rolled-back"].includes(result.status) && result.backup_id && info.kind === "ha-import") {
-      buttons.push(button(result.status === "converted" ? "還原到這台…" : "重新還原這份備份…", () => haRestoreOf(info, result), {
-        small: true, icon: "backup-restore", focus: `group-restore-${result.app_id}` }));
+    if (result.backup_id && info.kind === "ha-import" && ["converted", "failed", "rolled-back", "skipped"].includes(result.status)) {
+      const label = result.status === "converted" ? "還原到這台…" : result.status === "skipped" ? "到還原步驟確認並匯入…" : "重新還原這份備份…";
+      buttons.push(button(label, () => haRestoreOf(info, result), { small: true, icon: "backup-restore", focus: `group-restore-${result.app_id}` }));
     }
     return buttons.length ? h("div", { class: "button-group" }, buttons) : null;
   }
@@ -5106,6 +5107,7 @@
       h("p", { class: "muted", text: wizard.thenRestore === false
         ? "一個應用接著一個應用轉換成這台的備份；轉換不會變更這台的應用，備份會留在備份列表。"
         : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查。每個應用只停自己的時間；哪個失敗，只退回它自己。" }),
+      wizard.notice ? infoNotice(wizard.notice) : null,
       wizard.keyCreated ? haKeyCreatedNotice() : null,
       haGroupRows(view, { actions: false, excluded: haExcludedRows(wizard) }),
       wizard.jobId ? haJobBlock(wizard) : null,

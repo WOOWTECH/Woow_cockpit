@@ -6805,6 +6805,7 @@ try {
       await page.locator('#ha-ack').check();
       await v2Import(page).click();
       await page.locator('[data-focus="ha-stop-after"]').click();
+      await page.locator('.wizard-card .notice-info').filter({ hasText: '已要求做完這個應用就停止；後面的應用不會開始。' }).waitFor();
       await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
       const [cancel] = (await calls(page, 'job-cancel')).map(requestOf);
       assert.equal(cancel.after_this, true);
