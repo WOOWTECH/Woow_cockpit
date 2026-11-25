@@ -149,6 +149,8 @@ class FakeOwner:
         self.after = {'woowbk-demo-db.service': ['woowbk-demo-network.service', 'basic.target'],
                       'woowbk-demo-app.service': ['woowbk-demo-db.service', 'woowbk-demo-network.service']}
         self.fail_units = set()     # units whose start fails (also inside a multi-unit start)
+        self.oneshots = set()       # units that are `Type=oneshot` (inactive after they did their work, on purpose)
+        self.isready_failures = 0   # this many `pg_isready` calls fail first (a database still recovering)
         # Requires= and BindsTo= of each unit (Quadlet does not add After= for them: review L7)
         self.requires = {'woowbk-demo-app.service': ['woowbk-demo-db.service']}
         self.binds = {}
@@ -263,7 +265,8 @@ class FakeOwner:
             for unit in args[args.index('--') + 1:]:
                 load = 'masked' if unit in self.masked else 'loaded'
                 if unit in self.units:
-                    blocks.append(f'Id={unit}\nLoadState={load}\nActiveState={self.units[unit]}\nSubState=x')
+                    kind = '\nType=oneshot' if unit in self.oneshots else ''
+                    blocks.append(f'Id={unit}\nLoadState={load}\nActiveState={self.units[unit]}\nSubState=x{kind}')
                 else:
                     blocks.append(f'Id={unit}\nLoadState=not-found\nActiveState=inactive\nSubState=dead')
             return podman.Result(0, ('\n\n'.join(blocks) + '\n').encode(), b'')
@@ -352,6 +355,9 @@ class FakeOwner:
                 self.db['data'] = bytes(data)
                 return ok
             if tool[0] == 'pg_isready':
+                if self.isready_failures:
+                    self.isready_failures -= 1
+                    return podman.Result(2, b'', b'no response')
                 return ok
             if tool[0] == 'createdb':
                 self.db['databases'].add(tool[-1])
@@ -1805,6 +1811,181 @@ class DeltaReviewTests(AdapterCase):
         self.assertIn('注意：資料卷 woowbk-demo-files 有 1 個檔案的 setuid', self.everything_logged())
         imported = {row[0]: row[2] for row in tar_listing(owner.volumes['woowbk-demo-files'])}
         self.assertEqual(imported['helper'], 0o755)
+
+
+class HaRestoreCase(AdapterCase):
+    """The restore of a backup converted from a Home Assistant backup (`adapter.ha_import`), RESTORE lane, HAOS parity
+    2026-11-25. The same restore without the flag is an ordinary one and keeps its checks (owner decision H6)."""
+
+    def setUp(self):
+        super().setUp()
+        self.manifest, self.entries = self.run_backup()
+        self.extract = self.root / 'extract'
+        self.extract.mkdir(mode=0o700)
+        extract_entries(self.entries, self.extract)
+        self.logs.clear()
+        self.phases.clear()
+
+    def converted(self, owner=None):
+        adapter = self.make_adapter(owner or self.owner)
+        adapter.ha_import = True
+        return adapter
+
+
+class PatientWaitTests(HaRestoreCase):
+    """FL-17 and X-AD-37: the restore of a converted HA backup waits for what its data needs (a database recovering, an app's
+    first start), says so in the log, and gives up at once only when the service really ended; an ordinary restore waits
+    for the fixed time as before."""
+
+    def adapter_with(self, gib, *, ha=True):
+        adapter = self.make_adapter()
+        adapter.ha_import = ha
+        adapter._data_bytes = int(gib * 1024 ** 3)
+        return adapter
+
+    def test_the_patient_wait_scales_with_the_data_and_is_never_shorter_than_the_fixed_one(self):
+        for gib, seconds, expected in ((0, 180, 180), (0, 60, 60), (1, 180, 180), (2, 180, 300), (5, 60, 660),
+                                       (5, 900, 900), (1000, 60, 3600), (1000, 3600, 3600)):
+            with self.subTest(gib=gib, seconds=seconds):
+                self.assertEqual(self.adapter_with(gib)._patient(seconds), expected)
+        self.assertEqual(self.adapter_with(50, ha=False)._patient(180), 180, 'an ordinary restore is unchanged (H6)')
+
+    def test_the_restore_counts_the_bytes_it_puts_in_place(self):
+        adapter = self.converted()
+        adapter.restore(self.manifest, self.extract, mode='inplace')
+        expected = sum(entry.size for entry in self.entries
+                       if entry.path.split('/')[2] in ('volumes', 'postgres', 'dirs', 'secrets', 'config'))
+        self.assertGreater(expected, 0)
+        self.assertEqual(adapter._data_bytes, expected)
+
+    def test_a_database_that_needs_longer_than_180_seconds_is_waited_for(self):
+        self.owner.isready_failures = 300  # about 300 seconds of crash recovery of a larger data directory
+        adapter = self.adapter_with(3)  # 60 + 360 = 420 seconds
+        adapter._wait_for_postgres(self.app.postgres[0])
+        self.assertGreater(self.clock.t - 1000.0, 180)
+        self.assertTrue(any('還在啟動' in line and '420' in line for line in self.logs), self.logs)
+
+    def test_an_ordinary_restore_still_gives_up_after_180_seconds(self):
+        self.owner.isready_failures = 300
+        adapter = self.adapter_with(3, ha=False)
+        with self.assertRaises(BackupError) as caught:
+            adapter._wait_for_postgres(self.app.postgres[0])
+        self.assertIn('未在 180 秒內就緒', caught.exception.message)
+
+    def test_a_database_that_never_comes_up_is_given_up_at_the_scaled_time(self):
+        self.owner.isready_failures = 10 ** 6
+        adapter = self.adapter_with(1)
+        with self.assertRaises(BackupError) as caught:
+            adapter._wait_for_postgres(self.app.postgres[0])
+        self.assertIn('未在 180 秒內就緒', caught.exception.message)
+        self.assertGreaterEqual(self.clock.t - 1000.0, 180)
+
+    def test_a_database_service_that_really_ended_is_not_waited_for(self):
+        self.owner.isready_failures = 10 ** 6
+        self.owner.units['woowbk-demo-db.service'] = 'failed'
+        adapter = self.adapter_with(5)
+        with self.assertRaises(BackupError) as caught:
+            adapter._wait_for_postgres(self.app.postgres[0])
+        self.assertIn('服務已停止', caught.exception.message)
+        self.assertLess(self.clock.t - 1000.0, 10, 'it gave up at once, not after the scaled time')
+
+    def test_a_service_that_restarts_itself_is_not_taken_for_ended(self):
+        self.owner.isready_failures = 5
+        calls = []
+        original = self.owner.systemctl
+
+        def flapping(args):
+            if args[0] == 'show' and args[1].startswith('--property=Id,LoadState'):
+                calls.append(1)
+                self.owner.units['woowbk-demo-db.service'] = 'failed' if len(calls) == 1 else 'active'
+            return original(args)
+        self.owner.systemctl = flapping
+        self.adapter_with(1)._wait_for_postgres(self.app.postgres[0])
+
+    def test_the_health_check_goes_on_while_the_app_is_still_starting(self):
+        self.http.health_status = 503
+        calls = []
+        original = self.http.__call__
+
+        def comes_up(url, timeout, *, read_body=True):
+            calls.append(url)
+            if self.clock.t - 1000.0 > 100:
+                self.http.health_status = 200
+            return original(url, timeout, read_body=read_body)
+        adapter = self.adapter_with(1)
+        adapter.http_get = comes_up
+        checks = adapter.health()
+        self.assertEqual([c['status'] for c in checks], ['ok'])
+        self.assertGreater(self.clock.t - 1000.0, 60, 'longer than the catalog\'s 60 seconds')
+        self.assertTrue(any('應用還在啟動' in line for line in self.logs), self.logs)
+
+    def test_an_ordinary_restore_gives_up_at_the_catalog_time(self):
+        self.http.health_status = 503
+        adapter = self.adapter_with(1, ha=False)
+        checks = adapter.health()
+        self.assertEqual([c['status'] for c in checks], ['fail'])
+        catalog_time = sum(spec['timeout_seconds'] for spec in self.app.health)
+        self.assertLessEqual(self.clock.t - 1000.0, catalog_time + 10 * len(self.app.health))
+
+    def test_the_health_check_gives_up_at_once_when_the_service_really_ended(self):
+        self.http.health_status = 503
+        self.owner.units['woowbk-demo-app.service'] = 'failed'
+        adapter = self.adapter_with(5)
+        checks = adapter.health()
+        self.assertEqual(checks[0]['status'], 'fail')
+        self.assertIn('woowbk-demo-app.service 已停止', checks[0]['message'])
+        self.assertLess(self.clock.t - 1000.0, 20)
+
+    def test_a_oneshot_unit_that_did_its_work_does_not_end_the_wait(self):
+        self.http.health_status = 503
+        self.owner.units['woowbk-demo-app.service'] = 'inactive'
+        self.owner.oneshots.add('woowbk-demo-app.service')
+        adapter = self.adapter_with(1)
+        checks = adapter.health()
+        self.assertEqual(checks[0]['status'], 'fail')
+        self.assertGreaterEqual(self.clock.t - 1000.0, 120, 'it waited for the scaled time, the unit ended by design')
+
+
+class MissingVolumeTests(HaRestoreCase):
+    """X-AD-36 (HAOS parity 2026-11-25): a volume that is not there is created, empty, before the pre-restore copy of a
+    converted HA backup's restore; one that cannot be read stops this app only. An ordinary restore is unchanged (H6)."""
+
+    def test_a_missing_volume_is_created_empty_and_said_so(self):
+        del self.owner.volumes['woowbk-demo-files']
+        self.assertEqual(self.converted().ensure_volumes(), ['woowbk-demo-files'])
+        self.assertEqual(self.owner.volumes['woowbk-demo-files'], b'')
+        self.assertTrue(any('woowbk-demo-files' in line and '建立' in line for line in self.logs), self.logs)
+        self.assertEqual(self.converted().ensure_volumes(), [], 'a second call finds it there')
+
+    def test_the_volume_is_there_before_the_databases_are_looked_at_and_the_size_can_be_read(self):
+        del self.owner.volumes['woowbk-demo-files']
+        adapter = self.converted()
+        adapter.ensure_databases_running()
+        self.assertIn('woowbk-demo-files', self.owner.volumes)
+        self.assertGreater(adapter.estimate_bytes(), 0)
+
+    def test_an_ordinary_restore_creates_nothing_and_still_cannot_size_a_missing_volume(self):
+        del self.owner.volumes['woowbk-demo-files']
+        self.adapter.ensure_databases_running()
+        self.assertNotIn('woowbk-demo-files', self.owner.volumes)
+        with self.assertRaises(BackupError) as caught:
+            self.adapter.estimate_bytes()
+        self.assertEqual(caught.exception.code, 'not-deployed')
+
+    def test_a_volume_whose_existence_cannot_be_told_stops_only_this_app(self):
+        self.owner.fail.append(('volume exists woowbk-demo-files', 125))
+        with self.assertRaises(BackupError) as caught:
+            self.converted().ensure_volumes()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('woowbk-demo-files', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-demo-db.service'], 'active', 'nothing was stopped')
+
+    def test_a_volume_that_cannot_be_created_stops_this_app_only(self):
+        del self.owner.volumes['woowbk-demo-files']
+        self.owner.fail.append(('volume create woowbk-demo-files', 125))
+        with self.assertRaises(BackupError):
+            self.converted().ensure_volumes()
+        self.assertNotIn('woowbk-demo-files', self.owner.volumes)
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

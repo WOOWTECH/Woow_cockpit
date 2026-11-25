@@ -77,6 +77,14 @@ SHORT_TIMEOUT = 60
 PG_READY_TIMEOUT = 180
 DB_SETTLE_TIMEOUT = 30
 HEALTH_INTERVAL = 2.0
+# Waits of the restore of a converted Home Assistant backup (FL-17, X-AD-37; HAOS waits for as long as an add-on takes):
+# what the restored data needs, never less than the fixed time, and a service that really ended ends the wait at once.
+PATIENT_BASE = 60          # seconds on top of the data's share
+PATIENT_PER_GIB = 120      # seconds per GiB of restored data (a database's recovery, an app's first start)
+PATIENT_MAX = 3600         # no wait is longer than this
+PATIENT_NOTE_EVERY = 60    # seconds between two "still starting" lines in the job log
+# A unit that is `failed`, or `inactive` without being a oneshot (those end by design), twice in a row is not starting any more.
+ENDED_PROPERTIES = '--property=Id,LoadState,ActiveState,Type'
 HINT_TIMEOUT = 3
 SPACE_RESERVE = 512 * 1024 * 1024
 SMALL_OUTPUT = 1024 * 1024        # psql, pg_isready, systemctl show, podman load --quiet
@@ -448,6 +456,7 @@ class QuadletPostgresAdapter(Adapter):
         self.timing = {}
         self.kept_stopped = []
         self._taken_over = []
+        self._data_bytes = 0      # size of the data the running restore put in place (the patient waits scale with it)
         self.digest_results = []  # per digest check of the last restore: CONTRACT section 7 `verification[].checks`
         self.unstable_digests = []  # digest checks the last backup dropped because two reads differed (H2, F3)
 
@@ -879,8 +888,28 @@ class QuadletPostgresAdapter(Adapter):
             return f'應用「{self.app.name}」已停止，無法備份：備份時它的資料庫必須在執行中。'
         return f'應用「{self.app.name}」的資料庫沒有在執行，無法備份：備份時它的資料庫必須在執行中。'
 
+    def ensure_volumes(self):
+        """X-AD-36 (the restore of a converted HA backup, HAOS parity: a missing folder is created): a volume of this app that
+        is not there is created empty, so the pre-restore copy has something to copy (nothing is lost: it holds nothing) and
+        the restore something to replace. One whose existence cannot be told stops this app only. Returns the names created."""
+        created = []
+        for volume in self.app.volumes:
+            name = volume['name']
+            exists = self.runner.podman('volume', 'exists', name, timeout=SHORT_TIMEOUT, check=False)
+            if exists.returncode == 0:
+                continue
+            if exists.returncode != 1:
+                raise BackupError('job-failed', f'無法確認資料卷 {name} 是否存在。', app=self.app.id, volume=name)
+            self.runner.podman('volume', 'create', name, timeout=SHORT_TIMEOUT)
+            self.log(f'資料卷 {name} 不存在，已先建立一個空的資料卷；還原時會用備份的內容取代它。')
+            created.append(name)
+        return created
+
     def ensure_databases_running(self):
-        """Start inactive database units (needed to dump a pre-restore safety backup); raises if they cannot run."""
+        """Start inactive database units (needed to dump a pre-restore safety backup); raises if they cannot run. The restore of
+        a converted HA backup first creates what is missing of the app's volumes (X-AD-36)."""
+        if self.ha_import:
+            self.ensure_volumes()
         states = self.unit_states(self.app.units)
         started = []
         for pg in self.app.postgres:
@@ -2719,6 +2748,7 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('incompatible', f'備份缺少此設備設定需要的項目：{", ".join(missing)}。', app=app.id)
         files = {kind: {key: self.entry_path(root, item['entry']) for key, item in items.items()}
                  for kind, items in found.items()}
+        self._data_bytes = self._restored_bytes(files)
         instances = {pg['id']: self._instance_item(pg, found['postgres'][pg['id']], root)
                      for pg in app.postgres if pg['scope'] == 'instance'}
         for pg in app.postgres:
@@ -3165,13 +3195,67 @@ class QuadletPostgresAdapter(Adapter):
                                     max_output=SMALL_OUTPUT)
         return result.returncode == 0
 
+    @staticmethod
+    def _restored_bytes(files):
+        """Bytes of the files a restore puts in place (volumes, directories, dumps); what cannot be read counts as 0."""
+        total = 0
+        for items in files.values():
+            for path in items.values():
+                with contextlib.suppress(OSError):
+                    total += os.stat(path).st_size
+        return total
+
+    def _patient(self, seconds):
+        """How long to wait where the catalog or the engine says `seconds`: the same for an ordinary restore; for the restore
+        of a converted HA backup what the data needs (PATIENT_BASE + PATIENT_PER_GIB per GiB, at most PATIENT_MAX), never
+        less than `seconds`."""
+        if not self.ha_import:
+            return seconds
+        scaled = PATIENT_BASE + PATIENT_PER_GIB * self._data_bytes / (1024 ** 3)
+        return int(min(PATIENT_MAX, max(seconds, scaled)))
+
+    def _ended_units(self, units=None):
+        """The units among `units` (default: every unit of the app) that are not starting any more: failed, or inactive and
+        not a oneshot (a oneshot unit that has done its work is inactive on purpose)."""
+        wanted = list(units or self.app.units)
+        try:
+            out = self.runner.systemctl('show', ENDED_PROPERTIES, '--', *wanted, timeout=SHORT_TIMEOUT,
+                                        max_output=SMALL_OUTPUT).stdout or b''
+        except BackupError:
+            return []  # cannot tell: go on waiting for the time that is left
+        blocks = [b for b in out.decode('utf-8', 'replace').split('\n\n') if b.strip()]
+        ended = []
+        for unit, block in zip(wanted, blocks):
+            fields = dict(line.split('=', 1) for line in block.splitlines() if '=' in line)
+            if fields.get('LoadState') != 'loaded':
+                continue
+            state = fields.get('ActiveState')
+            if state == 'failed' or (state == 'inactive' and fields.get('Type') != 'oneshot'):
+                ended.append(unit)
+        return ended
+
     def _wait_for_postgres(self, pg):
-        deadline = self.clock() + PG_READY_TIMEOUT
+        patient = self.ha_import
+        limit = self._patient(PG_READY_TIMEOUT)
+        started = self.clock()
+        deadline = started + limit
+        ended_before, next_note = False, started + PATIENT_NOTE_EVERY
         while True:
             if self._postgres_ready(pg):
                 return
-            if self.clock() >= deadline:
-                raise BackupError('job-failed', f'資料庫 {pg["id"]} 未在 {PG_READY_TIMEOUT} 秒內就緒。', app=self.app.id)
+            now = self.clock()
+            if now >= deadline:
+                raise BackupError('job-failed', f'資料庫 {pg["id"]} 未在 {limit} 秒內就緒。', app=self.app.id)
+            if patient:
+                # Still starting (recovering a large data directory): keep waiting; only a service that ended twice in a row
+                # (it may be restarting itself in between) is no use waiting for.
+                ended = bool(self._ended_units([pg['unit']]))
+                if ended and ended_before:
+                    raise BackupError('job-failed', f'資料庫 {pg["id"]} 的服務已停止，沒有啟動成功。', app=self.app.id)
+                ended_before = ended
+                if now >= next_note:
+                    self.log(f'資料庫 {pg["id"]} 還在啟動，已等待 {int(now - started)} 秒，繼續等待（最多 {limit} 秒）…')
+                    next_note = now + PATIENT_NOTE_EVERY
             self.sleep(1)
 
     def _ensure_database(self, pg):
@@ -3314,7 +3398,11 @@ class QuadletPostgresAdapter(Adapter):
         return checks
 
     def _poll(self, spec):
-        deadline = self.clock() + spec['timeout_seconds']
+        patient = self.ha_import
+        limit = self._patient(spec['timeout_seconds'])
+        started = self.clock()
+        deadline = started + limit
+        ended_before, next_note = False, started + PATIENT_NOTE_EVERY
         last = '沒有回應'
         while True:
             try:
@@ -3324,8 +3412,18 @@ class QuadletPostgresAdapter(Adapter):
                 last = f'HTTP {status}'
             except Exception:  # noqa: BLE001 - any transport error is "not healthy yet"
                 last = '無法連線'
-            if self.clock() >= deadline:
+            now = self.clock()
+            if now >= deadline:
                 return False, last
+            if patient:
+                # FL-17: only a service that really ended (twice in a row) ends the wait early; otherwise it is still starting.
+                ended = self._ended_units()
+                if ended and ended_before:
+                    return False, f'服務 {"、".join(ended[:4])} 已停止，沒有啟動成功（{last}）'
+                ended_before = bool(ended)
+                if now >= next_note:
+                    self.log(f'應用還在啟動，已等待 {int(now - started)} 秒，繼續等待（最多 {limit} 秒）…')
+                    next_note = now + PATIENT_NOTE_EVERY
             self.sleep(HEALTH_INTERVAL)
 
     def http_specs(self):
