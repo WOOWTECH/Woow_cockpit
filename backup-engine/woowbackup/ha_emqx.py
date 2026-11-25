@@ -1028,10 +1028,7 @@ def mount_targets(mounts, secrets=()):
         if len(item) == 3 and isinstance(item[1], str) and item[1].startswith('/'):
             targets.add(item[1].rstrip('/') or '/')
     for spec in secrets or ():
-        try:
-            target = tempctr.secret_mount_path(spec)
-        except (AttributeError, TypeError, ValueError):
-            continue
+        target = tempctr.secret_mount_path(spec)
         if target:
             targets.add(target)
     return targets

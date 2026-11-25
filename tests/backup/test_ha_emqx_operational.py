@@ -66,6 +66,24 @@ class OperationalTests(unittest.TestCase):
                     self.invoke(transport)
                 self.assertNotIn('restore', transport.events)
 
+    def test_the_data_directory_is_the_images_in_every_form_it_is_written(self):
+        """E-36: `data` (relative to /opt/emqx), its absolute form, with or without a slash or a leading `./`; nothing else."""
+        for value in ('data', 'data/', './data', './data/', ' data ', '/opt/emqx/data', '/opt/emqx/data/'):
+            self.assertTrue(ha_emqx_settings.is_data_dir(value), value)
+        for value in ('/data', 'data2', 'elsewhere/data', '', '../data', '/opt/emqx/data/sub', '/opt/emqx', None, 5, ['data']):
+            self.assertFalse(ha_emqx_settings.is_data_dir(value), value)
+
+    def test_the_lab_harness_can_still_call_the_old_validators_and_none_of_them_refuses(self):
+        """tests/e2e/lab/emqx_synthetic_preservation.py calls validate, validate_passive and validate_monitoring on the real
+        device's roots: they exist, return and refuse nothing of what they refused (a clustered broker, E-38, is the one thing)."""
+        config = {'node': {'data_dir': '/outside', 'unlisted': 1}, 'rpc': {'protocol': 'quic'}, 'log': {'file': 5},
+                  'connectors': {'http': {'x': {}}}, 'prometheus': {'enable': True}, 'durable_sessions': {'enable': True}}
+        self.assertIsNone(ha_emqx_settings.validate(config, []))
+        self.assertEqual(ha_emqx_settings.validate_passive(config)['integrations'], ['connectors.http.x'])
+        self.assertEqual(ha_emqx_settings.validate_monitoring(config)['durable'], ['durable_sessions'])
+        with self.assertRaises(BackupError):
+            ha_emqx_settings.validate({'cluster': {'discovery_strategy': 'etcd'}}, [])
+
     def test_what_the_old_lists_refused_goes_through_but_the_data_dir_and_the_cluster(self):
         """E-34, E-36, E-37, E-39, E-40, E-35, E-30: every one of these was a refusal ("超出已核對的支援範圍"); only a data
         directory that is not the image's (its own words and advice) and a clustered broker (E-38, not this lane's) stop."""
