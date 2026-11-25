@@ -1,224 +1,163 @@
-"""Restricted EMQX 5.8.9 operational settings. Never reads files or secret values.
+"""Settings of this device's own EMQX 5.8.9 that shape the throwaway candidate. Never reads files or secret values: names only.
 
-Schema source: apps/emqx_conf/src/emqx_conf_schema.erl at a8319fe.
-Node/RPC/cluster are retained at boot and must never be dynamically rewritten.
+HAOS parity (2026-11-25, lane EMQX-B). Restoring a backup on another HAOS replaces the whole folder and does not ask what the
+target's settings look like, so this module no longer judges this device's settings against reviewed lists of roots and
+fields (E-32, E-33, E-34, E-37, E-39, E-40, E-45, E-46: an unlisted field, a monitoring exporter, a log handler of an unusual
+shape stop nothing: the candidate starts with exactly this device's configuration, its other settings come back unchanged and
+the comparison after the import proves it). What is left:
+
+* `validate`: a clustered broker is not imported (E-38, not part of this lane: with a second node, replacing one of them
+  overwrites the other; unchanged); the data directory (E-36: HA's data would land in the wrong place) is `is_data_dir`, which
+  ha_emqx judges;
+* `own_items`: the names of what this device already has that HA's import is mixed with -- rules, connectors, actions,
+  sources, bridges, gateways (E-41), topic rewrite, topic metrics, auto-subscribe, ExHook (E-42), PSK (E-43), plugins (E-44),
+  durable sessions (E-47) -- for the one confirmation (ha_emqx says them);
+* the roots of each kind (`ROOTS`, `PASSIVE_ROOTS`, `MONITOR_ROOTS`), which the lab harness reads.
+
+Where the files of the settings are is not decided here: ha_emqx scans every setting for file references (E-23, E-24, E-29,
+E-30, E-32, E-35, E-36, E-50).
 """
 from .errors import BackupError
-from . import ha_odoo
 
 IMMUTABLE_ROOTS = frozenset({'node', 'rpc', 'cluster'})
 ROOTS = IMMUTABLE_ROOTS | {'log', 'banned', 'api_key'}
-NODE_FIELDS = set('name cookie process_limit max_ports dist_buffer_size max_ets_tables data_dir config_files '
-                  'global_gc_interval crash_dump_file crash_dump_seconds crash_dump_bytes dist_net_ticktime '
-                  'backtrace_depth applications etc_dir cluster_call db_backend role rpc_module tlog_push_mode '
-                  'default_shard_transport shard_transports default_bootstrap_batch_size broker_pool_size '
-                  'generic_pool_size channel_cleanup_batch_size'.split())
-RPC_FIELDS = set('mode protocol async_batch_size port_discovery server_port client_num connect_timeout certfile '
-                 'keyfile cacertfile send_timeout authentication_timeout call_receive_timeout socket_keepalive_idle '
-                 'socket_keepalive_interval socket_keepalive_count socket_sndbuf socket_recbuf socket_buffer '
-                 'insecure_fallback ciphers tls_versions listen_address ipv6_only'.split())
-CLUSTER_FIELDS = set('name discovery_strategy autoclean autoheal proto_dist quic_lb_mode static dns etcd k8s '
-                     'prevent_overlapping_partitions'.split())
-HANDLER_FIELDS = set('level enable formatter timestamp_format time_offset chars_limit single_line sync_mode_qlen '
-                     'drop_mode_qlen flush_qlen overload_kill burst_limit supervisor_reports max_depth with_mfa '
-                     'payload_encode'.split())
+EMPTY_MAP_ROOTS = frozenset({'actions', 'sources', 'connectors', 'bridges', 'gateway'})
+PASSIVE_ROOTS = EMPTY_MAP_ROOTS | {'rewrite', 'topic_metrics', 'auto_subscribe', 'exhook',
+                                  'psk_authentication', 'plugins', 'rule_engine'}
+MONITOR_ROOTS = frozenset({'limiter', 'prometheus', 'sysmon', 'durable_sessions', 'durable_storage'})
+DATA_DIRS = ('data', '/opt/emqx/data')
 
 
 def refuse():
+    """E-38 (kept): a clustered broker."""
     raise BackupError('incompatible', 'EMQX 操作設定或檔案路徑超出已核對的支援範圍。')
 
 
-def fields(value, allowed):
-    if not isinstance(value, dict) or set(value) - allowed:
-        refuse()
+def is_data_dir(value):
+    """Whether `node.data_dir` is this image's data directory (the image's own `data`, relative to /opt/emqx, or its
+    absolute form), whatever the slashes."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    while text.startswith('./'):
+        text = text[2:]
+    return text.rstrip('/') in DATA_DIRS
 
 
-def output_path(path):
-    if not isinstance(path, str):
-        refuse()
-    if path.startswith('${EMQX_LOG_DIR}/'):
-        path = '/opt/emqx/log/' + path[len('${EMQX_LOG_DIR}/'):]
-    elif path.startswith('log/'):
-        path = '/opt/emqx/' + path
-    if not path.startswith('/opt/emqx/log/') or ha_odoo._norm(path[1:]) != path[1:]:
-        refuse()
-
-
-def validate(config, mounts):
-    if 'node' in config:
-        node = config['node']
-        fields(node, NODE_FIELDS)
-        if node.get('data_dir') not in ('data', '/opt/emqx/data'):
-            refuse()
-        if node.get('applications', '') not in ('', []):
-            refuse()
-        if 'etc_dir' in node and node['etc_dir'] not in ('etc', '/opt/emqx/etc'):
-            refuse()
-        if 'crash_dump_file' in node:
-            output_path(node['crash_dump_file'])
-        configs = node.get('config_files', [])
-        if not isinstance(configs, list):
-            refuse()
-        for path in configs:
-            if path == '/opt/emqx/etc/emqx.conf':
-                continue  # unchanged file supplied by the exact target image
-            if len([m for m in mounts if m[1] == path and m[2] == 'ro']) != 1:
-                refuse()
-        if 'cluster_call' in node:
-            fields(node['cluster_call'], {'retry_interval', 'max_history', 'cleanup_interval'})
-        shards = node.get('shard_transports', {})
-        if not isinstance(shards, dict) or any(v not in ('gen_rpc', 'distr') for v in shards.values()):
-            refuse()
-    if 'rpc' in config:
-        rpc = config['rpc']
-        fields(rpc, RPC_FIELDS)
-        if rpc.get('protocol', 'tcp') not in ('tcp', 'ssl'):
-            refuse()
-        # Explicit TLS files are handled by the shared reference resolver, including missing-file checks.
-        if rpc.get('protocol') == 'ssl' and not all(rpc.get(k) for k in ('certfile', 'keyfile', 'cacertfile')):
-            refuse()
-    if 'cluster' in config:
-        cluster = config['cluster']
-        fields(cluster, CLUSTER_FIELDS)
+def validate(config, mounts=()):
+    """What still stops the app among the settings of node, rpc, cluster, log, banned and api_key (`mounts` is kept for the
+    callers of old: the files of these settings are found by ha_emqx's scan of every setting; the data directory, E-36, is
+    judged by ha_emqx.check_data_dir, which says it with an issue). Every node, rpc, log, banned and api_key setting is
+    this device's own and comes back as it is. The one thing left here is E-38 (not a row of this lane, unchanged): a
+    cluster that joins other nodes by itself or runs its distribution over TLS; single-node brokers do not meet it."""
+    cluster = config.get('cluster')
+    if isinstance(cluster, dict):
         if cluster.get('discovery_strategy') not in ('manual', 'singleton'):
             refuse()
         if cluster.get('proto_dist', 'inet_tcp') not in ('inet_tcp', 'inet6_tcp'):
             refuse()  # TLS distribution requires separate image/VM-argument validation
-        for key, allowed in {
-            'static': {'seeds'}, 'dns': {'name', 'record_type'},
-            'etcd': {'server', 'prefix', 'node_ttl', 'ssl_options'},
-            'k8s': {'apiserver', 'service_name', 'address_type', 'namespace', 'suffix'},
-        }.items():
-            if key in cluster:
-                fields(cluster[key], allowed)
-        # These discovery backends are inactive under manual/singleton; never activate/copy their files.
-    if 'log' in config:
-        log = config['log']
-        fields(log, {'console', 'file', 'throttling'})
-        if 'throttling' in log:
-            fields(log['throttling'], {'time_window', 'msgs'})
-        handlers = []
-        if 'console' in log:
-            fields(log['console'], HANDLER_FIELDS)
-            handlers.append(log['console'])
-        files = log.get('file', {})
-        if not isinstance(files, dict):
-            refuse()
-        for handler in files.values():
-            fields(handler, HANDLER_FIELDS | {'path', 'rotation_count', 'rotation_size'})
-            if 'path' in handler:
-                output_path(handler['path'])
-            elif handler.get('enable', True):
-                refuse()
-            handlers.append(handler)
-        for handler in handlers:
-            if 'overload_kill' in handler:
-                fields(handler['overload_kill'], {'enable', 'mem_size', 'qlen', 'restart_after'})
-            if 'burst_limit' in handler:
-                fields(handler['burst_limit'], {'enable', 'max_count', 'window_time'})
-    for key in ('banned', 'api_key'):
-        if key in config:
-            fields(config[key], {'bootstrap_file'})
-            if not isinstance(config[key].get('bootstrap_file', ''), str):
-                refuse()
-
-
-# Only empty/disabled target instances are covered. Active connector/plugin/PSK migration
-# needs its own dependency review and is intentionally refused.
-EMPTY_MAP_ROOTS = frozenset({'actions', 'sources', 'connectors', 'bridges', 'gateway'})
-PASSIVE_ROOTS = EMPTY_MAP_ROOTS | {'rewrite', 'topic_metrics', 'auto_subscribe', 'exhook',
-                                  'psk_authentication', 'plugins', 'rule_engine'}
 
 
 def validate_passive(config):
-    for key in EMPTY_MAP_ROOTS & config.keys():
-        if config[key] != {}:
-            refuse()
-    for key in ('rewrite', 'topic_metrics'):
-        if key in config and config[key] != []:
-            refuse()
-    for key, field in (('auto_subscribe', 'topics'), ('exhook', 'servers')):
-        if key in config:
-            fields(config[key], {field})
-            if config[key].get(field, []) != []:
-                refuse()
-    if 'psk_authentication' in config:
-        psk = config['psk_authentication']
-        fields(psk, {'enable', 'init_file', 'separator', 'chunk_size'})
-        if psk.get('enable') is not False or psk.get('init_file', '') != '':
-            refuse()
-    if 'plugins' in config:
-        plugins = config['plugins']
-        fields(plugins, {'states', 'install_dir', 'check_interval'})
-        if plugins.get('states', []) != [] or plugins.get('install_dir') not in ('plugins', '/opt/emqx/plugins'):
-            refuse()
-    if 'rule_engine' in config:
-        rules = config['rule_engine']
-        fields(rules, {'rules', 'ignore_sys_message', 'jq_function_default_timeout', 'jq_implementation_module'})
-        if rules.get('rules', {}) != {} or rules.get('jq_implementation_module', 'jq_nif') not in ('jq_nif', 'jq_port'):
-            refuse()
-
-
-MONITOR_ROOTS = frozenset({'limiter', 'prometheus', 'sysmon', 'durable_sessions', 'durable_storage'})
+    """Kept for the lab harness (tests/e2e/lab/emqx_synthetic_preservation.py): nothing is refused any more (E-41..E-44);
+    what this device has is `own_items`."""
+    return own_items(config)
 
 
 def validate_monitoring(config):
-    """5.8.9 local-only profiles; active persistence/exporters require separate review."""
-    if 'limiter' in config:
-        value = config['limiter']
-        types = {'bytes', 'messages', 'connection', 'message_routing', 'internal'}
-        fields(value, types | {'max_conn_rate', 'messages_rate', 'bytes_rate'})
-        for key in types & value.keys():
-            fields(value[key], {'rate', 'burst'})
-    if 'prometheus' in config:
-        value = config['prometheus']
-        collectors = {'vm_dist', 'mnesia', 'vm_statistics', 'vm_system_info', 'vm_memory', 'vm_msacc'}
-        legacy = {k + '_collector' for k in collectors}
-        fields(value, {'enable_basic_auth', 'push_gateway', 'collectors', 'enable',
-                       'push_gateway_server', 'interval', 'headers', 'job_name'} | legacy)
-        if value.get('enable', False) is not False:
-            refuse()
-        if 'push_gateway' in value:
-            push = value['push_gateway']
-            fields(push, {'enable', 'method', 'url', 'interval', 'headers', 'job_name'})
-            if push.get('enable') is not False:
-                refuse()
-        if 'collectors' in value:
-            fields(value['collectors'], collectors)
-    if 'sysmon' in config:
-        value = config['sysmon']
-        fields(value, {'vm', 'os', 'top', 'mnesia_tm_mailbox_size_alarm_threshold',
-                       'broker_pool_mailbox_size_alarm_threshold'})
-        for key, names in {
-            'vm': 'process_check_interval process_high_watermark process_low_watermark long_gc long_schedule large_heap busy_dist_port busy_port',
-            'os': 'cpu_check_interval cpu_high_watermark cpu_low_watermark mem_check_interval sysmem_high_watermark procmem_high_watermark',
-            'top': 'num_items sample_interval max_procs db_hostname db_port db_username db_password db_name',
-        }.items():
-            if key in value:
-                fields(value[key], set(names.split()))
-        if value.get('top', {}).get('db_hostname', '') != '':
-            refuse()
-    if 'durable_sessions' in config:
-        value = config['durable_sessions']
-        fields(value, set('enable batch_size idle_poll_interval heartbeat_interval renew_streams_interval session_gc_interval session_gc_batch_size subscription_count_refresh_interval disconnected_session_count_refresh_interval message_retention_period force_persistence'.split()))
-        if value.get('enable') is not False or value.get('force_persistence', False) is not False:
-            refuse()
-    if 'durable_storage' in config:
-        # Only the CE builtin local backend while persistent sessions are disabled.
-        if config.get('durable_sessions', {}).get('enable') is not False:
-            refuse()
-        fields(config['durable_storage'], {'messages'})
-        if 'messages' not in config['durable_storage']:
-            return  # raw config omits the lazy default when durable sessions are disabled
-        value = config['durable_storage'].get('messages', {})
-        fields(value, {'backend', 'n_shards', 'local_write_buffer', 'layout',
-                       'poll_workers_per_shard', 'poll_batch_size'})
-        if value.get('backend') != 'builtin_local':
-            refuse()
-        if 'local_write_buffer' in value:
-            fields(value['local_write_buffer'], {'max_items', 'max_bytes', 'flush_interval'})
-        if 'layout' in value:
-            layout = value['layout']
-            fields(layout, {'type', 'bytes_per_topic_level', 'topic_index_bytes', 'serialization_schema'})
-            if layout.get('type') != 'wildcard_optimized_v2':
-                refuse()
+    """Kept for the lab harness: nothing is refused any more (E-45, E-46, E-47: the durable sessions are said by
+    `own_items`)."""
+    return own_items(config)
+
+
+# ---------------------------------------------------------------------- what this device has of its own (E-41..E-44, E-47)
+
+def _text(value, limit=60):
+    return str(value)[:limit]
+
+
+def _entries(config):
+    """{kind: {setting name: value}} of the entries this device holds of each kind; a root of an unexpected shape is one
+    entry named after the root. Only used for names and for telling whether the import changed an entry."""
+    found = {'integrations': {}, 'routing': {}, 'psk': {}, 'plugins': {}, 'durable': {}}
+    for root in ('connectors', 'actions', 'sources', 'bridges'):
+        value = config.get(root)
+        if not value:
+            continue
+        if not isinstance(value, dict):
+            found['integrations'][root] = value
+            continue
+        for kind, named in value.items():
+            if isinstance(named, dict) and named:
+                for name, body in named.items():
+                    found['integrations'][f'{root}.{_text(kind, 40)}.{_text(name)}'] = body
+            elif named not in ({}, None, []):
+                found['integrations'][f'{root}.{_text(kind)}'] = named
+    gateway = config.get('gateway')
+    if gateway:
+        if isinstance(gateway, dict):
+            for name, body in gateway.items():
+                if body not in ({}, None):
+                    found['integrations'][f'gateway.{_text(name)}'] = body
+        else:
+            found['integrations']['gateway'] = gateway
+    engine = config.get('rule_engine')
+    rules = engine.get('rules') if isinstance(engine, dict) else None
+    if rules:
+        if isinstance(rules, dict):
+            for name, body in rules.items():
+                found['integrations'][f'rule_engine.rules.{_text(name)}'] = body
+        else:
+            found['integrations']['rule_engine.rules'] = rules
+    if config.get('rewrite'):
+        found['routing']['rewrite'] = config['rewrite']
+    metrics = config.get('topic_metrics')
+    if metrics:
+        for index, body in enumerate(metrics if isinstance(metrics, list) else [metrics]):
+            topic = body.get('topic') if isinstance(body, dict) else None
+            found['routing'][f'topic_metrics.{_text(topic) if isinstance(topic, str) and topic else index + 1}'] = body
+    auto = config.get('auto_subscribe')
+    if isinstance(auto, dict):
+        if auto.get('topics'):
+            found['routing']['auto_subscribe'] = auto['topics']
+    elif auto:
+        found['routing']['auto_subscribe'] = auto
+    hooks = config.get('exhook')
+    servers = hooks.get('servers') if isinstance(hooks, dict) else None
+    if servers:
+        for index, body in enumerate(servers if isinstance(servers, list) else [servers]):
+            name = body.get('name') if isinstance(body, dict) else None
+            found['routing'][f'exhook.{_text(name) if isinstance(name, str) and name else index + 1}'] = body
+    psk = config.get('psk_authentication')
+    if isinstance(psk, dict):
+        if psk.get('enable') is True or psk.get('init_file') not in ('', None):
+            found['psk']['psk_authentication'] = psk
+    elif psk:
+        found['psk']['psk_authentication'] = psk
+    plugins = config.get('plugins')
+    states = plugins.get('states') if isinstance(plugins, dict) else None
+    if states:
+        for index, body in enumerate(states if isinstance(states, list) else [states]):
+            name = body.get('name_vsn') if isinstance(body, dict) else None
+            found['plugins'][f'plugins.{_text(name) if isinstance(name, str) and name else index + 1}'] = body
+    if isinstance(plugins, dict) and plugins.get('install_dir') not in (None, '', 'plugins', '/opt/emqx/plugins'):
+        found['plugins']['plugins.install_dir'] = plugins['install_dir']
+    sessions = config.get('durable_sessions')
+    if isinstance(sessions, dict) and (sessions.get('enable') is True or sessions.get('force_persistence') is True):
+        found['durable']['durable_sessions'] = sessions
+    return found
+
+
+def own_items(config, final=None):
+    """The names of what this device's own configuration holds that HA's import is mixed with, by kind: `integrations`
+    (E-41: rules, connectors, actions, sources, bridges, gateways), `routing` (E-42: topic rewrite, topic metrics,
+    auto-subscribe, ExHook servers), `psk` (E-43), `plugins` (E-44) and `durable` (E-47), each a sorted list of setting names
+    (never a value), and `replaced`: per kind how many of them the import changed (`final`: the candidate's configuration
+    after HA's data came in -- an entry of HA's with the same name wins, the others stay next to HA's). Nothing here ever
+    refuses."""
+    own = _entries(config if isinstance(config, dict) else {})
+    after = _entries(final) if isinstance(final, dict) else None
+    result = {kind: sorted(names) for kind, names in own.items()}
+    result['replaced'] = {kind: sum(1 for name, value in names.items() if after is not None and after[kind].get(name) != value)
+                          for kind, names in own.items()}
+    return result
