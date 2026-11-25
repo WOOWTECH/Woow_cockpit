@@ -106,10 +106,10 @@ NOT_CHECKED = '檢查作業在檢查這個應用之前就停止了，這個應�
 NOT_CHECKED_ACTION = '請先排除讓檢查停止的原因，再重新檢查。'
 TOO_LARGE = '這個應用的檢查結果太大，作業紀錄放不下，無法匯入這個應用；這台的這個應用沒有任何變更。'
 KEY_CREATED = '這台還沒有加密金鑰，匯入時會自動建立，用來加密匯入前備份和轉換出來的備份；完成後請到「加密金鑰」下載並保存。'
-NO_KEY_CREATED = '無法自動建立這台的加密金鑰，沒有開始匯入，這台沒有任何變更。'
+NO_KEY_CREATED = '無法自動建立這台的加密金鑰，匯入已停止，這台沒有任何變更。請到「加密金鑰」建立金鑰後，再重新匯入。'
 UNEXPECTED_JOB = '作業發生未預期的內部錯誤，請查看系統日誌。'
 CHOOSE_DATABASE = '請選擇要匯入的 Odoo 資料庫。'
-NO_DATABASE = 'HA 的 Odoo 沒有可以搬的資料庫。'
+NO_DATABASE = 'HA 的 Odoo 沒有可以搬的資料庫（原因見檢查結果）。請先在 HA 確認 Odoo 的資料庫，再重新檢查。'
 
 ISSUES = {
     'ha.addon-missing': 'stop',      # HA-03, X-CLI-03
