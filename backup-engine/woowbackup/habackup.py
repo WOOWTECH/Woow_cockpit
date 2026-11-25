@@ -100,6 +100,7 @@ MAX_BACKUP_JSON = 16 * 1024 * 1024
 MAX_ADDONS = 1000
 MAX_FOLDERS = 256
 MAX_PAX = 1024 * 1024
+MAX_PAX_RECORDS = 50_000_000     # records of all the extended headers of one tar: reading them takes 2.5 us each
 MAX_LONG_NAME = 64 * 1024
 MAX_NAME = 4096
 MAX_ADDON_JSON = 32 * 1024 * 1024
@@ -320,6 +321,16 @@ def _pax_time(records, key, default, bad=_corrupt):
     return float(text)
 
 
+def _pax_records(src, data, bad, outer):
+    """The records of one extended header (`_parse_pax`); the records of all those of one tar are counted: a tar of
+    millions of headers that each hold a megabyte of them would keep a job busy for hours (MAX_PAX_RECORDS)."""
+    records = _parse_pax(data, bad)
+    src.records += len(records)
+    if src.records > MAX_PAX_RECORDS:
+        raise (_limit if outer else _too_much)('too many extended header records', limit=MAX_PAX_RECORDS)
+    return records
+
+
 class _Head(typing.NamedTuple):
     """One member's header block with the extended headers before it applied."""
     block: bytes
@@ -359,7 +370,7 @@ def _read_head(src, *, outer=False):
             data = src.read_exact(size)
             src.skip((-size) % BLOCK)
             if typeflag == b'g':
-                if not GLOBAL_UNSAFE.isdisjoint(_parse_pax(data, bad)):
+                if not GLOBAL_UNSAFE.isdisjoint(_pax_records(src, data, bad, outer)):
                     raise bad('a global pax header changes the members after it')
                 return _Head(block, {}, b'', b'', typeflag, 0)
             if typeflag == b'L':
@@ -373,7 +384,7 @@ def _read_head(src, *, outer=False):
             else:
                 if pax is not None:
                     raise bad('consecutive pax headers')
-                pax = _parse_pax(data, bad)
+                pax = _pax_records(src, data, bad, outer)
             continue
         name = _cbytes(block[0:100])
         prefix = _cbytes(block[345:500]) if posix else b''
@@ -399,6 +410,7 @@ class _Outer:
 
     def __init__(self, fd, size):
         self.fd, self.size, self.pos = fd, size, 0
+        self.records = 0            # PAX records read so far (MAX_PAX_RECORDS)
 
     def read_exact(self, n):
         data = _pread_exact(self.fd, self.pos, n)
@@ -1413,6 +1425,7 @@ class _Reader:
         self.checkpoint = checkpoint
         self.max_bytes = max_bytes
         self.consumed = 0
+        self.records = 0            # PAX records read so far (MAX_PAX_RECORDS)
         self._next_check = CHECK_BYTES
 
     def _avail(self):

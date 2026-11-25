@@ -704,6 +704,19 @@ class OuterTarTests(TempFiles):
                      'too many folders in backup.json')
 
 
+    def test_extended_header_records_are_counted(self):
+        """UP-12: the records of all the extended headers of the outer tar are counted, the global ones too."""
+        one = hx.pax_member({'a': '1', 'b': '2'}) + hx.raw_member('x', b'')
+        glob = hx.pax_member({'comment': 'x'}, typeflag=b'g')
+        with mock.patch.object(habackup, 'MAX_PAX_RECORDS', 10):
+            self.assertEqual([m.name for m in self.describe(self.backup(one * 5)).members], [f'{hx.ODOO}.tar.gz'])
+            self.refused(self.backup(one * 6), 'limit-exceeded', 'too many extended header records')
+            self.assertEqual(len(self.describe(self.backup(glob * 10)).members), 1)
+            self.refused(self.backup(glob * 11), 'limit-exceeded', 'too many extended header records')
+            self.assertFalse(habackup.looks_like_ha(self.fd(self.backup(glob * 11))), 'an upload is not taken for one')
+        self.assertEqual(self.describe(self.backup(one * 6)).size, len(self.backup(one * 6)))
+
+
 class MemberProblemTests(TempFiles):
     """UP-44 to UP-47, KEY-05 to KEY-12, IN-01 to IN-15: one member that cannot be read stops one app; the other add-on
     of the same file is read completely."""
@@ -1398,6 +1411,38 @@ class EntryTests(WalkCase):
                         self.assertEqual(([row[0] for row in out], report.skip_count('name')),
                                          (['a'], 0) if typeflag == b'K' else ([], 1))
         self.assertEqual((habackup.MAX_PAX, habackup.MAX_LONG_NAME, habackup.MAX_NAME), (1 << 20, 64 << 10, 4096))
+
+    def test_extended_header_records_are_counted(self):
+        """IN-24: the megabyte of one header is not the limit of the work: the records of all the extended headers of a
+        tar are counted (262,000 headers of 88,000 records each would keep a job busy for 18 hours)."""
+        def tar(headers, per=2):
+            return b''.join(hx.pax_member({f'k{j}': 'v' for j in range(per)}) + hx.raw_member(f'x{i}', b'x')
+                            for i in range(headers)) + hx.END
+
+        def records(data):
+            reader = habackup._Reader(io.BytesIO(data))
+            while (header := habackup._inner_header(reader)) is not None:
+                reader.skip(header.size + (-header.size) % habackup.BLOCK)
+            return reader.records
+        self.assertEqual((records(tar(5)), records(tar(1, per=11))), (10, 11))
+        with mock.patch.object(habackup, 'MAX_PAX_RECORDS', 10):
+            self.assertEqual(len(self.walk([], raw=tar(5))[0]), 5, 'ten records are as many as there may be')
+            self.assertEqual(self.refused([], raw=tar(6)), ('limit-exceeded', 'too many extended header records'))
+            self.assertEqual(self.refused([], raw=tar(1, per=11)), ('limit-exceeded', 'too many extended header records'))
+            names = b''.join(hx.raw_member('L', b'long%d\0' % i, typeflag=b'L', magic=hx.GNU) + hx.raw_member(f'x{i}', b'x')
+                             for i in range(50)) + hx.END
+            self.assertEqual(len(self.walk([], raw=names)[0]), 50, 'a long name is no record')
+        self.assertEqual(habackup.MAX_PAX_RECORDS, 50_000_000)
+        # every pass over a member counts for itself
+        entries = [{'name': 'x/a', 'data': b'1'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/a'}]
+        per_pass = records(hx.tar_bytes(entries))
+        self.assertGreater(per_pass, 0)
+        for limit, expected in ((per_pass, [('y/b', 'file', None, b'1')]), (per_pass - 1, 'too many extended header records')):
+            with self.subTest(limit=limit), mock.patch.object(habackup, 'MAX_PAX_RECORDS', limit):
+                if isinstance(expected, str):
+                    self.assertEqual(self.refused(entries, habackup.Select(include=('y',))), ('limit-exceeded', expected))
+                else:
+                    self.assertEqual(self.walk(entries, habackup.Select(include=('y',)))[0], expected)
 
     def test_symlink_policy(self):
         entries = [{'name': 'nodes', 'type': 'dir'}, {'name': 'nodes/pkg', 'type': 'dir'},
