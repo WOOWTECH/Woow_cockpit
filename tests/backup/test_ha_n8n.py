@@ -1601,5 +1601,37 @@ class ColdFlowTests(N8nCase):
         self.assertEqual(self.built().count('n8n-pg'), 0)
 
 
+class ReferenceHostTests(unittest.TestCase):
+    """The Quadlet files of the reference host (names, mounts and dependencies only: tests/backup/fixtures/reference-host): the
+    real shape of n8n in queue mode, in the two ways its app settings can describe it."""
+    FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'reference-host' / 'quadlet'
+
+    def quadlets(self):
+        return {path.name: path.read_bytes() for path in sorted(self.FIXTURES.iterdir()) if path.name.startswith('n8n')}
+
+    def target(self, volumes, postgres):
+        quadlets = self.quadlets()
+        work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
+                                     runner=lambda _app: types.SimpleNamespace(home='/home/appowner'))
+        sink = Sink('n8n')
+        return ha_n8n.Target(work, n8n_app(volumes=volumes, postgres=postgres), sink), sink
+
+    def test_the_single_database_entry_is_filled_as_it_is(self):
+        target, sink = self.target(('n8n_n8n_data', 'n8n_valkey_data'), [dict(PG)])
+        self.assertEqual((target.cold, target.data_volume, target.queue_volumes, target.extra_volumes, sink.found),
+                         (False, 'n8n_n8n_data', ['n8n_valkey_data'], [], []))
+        self.assertEqual((target.main_file, target.pg_file, target.n8n_image),
+                         ('n8n-webhook.container', 'n8n-postgres.container', 'docker.n8n.io/n8nio/n8n:1.119.2'))
+        self.assertEqual(target.skipped_mounts, [], 'the host files inside the home are no skipped mounts')
+
+    def test_the_cold_entry_is_filled_too_with_the_secret_of_the_database_password(self):
+        """N8-01: the real container gets `n8n-db-password` as POSTGRES_PASSWORD, the throwaway n8n as DB_POSTGRESDB_PASSWORD."""
+        target, sink = self.target(('n8n_n8n_data', 'n8n_valkey_data', 'n8n_postgres_data'), [])
+        self.assertEqual((target.cold, target.pg_data_volume, target.queue_volumes, target.extra_volumes, sink.found),
+                         (True, 'n8n_postgres_data', ['n8n_valkey_data'], [], []))
+        self.assertEqual((target.pg['user'], target.pg['database'], target.pg_target), ('n8n', 'n8n', '/var/lib/postgresql/data'))
+        self.assertEqual(target.import_secrets, ['n8n-db-password,type=env,target=DB_POSTGRESDB_PASSWORD'])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -21,7 +21,10 @@ image (a version that cannot be read here is no gate: N8-10).
 HAOS parity (2026-11-25, DESIGN F-a lane N8N). What this device's n8n looks like decides what is carried, never whether
 the import may start: this device's own other volumes and folders go along as they are (N8-02, N8-27: `hatarget.carry`),
 the queue (Valkey / Redis) volumes are the only ones that are emptied, and a data volume whose owner cannot be read gets
-the owner of the image (N8-11, N8-12). The SQLite reader grows its time with the size of the file and, when it was killed
+the owner of the image (N8-11, N8-12). The app settings may list one database item (the dump of one database goes back) or
+the data volume of the database itself, a cold backup (N8-01: the new cluster is made like this device's own, with the
+password of its own, and is the volume that goes back); the instance of a whole PostgreSQL is the one layout that is not
+made here (adapter.import_manifest writes no globals, roles or databases). The SQLite reader grows its time with the size of the file and, when it was killed
 or timed out, is run once more with more time and memory (N8-06, N8-07, N8-09); a database that is broken stops only n8n.
 No key in HA's backup is no gate either: the workflows and everything else move, the credentials cannot be opened and are
 entered again, which is ONE line the customer confirms (N8-15; a key of any shape that n8n takes is used as it is). A
@@ -296,7 +299,7 @@ def scan_member(stream, report, staging, *, files=None, guard=None, checkpoint=N
                     src.native_bad.append(package)
             if files is not None:
                 files.add_member(_info(rel, 'file', mode=entry.mode & 0o755 | 0o644, uid=0, gid=0, mtime=entry.mtime,
-                                       size=entry.size), _Exact(_Replay(head, entry), None))
+                                       size=entry.size), _Exact(_Replay(head, entry), getattr(files, 'guard', None)))
             src.files_bytes += entry.size
             continue
         if files is not None:
