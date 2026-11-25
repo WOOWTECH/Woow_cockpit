@@ -1,0 +1,7 @@
+tests=2279 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=460
+FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded blocked_in_test=1 AssertionError: BackupError('無法執行隔離實驗室命令。') is not BackupError('cancelled')
+FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized blocked_in_test=1 + limit-exceeded
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary blocked_in_test=1 woowbackup.errors.BackupError: 無法執行隔離實驗室命令。
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded blocked_in_test=1 woowbackup.errors.BackupError: 無法執行隔離實驗室命令。
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned blocked_in_test=1 woowbackup.errors.BackupError: 無法執行隔離實驗室命令。
+blocked: [('Popen:child', 6)] shim: []

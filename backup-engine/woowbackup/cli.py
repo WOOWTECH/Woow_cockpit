@@ -18,7 +18,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
-from . import flows, haapps, haissues, hastore
+from . import flows, haapps, hachain, haissues, hastore
 from . import jobs as jobmod
 from . import version as engine_version
 from .errors import BackupError
@@ -234,7 +234,7 @@ SPECS = {
                       'allow_no_safety': (OPTIONAL, v_bool), 'accept_unauthenticated': (OPTIONAL, v_bool),
                       'acknowledged': (OPTIONAL, v_acknowledged)},
     'job-status': {'job_id': (REQUIRED, v_job_id)},
-    'job-cancel': {'job_id': (REQUIRED, v_job_id)},
+    'job-cancel': {'job_id': (REQUIRED, v_job_id), 'after_this': (OPTIONAL, v_bool)},
     'delete': {'backup_id': (REQUIRED, v_backup_id)},
     'upload-begin': {'filename': (REQUIRED, v_filename), 'size': (REQUIRED, v_size)},
     'upload-finish': {'upload_id': (REQUIRED, v_upload_id)},
@@ -969,7 +969,8 @@ def cmd_restore_start(svc, req):
         key_text = None
     confirm_restore(svc, req, header, key_text)
     created = ensure_key(svc, 'restore') if _needs_safety_key(svc, req['apps']) else False
-    params = {'backup_id': req['backup_id'], 'apps': list(req['apps']), 'key_provided': key_text is not None}
+    apps = list(req['apps'])
+    params = {'backup_id': req['backup_id'], 'apps': apps, 'key_provided': key_text is not None}
     if req.get('allow_no_safety'):
         params['allow_no_safety'] = True
     if req.get('accept_unauthenticated'):
@@ -977,9 +978,36 @@ def cmd_restore_start(svc, req):
     # Only the lines of the apps this restore touches stay in the job record (a request may carry the keys of 33 apps).
     acknowledged = {app_id: list(keys) for app_id, keys in (req.get('acknowledged') or {}).items()
                     if keys and app_id in req['apps']}
+    group = None
+    if 1 < len(apps) <= hachain.MAX_APPS and _from_ha(svc, req['backup_id']):
+        # A converted HA backup restores one app after the other, each with its own pre-restore backup and its own automatic
+        # rollback: one app's problem never takes back or stops the others (HAOS parity; hachain.py). Any other backup keeps
+        # its all-or-nothing restore.
+        group = hachain.new_group_id()
+        params['apps'] = apps[:1]
+        params['group'] = hachain.group_params(group, 'ha-restore', 'restore', apps[0], 0, len(apps))
+        params['chain'] = hachain.new_chain(apps, key_provided=key_text is not None, acknowledged=acknowledged,
+                                            allow_no_safety=bool(req.get('allow_no_safety')),
+                                            accept_unauthenticated=bool(req.get('accept_unauthenticated')))
+        acknowledged = {app_id: keys for app_id, keys in acknowledged.items() if app_id == apps[0]}
     if acknowledged:
         params['acknowledged'] = acknowledged
-    return dict(svc.start('restore', params, req['request_id'], key_text=key_text), key_created=created)
+    started = svc.start('restore', params, req['request_id'], key_text=key_text)
+    reply = dict(started, key_created=created)
+    if group is not None:
+        known = ((svc.job_record(started['job_id']) or {}).get('params') or {}).get('group') or {}
+        reply['group'] = known.get('id') if started.get('deduplicated') else group
+    return reply
+
+
+def _from_ha(svc, backup_id):
+    """True for a backup converted from an HA backup (ha-imports.json lists it; an unreadable file says no)."""
+    from . import haimport
+    try:
+        return backup_id in (haimport.load_registry(svc.paths) or {})
+    except Exception:  # noqa: BLE001 - the registry never changes whether a restore can start
+        traceback.print_exc(file=sys.stderr)
+        return False
 
 
 def _needs_safety_key(svc, app_ids):
@@ -1057,7 +1085,9 @@ def cmd_jobs(svc, _req):
 
 
 def cmd_job_cancel(svc, req):
-    return jobmod.cancel_job(svc.paths, req['job_id'])
+    """Cancel a job. A job of an HA import stands for the whole import (its live job is cancelled and the import stops);
+    `after_this: true` lets the app being worked on finish and stops the import after it (CONTRACT section 7)."""
+    return jobmod.cancel_job(svc.paths, req['job_id'], after_this=req.get('after_this') is True)
 
 
 def cmd_delete(svc, req):
@@ -1177,16 +1207,8 @@ def cmd_ha_check_start(svc, req):
 
 
 def _convert_params(rec, apps, *, database, test_mode, encrypt, key, acknowledged, choices):
-    params = {'source': 'ha', 'ha_backup_id': rec['id'], 'apps': list(apps), 'odoo_database': database,
-              'test_mode': bool(test_mode), 'encrypt': bool(encrypt), 'key_provided': key is not None}
-    acknowledged = {app_id: list(keys) for app_id, keys in (acknowledged or {}).items()
-                    if keys and app_id in (*apps, haissues.SHARED)}
-    choices = {app_id: dict(values) for app_id, values in (choices or {}).items() if values and app_id in apps}
-    if acknowledged:
-        params['acknowledged'] = acknowledged
-    if choices:
-        params['choices'] = choices
-    return params
+    return hachain.convert_params(rec['id'], apps, database=database, test_mode=test_mode, encrypt=encrypt,
+                                  key_provided=key is not None, acknowledged=acknowledged, choices=choices)
 
 
 def cmd_ha_convert_start(svc, req):
@@ -1217,8 +1239,7 @@ def cmd_ha_convert_start(svc, req):
 
 def _group_result(app_id, status, code=None, message=None):
     """GroupResult (CONTRACT section 7): what became of one app of an import."""
-    return {'app_id': app_id, 'status': status, 'convert_job_id': None, 'restore_job_id': None, 'backup_id': None,
-            'safety_backup_id': None, 'code': code, 'message': message}
+    return hachain.group_result(app_id, status, code, message)
 
 
 def _import_plan(svc, req):
@@ -1267,17 +1288,16 @@ def cmd_ha_import_start(svc, req):
     rec, key, apps, skipped = _import_plan(svc, req)
     encrypt = svc.encrypt_by_default()
     created = ensure_key(svc, 'ha-import') if encrypt else False
-    group = 'g' + secrets.token_hex(8)
+    group = hachain.new_group_id()
     first = apps[0]
     acknowledged, choices = req.get('acknowledged') or {}, req.get('choices') or {}
     database = (choices.get(first) or {}).get('database') if first == 'odoo' else None
     params = _convert_params(rec, [first], database=database, test_mode=req['test_mode'], encrypt=encrypt, key=key,
                              acknowledged=acknowledged, choices=choices)
-    params['group'] = {'id': group, 'index': 0, 'count': len(apps), 'kind': 'ha-import', 'step': 'convert',
-                       'app_id': first}
-    params['chain'] = {'apps': apps, 'test_mode': bool(req['test_mode']), 'then_restore': bool(req['then_restore']),
-                       'encrypt': bool(encrypt), 'acknowledged': {k: list(v) for k, v in acknowledged.items() if v},
-                       'choices': {k: dict(v) for k, v in choices.items() if v}, 'results': skipped}
+    params['group'] = hachain.group_params(group, 'ha-import', 'convert', first, 0, len(apps))
+    params['chain'] = hachain.new_chain(apps, test_mode=req['test_mode'], then_restore=req['then_restore'],
+                                        encrypt=encrypt, key_provided=key is not None, ha_backup_id=rec['id'],
+                                        acknowledged=acknowledged, choices=choices, results=skipped)
     started = svc.start('backup', params, req['request_id'], key_text=key, key_kind='ha')
     if started.get('deduplicated'):
         known = ((svc.job_record(started['job_id']) or {}).get('params') or {}).get('group') or {}
