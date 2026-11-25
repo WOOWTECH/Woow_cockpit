@@ -1071,6 +1071,40 @@ class PolicyTests(HeadscaleCase):
         self.refused(ha_id, 'incompatible')
 
 
+class _Spy:
+    """The real child, only the specs it was asked are noted (PolicyCopy's place in RealChildPolicyTests)."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __enter__(self):
+        real = hasqlite.run
+
+        def run(specs, files, work_dir, **kwargs):
+            self.seen.append(specs)
+            return real(specs, files, work_dir, **kwargs)
+
+        self.patch = mock.patch.object(hasqlite, 'run', side_effect=run)
+        self.patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.patch.stop()
+        return False
+
+
+@unittest.skipUnless(hasattr(hasqlite, 'COPY_POLICIES'), "needs the SQLite child's replace_policies_from (snippets/parity-hh/hasqlite.py.patch)")
+class RealChildPolicyTests(PolicyTests):
+    """The same policy tests with the child that really copies the policies instead of the stand-in (they are skipped until the
+    patch of hasqlite.py is in the tree; the lane's own run with the patch applied is in the hand-off)."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(__import__(__name__, fromlist=['x']), 'PolicyCopy', _Spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 class ConvertTests(HeadscaleCase):
     def test_the_whole_conversion(self):
         result = self.convert(self.upload_headscale(), ['headscale'])
