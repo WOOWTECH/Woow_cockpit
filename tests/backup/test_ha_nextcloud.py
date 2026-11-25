@@ -15,7 +15,7 @@ from unittest import mock
 from woowbackup import ha_nextcloud as nc
 from woowbackup import habackup, haimport, haissues, jobs
 from woowbackup.errors import BackupError
-from woowbackup.podman import Result
+from woowbackup.podman import CommandError, Result
 
 from . import hab1fakes as fk
 from . import hafixtures as hx
@@ -247,6 +247,16 @@ def members(data):
 
 
 class Owner(fk.Owner):
+    def systemctl(self, *args, **kwargs):
+        """`systemctl --user start|stop -- <unit>`: the container of the unit comes up or goes down (the unit is the
+        container's name)."""
+        self.calls.append(('systemctl', *args))
+        verb, container = args[0], args[-1].removesuffix('.service')
+        if verb == 'start' and container in self.world.cannot_start:
+            raise CommandError('systemctl start 執行失敗（結束碼 1）。', returncode=1, stderr=b'Job failed')
+        (self.world.down.discard if verb == 'start' else self.world.down.add)(container)
+        return Result(0, b'', b'')
+
     def dir_pack(self, rel, *, stdout, timeout=None, max_output=None, abort=None):
         self.calls.append(('dir_pack', rel))
         stdout.write(live_html())
@@ -273,6 +283,14 @@ class World(fk.World):
         self.catalog = None
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
         self.objects = {'functions': [], 'triggers': []}
+        self.down = set()               # containers that are stopped until their unit is started (NC-04)
+        self.cannot_start = set()
+        self.live_config = LIVE_CONFIG  # what `cat config.php` of the live app prints
+        self.php_config = None          # what this device's PHP prints of a config.php that is not plain data (NC-05)
+        self.live_db = LIVE_DB          # what the live database says of the role and its settings (NC-07, NC-08)
+        self.office_unreadable = False  # the Office settings cannot be read (NC-09)
+        self.live_settings = []         # [name, setting, source, context] of the live cluster (NC-49)
+        self.file_settings = []         # pg_file_settings of the new cluster: [name, setting, error]
         self.lists = HA_LISTS
         self.tables = TABLES
         self.office_cache = dict(OFFICE_CACHE)
@@ -282,6 +300,8 @@ class World(fk.World):
         self.dirs = {}
 
     def podman(self, args, data, stdout):
+        if args[:2] == ['container', 'inspect'] and '{{.State.Running}}' in args[3]:
+            return Result(0, b'false\n' if args[-1] in self.down else b'true\n', b'')
         if args[0] == 'exec':
             env, i = {}, 1
             while args[i].startswith('--'):
@@ -316,7 +336,9 @@ class World(fk.World):
 
     def exec(self, role, command, data, stdout):
         if role == 'nextcloud-app' and command[:1] == ['cat']:
-            return Result(0, LIVE_CONFIG, b'')
+            return Result(0, self.live_config, b'')
+        if role == 'nextcloud-app' and command[:1] == ['php']:
+            return Result(0 if self.php_config is not None else 3, self.php_config or b'', b'')
         if role == 'nextcloud-app' and command[:2] == ['sh', '-c']:
             folder, _sep, name = command[-1].rpartition('/')
             assert folder == '/var/www/html/data/appdata_oclive123456/richdocuments/remoteData', command
@@ -350,7 +372,9 @@ class World(fk.World):
         if sql.startswith("SELECT json_build_object('users'"):
             return HA_COUNTS
         if sql.startswith("SELECT json_build_object(\n 'role'"):
-            return LIVE_DB
+            if self.office_unreadable and 'oc_appconfig' in sql:
+                raise CommandError('psql 執行失敗（結束碼 1）。', returncode=1, stderr=b'ERROR: relation does not exist')
+            return self.live_db
         if sql.startswith('SELECT count(*) FROM public.oc_filecache'):
             return 2
         if sql.startswith("SELECT json_build_object(\n 'counts'"):
@@ -359,13 +383,18 @@ class World(fk.World):
                 'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'moved': moved.count("'") // 2, 'old': 0,
                 'appconfig': LIVE_DB['appconfig']}
         if sql.startswith("SELECT json_build_object(\n 'owners'"):
+            made = re.findall(r"PASSWORD '(SCRAM-SHA-256\$[^']+)'", '\n'.join(x for _db, x, _tx in self.psql['nc-db'].executed))
             return self.catalog if self.catalog is not None else {
-                'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
-                'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                'owners': ['oc_admin'], 'verifier_md5': hashlib.md5((made[-1] if made else VERIFIER).encode()).hexdigest(),
+                'role': {k: v for k, v in (self.live_db['role'] or nc.INSTALLER_ROLE).items() if k != 'password'}, 'role_settings': 0,
                 'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
                 **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
-        if 'FROM pg_settings' in sql or 'pg_file_settings' in sql:
-            return []
+        if sql == nc.ha_odoo.SETTINGS_SQL:
+            if role == 'nextcloud-db' and self.live_settings is None:      # this device's settings cannot be read
+                raise CommandError('psql 執行失敗（結束碼 1）。', returncode=1, stderr=b'ERROR: x')
+            return (self.live_settings if role == 'nextcloud-db' else []) or []
+        if sql == nc.ha_odoo.FILE_SETTINGS_SQL:
+            return self.file_settings() if callable(self.file_settings) else self.file_settings
         return None
 
     def export(self, volume):
@@ -1428,6 +1457,250 @@ class ConvertTests(NextcloudCase):
             self.convert(self.upload_nextcloud(share=None), ['nextcloud'])
         self.assertIn('沒有包含 share 資料夾', caught.exception.message)
         self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'no cluster is started')
+
+
+class LiveTargetTests(NextcloudCase):
+    """What this device's own Nextcloud is like: stopped, hand-edited, its database role missing, a superuser, ..."""
+
+    def systemctl(self, verb=None):
+        return [c[1:] for c in self.world.owner.calls if c[0] == 'systemctl' and (verb is None or c[1] == verb)]
+
+    def test_a_stopped_nextcloud_and_database_are_started_to_be_read_and_put_back(self):
+        # NC-04: they are started, read and put back as they were; the line says which
+        self.world.down = {'nextcloud-app', 'nextcloud-db'}
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertEqual((row['importable'], row['blockers']), (True, []))
+        started = [issue for issue in row['issues'] if issue['id'] == 'target.service-started']
+        self.assertEqual(sorted(name for issue in started for name in issue['items']), ['nextcloud-app', 'nextcloud-db'])
+        self.assertEqual({c[-1] for c in self.systemctl('start')}, {'nextcloud-app.service', 'nextcloud-db.service'})
+        self.assertEqual({c[-1] for c in self.systemctl('stop')}, {'nextcloud-app.service', 'nextcloud-db.service'})
+        self.assertEqual(self.world.down, {'nextcloud-app', 'nextcloud-db'}, 'back as they were')
+        self.assertEqual(row['nextcloud']['target_url'], 'http://127.0.0.1:18081', 'it was read')
+
+    def test_the_redis_of_this_device_is_started_for_the_conversion_too(self):
+        self.world.down = {'nextcloud-redis'}
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual({c[-1] for c in self.systemctl('start')}, {'nextcloud-redis.service'})
+        self.assertEqual(self.world.down, {'nextcloud-redis'})
+        self.assertTrue(result['results'][0]['status'] == 'converted')
+        self.assertIn(('systemctl', 'stop', '--', 'nextcloud-redis.service'), self.world.owner.calls)
+
+    def test_what_cannot_be_started_stops_only_nextcloud(self):
+        self.world.down = {'nextcloud-app'}
+        self.world.cannot_start = {'nextcloud-app'}
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'target.service-failed')
+        self.assertEqual((row['importable'], issue['level'], issue['items']), (False, 'stop', ['nextcloud-app']))
+        self.assertTrue(issue['action'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'nothing is built')
+
+    PLAIN_PASSWORD_LINE = b"'dbpassword' => 'live-db-password-0001',"
+
+    def test_a_config_php_that_is_not_plain_data_is_read_by_this_devices_php(self):
+        # NC-05: a function in this device's own config.php: its own PHP prints the values; HA's file is never run
+        self.world.live_config = LIVE_CONFIG.replace(b"'dbpassword' => 'live-db-password-0001',", b"'dbpassword' => getenv('DBPW'),")
+        self.assertNotEqual(self.world.live_config, LIVE_CONFIG)
+        self.world.php_config = LIVE_CONFIG
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.live-config-php')
+        self.assertEqual((row['ok'], issue['level']), (True, 'auto'))
+        php = [c for r, c, _d in self.world.execs if r == 'nextcloud-app' and c[:1] == ['php']]
+        self.assertEqual(len(php), 1)
+        self.assertEqual(php[0][:3], ['php', '-d', 'display_errors=0'])
+        self.assertIn('include "/var/www/html/config/config.php"', php[0][-1])
+        self.assertNotIn('ochaabcdef12', php[0][-1], 'nothing of HA is in the command')
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        merged = nc.parse_config(members(self.world.dirs[DIRS[2]])['./config/config.php'][1])
+        self.assertEqual((merged['dbpassword'], merged['instanceid']), ('live-db-password-0001', 'ochaabcdef12'))
+
+    def test_a_config_php_that_not_even_its_own_php_gives_stops_only_nextcloud(self):
+        self.world.live_config = LIVE_CONFIG.replace(b"'installed' => true,", b"'installed' => (true),")
+        for php in (None, b'<?php echo 1;', LIVE_CONFIG.replace(b'<?php', b'<?php if (1) {')):
+            with self.subTest(php=php):
+                self.world.php_config = php
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                issue = issue_of(row, 'nextcloud.live-config-unreadable')
+                self.assertEqual((row['importable'], issue['level']), (False, 'stop'))
+                self.assertTrue(issue['action'])
+
+    def test_a_missing_role_is_made_from_the_password_in_config_php(self):
+        # NC-07: the database has no such role: config.php names it and holds its password
+        self.world.live_db = dict(LIVE_DB, role=None)
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.db-role-created')
+        self.assertEqual((row['ok'], issue['level'], issue['items']), (True, 'auto', ['oc_admin']))
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        scripts = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+        made = re.search(r"CREATE ROLE \"oc_admin\" ([A-Z ]+) PASSWORD '(SCRAM-SHA-256\$[^']+)'", scripts)
+        self.assertTrue(made, scripts[:300])
+        self.assertIn('LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', made.group(1))
+        self.assertNotIn('live-db-password-0001', scripts, 'the password itself is in no statement')
+        iterations, salt = re.fullmatch(r'SCRAM-SHA-256\$([0-9]+):([^$]+)\$.*', made.group(2)).groups()
+        import base64
+        self.assertEqual(nc.scram_verifier('live-db-password-0001', iterations=int(iterations), salt=base64.b64decode(salt)),
+                         made.group(2), 'the verifier of config.php\'s password')
+
+    def test_a_role_without_a_usable_password_keeps_its_rights_and_gets_a_new_verifier(self):
+        for password in (None, 'plain-text-password', ''):
+            with self.subTest(password=password):
+                role = dict(LIVE_DB['role'], password=password, connlimit=5)
+                self.world.live_db = dict(LIVE_DB, role=role)
+                self.convert(self.upload_nextcloud(), ['nextcloud'])
+                scripts = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+                self.assertIn('CONNECTION LIMIT 5 PASSWORD \'SCRAM-SHA-256$', scripts)
+
+    def test_a_role_that_cannot_be_made_stops_only_nextcloud(self):
+        # NC-07: no usable password anywhere: config.php has none, or one SCRAM cannot take as it is
+        for password in (None, '', 'ünï', 'x' * 600):
+            with self.subTest(password=password):
+                config = {k: v for k, v in nc.parse_config(LIVE_CONFIG).items() if k != 'dbpassword'}
+                if password is not None:
+                    config['dbpassword'] = password
+                self.world.live_config = nc.render_config(config)
+                self.world.live_db = dict(LIVE_DB, role=None)
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                issue = issue_of(row, 'nextcloud.db-role-unusable')
+                self.assertEqual((row['importable'], issue['level'], issue['items']), (False, 'stop', ['oc_admin']))
+                self.assertTrue(issue['action'])
+                self.assertNotIn(str(password or 'x')[:3] + 'x', issue['message'])
+        self.world.live_config = nc.render_config(dict(nc.parse_config(LIVE_CONFIG), dbuser='pg_nope'))
+        self.assertEqual(issue_of(self.check(self.upload_nextcloud(), ['nextcloud'])[0], 'nextcloud.db-role-unusable')['level'],
+                         'stop')
+
+    def superuser_world(self, bootstrap=False):
+        """A live role that is a superuser: another one of the cluster (oc_admin) or the cluster's own (nextcloud)."""
+        name = 'nextcloud' if bootstrap else 'oc_admin'
+        if bootstrap:
+            self.world.live_config = LIVE_CONFIG.replace(b"'dbuser' => 'oc_admin'", b"'dbuser' => 'nextcloud'")
+        role = dict(LIVE_DB['role'], super=True)
+        self.world.live_db = dict(LIVE_DB, role=role)
+        self.world.catalog = {'owners': [name], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                              'role': {k: v for k, v in role.items() if k != 'password'}, 'role_settings': 0, 'grants': 0,
+                              'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                              **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+        return name
+
+    def test_a_superuser_role_is_loaded_by_a_plain_one_and_handed_over(self):
+        # NC-08: HA's data never loads with a superuser's rights; a plain, temporary role does, then it is handed over
+        name = self.superuser_world()
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.db-role-hand-over')
+        self.assertEqual((row['ok'], issue['level'], issue['items']), (True, 'auto', ['oc_admin']))
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        executed = [script for _db, script, _tx in self.world.psql['nc-db'].executed]
+        text = '\n'.join(executed)
+        self.assertIn('CREATE ROLE "oc_admin" LOGIN SUPERUSER', text)
+        self.assertIn('CREATE ROLE "woowbk_load" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', text)
+        restore = [c for r, c, _d in self.world.execs if r == 'nc-db' and c[:1] == ['pg_restore'] and '-U' in c]
+        self.assertEqual(restore[0][:3], ['pg_restore', '-U', 'woowbk_load'], 'HA\'s data is loaded by the plain role')
+        first = next(i for i, x in enumerate(executed) if 'REASSIGN OWNED BY "woowbk_load" TO "oc_admin"' in x)
+        self.assertEqual([x for x in executed[first:first + 3]],
+                         ['REASSIGN OWNED BY "woowbk_load" TO "oc_admin"', 'DROP OWNED BY "woowbk_load"',
+                          'DROP ROLE "woowbk_load"'])
+        for i, x in enumerate(executed):
+            if 'public.oc_' in x:
+                self.assertLess(i, first, 'every statement on the tables ran before the hand-over')
+        loaded = [x for x in self.world.sessions if x['role'] == 'nc-db' and 'public.oc_' in x['sql']]
+        self.assertTrue(loaded and all(x['pg_user'] == 'woowbk_load' for x in loaded),
+                        'the fix-ups and the reads of the tables run as the plain role: ' + str({x['pg_user'] for x in loaded}))
+        catalog = [x for x in self.world.sessions if x['role'] == 'nc-db' and 'rolpassword' in x['sql']]
+        self.assertEqual({x['pg_user'] for x in catalog}, {'nextcloud'}, 'the catalogs are read by the cluster\'s superuser')
+        self.assertEqual(name, 'oc_admin')
+
+    def test_the_clusters_own_superuser_as_nextcloud_role_gets_this_devices_verifier(self):
+        name = self.superuser_world(bootstrap=True)
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        text = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+        self.assertNotIn('CREATE ROLE "nextcloud"', text, 'it exists already')
+        self.assertIn(f'ALTER ROLE "nextcloud" PASSWORD \'{VERIFIER}\'', text)
+        self.assertIn(f'REASSIGN OWNED BY "woowbk_load" TO "{name}"', text)
+
+    def test_a_superuser_role_that_owns_nothing_after_the_hand_over_stops_the_conversion(self):
+        # the verification is what it was: the owner of every table must be the role, the role must be what the live one is
+        self.superuser_world()
+        self.world.catalog = dict(self.world.catalog, owners=['woowbk_load'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('資料表的擁有者不是 oc_admin', caught.exception.message)
+        self.superuser_world()
+        self.world.catalog = dict(self.world.catalog, role=dict(self.world.catalog['role'], super=False))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('oc_admin 角色的權限和這台的不同', caught.exception.message)
+        self.world.live_db = dict(LIVE_DB)       # a plain live role that the new cluster made a superuser of
+        self.world.catalog = dict(self.world.catalog, role=dict(self.world.catalog['role'], super=True))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('oc_admin 角色的權限和這台的不同', caught.exception.message)
+
+    def test_a_plain_role_is_not_touched_by_any_of_it(self):
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        text = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+        self.assertNotIn('woowbk_load', text)
+        self.assertNotIn('REASSIGN', text)
+
+    def test_office_settings_that_cannot_be_read_are_a_reminder(self):
+        # NC-09: HA's Office settings stay as they are; the customer is told to set Office up again
+        self.world.office_unreadable = True
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        issue = issue_of(row, 'nextcloud.office-settings-unread')
+        self.assertEqual((row['ok'], row['importable'], issue['level']), (True, True, 'notice'))
+        self.assertIn('重新設定 Office', issue['message'])
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        text = '\n'.join(script for _db, script, _tx in self.world.psql['nc-db'].executed)
+        self.assertNotIn('DELETE FROM public.oc_appconfig WHERE (appid, configkey)', text, 'HA\'s settings are not taken out')
+        self.assertNotIn('INSERT INTO public.oc_appconfig', text)
+        self.assertEqual(sum(i['id'] == 'nextcloud.office-settings-unread' for i in result['results'][0]['issues']), 1)
+
+    def test_the_cached_collabora_answers_that_cannot_be_read_are_a_reminder_too(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if role == 'nextcloud-app' and command[:2] == ['sh', '-c']:
+                raise CommandError('podman exec 執行失敗（結束碼 1）。', returncode=1, stderr=b'x')
+            return real(role, command, data, stdout)
+
+        self.world.exec = exec_
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(sum(i['id'] == 'nextcloud.office-settings-unread' for i in result['results'][0]['issues']), 1)
+        self.assertNotIn('./appdata_ochaabcdef12/richdocuments/remoteData/discovery', members(self.world.dirs[DIRS[3]]))
+
+    def test_settings_of_this_devices_postgresql_that_are_refused_are_left_at_their_defaults(self):
+        # NC-49: one setting is written, the new cluster refuses it: it is taken out again; the data is as it was
+        self.world.live_settings = [['work_mem', '8MB', 'configuration file', 'user'],
+                                    ['maintenance_work_mem', '64MB', 'configuration file', 'user']]
+        refused = [['work_mem', '8MB', 'invalid value'], ['maintenance_work_mem', '64MB', '']]
+        self.world.file_settings = [refused[0], refused[1]]
+
+        def after_reset():
+            executed = '\n'.join(statement for _db, statement, _tx in self.world.psql['nc-db'].executed)
+            return [refused[1]] if 'ALTER SYSTEM RESET work_mem' in executed else refused
+
+        self.world.file_settings = after_reset
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        issue = next(i for i in result['results'][0]['issues'] if i['id'] == 'nextcloud.settings-not-carried')
+        self.assertEqual((issue['level'], issue['items']), ('notice', ['work_mem']))
+        executed = [statement for _db, statement, _tx in self.world.psql['nc-db'].executed]
+        self.assertTrue(any('ALTER SYSTEM SET maintenance_work_mem' in x for x in executed))
+        self.assertTrue(any('ALTER SYSTEM RESET work_mem' in x for x in executed))
+        self.assertFalse(any('RESET ALL' in x for x in executed))
+        # when what is left is refused after that too, none of them is kept
+        answers = iter([[['work_mem', '8MB', 'invalid'], ['maintenance_work_mem', '64MB', '']],
+                        [['maintenance_work_mem', '64MB', 'invalid']], []])
+        self.world.file_settings = lambda: next(answers, [])
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        issue = next(i for i in result['results'][0]['issues'] if i['id'] == 'nextcloud.settings-not-carried')
+        self.assertEqual(sorted(issue['items']), ['maintenance_work_mem', 'work_mem'])
+        self.assertTrue(any('ALTER SYSTEM RESET ALL' in x for _db, x, _tx in self.world.psql['nc-db'].executed))
+
+    def test_settings_that_cannot_be_read_from_this_device_are_a_reminder(self):
+        self.world.live_settings = None
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual([i['level'] for i in result['results'][0]['issues'] if i['id'] == 'nextcloud.settings-not-carried'],
+                         ['notice'])
 
 
 class ShapeTests(unittest.TestCase):

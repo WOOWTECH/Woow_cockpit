@@ -110,6 +110,13 @@ ISSUES = {
     'nextcloud.extension-enabled': 'auto',        # NC-39: an extension this device's database image has is enabled
     'nextcloud.extension-missing': 'stop',        # NC-39: ... and one it has not
     'nextcloud.schemas-skipped': 'confirm',       # NC-40: only the schema public is moved
+    'nextcloud.live-config-php': 'auto',          # NC-05: this device's config.php is read by its own PHP
+    'nextcloud.live-config-unreadable': 'stop',   # NC-05: ... and could not be
+    'nextcloud.db-role-created': 'auto',          # NC-07: the database role of config.php is made from config.php
+    'nextcloud.db-role-unusable': 'stop',         # NC-07: ... and config.php has no password to make it from
+    'nextcloud.db-role-hand-over': 'auto',        # NC-08: a superuser role: loaded by a plain one, handed over
+    'nextcloud.office-settings-unread': 'notice',  # NC-09
+    'nextcloud.settings-not-carried': 'notice',   # NC-49
     'nextcloud.storage-missing': 'stop',          # NC-41
     'nextcloud.storage-taken': 'stop',            # NC-42
 }
@@ -121,6 +128,15 @@ SECRET_VALUE_RE = re.compile(r'[A-Za-z0-9+/=._-]{8,512}\Z')
 # control character (habackup leaves such a name out of what it hands out) and no slash (NC-25).
 DATADIR_SEG_RE = re.compile(r'[^\x00-\x1f\x7f/]{1,255}\Z')
 ROLE_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
+# NC-05: this device's own PHP evaluates a config.php that is more than a file of values; the strict parser reads what it prints.
+PHP_DUMP = ('ob_start(); include "/var/www/html/config/config.php"; ob_end_clean(); '
+            'if (!isset($CONFIG) || !is_array($CONFIG)) { exit(3); } '
+            'echo "<?php\\n\\$CONFIG = "; var_export($CONFIG); echo ";\\n";')
+PLAIN_PASSWORD_RE = re.compile(r'[\x20-\x7e]{1,512}\Z')   # a password that SCRAM-SHA-256 takes as it is (no SASLprep change)
+# What Nextcloud's installer makes of its database role (lib/private/Setup/PostgreSQL.php), for a role that is not there.
+INSTALLER_ROLE = {'super': False, 'login': True, 'createdb': True, 'createrole': False, 'replication': False,
+                  'bypassrls': False, 'connlimit': -1}
+LOADER = 'woowbk_load'    # NC-08: the plain role that loads HA's data when the database role of Nextcloud is a superuser
 EXT_RE = re.compile(r'[A-Za-z_][A-Za-z0-9_-]{0,62}\Z')
 DB_RE = re.compile(r'[a-z_][a-z0-9_]{0,62}\Z')
 STAT_RE = re.compile(rb'\s*([0-9]{1,10}) ([0-9]{1,10}) ([0-7]{1,4})\s*\Z')
@@ -1149,14 +1165,37 @@ def _exec(work, app, container, argv, what, *, max_output=MAX_CONFIG):
         raise BackupError('job-failed', f'無法讀取這台 Nextcloud 的{what}，請確認它正在執行。', app=app.id) from None
 
 
+def php_config(work, app, live):
+    """The live config.php as its own PHP evaluates it (NC-05), in the shape Nextcloud writes it: read only, the file
+    is this device's own and runs in this device's own container (never HA's). None when it cannot be."""
+    try:
+        out = _exec(work, app, live.app_container, ['php', '-d', 'display_errors=0', '-r', PHP_DUMP], '設定檔 config.php')
+        return parse_config(out)
+    except ValueError:
+        return None
+    except BackupError as error:
+        if error.code != 'job-failed' or haissues.is_job_wide(error):
+            raise
+        return None
+
+
 def live_config(work, app, live):
-    """The live config.php (parsed strictly, secrets masked)."""
+    """The live config.php (parsed strictly, secrets masked). One that is not what Nextcloud writes (a function, a double-quoted
+    text with a variable ...) is read by this device's own PHP instead (NC-05); only when that fails Nextcloud stops."""
     data = _exec(work, app, live.app_container, ['cat', '/var/www/html/config/config.php'], '設定檔 config.php')
     try:
         config = parse_config(data)
     except ValueError:
-        raise BackupError('incompatible', '無法解讀這台 Nextcloud 的 config.php（格式不是 Nextcloud 自己寫的樣子）。',
-                          app=app.id) from None
+        config = php_config(work, app, live)
+        if config is None:
+            raise haissues.stopped(haissues.Issue(
+                'nextcloud.live-config-unreadable', 'stop', '無法解讀這台 Nextcloud 的 config.php（格式不是 Nextcloud 自己寫的樣子），'
+                '也無法請這台 Nextcloud 自己讀出它的設定值。',
+                action='請先在這台確認 Nextcloud 能正常運作、config.php 是 Nextcloud 自己寫的樣子，再匯入。'),
+                'incompatible', app=app.id) from None
+        work.sink(app).auto('nextcloud.live-config-php',
+                            '這台 Nextcloud 的 config.php 不是 Nextcloud 自己寫的樣子（含有函式或變數），'
+                            '已改由這台 Nextcloud 自己的 PHP 讀出設定值。')
     mask_config(config)
     role, dbname = config.get('dbuser'), config.get('dbname')
     if config.get('dbtype') != 'pgsql' or not (isinstance(role, str) and ROLE_RE.fullmatch(role)) \
@@ -1208,46 +1247,103 @@ def image_env(work, app, image, key):
     return None
 
 
-def live_db_sql(role):
+def live_db_sql(role, *, appconfig=True):
     """What the import reads of the LIVE database, as its superuser: names resolve in pg_catalog only, so nothing the
-    Nextcloud role could have created in `public` can stand in for a built-in."""
+    Nextcloud role could have created in `public` can stand in for a built-in. `appconfig` False: without the Office settings
+    (NC-09: the part that can fail on its own)."""
     lit = ha_odoo.sql_literal
     keys = ' OR '.join(f'(appid = {lit(a)} AND configkey = {lit(k)})' for a, k in LIVE_APPCONFIG)
-    return f"""SET search_path = pg_catalog; SELECT json_build_object(
- 'role', (SELECT json_build_object('password', rolpassword, 'super', rolsuper, 'login', rolcanlogin,
+    parts = [f""" 'role', (SELECT json_build_object('password', rolpassword, 'super', rolsuper, 'login', rolcanlogin,
           'createdb', rolcreatedb, 'createrole', rolcreaterole, 'replication', rolreplication,
-          'bypassrls', rolbypassrls, 'connlimit', rolconnlimit) FROM pg_authid WHERE rolname = {lit(role)}),
- 'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_'),
- 'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension),
- 'available', (SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions),
- 'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database()),
- 'nspacl', (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public'),
- 'appconfig', (SELECT coalesce(json_agg(row_to_json(a) ORDER BY appid, configkey), '[]'::json)
-               FROM public.oc_appconfig a WHERE {keys}))"""
+          'bypassrls', rolbypassrls, 'connlimit', rolconnlimit) FROM pg_authid WHERE rolname = {lit(role)})""",
+             """ 'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_')""",
+             """ 'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension)""",
+             """ 'available', (SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions)""",
+             """ 'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database())""",
+             """ 'nspacl', (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public')"""]
+    if appconfig:
+        parts.append(f""" 'appconfig', (SELECT coalesce(json_agg(row_to_json(a) ORDER BY appid, configkey), '[]'::json)
+               FROM public.oc_appconfig a WHERE {keys})""")
+    return 'SET search_path = pg_catalog; SELECT json_build_object(\n' + ',\n'.join(parts) + ')'
 
 
-def live_database(work, app, live, role):
-    """The live database's role `role` (verifier masked), roles, extensions, grants and kept app settings."""
+def scram_verifier(password, *, iterations=4096, salt=None):
+    """The SCRAM-SHA-256 verifier PostgreSQL keeps of `password` (RFC 5802 and 7677: the salted password, the keys of the client
+    and the server; `SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>`). The role gets it as it is, so the password
+    itself is never in a statement."""
+    salt = os.urandom(16) if salt is None else salt
+    salted = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+    stored = hashlib.sha256(hmac.new(salted, b'Client Key', hashlib.sha256).digest()).digest()
+    server = hmac.new(salted, b'Server Key', hashlib.sha256).digest()
+
+    def b64(raw):
+        return base64.b64encode(raw).decode('ascii')
+    return f'SCRAM-SHA-256${iterations}:{b64(salt)}${b64(stored)}:{b64(server)}'
+
+
+def database_role(work, app, doc, role, config, sink):
+    """The Nextcloud database role the new cluster gets, from the live read `doc` (NC-07, NC-08): the live role as it is; or,
+    when the live database has no such role or no usable password for it, the role config.php names with the password
+    config.php holds (the verifier is made here); a superuser role stays one (it is loaded by a plain role: build_cluster)."""
     from . import jobs
-    doc = hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, live_db_sql(role))
-    if not isinstance(doc, dict) or not isinstance(doc.get('role'), dict):
-        raise BackupError('incompatible', f'這台的 Nextcloud 資料庫沒有 {role} 角色。', app=app.id)
-    password = doc['role'].get('password')
-    if not isinstance(password, str) or not ha_odoo.VERIFIER_RE.fullmatch(password):
-        raise BackupError('incompatible', f'這台 Nextcloud 資料庫的 {role} 角色沒有可用的密碼設定。', app=app.id)
+    row = doc.get('role') if isinstance(doc.get('role'), dict) else None
+    password = row.get('password') if row else None
+    if not (isinstance(password, str) and ha_odoo.VERIFIER_RE.fullmatch(password)):
+        plain = config.get('dbpassword')
+        if not (isinstance(plain, str) and PLAIN_PASSWORD_RE.fullmatch(plain)) or role.startswith('pg_'):
+            raise haissues.stopped(haissues.Issue(
+                'nextcloud.db-role-unusable', 'stop',
+                '這台 Nextcloud 的資料庫裡沒有 config.php 寫的資料庫帳號，或它沒有可用的密碼，config.php 裡也沒有可用的密碼可以重建它，'
+                '沒辦法讓 Nextcloud 在匯入後登入資料庫。', [role],
+                action='請先在這台讓 Nextcloud 正常運作（它能連上自己的資料庫），再匯入。'), 'incompatible', app=app.id)
+        password = scram_verifier(plain)
+        row = dict(INSTALLER_ROLE, **{key: value for key, value in (row or {}).items() if key != 'password'})
+        row['password'] = password
+        sink.auto('nextcloud.db-role-created',
+                  '這台 Nextcloud 的資料庫裡沒有 config.php 寫的資料庫帳號，或它沒有可用的密碼；'
+                  '已用 config.php 裡的帳號與密碼在新的資料庫建立它。', [role])
     jobs.mask_secret(password)
-    if doc['role'].get('super') is not False:
-        raise BackupError('incompatible', f'這台 Nextcloud 資料庫的 {role} 角色是超級使用者，不是 Nextcloud 安裝程式建立的樣子。',
-                          app=app.id)
+    if row.get('super') is True:
+        sink.auto('nextcloud.db-role-hand-over',
+                  '這台 Nextcloud 用的資料庫帳號是超級使用者，不是 Nextcloud 安裝程式建立的樣子。放入 HA 的資料時改用權限低的暫時帳號，'
+                  '放完再把資料交回這個帳號；匯入後它仍是超級使用者，和這台原本一樣。', [role])
+    doc['role'] = row
+    return doc
+
+
+def office_unread(sink):
+    """NC-09: this device's Office settings (or its cached Collabora answers) could not be read: the converted Nextcloud keeps
+    HA's, a reminder says so (once)."""
+    if not any(issue.id == 'nextcloud.office-settings-unread' for issue in sink.found):
+        sink.notice('nextcloud.office-settings-unread',
+                    '讀不到這台 Nextcloud 的 Office（Collabora）設定，匯入後 Office 設定會是 HA 的，可能開不了線上文件；'
+                    '請在匯入後重新設定 Office。')
+
+
+def live_database(work, app, live, role, config, sink):
+    """The live database's role `role` (verifier masked), roles, extensions, grants and kept app settings. A role that is not
+    there, one without a usable password and a superuser one are no refusal (database_role, NC-07, NC-08); Office settings that
+    cannot be read are a reminder, `appconfig` is then None (NC-09)."""
+    try:
+        doc = hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, live_db_sql(role))
+    except BackupError as error:
+        if error.code != 'job-failed' or haissues.is_job_wide(error):
+            raise
+        doc = hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, live_db_sql(role, appconfig=False))
+        doc = dict(doc, appconfig=None) if isinstance(doc, dict) else doc
+    if not isinstance(doc, dict):
+        raise BackupError('job-failed', '無法讀取這台 Nextcloud 的資料庫設定。', app=app.id)
     rows = doc.get('appconfig')
-    if not isinstance(rows, list) or not all(isinstance(r, dict) and isinstance(r.get('appid'), str)
-                                             and isinstance(r.get('configkey'), str) for r in rows):
-        raise BackupError('job-failed', '無法讀取這台 Nextcloud 的 Office 設定。', app=app.id)
+    if rows is not None and not (isinstance(rows, list) and all(isinstance(r, dict) and isinstance(r.get('appid'), str)
+                                                                 and isinstance(r.get('configkey'), str) for r in rows)):
+        doc['appconfig'] = rows = None
+    if rows is None:
+        office_unread(sink)
     if not all(isinstance(doc.get(key), list) for key in ('roles', 'extensions')):
         raise BackupError('job-failed', '無法讀取這台 Nextcloud 的資料庫設定。', app=app.id)
     available = doc.get('available')
     doc['available'] = [name for name in available if isinstance(name, str)] if isinstance(available, list) else []
-    return doc
+    return database_role(work, app, doc, role, config, sink)
 
 
 class Target:
@@ -1256,11 +1352,14 @@ class Target:
     def __init__(self, work, app):
         runner = work.runner(app)
         self.live = Live(work.quadlets(app), runner.home, app)
+        # NC-04: a stopped Nextcloud or database is started to be read, and put back when the app's throwaway objects go
+        hatarget.ensure_running(work, app, self.live.app_container)
+        hatarget.ensure_running(work, app, self.live.db_container, ready='postgres')
         self.config = live_config(work, app, self.live)
         self.image_version = image_env(work, app, self.live.app_image, 'NEXTCLOUD_VERSION')
         self.php_version = image_env(work, app, self.live.app_image, 'PHP_VERSION')
         self.role = self.config['dbuser']
-        self.db = live_database(work, app, self.live, self.role)
+        self.db = live_database(work, app, self.live, self.role, self.config, work.sink(app))
         self.shipped, self.custom = live_apps(work, app, self.live)
         self.index = {d['path']: i for i, d in enumerate(app.data_dirs)}
 
@@ -1681,7 +1780,7 @@ def import_texts(data):
 def role_sql(name, role, dbname):
     """The live Nextcloud role with its attributes and verifier, and the grants Nextcloud's installer gives it
     (lib/private/Setup/PostgreSQL.php:86,95,186-193,108)."""
-    flags = ['LOGIN' if role.get('login') else 'NOLOGIN', 'NOSUPERUSER',
+    flags = ['LOGIN' if role.get('login') else 'NOLOGIN', 'SUPERUSER' if role.get('super') is True else 'NOSUPERUSER',
              'CREATEDB' if role.get('createdb') else 'NOCREATEDB',
              'CREATEROLE' if role.get('createrole') else 'NOCREATEROLE',
              'REPLICATION' if role.get('replication') else 'NOREPLICATION',
@@ -1753,6 +1852,20 @@ def skip_toc(text, kinds):
     return ''.join(line for line in text.splitlines(True) if not entry.match(line) and not comment.match(line))
 
 
+def loader_sql(dbname):
+    """The plain role that loads HA's data when Nextcloud's own database role is a superuser (NC-08): no right but to
+    connect (every role may) and to create in `public`; it is handed over and dropped when the data is in (hand_over_sql)."""
+    ident = ha_odoo.pg_ident(LOADER)
+    return (f'CREATE ROLE {ident} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;\n'
+            f'GRANT CONNECT ON DATABASE {ha_odoo.pg_ident(dbname)} TO {ident};\n')
+
+
+def hand_over_sql(role):
+    """Everything the loader made goes to Nextcloud's role, what the loader was given is taken back, the loader is dropped."""
+    ident, loader = ha_odoo.pg_ident(role), ha_odoo.pg_ident(LOADER)
+    return f'REASSIGN OWNED BY {loader} TO {ident};\nDROP OWNED BY {loader};\nDROP ROLE {loader};\n'
+
+
 def restore_dump(work, tmp, dump, role, dbname, *, majors=None, skip=()):
     """HA's dump into the new database AS THE NEXTCLOUD ROLE (HA's server is untrusted: review HA-SEC-01), without
     its EXTENSION entries, refused when it holds superuser-only objects; streamed on stdin. The listing is cross-checked
@@ -1808,7 +1921,8 @@ def fixup_sql(moves, new_root, remote, live_rows, *, jobs=False):
     lit = ha_odoo.sql_literal
     keys = ', '.join(f'({lit(a)}, {lit(k)})' for a, k in LIVE_APPCONFIG)
     sql = [f'UPDATE public.oc_storages SET id = {lit(new)} WHERE id = {lit(old)};\n' for old, new in moves]
-    sql.append(f'DELETE FROM public.oc_appconfig WHERE (appid, configkey) IN ({keys});\n')
+    if live_rows is not None:      # None: this device's Office settings could not be read (NC-09): HA's stay as they are
+        sql.append(f'DELETE FROM public.oc_appconfig WHERE (appid, configkey) IN ({keys});\n')
     if live_rows:
         sql.append('INSERT INTO public.oc_appconfig SELECT * FROM json_populate_recordset(NULL::public.oc_appconfig, '
                    f'{lit(json.dumps(live_rows, ensure_ascii=False, sort_keys=True))});\n')
@@ -1876,7 +1990,7 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
         return ['無法讀取轉換後的資料庫']
     problems = []
     attrs = doc.get('role') if isinstance(doc.get('role'), dict) else {}
-    if any(attrs.get(key) != db['role'].get(key) for key in ROLE_ATTRS) or attrs.get('super') is not False:
+    if any(attrs.get(key) != db['role'].get(key) for key in ROLE_ATTRS):
         problems.append(f'{role} 角色的權限和這台的不同')
     if doc.get('role_settings') != 0:
         problems.append('出現了角色或資料庫層級的設定')
@@ -1900,55 +2014,87 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
                        ('nspacl', 'public schema 權限')):
         if doc.get(key) != db.get(key):
             problems.append(f'{label}和這台的不同')
-    if _rows(doc.get('appconfig')) != _rows(db.get('appconfig')):
+    if db.get('appconfig') is not None and _rows(doc.get('appconfig')) != _rows(db.get('appconfig')):
         problems.append('Office 或背景工作設定和這台的不同')
     return problems
 
 
-def carry_settings(work, app, live, cluster):
-    """PostgreSQL settings the live cluster sets (ha_odoo.settings_to_carry), written with ALTER SYSTEM."""
-    live_rows = hacommon.live_json(work, app, live.db_container, live.db_user, 'postgres', ha_odoo.SETTINGS_SQL)
+def carry_settings(work, app, live, cluster, sink):
+    """PostgreSQL settings the live cluster sets (ha_odoo.settings_to_carry), written with ALTER SYSTEM. What cannot be carried
+    (the live cluster's settings cannot be read, one is refused by the new cluster) is taken out again and the new
+    cluster uses its defaults for it: a reminder (NC-49), the data is not touched."""
+    try:
+        live_rows = hacommon.live_json(work, app, live.db_container, live.db_user, 'postgres', ha_odoo.SETTINGS_SQL)
+    except BackupError as error:
+        if error.code != 'job-failed' or haissues.is_job_wide(error):
+            raise
+        sink.notice('nextcloud.settings-not-carried', '讀不到這台 PostgreSQL 自己的設定，新的資料庫改用預設值；資料沒有影響。')
+        return []
     carried = []
     for name, value in ha_odoo.settings_to_carry(live_rows, cluster.query_json(ha_odoo.SETTINGS_SQL)):
         sql = ha_odoo.alter_system_sql(name, value)
         if sql is not None:
             cluster.statement(sql)
             carried.append(name)
-    if carried:
+
+    def refused():
         cluster.statement('SELECT pg_reload_conf();')
         rows = cluster.query_json(ha_odoo.FILE_SETTINGS_SQL)
         written = {r[0].lower(): r[2] for r in rows or [] if isinstance(r, list) and len(r) == 3}
-        bad = [name for name in carried if name not in written or written[name]]
+        return [name for name in carried if name not in written or written[name]]
+
+    if carried:
+        bad = refused()
         if bad:
-            raise BackupError('job-failed', f'沿用這台 PostgreSQL 的設定失敗：{"、".join(bad[:10])}。')
-        work.log(f'沿用這台 PostgreSQL 的設定：{"、".join(carried)}')
+            for name in bad:
+                cluster.statement(f'ALTER SYSTEM RESET {name};')
+            carried = [name for name in carried if name not in bad]
+            if refused():     # one that is still refused: none of them is kept
+                cluster.statement('ALTER SYSTEM RESET ALL;')
+                bad, carried = bad + [name for name in carried if name not in bad], []
+                cluster.statement('SELECT pg_reload_conf();')
+            sink.notice('nextcloud.settings-not-carried', '沿用這台 PostgreSQL 設定失敗，新的資料庫對它們改用預設值；資料沒有影響。',
+                        bad)
+        if carried:
+            work.log(f'沿用這台 PostgreSQL 的設定：{"、".join(carried)}')
     return carried
 
 
 def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, moves, remote, majors=None):
     """The new cluster in the throwaway volume `nc-db` (stopped cleanly); returns the verified document."""
     live, db, role = target.live, target.db, target.role
+    sink = work.sink(app)
+    # NC-08: a superuser role never loads HA's data: a plain role does and owns it until the fix-ups and the reads of the
+    # tables are done, then everything goes to the role and the plain one is dropped
+    plain = db['role'].get('super') is not True
+    loader = role if plain else LOADER
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
     tmp.volume('nc-db')
     tmp.run('nc-db', live.db_image, [], detach=True, volumes=[(tmp.name('nc-db'), live.db_target, None)],
             env=live.db_env, secrets=live.db_secrets)
     pg = ha_odoo.Cluster(tmp, 'nc-db', superuser=live.db_user, log=work.log)
     pg.wait_ready(tcp=True, checkpoint=work.checkpoint)
-    pg.script(role_sql(role, db['role'], live.db_name))
+    if role == live.db_user and not plain:      # the cluster's own superuser exists already: it only gets this device's verifier
+        pg.script(f'ALTER ROLE {ha_odoo.pg_ident(role)} PASSWORD {ha_odoo.sql_literal(db["role"]["password"])};\n')
+    else:
+        pg.script(role_sql(role, db['role'], live.db_name))
+    if not plain:
+        pg.script(loader_sql(live.db_name))
     extensions = [e for e in db['extensions'] if e != 'plpgsql' and ROLE_RE.fullmatch(e)]
     # NC-39: what HA's database uses and this device's database image has is enabled too (before HA's data is put in)
     extras = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK and e not in extensions
               and e in db.get('available', ()) and EXT_RE.fullmatch(e)]
-    pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(role)};\n'
+    pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(loader)};\n'
               + ''.join(f'CREATE EXTENSION IF NOT EXISTS {_ext_ident(e)};\n' for e in extensions + extras), live.db_name)
     left_out = shape_objects(details.get('shape'))
-    restore_dump(work, tmp, dump, role, live.db_name, majors=majors, skip=SKIPPED_TOC if left_out and left_out[0] else ())
+    restore_dump(work, tmp, dump, loader, live.db_name, majors=majors, skip=SKIPPED_TOC if left_out and left_out[0] else ())
     # From here on the cluster holds HA's objects: every session is pinned (Pinned); the superuser reads catalogs only
-    # and never touches a table of HA's, the fix-ups and table reads run as the tables' owner (the live Nextcloud role),
-    # so a default, constraint or index expression of HA's never runs with more rights than Nextcloud itself has.
+    # and never touches a table of HA's, the fix-ups and table reads run as the tables' owner (the live Nextcloud role, or
+    # the plain loader of a superuser role), so a default, constraint or index expression of HA's never runs with more
+    # rights than Nextcloud itself has.
     pinned = Pinned(tmp, 'nc-db')
     admin = ha_odoo.Cluster(pinned, 'nc-db', superuser=live.db_user, log=work.log)
-    owner = ha_odoo.Cluster(pinned, 'nc-db', superuser=role, log=work.log)
+    owner = ha_odoo.Cluster(pinned, 'nc-db', superuser=loader, log=work.log)
     shape = shape_problems(admin.query_json(SHAPE_SQL, live.db_name), converted=True)
     if shape is None:
         raise BackupError('job-failed', '無法讀取轉換後的 Nextcloud 資料庫結構。')
@@ -1959,6 +2105,8 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     expected = dict(details['counts'])
     expected['files'] = expected.get('files', 0) - int(removed or 0)
     doc = owner.query_json(data_verify_sql(new_root, moves, details['tables']), live.db_name)
+    if not plain:
+        admin.script(hand_over_sql(role), live.db_name)
     catalog = admin.query_json(catalog_verify_sql(role), live.db_name)
     if isinstance(doc, dict) and isinstance(catalog, dict):
         doc = {**doc, **catalog}
@@ -1968,7 +2116,7 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
                                 role=role, dbname=live.db_name, moves=moves)
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
-    carry_settings(work, app, live, admin)
+    carry_settings(work, app, live, admin, sink)
     admin.statement('CHECKPOINT;')
     code = tmp.stop('nc-db', timeout=300)
     if code != 0:
@@ -2106,6 +2254,7 @@ def convert(work, app, test_mode, out_dir):
     staging = work.staging / 'nextcloud-work'
     staging.mkdir(mode=0o700)
     (out_dir / 'dirs').mkdir(mode=0o700, parents=True, exist_ok=True)
+    hatarget.ensure_running(work, app, live.redis_container)      # NC-04 (the app and the database were started by Target)
     tops = {'postgres': live_stat(work, app, live.db_container, live.db_target),
             'redis': live_stat(work, app, live.redis_container, '/data'),
             'data': live_stat(work, app, live.app_container, '/var/www/html/data')}
@@ -2141,7 +2290,13 @@ def convert(work, app, test_mode, out_dir):
         if not userfiles_moved(data):
             data_out.add('.ncdata', 'file', mode=0o644, uid=www[0], gid=www[1], mtime=time.time(), size=len(NCDATA),
                          fileobj=io.BytesIO(NCDATA))
-        office_cache = live_office_cache(work, app, live, target.config)
+        try:
+            office_cache = live_office_cache(work, app, live, target.config)
+        except BackupError as error:
+            if error.code != 'job-failed' or haissues.is_job_wide(error):
+                raise
+            office_unread(sink)
+            office_cache = {}
         add_office_cache(data_out, src.config['instanceid'], office_cache, www)
     finally:
         data_out.close()
