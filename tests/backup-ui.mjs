@@ -791,7 +791,6 @@ function installCockpitFixture() {
   // restore 'ok' | 'rolled-back' | 'fail'; `data.ha.chain.backups[app]` is the backup a conversion adds.
   const KEY_RE = /^[a-z0-9.-]{4,70}:[0-9a-f]{16}$/;
   const GROUP_MESSAGES = {
-    imported: app => `${app} 已匯入。`,
     'rolled-back': () => '這個應用匯入失敗，已自動退回匯入前的狀態。這台的這個應用沒有任何變更；轉換好的備份還在備份列表，可以再試一次。',
     failed: () => '這個應用的轉換沒有成功。這台的這個應用沒有任何變更。',
     manual: () => '這個應用已經變更，沒有退回成功，需人工處理：請用匯入前備份還原。',
@@ -869,7 +868,7 @@ function installCockpitFixture() {
       if (cancelled) {
         entry = groupResult(app, 'converted', { ...common, safety_backup_id: null, code: 'cancelled', message: GROUP_MESSAGES.converted() });
         record.job.state = 'cancelled';
-      } else if (restore === 'ok') entry = groupResult(app, 'imported', { ...common, message: GROUP_MESSAGES.imported(app) });
+      } else if (restore === 'ok') entry = groupResult(app, 'imported', common);
       else if (restore === 'rolled-back') {
         entry = groupResult(app, 'rolled-back', { ...common, code: 'job-failed', message: GROUP_MESSAGES['rolled-back']() });
         record.job.state = 'rolled-back';
@@ -6724,6 +6723,7 @@ try {
       await page.getByText('請輸入 HA 備份金鑰。').waitFor();
       assert.equal((await calls(page, 'ha-check-start')).length, 0, 'an empty key is never sent');
       await page.locator('#ha-key').fill('ABCD\tEFGH');
+      await page.locator('#ha-key-odd').waitFor();   // a reminder while typing, not a stop
       await page.locator('[data-focus="ha-key-next"]').click();
       await page.locator('.wizard-card .notice-error').getByText('HA 備份金鑰不正確，請確認後再試一次。').waitFor();
       assert.match(await page.locator('.wizard-card .notice-error').textContent(), /你輸入的金鑰含有 Tab 或換行等看不見的字元/);

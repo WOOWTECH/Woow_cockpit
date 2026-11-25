@@ -3939,11 +3939,14 @@
   }
 
   function haStepKey(ha, wizard) {
+    // UI-12: a Tab or another invisible character is a reminder, not a stop; the key is tried as it is typed.
+    const odd = h("p", { id: "ha-key-odd", class: "hint", role: "status", hidden: !HA_KEY_ODD_RE.test(str(wizard.keyText)),
+      text: "金鑰裡有 Tab 或換行等看不見的字元。如果是複製時多出來的，請刪掉；也可以照原樣按「下一步」試試看。" });
     const input = h("input", {
       id: "ha-key", type: "text", class: "mono", autocomplete: "off", autocapitalize: "off", spellcheck: "false", maxLength: HA_KEY_MAX,
       placeholder: "ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12", "aria-describedby": "ha-key-hint", disabled: wizard.busy, dataset: { focus: "ha-key" },
       on: {
-        input: event => { wizard.keyText = event.target.value; },
+        input: event => { wizard.keyText = event.target.value; odd.hidden = !HA_KEY_ODD_RE.test(event.target.value); },
         keydown: event => {
           if (event.key !== "Enter" || event.isComposing) return;
           event.preventDefault();
@@ -3957,7 +3960,7 @@
       h("h3", { class: "step-title", text: "輸入 HA 備份金鑰" }),
       h("p", { class: "muted", text: "這份 HA 備份有加密，檢查和轉換都要用 HA 備份金鑰把它解開。" }),
       h("div", { class: "field" }, h("label", { htmlFor: "ha-key", text: "HA 備份金鑰" }), input,
-        h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE })),
+        h("p", { id: "ha-key-hint", class: "hint", text: HA_KEY_WHERE }), odd),
       h("p", { class: "hint", text: "金鑰只留在這個頁面，交給這次的檢查和轉換使用，不會存到這台設備；離開這一頁或結束這次匯入後，就要重新輸入。" }),
       wizard.keyError ? h("div", { class: "notice notice-error", role: "alert" }, icon("alert-circle-outline"), h("p", { text: wizard.keyError })) : null,
       active ? haActiveNotice(active) : null,
