@@ -81,7 +81,7 @@ APT_INSTALL = (APT_GET, '-q', '-o', 'Acquire::Retries=1', '-o', 'DPkg::Lock::Tim
                '--no-install-recommends', '--no-remove', '--reinstall', 'install')
 # What cannot be done while a package is missing: (the packages of which one is needed, what stops without it).
 WITHOUT = (
-    (('age', 'zstd'), '建立、檢查與還原加密的備份（預設的備份都是加密的，HA 匯入轉換出來的備份也是）'),
+    (('age', 'zstd'), '建立、檢查與還原加密的備份（預設的備份都是加密的，HA 匯入轉換出來的備份也是，除非關掉預設加密）'),
     (('age',), '建立與檢查加密金鑰'),
     (('python3-nacl',), '讀取 2026 年 3 月以後的 HA 加密備份'),
     (('python3-cryptography',), '讀取 2026 年 3 月以前的 HA 加密備份'),
