@@ -3,7 +3,7 @@
 the lab proved is removed, one at a time, in a throwaway copy of the engine, and the Omnigent unit tests must FAIL
 for each (and pass on the unmodified copy). Nothing here touches Podman, a device or a secret.
 
-  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--refusals | --named]
+  python3 -I tests/backup/omnigent_product_mutations.py [--json OUT] [--only P01,P02] [--refusals | --named]
 
 Prints one fixed line per mutation (`<id> <name>: caught|MISSED (<failures>/<tests>) [by <the failing test>]`, the run
 of a mutation stops at its first failing test since 2026-11-24); exit 0 only when the baseline passes and every
@@ -54,7 +54,7 @@ MUTATIONS = (
     ('M06', 'the live revision did not move since the check (before the capture)',
      '    if before.alembic != sorted(alembic or []):\n', '    if False:\n', 1),
     ('M07', "HA's columns, sequences and types equal the trusted schema (convert)",
-     '    differ = schema_differences(ha_schema, trusted)\n', '    differ = []\n', 1),
+     '    differ = schema_differences(ha_schema, trusted, ignore=ignored)\n', '    differ = []\n', 1),
     ('M08', "the new cluster's schema equals the trusted one (after post-data and after the last write)",
      "    differ = [key for key in SIGNATURE_KEYS if found.get(key) != trusted.signature.get(key)]\n",
      '    differ = []\n', 1),
@@ -73,11 +73,11 @@ MUTATIONS = (
     ('M13', 'the loader role is dropped before the export',
      "    cluster.script(f'DROP OWNED BY {RESTORE_ROLE};\\nDROP ROLE {RESTORE_ROLE};\\n', DATABASE)\n",
      '    pass\n', 1),
-    ('M14', "every Quadlet secret is registered in the catalog before anything runs",
-     '    require_registered_secrets(work, app)\n    adapter = work.adapter(app)\n',
-     '    adapter = work.adapter(app)\n', 1),
-    ('M15', 'the check names a schema difference as a blocker',
-     '        if differ:\n            blockers.append(schema_blocker(differ))\n', '        pass\n', 1),
+    ('M14', "the conversion tells the Quadlet secrets that the app settings do not list (O-48: a notice, no refusal)",
+     '    note_secrets(sink, unregistered)\n', '', 1),
+    ('M15', 'the check names a schema difference as a stop',
+     "    if differ:\n        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_UNCHANGED)\n    names, counts",
+     '    names, counts', 1),
     ('M16', 'the new cluster runs with a read-only root and a noexec data volume',
      "            volumes=[(tmp.name('omni-db'), target.db_target, 'rw,noexec,nosuid,nodev')],\n"
      "            env=target.db_env, secrets=target.db_secrets, read_only_root=True)\n",
@@ -115,13 +115,13 @@ MUTATIONS = (
      "CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029\\u061c\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]')\n",
      "CONTROL_RE = re.compile(r'[\\x00-\\x1f\\x7f-\\x9f\\u2028\\u2029]')\n", 1, 'woowbackup/hacommon.py'),
     ('M21', "HA-controlled names reach the job log and the page without control characters (SR-4, shared hacommon)",
-     "    items = [CONTROL_RE.sub('?', str(item)[:60]) for item in items]\n",
-     '    items = [str(item)[:60] for item in items]\n', 1, 'woowbackup/hacommon.py'),
+     "    return ''.join('?' if unicodedata.category(ch) in HIDDEN_CATEGORIES else ch for ch in str(text)[:limit])\n",
+     '    return str(text)[:limit]\n', 1, 'woowbackup/hacommon.py'),
     ('M22', "HA's rows that this device's schema refuses end with the plain message, never their values (review v5)",
      "            if DATA_REFUSED_RE.search(error.stderr or b''):\n", '            if False:\n', 1),
     # the independent verifier's gaps X7..X15 (2026-11-24): protections no unit test failed without until iteration 5
-    ('M29', 'the conversion itself refuses a version that does not match, not only the check (X7)',
-     "    if blocker:\n        raise BackupError('incompatible', f'Omnigent 不能搬過來：{blocker}', app=app.id)\n", '', 1),
+    ('M29', "the conversion itself stops on another structure version, not only the check (X7, O-19)",
+     '    elif not ha_alembic or sorted(ha_alembic) != sorted(live_alembic_value):\n', '    elif False:\n', 1),
     ('M30', "after the last write every table holds HA's rows (users this device's kept accounts too) and the revision "
             "is HA's (X8)",
      "    if differ or sorted(now_alembic or []) != sorted(found['alembic']):\n", '    if False:\n', 1),
@@ -130,9 +130,10 @@ MUTATIONS = (
      "    if sorted(now_alembic or []) != sorted(found['alembic']):\n", 1),
     ('M32', 'the revision of that final comparison (X8)',
      "    if differ or sorted(now_alembic or []) != sorted(found['alembic']):\n", '    if differ:\n', 1),
-    ('M33', 'a cluster whose stop did not end with 0 is never exported (X9)',
-     "    if code != 0:\n        raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')\n",
-     '', 1),
+    ('M33', "O-54 is gone: the exit code of the stop is no refusal on its own (pg_controldata is the proof)",
+     "    if code != 0:    # O-54: the control file below is the proof of a clean stop (a PostgreSQL that was killed says so there)\n"
+     "        work.log(f'新的 PostgreSQL 叢集關閉時結束碼是 {code}；以 pg_controldata 的狀態判斷它有沒有正常關閉。')\n",
+     "    if code != 0:\n        raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')\n", 1),
     ('M34', 'only a cluster that pg_controldata calls "shut down" is exported (X10)',
      "    if not re.search(rb'Database cluster state:\\s+shut down\\s*$', state, re.M):\n", '    if False:\n', 1),
     ('M35', 'exactly "shut down", not "shut down in recovery" (X10)',
@@ -180,13 +181,106 @@ MUTATIONS = (
     ('M53', 'only x.y.z is a live version',
      '    return version if isinstance(version, str) and SERVER_VERSION_RE.fullmatch(version) else None\n',
      '    return version if isinstance(version, str) else None\n', 1),
+    # HAOS parity (2026-11-25, lane OMNIGENT): what the new behaviour must still refuse, and the old refusals that must stay gone
+    ('P01', 'O-01: any other id both maps hold runs the dump when the list has none',
+     '    spare = _spare_id(uids, gids, {0, *pg_ids}) if uids is not None else None\n', '    spare = None\n', 1),
+    ('P02', "O-01: a spare id is never root or the image's postgres",
+     '            if candidate not in avoid:\n                return candidate\n', '            return candidate\n', 1),
+    ('P03', "O-02: a hard link in HA's database folder is copied as a file",
+     '                entry.copy_later()      # the same name comes again after the walk as a file with the content\n', '                pass\n', 1),
+    ('P04', "O-03: a hard link of the artifact store to a file outside it is never carried",
+     "            if copied or (entry.kind == 'hardlink' and (not ha_odoo._under(entry.linkname, ARTIFACTS)\n",
+     "            if copied or (entry.kind == 'hardlink' and (False\n", 1),
+    ('P05', "O-03: a copy of a file outside the artifact store is never carried either",
+     "            if copied or (entry.kind == 'hardlink' and", "            if (entry.kind == 'hardlink' and", 1),
+    ('P06', 'O-20: an empty or huge login key is not carried',
+     '                    if not src.cookie:\n                        continue\n', '', 1),
+    ('P07', "O-61: PG_VERSION is read by its start (the old limit of 64 KiB is not back)",
+     "                    head = entry.peek(64).split(b'\\n', 1)[0]\n",
+     "                    head = entry.read_all(ha_odoo.MAX_SMALL_FILE).split(b'\\n', 1)[0]\n", 1),
+    ('P08', "O-12: HA's tables that are not Omnigent's are not compared (and not moved)",
+     '    ignored = set(ignore)\n', '    ignored = set()\n', 1),
+    ('P09', "O-28: an entry of the dump list that is not this device's is not selected, it does not stop",
+     '                    if skipped is not None:\n                        skipped.add(match.group(2)[:200])\n                    continue\n',
+     "                    raise BackupError('incompatible', 'HA 的資料庫匯出清單有不屬於這台 Omnigent 資料庫結構的資料項目，無法安全地搬過來。')\n", 1),
+    ('P10', 'O-28: a trusted name twice in the dump list stops the conversion',
+     '                if entry.groups()[:2] in named:\n', '                if False:\n', 1),
+    ('P11', 'O-21: an artifact key may not contain a . or .. part',
+     "        part and part not in ('.', '..') and len(part) <= MAX_PART_CHARS", '        part and len(part) <= MAX_PART_CHARS', 1),
+    ('P12', 'O-21: the locations that could leave the store are cleared in the new cluster',
+     '        blank_locations(pg, unsafe)\n', '        pass\n', 1),
+    ('P13', 'O-21: they are cleared by the role without privileges',
+     '    loader = ha_odoo.Cluster(cluster.tmp, cluster.role, superuser=RESTORE_ROLE, log=cluster.log)\n    loader.script("UPDATE',
+     '    cluster.script("UPDATE', 1),
+    ('P14', 'O-21: nothing unsafe is left in the new cluster after the clearing',
+     '        if bundle_locations({\'keys\': pg.query_json(KEYS_SQL, DATABASE) or {}})[1]:\n', '        if False:\n', 1),
+    ('P15', 'O-22: files the database names that the backup lacks are asked about',
+     "    if lost:\n        sink.confirm('omnigent.files-missing'", "    if False:\n        sink.confirm('omnigent.files-missing'", 1),
+    ('P16', 'O-12/O-14/O-15/O-16: what is left out is asked about (the one line)',
+     "    if names.count:\n        what = ", "    if False:\n        what = ", 1),
+    ('P17', 'O-18: a PostgreSQL that is newer than the image stops this app',
+     '    if ha_major is not None and target_major is not None and ha_major > target_major:\n',
+     '    if False:\n', 1),
+    ('P18', "O-18: an image without PG_MAJOR is no gate",
+     '    if ha_major is not None and target_major is not None and ha_major > target_major:\n',
+     '    if ha_major is None or target_major is None or ha_major > target_major:\n', 1),
+    ('P19', 'O-25: a version that differs is a notice, never a stop',
+     "        sink.notice('omnigent.version-different',", "        sink.stop('omnigent.version-different',", 1),
+    ('P20', 'O-32, O-33, O-58, O-59: the snapshot is taken again',
+     '    return hatarget.retry(attempt, attempts=SNAPSHOT_ATTEMPTS,', '    return hatarget.retry(attempt, attempts=1,', 1),
+    ('P21', 'O-59: each try waits longer for the columns',
+     "        script = script.replace('__WAIT__', str(60 * len(tries)))\n", "        script = script.replace('__WAIT__', '60')\n", 1),
+    ('P22', 'O-23 (snapshot): a snapshot id that is no id is never tried again',
+     "    return hatarget.transient(error) and getattr(error, 'returncode', None) != 23\n",
+     '    return hatarget.transient(error)\n', 1),
+    ('P23', 'O-42, O-43: a structure that is still moving is waited for',
+     '    return hatarget.retry(attempt, attempts=STEADY_ATTEMPTS,', '    return hatarget.retry(attempt, attempts=1,', 1),
+    ('P24', 'O-40, O-41: an odd answer of this device is read again',
+     '    return hatarget.retry(action, attempts=READ_ATTEMPTS,', '    return hatarget.retry(action, attempts=1,', 1),
+    ('P25', 'O-44: only the version of an extension may differ',
+     "    if len(now) != len(found) or len(live) != len(trusted) or set(now) != set(live):\n", '    if False:\n', 1),
+    ('P26', 'O-44: a newer extension version of the new cluster is no difference',
+     "        if versions is not None:\n            differ.remove('extensions')\n", '        if False:\n            differ.remove(\'extensions\')\n', 1),
+    ('P27', 'O-56: no promise about this device\'s DDL is asked of the compatibility entry',
+     'def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced=None):\n',
+     'def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced=None):\n'
+     "    if schema_ddl_quiesced is not True:\n        raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)\n", 1),
+    ('P28', 'O-09: this device\'s accounts that cannot be read are not kept and the import goes on',
+     '        if not (isinstance(error, _Odd) or hatarget.transient(error)):\n            raise\n', '        raise\n', 1),
+    ('P29', "O-09: a read that is refused (not a read that failed for a moment) still stops this app",
+     '        if not (isinstance(error, _Odd) or hatarget.transient(error)):\n', '        if False:\n', 1),
+    ('P30', "O-07: this device's other volumes of the app are carried",
+     '    if target.extra_volumes:   # O-07: this device\'s other volumes of the app, as they are\n', '    if False:\n', 1),
+    ('P31', 'O-07: the three volumes of the package must all be there',
+     '        if (len(needed) != 3 or not needed <= set(declared) or len(declared) != len(set(declared))\n',
+     '        if (len(needed) != 3 or len(declared) != len(set(declared))\n', 1),
+    ('P32', 'O-10: HA without an omnigent database stops this app',
+     "    if DATABASE not in databases:\n        (sink if sink is not None else haissues.Sink(APP_ID)).refuse(",
+     "    if False:\n        (sink if sink is not None else haissues.Sink(APP_ID)).refuse(", 1),
+    ('P33', 'O-48: the secrets that are not listed are told in the check',
+     '    note_secrets(sink, unregistered_secrets(work, app))\n', '', 1),
+    ('P34', 'O-20: a missing login key is told',
+     "    if not src.cookie:\n        sink.notice('omnigent.cookie-missing'", "    if False:\n        sink.notice('omnigent.cookie-missing'", 1),
+    ('P35', 'O-13: a table HA lacks is found by the comparison of the columns',
+     "    differ |= {t for t in set(ha_cols) | set(trusted_cols) if t not in ignored and ha_cols.get(t) != trusted_cols.get(t)}\n",
+     "    differ |= {t for t in set(ha_cols) & set(trusted_cols) if t not in ignored and ha_cols.get(t) != trusted_cols.get(t)}\n", 1),
+    ('P36', 'O-02: hard links that were copied are told (an auto line)',
+     "    if src.pg_links.count:\n        sink.auto('omnigent.hardlinks-copied', f'HA 的資料庫資料夾裡有 {src.pg_links.count} 個硬連結（正常的資料庫不會有），'\n"
+     "                  '匯入時會把它們當成一般檔案複製。', src.pg_links)\n    work.phase('check')\n",
+     "    work.phase('check')\n", 1),
+    ('P37', 'the conversion asks the same questions as the check (the same sink calls, before anything of HA is dumped)',
+     '    judge(sink, src, found, live_alembic_value=alembic, ha_major=_ha_major(src), target_major=pg_major(work, app, target))\n',
+     '', 1),
+    ('P38', 'the blanking role gets the right to read and change ONE column, nothing else',
+     "    cluster.script(f'GRANT SELECT (bundle_location), UPDATE (bundle_location) ON public.agents TO {RESTORE_ROLE};\\n', DATABASE)\n",
+     "    cluster.script(f'GRANT ALL ON ALL TABLES IN SCHEMA public TO {RESTORE_ROLE};\\n', DATABASE)\n", 1),
 )
 
 
 # The test of each protection added in iteration 5: it alone must fail without the protection (--named).
 OMNI, SCRIPT = 'tests.backup.test_ha_omnigent.', 'tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.'
 NAMED = {ident: test for test, idents in (
-    (OMNI + 'ConvertTests.test_a_version_that_does_not_match_stops_the_conversion_itself', ('M29',)),
+    (OMNI + 'ConvertTests.test_another_structure_version_stops_the_conversion_itself', ('M29',)),
     (OMNI + 'ConvertTests.test_counts_that_differ_stop_the_conversion', ('M30', 'M31', 'M32')),
     (OMNI + 'ConvertTests.test_a_cluster_that_did_not_stop_cleanly_is_never_exported', ('M33',)),
     (OMNI + 'ConvertTests.test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported', ('M34', 'M35')),
@@ -261,6 +355,7 @@ def run_tests(root, *options, tests=TESTS):
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--json')
+    parser.add_argument('--only', help='comma separated mutation ids (a part of the list, or of NAMED with --named)')
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--refusals', action='store_true')
     mode.add_argument('--named', action='store_true')
@@ -286,6 +381,9 @@ def main(argv):
         baseline = {'returncode': rc, 'tests': ran, 'failures': failures, 'failed': failed}
         print(f'baseline: {"pass" if rc == 0 else "FAIL"} ({failures}/{ran})', flush=True)
         listed = [m for m in MUTATIONS if m[0] in NAMED] if args.named else MUTATIONS
+        if args.only:
+            wanted = set(args.only.split(','))
+            listed = [m for m in listed if m[0] in wanted]
         for ident, name, *change in refusals(source) if args.refusals else listed:
             module = change[3] if len(change) > 3 else MODULE
             original = sources[module]
