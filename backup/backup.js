@@ -133,7 +133,7 @@
     + "較舊的 HA 備份如果是用自己設定的密碼加密，請輸入當時設定的密碼。";
   // H-c (DESIGN): the check reads this device's own services too (hatarget.ensure_running): a stopped one is started for it and
   // put back when the check is over, whatever way it ends.
-  const HA_CHECK_STARTS = "檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子。";
+  const HA_CHECK_STARTS = "檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子；沒能恢復的，作業紀錄會寫出是哪一個。";
   // Where a custom module of an HA Odoo database comes from, in words (ha_odoo.py MODULE_SOURCES, share/odoo_addons).
   const HA_MODULE_FROM = { "data/addons": "HA 附加元件的模組資料夾", "data/odoo/addons/18.0": "HA 附加元件的模組資料夾",
     "share/odoo_addons": "HA 的 /share/odoo_addons 資料夾" };

@@ -7088,7 +7088,7 @@ try {
 
   // ------------------------------------------------------------------ iteration 2 (2026-11-25 evening): the kept copies (S4), H-c and what the first verifier found untested
 
-  const HC_SENTENCE = '檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子。';
+  const HC_SENTENCE = '檢查可能會暫時啟動這台停著的服務（例如資料庫）來讀取資料；檢查結束後，包括失敗或取消，會把它們恢復成原本停著的樣子；沒能恢復的，作業紀錄會寫出是哪一個。';
   const KEPT_ID = B_V2_KEPT.n8n;
   const v2KeptFixture = (extra = {}) => v2Fixture({ chain: { kept: { n8n: { backup: v2Kept('n8n'), detail: V2_KEPT_DETAIL } }, restoreWarnings: { n8n: [V2_PAUSE_WARNING] } },
     left: ['test', 'demo-old'], ...extra });
