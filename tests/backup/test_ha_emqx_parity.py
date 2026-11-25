@@ -549,6 +549,34 @@ class MarkerTests(base.EmqxCase):
         self.assertEqual(self.storage.list_backups(), [])
 
 
+class ConversionLogTests(base.EmqxCase):
+    """The job log names the no-match rule of HA, not the one this device had before the import (the real run on dev-d,
+    2026-11-25, printed this device's own: 「deny」 for an HA broker that allows)."""
+
+    def done_line(self):
+        lines = [line for line in self.reporter.logs if '資料匯入完成' in line]
+        self.assertEqual(len(lines), 1, lines)
+        return lines[0]
+
+    def test_ha_allows_this_device_denied(self):
+        self.assertEqual(self.world.ha_strict, '{allow,ignore}')
+        self.assertEqual(self.world.target_config['authorization']['no_match'], 'deny')
+        self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        line = self.done_line()
+        self.assertIn('HA 的「允許」', line)
+        self.assertNotIn('拒絕', line)
+        self.assertNotIn('deny', line)
+
+    def test_ha_denies_this_device_allowed(self):
+        self.world.ha_strict = '{deny,ignore}'
+        self.world.target_config['authorization']['no_match'] = 'allow'
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        line = self.done_line()
+        self.assertIn('HA 的「拒絕」', line)
+        self.assertNotIn('允許', line)
+
+
 class TunnelReadingTests(unittest.TestCase):
     def target(self, files):
         quadlets = dict(base.QUADLETS)
