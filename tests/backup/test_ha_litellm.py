@@ -1199,6 +1199,35 @@ class ConvertTests(LiteLLMCase):
         self.assertIs(self.world.kept, True, 'the adapter was told to keep the pre-restore backup')
         self.assertTrue(any('保留的複本' in note and 'extra' in note for note in result['ha_import']['notes']))
 
+    def other_schemas(self):
+        self.keep_supported()
+        self.world.live_signature = dict(signature(), schemas=['extra', 'woow_platform'])
+        self.world.restored_signature = self.world.live_signature
+
+    def test_l38_not_confirmed_stops_only_this_app_before_anything_is_captured(self):
+        self.other_schemas()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertFalse(self.world.snapshots)
+        self.assert_nothing_loaded()
+
+    def test_l38_confirmed_goes_on_and_the_restore_is_told_to_keep_its_backup(self):
+        self.other_schemas()
+        line = next(i for i in self.check(self.upload_litellm(), ['litellm'])[0]['issues'] if i['id'] == 'litellm.other-schemas')
+        self.assertTrue(self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})['backup_id'])
+        self.assertIs(self.world.kept, True)
+
+    def test_l38_one_more_schema_is_confirmed_again(self):
+        self.other_schemas()
+        line = next(i for i in self.check(self.upload_litellm(), ['litellm'])[0]['issues'] if i['id'] == 'litellm.other-schemas')
+        self.world.live_signature = dict(signature(), schemas=['extra', 'extra2', 'woow_platform'])
+        self.world.restored_signature = self.world.live_signature
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assert_nothing_loaded()
+
     def test_without_the_one_line_snippet_other_schemas_stop_the_app(self):
         # Until haimport hands `keep_safety` on, the promise of the line could not be kept: fail closed, as before.
         self.world.live_signature = dict(signature(), schemas=['extra', 'woow_platform'])
@@ -2049,23 +2078,93 @@ class RowTests(LiteLLMCase):
         return result
 
     # ---------------------------------------------------------------- L-21, L-23, L-24: what HA's database has beyond LiteLLM
-    def test_l21_other_schemas_of_ha_are_named_and_not_moved(self):
-        self.world.objects = dict(self.world.objects, schemas=['evil', 'woow', 'woow_platform'])
-        line = self.confirm_cycle('litellm.schemas-skipped', lambda: setattr(
-            self.world, 'objects', dict(self.world.objects, schemas=['evil', 'evil2', 'woow', 'woow_platform'])))
-        self.assertEqual(line['items'], ['evil'])
-        self.world.objects = dict(self.world.objects, schemas=['evil', 'woow', 'woow_platform'])
-        self.confirmed('litellm.schemas-skipped')
-        self.assertFalse(any('evil' in sql for _r, _u, sql in self.world.copies_out), 'only this device\'s tables are read')
+    def not_confirmed(self, issue_id):
+        """Not confirmed: only this app stops (`confirmation-required`) before any row is read or anything captured."""
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.details['apps']['litellm'][0]['id'], issue_id)
+        self.assertFalse(self.world.copies_out or self.world.snapshots)
+        self.assertEqual(self.storage.list_backups(), [])
 
-    def test_l23_objects_only_a_superuser_makes_are_named_and_not_moved(self):
+    def one_more(self, issue_id, more):
+        """One more name than the customer saw: the confirmation of the old names does not cover it."""
+        line = self.line(issue_id)
+        more()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def schemas(self, names):
+        self.world.objects = dict(self.world.objects, schemas=[*names, 'woow', 'woow_platform'])
+
+    def test_l21_other_schemas_of_ha_are_named(self):
+        self.schemas(['evil'])
+        line = self.line('litellm.schemas-skipped')
+        self.assertEqual((line['level'], line['items']), ('confirm', ['evil']))
+        self.assertTrue(self.check(self.upload_litellm(), ['litellm'])[0]['importable'])
+
+    def test_l21_not_confirmed_stops_only_this_app(self):
+        self.schemas(['evil'])
+        self.not_confirmed('litellm.schemas-skipped')
+
+    def test_l21_confirmed_goes_on_and_only_this_devices_tables_are_read(self):
+        self.schemas(['evil'])
+        self.confirmed('litellm.schemas-skipped')
+        self.assertFalse(any('evil' in sql for _r, _u, sql in self.world.copies_out))
+
+    def test_l21_one_more_name_is_confirmed_again(self):
+        self.schemas(['evil'])
+        self.one_more('litellm.schemas-skipped', lambda: self.schemas(['evil', 'evil2']))
+
+    def test_l23_objects_only_a_superuser_makes_are_named(self):
         self.world.superuser = ['EVENT TRIGGER']
-        line = self.confirm_cycle('litellm.superuser-objects', lambda: setattr(self.world, 'superuser', ['EVENT TRIGGER', 'CAST']))
-        self.assertEqual(line['items'], ['EVENT TRIGGER'])
+        line = self.line('litellm.superuser-objects')
+        self.assertEqual((line['level'], line['items']), ('confirm', ['EVENT TRIGGER']))
+
+    def test_l23_not_confirmed_stops_only_this_app(self):
+        self.world.superuser = ['EVENT TRIGGER']
+        self.not_confirmed('litellm.superuser-objects')
+
+    def test_l23_confirmed_goes_on_and_nothing_of_them_is_created(self):
         self.world.superuser = ['EVENT TRIGGER']
         self.confirmed('litellm.superuser-objects')
-        statements = ' '.join(self.world.executed('ll-db'))
-        self.assertNotIn('EVENT TRIGGER', statements, "nothing of HA's is created in the new cluster")
+        self.assertNotIn('EVENT TRIGGER', ' '.join(self.world.executed('ll-db')), "nothing of HA's is created in the new cluster")
+
+    def test_l23_one_more_name_is_confirmed_again(self):
+        self.world.superuser = ['EVENT TRIGGER']
+        self.one_more('litellm.superuser-objects', lambda: setattr(self.world, 'superuser', ['EVENT TRIGGER', 'CAST']))
+
+    def test_l13_not_confirmed_stops_only_this_app(self):
+        self.world.ha_columns = self.world.live_columns = COLUMNS + StoredSettingsTests.CONFIG
+        self.world.counts['public.LiteLLM_Config'] = 3
+        answer = self.world.answer
+
+        def unreadable(role, sql, database):
+            if sql == ha_litellm.STORED_SETTINGS_SQL:
+                raise BackupError('limit-exceeded', 'output over the limit')
+            return answer(role, sql, database)
+
+        self.world.answer = unreadable
+        self.not_confirmed('litellm.config-unreadable')
+
+    def test_l13_the_confirmation_of_another_line_does_not_cover_it(self):
+        self.world.ha_columns = self.world.live_columns = COLUMNS + StoredSettingsTests.CONFIG
+        self.world.counts['public.LiteLLM_Config'] = 3
+        answer = self.world.answer
+
+        def unreadable(role, sql, database):
+            if sql == ha_litellm.STORED_SETTINGS_SQL:
+                raise BackupError('limit-exceeded', 'output over the limit')
+            return answer(role, sql, database)
+
+        self.world.answer = unreadable
+        other = ha_litellm.Issue('litellm.hooks-removed', 'confirm', 'x', ['litellm_settings.post_call_rules']).key('litellm')
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [other]})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.details['apps']['litellm'][0]['id'], 'litellm.config-unreadable')
 
     def test_l24_large_objects_are_a_reminder_and_do_not_stop(self):
         self.world.objects = dict(self.world.objects, large_objects=3)
