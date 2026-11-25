@@ -999,6 +999,8 @@ def scaled_timeout(base, nbytes=None, *, rate=SCALE_RATE, ceiling=SCALE_TIMEOUT_
     """Seconds a command may take: `base` (what the call always had: the floor), or, when it works through `nbytes` of
     data, `base` plus the time those bytes need at `rate` bytes per second, at most `ceiling`. A wait that is only too
     short for a big app grows with the app (X-PD-05); an unknown size changes nothing."""
+    if not isinstance(base, (int, float)) or isinstance(base, bool):
+        return base     # no wait at all stays no wait
     if not isinstance(nbytes, (int, float)) or isinstance(nbytes, bool) or nbytes <= 0 or rate <= 0:
         return base
     return int(max(base, min(base + nbytes / rate, ceiling)))

@@ -66,7 +66,7 @@ SECRET_OPTION_RE = re.compile(r'(?:type=(?:mount|env)|target=[A-Za-z0-9_./-]{1,2
 SECRETS_TMPFS = '/run/secrets:rw,noexec,nosuid,nodev,mode=0755'
 # TempObjects takes `scope`; haimport.Work.temp passes the app's place in the job once this is True. It stays False until
 # the doubles of the importer tests (hab1fakes.role_of, test_ha_flows, test_ha_omnigent: they read the role out of the name)
-# know scoped names: the patches that do, and the one-line switch, are snippets/parity-f3/scopes-on/ (verified together).
+# know scoped names: the patches that do, and the one-line switch, are snippets/parity-f3/scopes-on.patch (verified together).
 SCOPES = False
 SCOPE_RE = re.compile(r'[0-9]{1,2}\Z')
 REMOVE_ARGS = {'container': ('rm', '--force', '--time', '10'), 'volume': ('volume', 'rm', '--force'),

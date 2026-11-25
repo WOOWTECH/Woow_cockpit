@@ -488,6 +488,8 @@ class ScaledLimitTests(unittest.TestCase):
         self.assertEqual(podman.scaled_timeout(2 * podman.SCALE_TIMEOUT_CEILING, 1 << 60), 2 * podman.SCALE_TIMEOUT_CEILING,
                          'a call that already waits longer than the ceiling keeps its own value')
         self.assertEqual(podman.scaled_timeout(600, 5, rate=0), 600)
+        self.assertIsNone(podman.scaled_timeout(None, 10 ** 12), 'no wait at all stays no wait')
+        self.assertEqual(podman.scaled_timeout(True, 10 ** 12), True)
 
     def test_an_output_limit_never_gets_smaller_and_has_a_ceiling(self):
         mib = 1024 * 1024
