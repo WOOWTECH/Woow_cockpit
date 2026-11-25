@@ -26,12 +26,13 @@ role without privileges; HA's cluster stays isolated (no network, read-only root
 check: HA's cluster is streamed into a throwaway volume (its configuration and recovery files replaced or dropped,
 ha_odoo.PgSink) and opened by a throwaway PostgreSQL 16 of the live image exactly as hardened as Odoo's
 (ha_odoo.start_ha_cluster: socket only, network none, read-only root, noexec data volume, every library/command
-setting overridden); the database must hold only Omnigent's own tables, no function, trigger, view, rule, policy,
-other schema or object only a superuser can create, extensions within plpgsql and pg_trgm, UTF8; every agent bundle and
-file blob the database names must be in the backup's artifact store, whose `accounts-cookie-secret` must be there.
+setting overridden); what the database holds besides Omnigent's own tables (functions, triggers, views, rules, policies,
+other schemas, objects only a superuser can create, extensions beyond plpgsql and pg_trgm) is listed and left out (one line to
+confirm); it must be UTF8; every agent bundle and file blob the database names should be in the backup's artifact store (a
+missing one is a line to confirm), whose `accounts-cookie-secret` is carried when it is usable.
 
 The check also compares HA's tables and columns with this device's live database (the trusted schema, below); a
-difference is a blocker naming the tables.
+difference is a stop naming the tables.
 
 convert (B1-01: HA's backup never provides DDL, defaults, checks or domains): `pg_dump -Fc omnigent` of HA's cluster
 is the source of DATA only. A NEW cluster from the live image, environment and secret mount (its superuser is the live
@@ -48,8 +49,8 @@ must equal the live one after the post-data section and again after the last wri
 other role, no role or database setting, no ALTER SYSTEM setting and no large object (audit_new_cluster). This
 device's own admin and runner accounts (the Quadlet's OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME /
 OMNIGENT_RUNNER_USERNAME) are read from the live database as the app owner and added back by that restricted role
-unless HA has a user of the same name (HA's wins, with a warning): without them the runner could not log in while
-every health check stays green. Test mode pauses every active scheduled task (the restricted role). Counts and alembic
+unless HA has a user of the same name (HA's wins, with a notice): without them the runner could not log in while
+every health check stays green (accounts that cannot be read are not kept and the customer is told: O-09). Test mode pauses every active scheduled task (the restricted role). Counts and alembic
 are verified, the restricted role is dropped, the cluster is stopped cleanly (`pg_controldata` "shut down") and
 exported. HA's cluster can lie and run code inside its container (security review 2026-11-23): its answers are given
 again by the new cluster before anything is exported (require_answers, SR-1) and the SEQUENCE SET statements pg_dump
