@@ -5,10 +5,12 @@ and a place for logs the candidate cannot be given (E-35) are what is left to st
 that HA's import is mixed with -- rules, connectors, rewrite, PSK, plugins, durable sessions -- is named in the one
 confirmation (E-41, E-42, E-43, E-44, E-47)."""
 import copy
+import hashlib
 import unittest
 from types import SimpleNamespace
 from woowbackup.errors import BackupError
 from woowbackup import ha_emqx, ha_emqx_settings, haissues
+from woowbackup.podman import Result
 from . import test_ha_emqx as base
 from . import test_ha_emqx_candidate_flow as flow
 from . import test_ha_emqx_parity as parity
@@ -477,6 +479,315 @@ class OwnItemsTests(unittest.TestCase):
                         'psk_authentication': 'p', 'actions': {'http': 'x'}}, {'rule_engine': None, 'plugins': []}):
             own = ha_emqx_settings.own_items(config, config)
             self.assertTrue(any(own[kind] for kind in ('integrations', 'routing', 'psk', 'plugins')) or not any(config.values()))
+
+
+def levels(issues):
+    return {issue.id: issue.level for issue in issues}
+
+
+class OwnLinesTests(base.EmqxCase):
+    """E-41, E-42, E-43, E-44, E-47 through the whole candidate of the generated device: each line to confirm has its three steps
+    (not confirmed: only this app stops; confirmed: it goes on; one more name: confirm again), the plugins are a notice."""
+    world_class = base.World
+
+    def set_own(self, **roots):
+        self.world.target_config.update(copy.deepcopy(roots))
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+    def three(self, issue_id, make, more=None):
+        return parity.ThreeStepsTests.three(self, issue_id, make, more=more)
+
+    def test_this_devices_own_integrations_are_a_line_to_confirm(self):
+        """E-41: rules, connectors, actions, sources, bridges and gateways of this device, by name."""
+        own = {'connectors': {'http': {'erp': {'url': 'http://erp.example/hook'}}},
+               'rule_engine': {'rules': {'r1': {'sql': 'SELECT 1', 'actions': []}}}}
+
+        def more():
+            self.world.target_config['connectors']['http']['second'] = {'url': 'http://second.example/'}
+            self.world.current_config = copy.deepcopy(self.world.target_config)
+        line = self.three('emqx.device-integrations', lambda: self.set_own(**own), more=more)
+        self.assertEqual(line.names, ('connectors.http.erp', 'rule_engine.rules.r1'))
+        self.assertIn('2 項', line.message)
+        self.assertNotIn('erp.example', repr(line.view('emqx')), 'names, never a value')
+        self.assertNotIn('以 HA 的為準（其中', line.message, 'nothing of it was replaced')
+
+    def test_the_line_says_how_many_of_them_the_import_replaced(self):
+        """E-41: a same-named entry of HA's wins; the others stay next to HA's (the import is a merge)."""
+        self.set_own(connectors={'http': {'erp': {'url': 'http://erp.example/hook'}, 'keep': {'url': 'http://keep.example/'}}})
+        self.world.import_changes = {'connectors': {'http': {'erp': {'url': 'http://ha.example/'},
+                                                             'keep': {'url': 'http://keep.example/'},
+                                                             'ha-only': {'url': 'http://ha-only.example/'}}}}
+        result = self.internal_candidate(self.upload_emqx(state='stopped'))
+        [line] = [issue for issue in result['issues'] if issue.id == 'emqx.device-integrations']
+        self.assertEqual(line.names, ('connectors.http.erp', 'connectors.http.keep'))
+        self.assertIn('（其中 1 個已經換成 HA 的）', line.message)
+
+    def test_this_devices_own_routing_is_a_line_to_confirm(self):
+        """E-42: topic rewrite, topic metrics, auto-subscribe and ExHook servers of this device, by name."""
+        own = {'rewrite': [{'action': 'publish', 'source_topic': 'x/#', 'dest_topic': 'y/#'}],
+               'topic_metrics': [{'topic': 'sensors/t'}],
+               'exhook': {'servers': [{'name': 'hook1', 'url': 'http://hook.example', 'enable': False}]}}
+
+        def more():
+            self.world.target_config['topic_metrics'].append({'topic': 'sensors/h'})
+            self.world.current_config = copy.deepcopy(self.world.target_config)
+        line = self.three('emqx.device-routing', lambda: self.set_own(**own), more=more)
+        self.assertEqual(line.names, ('exhook.hook1', 'rewrite', 'topic_metrics.sensors/t'))
+        self.assertNotIn('hook.example', repr(line.view('emqx')))
+
+    def test_this_devices_psk_is_a_line_to_confirm(self):
+        """E-43: PSK authentication (or a PSK file): HA's keys replace this device's."""
+        own = {'psk_authentication': {'enable': True, 'init_file': '', 'separator': ':'}}
+        line = self.three('emqx.device-psk', lambda: self.set_own(**own))
+        self.assertEqual(line.names, ('psk_authentication',))
+        self.assertIn('重新設定', line.message)
+        self.world.again()
+        self.set_own(psk_authentication={'enable': False, 'init_file': '/opt/emqx/etc/psk.txt'})
+        found = [issue.id for issue in self.internal_candidate(self.upload_emqx(state='stopped'))['issues']]
+        self.assertIn('emqx.device-psk', found, 'a PSK file alone is enough')
+
+    def test_this_devices_durable_sessions_are_a_line_to_confirm(self):
+        """E-47: the messages queued for offline devices are not in HA's export and the restore replaces the data volume."""
+        line = self.three('emqx.durable-sessions', lambda: self.set_own(durable_sessions={'enable': True}))
+        self.assertEqual(line.names, ('durable_sessions',))
+        self.assertIn('排隊', line.message)
+        self.world.again()
+        self.set_own(durable_sessions={'enable': False, 'force_persistence': False},
+                     durable_storage={'messages': {'backend': 'builtin_raft'}})
+        found = [issue.id for issue in self.internal_candidate(self.upload_emqx(state='stopped'))['issues']]
+        self.assertNotIn('emqx.durable-sessions', found, 'durable sessions that are off queue nothing')
+
+    def test_plugins_are_a_notice_and_nothing_is_cleared(self):
+        """E-44: the plugin files live in the container, not in the data; the records stay (vendor emqx_plugins.erl only logs a
+        plugin that is not installed), the customer is told once."""
+        own = {'plugins': {'states': [{'name_vsn': 'my_plugin-1.0.0', 'enable': True}], 'install_dir': 'plugins'}}
+        self.set_own(**own)
+        result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
+        self.assertEqual(levels(result['issues']).get('emqx.device-plugins'), 'notice')
+        [line] = [issue for issue in result['issues'] if issue.id == 'emqx.device-plugins']
+        self.assertEqual(line.names, ('plugins.my_plugin-1.0.0',))
+        self.assertIn('重新安裝', line.message)
+        self.assertTrue(result['volumes'], 'a notice needs no confirmation')
+        self.assertEqual(self.world.current_config['plugins'], own['plugins'], 'the records are this device\'s and stay')
+
+    def test_nothing_of_its_own_nothing_to_confirm(self):
+        found = levels(self.internal_candidate(self.upload_emqx(state='stopped'))['issues'])
+        for issue_id in ('emqx.device-integrations', 'emqx.device-routing', 'emqx.device-psk', 'emqx.durable-sessions',
+                         'emqx.device-plugins', 'emqx.dirs-follow-device', 'emqx.files-not-carried'):
+            self.assertNotIn(issue_id, found)
+
+    def test_the_check_lists_them_and_leaves_the_device_alone(self):
+        self.set_own(connectors={'http': {'erp': {'url': 'http://erp.example/hook'}}}, durable_sessions={'enable': True})
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        confirm = {issue['id']: issue for issue in result['issues'] if issue['level'] == 'confirm'}
+        self.assertEqual(sorted(confirm), ['emqx.device-integrations', 'emqx.durable-sessions'])
+        self.assertTrue(all(issue['key'] for issue in confirm.values()))
+        self.assertFalse(result['ok'], 'a line to confirm is asked for before the import')
+        self.assertNotIn('woow_emqx_data', self.world.imported, 'no volume of this device is written')
+
+
+class OwnWorld(base.World):
+    """The generated device with more of its own: `own` roots in its configuration, `volume_files` in its data volume, and the
+    etc folder its broker (`woow-emqx`) and the candidate (`emqx-new`) answer."""
+    own = {}
+    volume_files = {}
+    etc = {}
+
+    def __init__(self):
+        super().__init__()
+        self.target_config.update(copy.deepcopy(self.own))
+        self.current_config = copy.deepcopy(self.target_config)
+
+    def evaluate(self, role, expression):
+        if expression == ha_emqx.ETC_EXPR:
+            return f'WOOWETC:{self.etc.get(role, "/opt/emqx/etc")}:ENDok\n'.encode()
+        return super().evaluate(role, expression)
+
+    def exec(self, role, command, data, stdout):
+        if role == 'emqx-new' and command[:1] == ['sha256sum'] and len(command) == 2 and command[1].startswith('/opt/emqx/data/'):
+            # the candidate's copy of a file of this device's data volume is the very bytes that were exported
+            body = self.volume_files.get(command[1][len('/opt/emqx/data/'):])
+            if body is not None:
+                return Result(0, hashlib.sha256(body).hexdigest().encode() + b'  ' + command[1].encode() + b'\n', b'')
+        return super().exec(role, command, data, stdout)
+
+    def export(self, volume):
+        data = super().export(volume)
+        if volume.endswith('emqx-xfer') or not self.volume_files:
+            return data
+        import io
+        import tarfile
+        entries = []
+        with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+            for member in tar.getmembers():
+                entries.append({'name': member.name, 'type': 'dir', 'uid': member.uid} if member.isdir() else
+                               {'name': member.name, 'data': tar.extractfile(member).read(), 'uid': member.uid})
+        entries += [{'name': name, 'data': body, 'uid': 1000} for name, body in sorted(self.volume_files.items())]
+        return base.fk.tar_of(entries)
+
+
+def quadlet(*, env=(), volumes=(), swap=()):
+    """The generated device's Quadlet files with more `Environment=` and `Volume=` lines and `swap` ((old, new) pairs)."""
+    text = base.QUADLETS['emqx.container']
+    for old, new in swap:
+        assert old in text, old
+        text = text.replace(old, new)
+    lines = ''.join(f'Environment={line}\n' for line in env) + ''.join(f'Volume={line}\n' for line in volumes)
+    text = text.replace(b'Volume=emqx-data.volume', lines.encode() + b'Volume=emqx-data.volume')
+    return {'emqx': {**base.QUADLETS, 'emqx.container': text}}
+
+
+class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
+    """E-23, E-24, E-29, E-30, E-35, E-36 through check and conversion of the generated device: its own folders and files."""
+    world_class = OwnWorld
+
+    def result(self, **world):
+        for name, value in world.items():
+            setattr(self.world, name, value)
+        return self.check(self.upload_emqx(), ['emqx'])[0]
+
+    def candidate_volumes(self):
+        [run] = self.runs('emqx-new')
+        return [value.split(':') for value in run[3]['--volume']]
+
+    def test_a_log_folder_elsewhere_is_given_to_the_candidate_as_scratch(self):
+        """E-23, E-35: EMQX_LOG_DIR and the log handler and the crash dump point to /var/log/emqx; the candidate runs with the
+        same environment and its own log volume there (logs are never carried)."""
+        self.world.quadlets = quadlet(env=['EMQX_LOG_DIR=/var/log/emqx'])
+        self.world.target_config.update({'node': {'name': 'emqx@127.0.0.1', 'data_dir': 'data',
+                                                  'crash_dump_file': '${EMQX_LOG_DIR}/erl_crash.dump'},
+                                         'log': {'file': {'default': {'enable': True, 'path': '${EMQX_LOG_DIR}/emqx.log'}}}})
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        [auto] = [issue for issue in result['issues'] if issue['id'] == 'emqx.dirs-follow-device']
+        self.assertEqual((auto['level'], auto['items']), ('auto', ['/var/log/emqx']))
+        volumes = self.candidate_volumes()
+        scratch = [v for v in volumes if v[1] == '/var/log/emqx']
+        self.assertEqual(len(scratch), 1)
+        self.assertEqual(scratch[0][0], [v for v in volumes if v[1] == '/opt/emqx/log'][0][0], 'the candidate\'s own log volume')
+        [run] = self.runs('emqx-new')
+        self.assertIn('EMQX_LOG_DIR=/var/log/emqx', run[3]['--env'])
+
+    def test_a_log_folder_that_is_one_of_this_devices_mounts_is_never_mounted_for_the_candidate(self):
+        """E-35: this device's real folder stays untouched; the candidate gets scratch space at its place."""
+        self.world.quadlets = quadlet(volumes=['%h/emqx-logs:/var/log/emqx:Z'])
+        self.world.target_config.update({'log': {'file': {'default': {'enable': True, 'path': '/var/log/emqx/emqx.log'}}}})
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        volumes = self.candidate_volumes()
+        self.assertEqual([v[0] for v in volumes if v[1] == '/var/log/emqx'], [[x[0] for x in volumes if x[1] == '/opt/emqx/log'][0]])
+        self.assertFalse([v for v in volumes if 'emqx-logs' in v[0]], 'the host folder is not in the candidate')
+
+    def test_a_log_place_that_cannot_be_given_stops_only_this_app_before_the_candidate_exists(self):
+        """E-35: a log file in the image's own etc folder, or below one of this device's mounts."""
+        for path, mounted in (('/opt/emqx/etc/emqx.log', False), ('/var/log/emqx/sub/emqx.log', True)):
+            with self.subTest(path=path):
+                self.world = OwnWorld()
+                self.world.quadlets = quadlet(volumes=['%h/emqx-logs:/var/log/emqx:Z'] if mounted else [])
+                self.world.target_config.update({'log': {'file': {'default': {'enable': True, 'path': path}}}})
+                self.world.current_config = copy.deepcopy(self.world.target_config)
+                self.deps.adapter_factory = self.world.factory
+                result = self.check(self.upload_emqx(), ['emqx'])[0]
+                self.assertFalse(result['importable'])
+                [stop] = [issue for issue in result['issues'] if issue['level'] == 'stop']
+                self.assertEqual(stop['id'], 'emqx.output-dir-unusable')
+                self.assertTrue(stop['items'] and stop['action'])
+                self.assertEqual(self.runs('emqx-new'), [], 'nothing of the candidate was started')
+
+    def test_this_devices_own_etc_folder_is_the_candidates_too(self):
+        """E-24: EMQX_ETC_DIR is /custom/etc; the ACL file `${EMQX_ETC_DIR}/acl.conf` is looked for there (on this device's
+        mount), the candidate starts with the same environment and the same mount, and the customer is told."""
+        self.world.quadlets = quadlet(env=['EMQX_ETC_DIR=/custom/etc'], swap=[
+            (b'/opt/emqx/etc/acl.conf:ro,Z', b'/custom/etc/acl.conf:ro,Z')])
+        self.world.etc = {'woow-emqx': '/custom/etc', 'emqx-new': '/custom/etc'}
+        self.world.target_config['authorization'] = {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [
+            {'type': 'file', 'enable': True, 'path': '${EMQX_ETC_DIR}/acl.conf'}]}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        [auto] = [issue for issue in result['issues'] if issue['id'] == 'emqx.dirs-follow-device']
+        self.assertEqual(auto['items'], ['/custom/etc'])
+        [run] = self.runs('emqx-new')
+        self.assertIn('EMQX_ETC_DIR=/custom/etc', run[3]['--env'])
+        self.assertTrue([v for v in self.candidate_volumes() if v[1] == '/custom/etc/acl.conf'])
+        self.assertEqual([i['id'] for i in result['issues'] if i['id'] == 'emqx.target-file-missing'], [])
+
+    def test_an_etc_folder_that_the_candidate_does_not_have_stops_only_this_app(self):
+        """E-24: this device says /custom/etc and the candidate something else: the candidate is not this device's replica."""
+        self.world.etc = {'woow-emqx': '/custom/etc'}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['importable'])
+        self.assertEqual([i['id'] for i in result['issues'] if i['level'] == 'stop'], ['failure.incompatible'])
+        self.assertEqual([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import']], [], 'nothing was imported')
+
+    def test_an_etc_folder_the_broker_cannot_tell_stops_only_this_app(self):
+        self.world.etc = {'woow-emqx': 'relative/etc'}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['importable'])
+        self.assertEqual(self.runs('emqx-new'), [])
+
+    def test_an_acl_the_dashboard_wrote_is_found_by_its_relative_path_and_carried(self):
+        """E-29, E-30: `data/authz/acl.conf` (or the list of its character codes) is in the data volume, not on a mount."""
+        for path in ('data/authz/acl.conf', [ord(char) for char in 'data/authz/acl.conf'], 'data/other/acl2.conf'):
+            with self.subTest(path=path if isinstance(path, str) else 'character codes'):
+                self.world = OwnWorld()
+                self.world.volume_files = {'authz/acl.conf': b'{allow, all}.\n', 'other/acl2.conf': b'{deny, all}.\n'}
+                self.world.target_config['authorization'] = {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [
+                    {'type': 'file', 'enable': True, 'path': path}]}
+                self.world.current_config = copy.deepcopy(self.world.target_config)
+                self.deps.adapter_factory = self.world.factory
+                result = self.check(self.upload_emqx(), ['emqx'])[0]
+                self.assertTrue(result['importable'], result['blockers'])
+                import io
+                import tarfile
+                with tarfile.open(fileobj=io.BytesIO(self.world.imported['emqx-new'])) as tar:
+                    names = {m.name for m in tar.getmembers() if m.isfile()}
+                self.assertIn('authz/acl.conf' if 'acl2' not in str(path) else 'other/acl2.conf', names)
+                self.assertNotIn('emqx.target-file-missing', [i['id'] for i in result['issues']])
+
+    def test_a_file_in_the_data_volume_that_is_not_there_is_a_notice_not_a_stop(self):
+        """E-29, E-50 with E-55: this device's own hole."""
+        self.world.target_config['listeners'] = {'ssl': {'default': {'ssl_options': {'certfile': 'data/certs/never.pem'}}}}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        [missing] = [i for i in result['issues'] if i['id'] == 'emqx.target-file-missing']
+        self.assertEqual((missing['level'], missing['items']), ('notice', ['certs/never.pem']))
+
+    def test_files_nobody_can_place_are_one_notice_with_the_names_of_the_settings(self):
+        """E-50: setting names, never a path."""
+        self.world.target_config['alarm'] = {'actions': ['log'], 'cacertfile': '${NOT_SET}/ca.pem', 'keyfile': '/proc/self/x'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        [line] = [i for i in result['issues'] if i['id'] == 'emqx.files-not-carried']
+        self.assertEqual((line['level'], line['items']), ('notice', ['alarm.cacertfile', 'alarm.keyfile']))
+        self.assertTrue(result['ok'], 'a notice asks nothing')
+
+    def test_a_data_directory_that_is_not_the_images_stops_only_this_app_with_its_advice(self):
+        """E-36: HA's data would land in the wrong place; every other node setting is this device's own."""
+        self.world.target_config['node'] = {'name': 'emqx@127.0.0.1', 'data_dir': '/var/lib/emqx'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['importable'])
+        [stop] = [i for i in result['issues'] if i['level'] == 'stop']
+        self.assertEqual(stop['id'], 'emqx.data-dir-moved')
+        self.assertIn('/opt/emqx/data', stop['action'])
+        self.assertEqual(self.runs('emqx-new'), [])
+
+    def test_the_other_node_settings_are_this_devices_own_and_come_back(self):
+        """E-36: extra applications, configuration files, shard transports, the etc folder name, unlisted fields."""
+        node = {'name': 'emqx@127.0.0.1', 'data_dir': 'data', 'applications': ['my_app'], 'etc_dir': '/custom/etc',
+                'config_files': ['/opt/emqx/etc/emqx.conf', '/custom.conf'], 'shard_transports': {'a': 'new'}, 'unlisted': 1,
+                'cluster_call': {'retry_interval': '1s', 'future': True}}
+        self.world.target_config['node'] = node
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        self.assertEqual(self.world.current_config['node'], node)
 
 
 if __name__ == '__main__':
