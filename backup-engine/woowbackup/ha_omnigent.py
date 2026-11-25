@@ -9,18 +9,30 @@ is the Podman package in cold mode: volumes `omnigent-postgres-data` (a whole Po
 superuser is the app role), `omnigent-server-data` (/data: artifacts and the admin's runtime setting files) and
 `omnigent-pi-data` (the runner's own pi state).
 
-Versions: the add-on version maps to an Omnigent version (VERSIONS) that must equal the live server's `/v1/info`
-`server_version`, and HA's `alembic_version` must equal the live database's; HA's PostgreSQL major must not be newer.
+Versions (HAOS parity, 2026-11-25): the add-on version maps to an Omnigent version (VERSIONS); that table and the live
+server's `/v1/info` `server_version` only inform (O-23, O-24, O-25: an unknown or unreadable version is a notice, two
+different versions are a notice too). What decides is the data itself: HA's `alembic_version` must equal the live
+database's and HA's tables and columns must equal this device's (O-19, O-26: stops of this app only); HA's PostgreSQL
+major must not be newer than the image that opens it (O-18).
+
+Findings go to `work.sink(app)` (haissues; ISSUES below): the check collects them, the conversion asks for the same ones
+again (`judge`) and stops this app only (`stop`, or a `confirm` the customer did not confirm with exactly these names).
+What HAOS would simply restore is no longer a refusal here: what this device cannot take over is left out and listed in
+ONE line to confirm (`omnigent.skipped`: tables, objects, extensions and links that are not Omnigent's, locations that
+point out of the artifact store; `omnigent.files-missing`), the rest is moved. Nothing of it weakens a protection: only
+TABLE DATA and SEQUENCE SET entries that name this device's own tables and sequences, once each, are ever restored, as the
+role without privileges; HA's cluster stays isolated (no network, read-only root, no executable data volume).
 
 check: HA's cluster is streamed into a throwaway volume (its configuration and recovery files replaced or dropped,
 ha_odoo.PgSink) and opened by a throwaway PostgreSQL 16 of the live image exactly as hardened as Odoo's
 (ha_odoo.start_ha_cluster: socket only, network none, read-only root, noexec data volume, every library/command
-setting overridden); the database must hold only Omnigent's own tables, no function, trigger, view, rule, policy,
-other schema or object only a superuser can create, extensions within plpgsql and pg_trgm, UTF8; every agent bundle and
-file blob the database names must be in the backup's artifact store, whose `accounts-cookie-secret` must be there.
+setting overridden); what the database holds besides Omnigent's own tables (functions, triggers, views, rules, policies,
+other schemas, objects only a superuser can create, extensions beyond plpgsql and pg_trgm) is listed and left out (one line to
+confirm); it must be UTF8; every agent bundle and file blob the database names should be in the backup's artifact store (a
+missing one is a line to confirm), whose `accounts-cookie-secret` is carried when it is usable.
 
 The check also compares HA's tables and columns with this device's live database (the trusted schema, below); a
-difference is a blocker naming the tables.
+difference is a stop naming the tables.
 
 convert (B1-01: HA's backup never provides DDL, defaults, checks or domains): `pg_dump -Fc omnigent` of HA's cluster
 is the source of DATA only. A NEW cluster from the live image, environment and secret mount (its superuser is the live
@@ -37,8 +49,8 @@ must equal the live one after the post-data section and again after the last wri
 other role, no role or database setting, no ALTER SYSTEM setting and no large object (audit_new_cluster). This
 device's own admin and runner accounts (the Quadlet's OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME /
 OMNIGENT_RUNNER_USERNAME) are read from the live database as the app owner and added back by that restricted role
-unless HA has a user of the same name (HA's wins, with a warning): without them the runner could not log in while
-every health check stays green. Test mode pauses every active scheduled task (the restricted role). Counts and alembic
+unless HA has a user of the same name (HA's wins, with a notice): without them the runner could not log in while
+every health check stays green (accounts that cannot be read are not kept and the customer is told: O-09). Test mode pauses every active scheduled task (the restricted role). Counts and alembic
 are verified, the restricted role is dropped, the cluster is stopped cleanly (`pg_controldata` "shut down") and
 exported. HA's cluster can lie and run code inside its container (security review 2026-11-23): its answers are given
 again by the new cluster before anything is exported (require_answers, SR-1) and the SEQUENCE SET statements pg_dump
@@ -52,9 +64,10 @@ import json
 import os
 import re
 import time
+import unicodedata
 import urllib.parse
 
-from . import habackup, hacommon, ha_n8n, ha_odoo, tempctr
+from . import habackup, hacommon, ha_n8n, ha_odoo, haissues, hatarget, podman, tempctr
 from .errors import BackupError
 from .podman import CommandError
 
@@ -103,11 +116,62 @@ DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
 # 1-54999: `podman exec --user 65534` failed there with 255), so the first of DUMP_IDS the owner's uid AND gid maps
 # hold is taken, never root and never the image's postgres ids.
 DUMP_IDS = (65534, 32767, 9999, 999)
+SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
+                  '請等它正常執行後再轉換一次。')
+
+# What this module says about HA's Omnigent against this device (haissues; DESIGN B2). Numbers only in a message, names in
+# `items`; a name from the backup is shown cleaned (haissues.Issue.shown).
+ISSUES = {
+    'omnigent.no-database': 'stop',          # O-10: HA's PostgreSQL has no omnigent database: nothing to move
+    'omnigent.encoding': 'stop',             # O-17 (wave 2): HA's database is not UTF8
+    'omnigent.pg-newer': 'stop',             # O-18: HA's PostgreSQL major is newer than the image that must open it
+    'omnigent.alembic-different': 'stop',    # O-19 (wave 2): the structure version of the two databases differs
+    'omnigent.schema-different': 'stop',     # O-26 (wave 2): tables or columns differ
+    'omnigent.target-unreadable': 'stop',    # O-40, O-41: this device's structure or its version cannot be read (also after trying again)
+    'omnigent.version-different': 'notice',  # O-25, O-49: the two versions differ; the data decides
+    'omnigent.skipped': 'confirm',           # O-03, O-12, O-14, O-15, O-16, O-21, O-28: what is left out, in ONE line
+    'omnigent.files-missing': 'confirm',     # O-22: agent bundles or files the database names that the backup does not hold
+    'omnigent.cookie-missing': 'notice',     # O-20: no usable login key: everyone signs in again
+    'omnigent.extras-carried': 'auto',       # O-07: this device's other volumes go along as they are
+    'omnigent.hardlinks-copied': 'auto',     # O-02: hard links in HA's database folder are copied as ordinary files
+    'omnigent.extension-version': 'auto',    # O-44: an extension of the new cluster has another version than this device's
+    'omnigent.secrets-unregistered': 'notice',  # O-48: a Quadlet secret is not in the app settings
+    'omnigent.accounts-unreadable': 'notice',   # O-09: this device's own accounts could not be read, not kept
+    'omnigent.entries-skipped': 'notice',    # O-28: entries of HA's dump list that are not this device's tables or sequences
+    'omnigent.addon-artifacts-unused': 'notice',
+    'omnigent.credentials-reconnect': 'notice',
+    'omnigent.settings-not-moved': 'notice',
+    'omnigent.tasks-active': 'notice',
+    'omnigent.public-sessions': 'notice',
+    'omnigent.account-conflict': 'notice',
+}
+ACTION_REBACKUP = '請在 HA 重新備份後再匯入 Omnigent；這台的 Omnigent 不會有任何變更。'
+ACTION_SAME_VERSION = '請先讓兩邊的 Omnigent 版本一致後再匯入；這台的 Omnigent 不會有任何變更。'
+ACTION_UNCHANGED = '這台的 Omnigent 不會有任何變更。'
+ACTION_UNREADABLE = '請先確認這台的 Omnigent 資料庫正常執行（啟動過一次），再匯入；這台的 Omnigent 不會有任何變更。'
+SNAPSHOT_ATTEMPTS = 3      # O-32, O-33, O-58, O-59: this device's structure snapshot, tried this many times
+STEADY_ATTEMPTS = 3        # O-42, O-43: waits for this device's database structure to stop changing, this many times
+READ_ATTEMPTS = 3          # O-09, O-40, O-41: a read of this device's own database
+MAX_KEY_PARTS = 16         # O-21: levels of an artifact key (Omnigent's own have 2)
+MAX_KEY_CHARS = 512        # agents.bundle_location is a String(512)
+MAX_PART_CHARS = 255
+
+
+def _spare_id(uids, gids, avoid):
+    """The highest id both the owner's uid and gid maps hold that is not in `avoid` (None when there is none)."""
+    spans = sorted(((max(a, c), min(b, d)) for a, b in uids.ranges for c, d in gids.ranges if max(a, c) < min(b, d)),
+                   reverse=True)
+    for start, end in spans:
+        for candidate in range(end - 1, max(start, end - 1 - len(avoid)) - 1, -1):
+            if candidate not in avoid:
+                return candidate
+    return None
 
 
 def dump_user(ids, pg_ids):
     """`uid:gid` of HA's pg_dump (see DUMP_IDS): `ids` = the owner's (uid IdMap, gid IdMap), `pg_ids` = the image's
-    postgres (uid, gid)."""
+    postgres (uid, gid). One of DUMP_IDS when the owner's maps hold it; else any other id both maps hold (O-01): never
+    root and never the image's postgres ids. None at all: this device cannot run the dump safely (job-failed)."""
     uids, gids = ids if ids else (None, None)
     for candidate in DUMP_IDS:
         if candidate in (0, *pg_ids):
@@ -115,9 +179,10 @@ def dump_user(ids, pg_ids):
         if uids is not None and (candidate not in uids or candidate not in gids):
             continue
         return f'{candidate}:{candidate}'
+    spare = _spare_id(uids, gids, {0, *pg_ids}) if uids is not None else None
+    if spare is not None:
+        return f'{spare}:{spare}'
     raise BackupError('job-failed', '這台的使用者命名空間沒有可用來匯出 HA 資料庫的帳號 ID，無法安全地轉換。')
-SCHEMA_CHANGED = ('這台 Omnigent 的資料庫結構在轉換期間改變了（可能正在升級或重新啟動），沒有匯入任何資料；'
-                  '請等它正常執行後再轉換一次。')
 
 
 # ====================================================================== the add-on member
@@ -132,59 +197,82 @@ class Source:
         self.keys = set()           # artifact keys (paths relative to the artifact store)
         self.artifact_files = 0
         self.artifact_bytes = 0
-        self.cookie = False
+        self.cookie = False         # a usable accounts-cookie-secret is there (and carried)
+        self.cookie_unusable = False  # O-20: one is there but empty or too large: not carried, a new one is made
         self.addon_artifacts = 0    # files in the add-on's own ARTIFACT_DIR (expected none)
         self.overrides = []         # HA's runtime setting files in /data (not imported)
+        self.pg_links = haissues.Names()       # O-02: hard links in HA's database folder, copied as ordinary files
+        self.outside_links = haissues.Names()  # O-03: hard links of the artifact store to files outside it: left out
         self.problems = []
 
 
 def scan_member(stream, report, *, pg=None, artifacts=None, checkpoint=None):
     """One strict pass: `data/postgres/**` into `pg` (a PgSink), the artifact store into `artifacts` (a TreeTar,
     names `artifacts/...`, owner and modes fixed later); HA's runtime setting files are only named. Returns a
-    Source."""
+    Source.
+
+    Hard links (HAOS parity; the reader hands a link to an earlier selected file out as a `hardlink` and every other one as
+    a regular `file` after the walk): in HA's database folder a link is copied as an ordinary file (O-02: a normal database
+    has none; the content stays in the isolated throwaway); in the artifact store a link that names a file outside the store
+    is never carried, nor copied (O-03: the store is downloadable): it is left out and listed in `Source.outside_links`.
+    The login key (accounts-cookie-secret) that is empty or larger than 4096 bytes is not carried either (O-20: Omnigent
+    makes a new one; an empty key would sign with nothing). PG_VERSION is read only at its start (O-61: the database that
+    opens the folder is what refuses a damaged one)."""
     select = habackup.Select(include=(PG_PREFIX, ARTIFACTS, ADDON_ARTIFACT_DIR) + tuple(f'data/{n}' for n in OVERRIDES),
                              exclude=(f'{ARTIFACTS}/.cache',), symlinks=(), hardlinks=True)
     src = Source()
     count = 0
+    copies = getattr(report, 'copied_links', 0)
     for entry in habackup.iter_entries(stream, select, report, checkpoint=checkpoint):
         count += 1
         if checkpoint is not None and count % 256 == 0:
             checkpoint()
+        copied = getattr(report, 'copied_links', 0) != copies   # a hard link whose file the reader copied (set just before)
+        copies = getattr(report, 'copied_links', 0)
         name = entry.name
         if ha_odoo._under(name, PG_PREFIX):
-            if entry.kind == 'hardlink':
-                raise BackupError('incompatible', 'HA 的 Omnigent 資料庫檔案含有硬連結，無法安全地搬過來。', member=name[:200])
             rel = name[len(PG_PREFIX) + 1:] if name != PG_PREFIX else '.'
-            data = None
+            if entry.kind == 'hardlink':
+                entry.copy_later()      # the same name comes again after the walk as a file with the content
+                continue
+            if copied:
+                src.pg_links.add(rel)   # counted once: here, where the copy arrives
             if entry.kind == 'file':
                 src.pg_files += 1
                 src.pg_bytes += entry.size
                 if rel == 'PG_VERSION':
-                    data = entry.read_all(ha_odoo.MAX_SMALL_FILE)
-                    src.pg_version = data.decode('ascii', 'replace').strip()[:16]
+                    head = entry.peek(64).split(b'\n', 1)[0]
+                    src.pg_version = head.decode('ascii', 'replace').strip()[:16]
             if pg is not None:
-                pg.add(rel, entry, data)
+                pg.add(rel, entry, None)
             continue
         if ha_odoo._under(name, ARTIFACTS):
             rel = name[len(ARTIFACTS) + 1:] if name != ARTIFACTS else ''
             target = 'artifacts' + (f'/{rel}' if rel else '')
+            if copied or (entry.kind == 'hardlink' and (not ha_odoo._under(entry.linkname, ARTIFACTS)
+                                                        or entry.linkname == ARTIFACTS)):
+                src.outside_links.add(f'檔案區裡指到區外的硬連結 {rel}')   # O-03: never carried, never copied
+                continue
             if entry.kind == 'dir':
                 if artifacts is not None:
                     artifacts.dir(target, 0o755, entry.mtime)
             elif entry.kind == 'file':
+                if rel == COOKIE:
+                    src.cookie = 0 < entry.size <= 4096
+                    src.cookie_unusable = not src.cookie
+                    if not src.cookie:
+                        continue
                 src.artifact_files += 1
                 src.artifact_bytes += entry.size
                 if len(src.keys) < MAX_KEYS:
                     src.keys.add(rel)
-                if rel == COOKIE:
-                    src.cookie = 0 < entry.size <= 4096
                 if artifacts is not None:
                     artifacts.file(target, entry, 0o600 if rel == COOKIE else 0o644)
             elif entry.kind == 'hardlink':
-                if not ha_odoo._under(entry.linkname, ARTIFACTS) or entry.linkname == ARTIFACTS:
-                    raise BackupError('incompatible', 'HA 的 Omnigent 檔案區有指向其他資料的硬連結，無法安全地搬過來。',
-                                      member=name[:200])
                 linked = entry.linkname[len(ARTIFACTS) + 1:]
+                if linked == COOKIE and src.cookie_unusable:
+                    src.outside_links.add(f'檔案區裡指到區外的硬連結 {rel}')   # the key it names is not carried
+                    continue
                 if len(src.keys) < MAX_KEYS:
                     src.keys.add(rel)
                 if artifacts is not None:
@@ -206,10 +294,47 @@ def scan_member(stream, report, *, pg=None, artifacts=None, checkpoint=None):
 
 # ====================================================================== the live target
 
-class Target:
-    """The omnigent app's catalog items the import fills, resolved against the live Quadlet files."""
+def _sink(work, app):
+    """The issues of this app (a work without sinks -- a harness -- collects nowhere)."""
+    maker = getattr(work, 'sink', None)
+    app_id = getattr(app, 'id', None) or APP_ID
+    return maker(app_id) if callable(maker) else haissues.Sink(app_id)
 
-    def __init__(self, work, app):
+
+def _abort(work):
+    abort = getattr(work, 'abort', None)
+    return abort if callable(abort) else None
+
+
+def _log(work):
+    log = getattr(work, 'log', None)
+    return log if callable(log) else None
+
+
+def _again(work, action, what, **kwargs):
+    """`action()` tried READ_ATTEMPTS times when a read of this device fails for a moment (hatarget.retry)."""
+    return hatarget.retry(action, attempts=READ_ATTEMPTS, abort=_abort(work), log=_log(work), what=what, **kwargs)
+
+
+def _unreadable(app, message):
+    """The stop of this app when this device's own database structure cannot be read (O-40, O-41), with what to do."""
+    issue = haissues.Issue('omnigent.target-unreadable', 'stop', message, action=ACTION_UNREADABLE)
+    return haissues.stopped(issue, 'incompatible', app=app.id)
+
+
+class _Odd(BackupError):
+    """An answer of this device's own database that is not the shape asked for: worth another try (O-09, O-41)."""
+
+    def __init__(self, message, app):
+        super().__init__('job-failed', message, app=app.id)
+
+
+class Target:
+    """The omnigent app's catalog items the import fills, resolved against the live Quadlet files. A volume of the app
+    settings beyond the three (database, server, runner) is this device's own and goes along as it is (O-07: `extra_volumes`,
+    carried by `convert`); the three must be there, all different, and the database settings must fit."""
+
+    def __init__(self, work, app, sink=None):
         quadlets = work.quadlets(app)
         home = work.runner(app).home
         declared = [v['name'] for v in app.volumes]
@@ -240,10 +365,15 @@ class Target:
         users = [server_env.get('OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME') or 'admin',
                  runner_env.get('OMNIGENT_RUNNER_USERNAME') or 'operator']
         self.own_users = [u.lower() for u in dict.fromkeys(users) if USER_RE.fullmatch(u.lower())]
-        if (sorted(declared) != sorted({self.db_volume, server_volume, pi_volume} - {None}) or len(declared) != 3
+        needed = {self.db_volume, server_volume, pi_volume} - {None}
+        if (len(needed) != 3 or not needed <= set(declared) or len(declared) != len(set(declared))
                 or self.database != DATABASE or not self.pgdata or not tempctr.TARGET_RE.fullmatch(self.pgdata)
                 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', self.db_user)):
             raise BackupError('incompatible', '這台的 Omnigent 資料卷、資料庫設定和 Quadlet 檔不一致，無法匯入。', app=app.id)
+        self.extra_volumes, _dirs = hatarget.extras(app, needed)
+        if self.extra_volumes and sink is not None:
+            sink.auto('omnigent.extras-carried', '這台 Omnigent 的應用設定還有其他資料卷，匯入時會照這台現在的內容原樣帶過去，不會被 HA 的資料取代。',
+                      self.extra_volumes)
         self.info_url = info_url(app)
 
 
@@ -264,7 +394,8 @@ def info_url(app):
 
 
 def target_version(work, app, url):
-    """The live server's version (`GET /v1/info` -> server_version; unauthenticated, loopback only)."""
+    """The live server's version (`GET /v1/info` -> server_version; unauthenticated, loopback only); None when it cannot be
+    read (O-24: that is no reason to refuse, the data decides)."""
     from .adapters.quadlet_postgres import loopback_get
     if url is None:
         return None
@@ -280,23 +411,47 @@ def target_version(work, app, url):
 
 
 def live_alembic(work, app, target):
-    value = hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
-                               "SELECT coalesce(json_agg(version_num), '[]'::json) FROM alembic_version")
-    return value if isinstance(value, list) and all(isinstance(v, str) for v in value) else None
+    """This device's structure version; None when the answer is no list of texts, also after trying again (O-41; a read that
+    fails stops this app as it did)."""
+    def read():
+        value = hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
+                                   "SELECT coalesce(json_agg(version_num), '[]'::json) FROM alembic_version")
+        if not (isinstance(value, list) and all(isinstance(v, str) for v in value)):
+            raise _Odd('這台 Omnigent 的資料庫結構版本讀到的不是清單。', app)
+        return value
+    try:
+        return _again(work, read, '讀取這台 Omnigent 的資料庫結構版本')
+    except _Odd:
+        return None
 
 
 LIVE_USERS_SQL = "SELECT coalesce(json_agg(u ORDER BY u.id), '[]'::json) FROM users u WHERE u.id IN ({names})"
 
 
-def live_users(work, app, target):
-    """This device's own admin and runner rows (argon2id hashes masked in every log line from now on)."""
+def live_users(work, app, target, sink=None):
+    """This device's own admin and runner rows (argon2id hashes masked in every log line from now on). When they cannot be
+    read, also after trying again, they are not kept (O-09): the import goes on and the customer is told to make the runner's
+    account again."""
     from . import jobs
     if not target.own_users:
         return []
     sql = LIVE_USERS_SQL.format(names=', '.join(ha_odoo.sql_literal(u) for u in target.own_users))
-    rows = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, sql)
-    if not isinstance(rows, list):
-        raise BackupError('job-failed', '無法讀取這台 Omnigent 的帳號。', app=app.id)
+
+    def read():
+        rows = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, sql)
+        if not isinstance(rows, list):
+            raise _Odd('無法讀取這台 Omnigent 的帳號。', app)
+        return rows
+    try:
+        rows = _again(work, read, '讀取這台 Omnigent 的帳號')
+    except BackupError as error:
+        if not (isinstance(error, _Odd) or hatarget.transient(error)):
+            raise
+        if sink is not None:
+            sink.notice('omnigent.accounts-unreadable',
+                        '讀不到這台 Omnigent 自己的管理者與 runner 帳號，匯入後它們不會保留；請用 HA 的帳號登入，並重新建立 runner 的帳號。',
+                        target.own_users)
+        return []
     kept = []
     for row in rows[:10]:
         if not isinstance(row, dict) or row.get('id') not in target.own_users:
@@ -365,11 +520,14 @@ def table_counts(cluster, tables, database=DATABASE):
     return found
 
 
-def analyse(cluster):
-    """What HA's database holds (from the hardened throwaway cluster)."""
+def analyse(cluster, sink=None):
+    """What HA's database holds (from the hardened throwaway cluster). Without an `omnigent` database there is nothing to
+    move: this app only stops (O-10)."""
     databases = {db['name']: db for db in ha_odoo.ha_databases(cluster)}
     if DATABASE not in databases:
-        raise BackupError('incompatible', 'HA 的 Omnigent 沒有 omnigent 資料庫。')
+        (sink if sink is not None else haissues.Sink(APP_ID)).refuse(
+            'omnigent.no-database', 'HA 的 Omnigent 沒有 omnigent 資料庫，沒有資料可以搬。',
+            action='請先在 HA 的 Omnigent 建立資料並重新備份，再匯入；這台的 Omnigent 不會有任何變更。')
     objects = cluster.query_json(OBJECTS_SQL, DATABASE)
     if not isinstance(objects, dict):
         raise BackupError('job-failed', '無法讀取 HA 的 Omnigent 資料庫。')
@@ -384,68 +542,110 @@ def analyse(cluster):
             'counts': table_counts(cluster, tables)}
 
 
-def verdict(src, found, *, live_alembic_value, ha_major, target_major):
-    """(blockers, warnings) of HA's Omnigent against this device."""
-    blockers, warnings = [], []
-    objects = found['objects']
-    unknown = sorted(set(found['tables']) - KNOWN_TABLES)
-    missing = sorted(set(TABLES) - set(found['tables']))
-    if unknown:
-        blockers.append(f'HA 的 Omnigent 資料庫有 Omnigent 不會建立的資料表（{hacommon.names(unknown)}），無法安全地搬過來。')
-    if missing:
-        blockers.append(f'HA 的 Omnigent 資料庫缺少資料表（{hacommon.names(missing)}），版本或資料可能不完整。')
-    odd = [label for key, label in (('functions', '函式'), ('triggers', '觸發程序'), ('views', '檢視表'), ('rules', '規則'),
-                                    ('policies', '資料列政策')) if ha_odoo._int(objects.get(key))]
-    if objects.get('schemas'):
-        odd.append(f'其他結構描述（{hacommon.names([str(s) for s in objects["schemas"]], 5)}）')
-    if odd:
-        blockers.append(f'HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（{"、".join(odd)}），無法安全地搬過來。')
-    if found['superuser']:
-        blockers.append(f'HA 的 Omnigent 資料庫含有只有資料庫超級使用者才能建立的物件（{hacommon.names(found["superuser"])}），'
-                        '無法安全地搬過來。')
-    extensions = [str(e) for e in objects.get('extensions') or []]
-    if any(e not in EXTENSIONS_OK for e in extensions):
-        odd_extensions = [e for e in extensions if e not in EXTENSIONS_OK]
-        blockers.append(f'HA 的 Omnigent 資料庫使用了這台不支援的擴充功能：{hacommon.names(odd_extensions)}。')
-    if objects.get('encoding') != 'UTF8':
-        blockers.append('HA 的 Omnigent 資料庫不是 UTF8 編碼。')
-    if ha_major is None or target_major is None or ha_major > target_major:
-        blockers.append(f'HA 的 PostgreSQL 是 {ha_major or "未知"} 版，這台是 {target_major or "未知"} 版；只能從相同或較舊的版本搬過來。')
-    ha_alembic = found['alembic']
-    if not ha_alembic or live_alembic_value is None or sorted(ha_alembic) != sorted(live_alembic_value):
-        blockers.append(f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or "未知"}，這台是 '
-                        f'{"、".join(live_alembic_value or []) or "未知"}。請先讓兩邊的 Omnigent 版本一致後再匯入。')
-    if not src.cookie:
-        blockers.append('HA 備份裡找不到 Omnigent 的登入金鑰（accounts-cookie-secret），它應在 /data/omnigent-home/.omnigent/'
-                        'artifacts；可能用了其他資料位置（OMNIGENT_DATA_DIR），無法完整搬過來。')
+def unknown_tables(found):
+    """HA's tables that are none of Omnigent's (O-12): left out, listed."""
+    return sorted(set(found['tables']) - KNOWN_TABLES)
+
+
+def odd_extensions(found):
+    """HA's extensions beyond plpgsql and pg_trgm (O-16): left out, listed."""
+    return [e for e in (str(e) for e in found['objects'].get('extensions') or []) if e not in EXTENSIONS_OK]
+
+
+def bundle_locations(found):
+    """(the agent bundle locations and file blob keys HA's database names, the bundle locations that are not safe)."""
     keys = found['keys']
     wanted = [k for k in (keys.get('bundles') or []) + (keys.get('blobs') or []) if isinstance(k, str)]
-    bad = [k for k in wanted if not key_ok(k)]
+    return wanted, [k for k in wanted if not key_ok(k)]
+
+
+ODD_OBJECTS = (('functions', '函式'), ('triggers', '觸發程序'), ('views', '檢視表'), ('rules', '規則'),
+               ('policies', '資料列政策'))
+MSG_SKIPPED = ('HA 的 Omnigent 備份裡有這台搬不過來的項目，匯入時只會略過它們（Omnigent 用不到的資料表、物件、擴充功能和檔案區外的連結不搬；'
+               '會跑出檔案區的代理程式位置會被清空），其餘的資料照常搬：{what}。')
+MSG_FILES_MISSING = ('HA 的資料庫記著 {count} 個代理程式包或檔案，不在這份備份的檔案區裡{all}；它們在這台打不開，其他資料都正常。'
+                     '請確認 HA 那邊本來就缺這些檔案，或把它們放在別的資料位置。')
+
+
+def skipped_names(src, found):
+    """(the names of everything that is left out, as ONE list for the line to confirm, and how many of each kind): HA's tables
+    that are not Omnigent's, objects and extensions that are not Omnigent's or only a database superuser can make (O-12,
+    O-14, O-15, O-16), the artifact store's links to files outside it (O-03), the agent locations that could leave the store
+    (O-21). Every name of every kind is in the key (haissues.MergedNames)."""
+    kinds = {'資料表': haissues.Names(f'資料表 {t}' for t in unknown_tables(found))}
+    objects = found['objects']
+    odd = haissues.Names(label for key, label in ODD_OBJECTS if ha_odoo._int(objects.get(key)))
+    for schema in objects.get('schemas') or []:
+        odd.add(f'其他結構描述 {schema}')
+    for kind in found['superuser']:
+        odd.add(f'只有資料庫超級使用者能建立的物件 {kind}')
+    kinds['物件'] = odd
+    kinds['擴充功能'] = haissues.Names(f'擴充功能 {e}' for e in odd_extensions(found))
+    kinds['檔案位置'] = haissues.Names(f'會跑出檔案區的代理程式位置（會被清空） {k}' for k in bundle_locations(found)[1])
+    kinds['連結'] = src.outside_links
+    kinds = {kind: names for kind, names in kinds.items() if names.count}
+    return haissues.MergedNames(list(kinds.items())), {kind: names.count for kind, names in kinds.items()}
+
+
+def judge(sink, src, found, *, live_alembic_value, ha_major, target_major, differ=None):
+    """Everything the check says about HA's Omnigent against this device, in the sink (the conversion asks again: a stop
+    raises there, a line to confirm raises unless the customer confirmed these names). Stops first, so a conversion that
+    stops, stops with the reason and not with a question. `differ`: the tables, sequences and types whose shape differs
+    (O-26), known to the caller (the check reads this device's live schema, the conversion has the captured one)."""
+    objects = found['objects']
+    if ha_major is not None and target_major is not None and ha_major > target_major:
+        sink.stop('omnigent.pg-newer', f'HA 的 PostgreSQL 是 {ha_major} 版，這台的資料庫是 {target_major} 版，打不開比自己新的資料。',
+                  action='請先把這台的 Omnigent 更新到使用同版或更新的 PostgreSQL，再匯入；這台的 Omnigent 不會有任何變更。')
+    if objects.get('encoding') != 'UTF8':
+        sink.stop('omnigent.encoding', 'HA 的 Omnigent 資料庫不是 UTF8 編碼。', action=ACTION_REBACKUP)
+    ha_alembic = found['alembic']
+    if live_alembic_value is None:
+        sink.stop('omnigent.target-unreadable', '無法讀取這台 Omnigent 的資料庫結構版本。', action=ACTION_UNREADABLE)
+    elif not ha_alembic or sorted(ha_alembic) != sorted(live_alembic_value):
+        sink.stop('omnigent.alembic-different',
+                  f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or "未知"}，這台是 '
+                  f'{hacommon.names(live_alembic_value, 5) or "未知"}。', action=ACTION_SAME_VERSION)
+    if differ:
+        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_UNCHANGED)
+    names, counts = skipped_names(src, found)
+    if names.count:
+        what = '、'.join(f'{kind} {n} 個' for kind, n in counts.items())
+        sink.confirm('omnigent.skipped', MSG_SKIPPED.format(what=what), names)
+    wanted, _bad = bundle_locations(found)
     lost = [k for k in wanted if key_ok(k) and k not in src.keys]
-    if bad:
-        blockers.append(f'HA 的 Omnigent 資料庫有格式不明的檔案位置（{hacommon.names(bad, 3)}），無法安全地搬過來。')
     if lost:
-        blockers.append(f'HA 的 Omnigent 有 {len(lost)} 個代理程式包或檔案不在備份的檔案區裡（例如 {hacommon.names(lost, 3)}）；'
-                        '可能用了其他資料位置，無法完整搬過來。')
-    if src.addon_artifacts:
-        warnings.append(f'HA 的 /data/artifacts 有 {src.addon_artifacts} 個檔案，Omnigent 不會使用它們，不會搬過來。')
+        sink.confirm('omnigent.files-missing', MSG_FILES_MISSING.format(
+            count=len(lost), all='（備份的檔案區裡完全沒有它們要的檔案）' if len(lost) == len(set(wanted)) else ''),
+            haissues.Names(lost))
+    if not src.cookie:
+        sink.notice('omnigent.cookie-missing', 'HA 備份裡沒有可用的 Omnigent 登入金鑰（accounts-cookie-secret：沒有、是空的或太大）；'
+                    '匯入後 Omnigent 會自己產生新的，所有瀏覽器、裝置授權和權杖都要重新登入，外部連線可能要重連；帳號和對話都還在。')
     detail = found['detail']
+    if src.addon_artifacts:
+        sink.notice('omnigent.addon-artifacts-unused', f'HA 的 /data/artifacts 有 {src.addon_artifacts} 個檔案，Omnigent 不會使用它們，不會搬過來。')
     if ha_odoo._int(detail.get('connections_with_secrets')):
-        warnings.append(f'HA 的 Omnigent 有 {detail["connections_with_secrets"]} 個加密保存的外部連線憑證，這台沒有相同的'
-                        '加密設定，搬過來後需要重新連線。')
+        sink.notice('omnigent.credentials-reconnect', f'HA 的 Omnigent 有 {detail["connections_with_secrets"]} 個加密保存的外部連線憑證，'
+                    '這台沒有相同的加密設定，搬過來後需要重新連線。')
     if src.overrides:
-        warnings.append(f'HA 的 Omnigent 執行期設定檔（{hacommon.names(src.overrides)}）不會搬過來，這台維持自己的分享與管理者設定。')
+        sink.notice('omnigent.settings-not-moved', 'HA 的 Omnigent 執行期設定檔不會搬過來，這台維持自己的分享與管理者設定。',
+                    src.overrides)
     if ha_odoo._int(detail.get('scheduled_tasks_active')):
-        warnings.append(f'HA 的 Omnigent 有 {detail["scheduled_tasks_active"]} 個啟用中的排程，搬過來後會在這台執行'
-                        '（測試匯入會先全部暫停）。')
+        sink.notice('omnigent.tasks-active', f'HA 的 Omnigent 有 {detail["scheduled_tasks_active"]} 個啟用中的排程，搬過來後會在這台執行'
+                    '（測試匯入會先全部暫停）。')
     if ha_odoo._int(detail.get('public_sessions')):
-        warnings.append(f'HA 的 Omnigent 有 {detail["public_sessions"]} 個公開分享的工作階段，搬過來後仍然公開。')
-    return blockers, warnings
+        sink.notice('omnigent.public-sessions', f'HA 的 Omnigent 有 {detail["public_sessions"]} 個公開分享的工作階段，搬過來後仍然公開。')
 
 
 def key_ok(key):
-    """An artifact key as Omnigent writes them (`<agent id>/<sha256>`, a blob's hex id): plain names, no `.`/`..`."""
-    return bool(KEY_RE.fullmatch(key)) and not any(part in ('.', '..') for part in key.split('/'))
+    """An artifact key (`<agent id>/<sha256>`, a blob's hex id, or whatever a later Omnigent writes) that stays inside the
+    artifact store (O-21): not empty, no empty, `.` or `..` part, no absolute path, no backslash, no control or invisible
+    character, within the size of agents.bundle_location. Anything else could make Omnigent read outside the store."""
+    if not isinstance(key, str) or not 0 < len(key) <= MAX_KEY_CHARS:
+        return False
+    parts = key.split('/')
+    return (len(parts) <= MAX_KEY_PARTS and all(
+        part and part not in ('.', '..') and len(part) <= MAX_PART_CHARS and '\\' not in part
+        and not any(unicodedata.category(ch) in haissues.HIDDEN_CATEGORIES for ch in part) for part in parts))
 
 
 def account_conflicts(found, target):
@@ -469,9 +669,9 @@ def section(src, found, *, version, conflicts):
 
 # ====================================================================== the job steps
 
-def member_pass(work, app, tmp, pg_ids, *, artifacts=None):
+def member_pass(work, app, tmp, pg_ids, *, artifacts=None, report=None):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = report if report is not None else habackup.Report(names=haissues.Names)
     holder = {}
 
     def produce(out):
@@ -498,39 +698,90 @@ def _ha_major(src):
 
 
 def _prepare(work, app):
-    """(Target, live server version, live alembic, add-on, version blocker or None)."""
+    """(Target, live server version, live alembic, add-on, None). The fifth value was the version gate; no version is a gate
+    any more (`note_versions` tells), it stays for the callers that unpack five."""
     target = Target(work, app)
     addon = work.addon_info(SLUG)
     version = target_version(work, app, target.info_url)
-    blocker = VERSIONS.blocker(addon.version if addon else '', version)
-    return target, version, live_alembic(work, app, target), addon, blocker
+    return target, version, live_alembic(work, app, target), addon, None
+
+
+def note_versions(sink, addon, version):
+    """O-23, O-24, O-25, O-49: the add-on's version that the table does not know, this device's version that cannot be read
+    and two different versions are notices; the structure version and the tables decide (judge)."""
+    addon_version = addon.version if addon else ''
+    for issue in VERSIONS.issues(addon_version, version):
+        if issue.id != 'version.different':
+            sink.add(issue)
+            continue
+        sink.notice('omnigent.version-different',
+                    f'HA 的 Omnigent 是 {haissues.clean(VERSIONS.upstream(addon_version), 40)}（附加元件 {haissues.clean(addon_version, 40)}），'
+                    f'這台是 {haissues.clean(version, 40)}；版本不同本身不擋，資料庫結構版本和資料表欄位相同才會匯入。')
+
+
+def pg_major(work, app, target):
+    """The PostgreSQL major of the image that opens HA's data: its PG_MAJOR; an image without one is asked through the
+    database it runs here (O-18); None when neither says (then PostgreSQL itself refuses a cluster it cannot open)."""
+    major = ha_odoo.target_pg_major(work, app, target.db_image)
+    if major is not None:
+        return major
+    try:
+        value = hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
+                                   "SELECT to_json(current_setting('server_version_num')::int / 10000)")
+    except BackupError as error:
+        if error.code != 'job-failed':
+            raise
+        return None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def unregistered_secrets(work, app):
+    """The secrets this device's Quadlet files use that the app settings do not list, and those listed twice (O-48): only
+    names, read from the Quadlet files, never a value."""
+    declared = [item['name'] for item in app.secrets]
+    referenced = {spec.split(',', 1)[0] for text in work.quadlets(app).values() for spec in tempctr.quadlet_secrets(text)}
+    return sorted(referenced - set(declared)) + sorted({n for n in declared if declared.count(n) > 1})
+
+
+def note_secrets(sink, names):
+    if names:
+        sink.notice('omnigent.secrets-unregistered', '這台 Omnigent 用到的機密沒有全部登記在應用設定裡（或登記了兩次）；原地匯入不受影響，'
+                    '但之後把備份還原到全新的設備時會少這些機密，服務起不來。請補登它們。', names)
 
 
 def check(work, app):
+    sink = _sink(work, app)
     tmp = work.temp(app)
-    target, version, alembic, _addon, blocker = _prepare(work, app)
+    target = Target(work, app, sink)
+    hatarget.ensure_image(work, app, target.db_image)
+    addon = work.addon_info(SLUG)
+    version = target_version(work, app, target.info_url)
+    alembic = live_alembic(work, app, target)
+    note_versions(sink, addon, version)
+    note_secrets(sink, unregistered_secrets(work, app))
     pg_ids = tmp.user_ids('ids-pg', target.db_image, 'postgres')
-    src = member_pass(work, app, tmp, pg_ids)
+    report = habackup.Report(names=haissues.Names)
+    src = member_pass(work, app, tmp, pg_ids, report=report)
+    sink.skipped(report)
+    if src.pg_links.count:
+        sink.auto('omnigent.hardlinks-copied', f'HA 的資料庫資料夾裡有 {src.pg_links.count} 個硬連結（正常的資料庫不會有），'
+                  '匯入時會把它們當成一般檔案複製。', src.pg_links)
     work.phase('check')
     cluster = ha_odoo.start_ha_cluster(work, tmp, target.db_image)
-    found = analyse(cluster)
-    ha_schema = read_schema(cluster, found['alembic']) if set(TABLES) <= set(found['tables']) else None
+    found = analyse(cluster, sink)
+    ha_schema = read_schema(cluster, found['alembic'])
     tmp.remove('hapg')
     tmp.remove_volume('hapg')
-    blockers, warnings = verdict(src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
-                                 target_major=ha_odoo.target_pg_major(work, app, target.db_image))
-    if blocker:
-        blockers.insert(0, blocker)
-    if ha_schema is not None:
-        differ = schema_differences(ha_schema, live_schema(work, app, target))
-        if differ:
-            blockers.append(schema_blocker(differ))
+    differ = (schema_differences(ha_schema, live_schema(work, app, target), ignore=unknown_tables(found))
+              if alembic is not None else None)   # no structure version of this device: judge says so
     conflicts = account_conflicts(found, target)
+    judge(sink, src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
+          target_major=pg_major(work, app, target), differ=differ)
     if conflicts:
-        warnings.append(f'HA 也有和這台相同名稱的帳號（{hacommon.names(conflicts)}），匯入後以 HA 的帳號為準，這台的'
-                        '管理者或 runner 密碼對它不再適用。')
-    return {'target_version': version or '', 'blockers': blockers, 'warnings': warnings,
-            'omnigent': section(src, found, version=VERSIONS.upstream(work.addon_info(SLUG).version),
+        sink.notice('omnigent.account-conflict', 'HA 也有和這台相同名稱的帳號，匯入後以 HA 的帳號為準，這台的管理者或 runner 密碼對它不再適用。',
+                    conflicts)
+    return {'target_version': version or '',
+            'omnigent': section(src, found, version=VERSIONS.upstream(addon.version if addon else ''),
                                 conflicts=conflicts)}
 
 
@@ -549,11 +800,41 @@ def toc_kinds(text):
     return found
 
 
-def data_only_toc(text, *, tables=None, sequences=None):
+ARCHIVE_SETTINGS = ('ENCODING', 'STDSTRINGS', 'SEARCHPATH')   # the three entries every pg_dump 16 archive begins with
+INCOMPLETE_LIST = '資料庫匯出檔的項目清單沒有完整送達（主機可能太忙），已停止，沒有做任何變更，請稍後再試。'
+
+
+def toc_entries(text):
+    """(entries, declared) of a `pg_restore -l` listing: how many lines are entries (`<id>; <oid> <oid> <kind> ...`) and the
+    `TOC Entries:` its header says the archive has (None when the header is not there)."""
+    declared, entries = None, 0
+    for line in text.splitlines():
+        header = re.match(r';\s+TOC Entries:\s+([0-9]{1,9})\s*\Z', line)
+        if header:
+            declared = int(header.group(1))
+        elif re.match(r'\s*\d+;\s+\d+\s+\d+\s', line):
+            entries += 1
+    return entries, declared
+
+
+def check_listing(text):
+    """pg-stdin follow-up F4: the listing of the dump is whole when the number of its entries is what its own header says the
+    archive has, short by at most the three archive settings (ENCODING, STDSTRINGS, SEARCHPATH) that a plain listing may leave
+    out. A listing that came back short would restore only the part it names, and nothing would notice. pg_restore always
+    prints the header; a listing without one (a double) cannot be compared and is let through. Returns the entries."""
+    entries, declared = toc_entries(text)
+    if declared is not None and not declared - len(ARCHIVE_SETTINGS) <= entries <= declared:
+        raise BackupError('job-failed', INCOMPLETE_LIST, listed=entries, declared=declared)   # numbers only, no content
+    return entries
+
+
+def data_only_toc(text, *, tables=None, sequences=None, skipped=None):
     """Only the table data and sequence values of a locally generated custom archive (its `pg_restore -l` list), as
     the `-L` list of the data restore. pg_restore reads nothing of a selected line but the dump id at its start, so a
     name in HA's database that carries a line break could add an entry of its own choice: with `tables`/`sequences`
-    (the trusted schema's names) every selected entry must name one of them, each at most once."""
+    (the trusted schema's names) an entry is selected only when it names exactly one of them, each at most once; an entry
+    that names anything else is not selected and is counted in `skipped` (a haissues.Names: O-28, HA's tables and
+    sequences that are not Omnigent's); one trusted name twice, a line that is no entry and an empty selection stop."""
     selected, seen, named = [], set(), set()
     strict = tables is not None or sequences is not None
     for line in text.splitlines():
@@ -567,9 +848,12 @@ def data_only_toc(text, *, tables=None, sequences=None):
             if strict:
                 entry = re.fullmatch(r'(TABLE DATA|SEQUENCE SET) public (\S+) \S+', match.group(2))
                 allowed = (tables if entry and entry.group(1) == 'TABLE DATA' else sequences) or ()
-                if not entry or entry.group(2) not in allowed or entry.groups()[:2] in named:
-                    raise BackupError('incompatible', 'HA 的資料庫匯出清單有不屬於這台 Omnigent 資料庫結構的資料項目，'
-                                                      '無法安全地搬過來。')
+                if not entry or entry.group(2) not in allowed:
+                    if skipped is not None:
+                        skipped.add(match.group(2)[:200])
+                    continue
+                if entry.groups()[:2] in named:
+                    raise BackupError('incompatible', 'HA 的資料庫匯出清單有同一個資料項目出現兩次，無法安全地搬過來。')
                 named.add(entry.groups()[:2])
             selected.append(line)
     if not selected:
@@ -626,7 +910,7 @@ SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[
 __COLUMNS__;
 \\o
 SQL
-for n in $(seq 1 60); do
+for n in $(seq 1 __WAIT__); do
     [ -s "$snapdir/columns" ] && break
     kill -0 "$pid" 2>/dev/null || exit 21
     sleep 1
@@ -643,6 +927,22 @@ pid=
 '''
 
 
+class _BadSnapshot(BackupError):
+    """The snapshot's first line is no list of columns (O-32, O-33): a read of the live database that went wrong, tried again."""
+
+    def __init__(self, app):
+        super().__init__('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id)
+
+
+def _snapshot_worth_another_try(error):
+    """O-32, O-33, O-58, O-59: a snapshot that was not taken (psql ended by itself: no connection, no lock within 15 s, an SQL
+    failure: exit 21; no columns within the wait or another revision: exit 22) or came back damaged; not a snapshot id that
+    is no id (exit 23), and nothing that stays (a missing image, a refused login)."""
+    if isinstance(error, _BadSnapshot):
+        return True
+    return hatarget.transient(error) and getattr(error, 'returncode', None) != 23
+
+
 def capture_consistent_target_schema(work, app, target, path, expected_alembic):
     """Capture schema, revision and column signature from one exported snapshot.
 
@@ -651,12 +951,28 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
     the import's only caller, trusted_schema, compares the live schema (signature,
     columns, revision) before and after the capture, and the columns returned here,
     and stops the job when anything differs.
+
+    A snapshot that was not taken is tried again, SNAPSHOT_ATTEMPTS times in all, each time with a longer wait for the
+    columns (60, 120, 180 seconds): this device may be busy (O-58, O-59), answer badly for a moment (O-32, O-33). What is
+    left of a failed try is removed before the next one.
     """
     if not expected_alembic or any(not isinstance(v, str) or not ALEMBIC_RE.fullmatch(v) for v in expected_alembic):
         raise BackupError('incompatible', '目標 Omnigent 的結構版本不明。', app=app.id)
     revision = json.dumps(sorted(expected_alembic), ensure_ascii=True)
-    script = SNAPSHOT_SCRIPT.replace('__REVISION__', revision.replace("'", "''"))
-    script = script.replace('__COLUMNS__', ' '.join(SCHEMA_COLUMNS_SQL.split()))
+    tries = []
+
+    def attempt():
+        tries.append(1)
+        script = SNAPSHOT_SCRIPT.replace('__REVISION__', revision.replace("'", "''"))
+        script = script.replace('__COLUMNS__', ' '.join(SCHEMA_COLUMNS_SQL.split()))
+        script = script.replace('__WAIT__', str(60 * len(tries)))
+        return _capture_once(work, app, target, path, script)
+
+    return hatarget.retry(attempt, attempts=SNAPSHOT_ATTEMPTS, retry_if=_snapshot_worth_another_try, abort=_abort(work),
+                          log=_log(work), what='擷取這台 Omnigent 的資料庫結構快照')
+
+
+def _capture_once(work, app, target, path, script):
     capture = path.with_name(path.name + '.capture')
     capture_created = output_created = False
     try:
@@ -674,9 +990,9 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
             try:
                 columns = util.loads_strict(source.readline(4 * 1024 * 1024 + 1), max_bytes=4 * 1024 * 1024)
             except ValueError:
-                raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id) from None
+                raise _BadSnapshot(app) from None
             if not isinstance(columns, list) or not columns or any(not isinstance(v, list) or len(v) != 6 for v in columns):
-                raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id)
+                raise _BadSnapshot(app)
             with open(path, 'xb') as dest:
                 output_created = True
                 os.fchmod(dest.fileno(), 0o600)
@@ -759,8 +1075,9 @@ def load_into_new_cluster(tmp, role, argv, path):
 
 
 def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source_columns, role='omni-db',
-                         tables=None, sequences=None):
-    """Load the trusted target schema and only data from HA (`tables`/`sequences`: data_only_toc's names).
+                         tables=None, sequences=None, skipped=None):
+    """Load the trusted target schema and only data from HA (`tables`/`sequences`: data_only_toc's names; `skipped`: what
+    names HA's entries of other tables and sequences are counted in).
 
     Both archives must be generated by our own pg_dump; schema_dump must come from
     the trusted target. The caller must compare Alembic revisions before calling.
@@ -771,7 +1088,8 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
         listing = tmp.exec(role, ['pg_restore', '-l'], user='postgres', input=handle,
                            timeout=DUMP_TIMEOUT, max_output=ha_odoo.TOC_OUTPUT).stdout or b''
     text = listing.decode('utf-8', 'surrogateescape')
-    selection = data_only_toc(text, tables=tables, sequences=sequences)
+    check_listing(text)
+    selection = data_only_toc(text, tables=tables, sequences=sequences, skipped=skipped)
     sets = sequence_set_lines(selection)
     if sets:
         cluster.write_file('/tmp/woowbk-omnigent-seq.toc', ('\n'.join(sets) + '\n').encode('utf-8', 'surrogateescape'))
@@ -779,9 +1097,9 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
             script = tmp.exec(role, ['pg_restore', '-f', '-', '-L', '/tmp/woowbk-omnigent-seq.toc'], user='postgres',
                               input=handle, timeout=DUMP_TIMEOUT, max_output=SEQUENCE_SCRIPT_OUTPUT).stdout or b''
         require_sequence_sets(script.decode('utf-8', 'surrogateescape'), len(sets), sequences)
-    skipped = [kind for kind in toc_kinds(text) if kind not in ('TABLE DATA', 'SEQUENCE SET')]
-    work.log(f'HA 的資料庫匯出清單：只載入資料（TABLE DATA、SEQUENCE SET），略過 {len(skipped)} 種結構項目'
-             + (f'（{hacommon.names(skipped, 8)}）' if skipped else ''))
+    kinds = [kind for kind in toc_kinds(text) if kind not in ('TABLE DATA', 'SEQUENCE SET')]
+    work.log(f'HA 的資料庫匯出清單：只載入資料（TABLE DATA、SEQUENCE SET），略過 {len(kinds)} 種結構項目'
+             + (f'（{hacommon.names(kinds, 8)}）' if kinds else ''))
     cluster.write_file('/tmp/woowbk-omnigent.toc', selection.encode('utf-8', 'surrogateescape'))
     with open(schema_dump, 'rb') as handle:
         tmp.exec(role, ['pg_restore', '-U', superuser, '--no-owner', '--no-acl', '--exit-on-error',
@@ -803,6 +1121,20 @@ def restore_trusted_data(work, tmp, schema_dump, data_dump, superuser, *, source
                                       '--single-transaction', '--section=post-data', '-d', DATABASE], schema_dump)
     tmp.exec(role, ['rm', '-f', '/tmp/woowbk-omnigent.toc'], user='postgres', timeout=120)
     return cluster
+
+
+def blank_locations(cluster, locations):
+    """O-21: the agent bundle locations of HA's database that could make Omnigent read outside the artifact store are cleared
+    in the new cluster, by the role without privileges, which gets the right to read and change this ONE column for it. The
+    names travel as one JSON text on the statement's stdin and are compared as they are: nothing of HA's text is ever part
+    of a command line or of the statement itself."""
+    if not locations:
+        return
+    payload = ha_odoo.sql_literal(json.dumps(sorted(locations), ensure_ascii=True))
+    cluster.script(f'GRANT SELECT (bundle_location), UPDATE (bundle_location) ON public.agents TO {RESTORE_ROLE};\n', DATABASE)
+    loader = ha_odoo.Cluster(cluster.tmp, cluster.role, superuser=RESTORE_ROLE, log=cluster.log)
+    loader.script("UPDATE public.agents SET bundle_location = '' WHERE bundle_location IN "
+                  f"(SELECT json_array_elements_text({payload}::json));\n", DATABASE)
 
 
 def finish_trusted_data(cluster):
@@ -968,15 +1300,31 @@ def read_schema(cluster, alembic):
 
 
 def live_schema(work, app, target):
-    """This device's schema, read from the LIVE database as the app owner (read only)."""
-    columns = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_COLUMNS_SQL)
-    if not isinstance(columns, list) or not columns or any(not isinstance(r, list) or len(r) != 6 for r in columns):
-        raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id)
-    signature = _signature(hacommon.live_json(work, app, target.db_container, target.db_user, target.database,
-                                              SCHEMA_SIGNATURE_SQL))
+    """This device's schema, read from the LIVE database as the app owner (read only). An answer that is not what was asked
+    for is read again (O-40, O-41: hatarget.retry, READ_ATTEMPTS in all); a database that is not running is started by
+    `live_json` first (CM-07); only a structure that cannot be read at the end stops this app."""
+    def read_columns():
+        columns = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_COLUMNS_SQL)
+        if not isinstance(columns, list) or not columns or any(not isinstance(r, list) or len(r) != 6 for r in columns):
+            raise _Odd('這台 Omnigent 的資料表結構讀到的不是欄位清單。', app)
+        return columns
+
+    def read_signature():
+        value = hacommon.live_json(work, app, target.db_container, target.db_user, target.database, SCHEMA_SIGNATURE_SQL)
+        if not isinstance(value, dict) or set(value) != set(SIGNATURE_KEYS):
+            raise _Odd('這台 Omnigent 的資料庫結構讀到的不完整。', app)
+        return value
+    try:
+        columns = _again(work, read_columns, '讀取這台 Omnigent 的資料表結構')
+    except _Odd:
+        raise _unreadable(app, '無法確認這台 Omnigent 的資料表結構。') from None
+    try:
+        signature = _again(work, read_signature, '讀取這台 Omnigent 的資料庫結構')
+    except _Odd:
+        raise _unreadable(app, '無法確認 Omnigent 的資料庫結構。') from None
     alembic = live_alembic(work, app, target)
     if alembic is None:
-        raise BackupError('incompatible', '無法讀取這台 Omnigent 的資料庫結構版本。', app=app.id)
+        raise _unreadable(app, '無法讀取這台 Omnigent 的資料庫結構版本。')
     return Schema(columns, signature, alembic)
 
 
@@ -988,19 +1336,30 @@ def _by(rows, width):
     return groups
 
 
-def schema_differences(ha, trusted):
+def schema_differences(ha, trusted, *, ignore=()):
     """The names (tables, sequences, types) whose DATA shape differs between HA and the trusted schema: the columns
     (name, type, not null, identity, generated; in order), the sequences (type, owning column) and the types.
-    Defaults, constraints and indexes are never compared: HA's are never used, the trusted ones apply."""
+    Defaults, constraints and indexes are never compared: HA's are never used, the trusted ones apply. `ignore`: HA's tables
+    that are not Omnigent's and are not moved (O-12): they and the sequences that belong to their columns are not compared
+    (a table that this device has too would then stop the conversion where the new cluster's columns are compared with HA's:
+    the columns of the tables that are moved)."""
+    ignored = set(ignore)
     differ = set()
     ha_cols, trusted_cols = _by(ha.columns, 6), _by(trusted.columns, 6)
-    differ |= {t for t in set(ha_cols) | set(trusted_cols) if ha_cols.get(t) != trusted_cols.get(t)}
+    differ |= {t for t in set(ha_cols) | set(trusted_cols) if t not in ignored and ha_cols.get(t) != trusted_cols.get(t)}
     pick = lambda rows: {str(r[0]): (r[1], r[8]) for r in rows or [] if isinstance(r, list) and len(r) == 9}  # noqa: E731
     ha_seq, trusted_seq = pick(ha.signature.get('sequences')), pick(trusted.signature.get('sequences'))
-    differ |= {s for s in set(ha_seq) | set(trusted_seq) if ha_seq.get(s) != trusted_seq.get(s)}
+    own = lambda owner: str(owner).split('.', 1)[0] in ignored  # noqa: E731 - a sequence of a column of an ignored table
+    differ |= {s for s in set(ha_seq) | set(trusted_seq)
+               if ha_seq.get(s) != trusted_seq.get(s) and not (s not in trusted_seq and own(ha_seq[s][1]))}
     ha_types, trusted_types = _by(ha.signature.get('types'), 6), _by(trusted.signature.get('types'), 6)
     differ |= {t for t in set(ha_types) | set(trusted_types) if ha_types.get(t) != trusted_types.get(t)}
     return sorted(differ)
+
+
+def moved_columns(columns, ignore):
+    """HA's columns of the tables that are moved (the new cluster has only this device's tables, O-12)."""
+    return [row for row in columns if row[0] not in set(ignore)]
 
 
 def schema_blocker(differ):
@@ -1008,28 +1367,62 @@ def schema_blocker(differ):
             '請先讓兩邊的 Omnigent 版本一致後再匯入。')
 
 
+class _Unsteady(BackupError):
+    """This device's structure moved while it was read (a server that upgrades or restarts): waited for, then read again."""
+
+    def __init__(self, app):
+        super().__init__('incompatible', SCHEMA_CHANGED, app=app.id)
+
+
 def trusted_schema(work, app, target, path, alembic):
     """This device's schema as the new cluster gets it: `path` is its `pg_dump --schema-only` taken in one exported
     snapshot; the live schema (signature, columns, alembic) before and after the capture and the snapshot's columns
-    must all be equal -- no DDL ran meanwhile (enforced here, not promised by a caller)."""
-    before = live_schema(work, app, target)
-    if before.alembic != sorted(alembic or []):
-        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
-    columns = capture_consistent_target_schema(work, app, target, path, alembic)
-    after = live_schema(work, app, target)
-    if columns != before.columns or after != before:
-        path.unlink(missing_ok=True)
-        raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)
-    return before
+    must all be equal -- no DDL ran meanwhile (enforced here, not promised by a caller). When this device is not steady --
+    its structure version is not the one the import started with, or anything changed while the snapshot was taken (an
+    upgrade, a restart: O-42, O-43) -- it is waited for and read again, STEADY_ATTEMPTS times in all (hatarget.retry); only
+    one that keeps changing stops the job, and nothing of this device was touched."""
+    def attempt():
+        before = live_schema(work, app, target)
+        if before.alembic != sorted(alembic or []):
+            raise _Unsteady(app)
+        columns = capture_consistent_target_schema(work, app, target, path, alembic)
+        after = live_schema(work, app, target)
+        if columns != before.columns or after != before:
+            path.unlink(missing_ok=True)
+            raise _Unsteady(app)
+        return before
+
+    return hatarget.retry(attempt, attempts=STEADY_ATTEMPTS, pause_first=5.0, factor=3.0, longest=60.0,
+                          retry_if=lambda error: isinstance(error, _Unsteady), abort=_abort(work), log=_log(work),
+                          what='這台 Omnigent 的資料庫結構還在變動，等它穩定後再讀取')
+
+
+def extension_drift(found, trusted):
+    """['pg_trgm 1.5 -> 1.6', ...] when the only difference between the two `extensions` parts of a schema signature is the
+    version of an extension both have (O-44: the new cluster takes the extension version of the image, this device's may be
+    older; a newer extension is what an update would make, nothing of Omnigent depends on it), else None."""
+    now = {(row[0], row[2]): row[1] for row in found if isinstance(row, list) and len(row) == 3}
+    live = {(row[0], row[2]): row[1] for row in trusted if isinstance(row, list) and len(row) == 3}
+    if len(now) != len(found) or len(live) != len(trusted) or set(now) != set(live):
+        return None
+    return [f'{name[0]} {live[name]} -> {now[name]}' for name in sorted(now) if now[name] != live[name]]
 
 
 def require_schema(cluster, trusted, stage):
-    """The new cluster's schema signature equals the trusted one (after the post-data section, after the last write)."""
+    """The new cluster's schema signature equals the trusted one (after the post-data section, after the last write). Only the
+    version of an extension may differ (O-44); those are returned (['pg_trgm 1.5 -> 1.6']) for the line that says so."""
     found = schema_signature(cluster)
     differ = [key for key in SIGNATURE_KEYS if found.get(key) != trusted.signature.get(key)]
+    drift = []
+    if 'extensions' in differ:
+        versions = extension_drift(found.get('extensions') or [], trusted.signature.get('extensions') or [])
+        if versions is not None:
+            differ.remove('extensions')
+            drift = versions
     if differ:
         raise BackupError('job-failed', f'新的 PostgreSQL 叢集的資料庫結構和這台 Omnigent 的不同（{"、".join(differ)}），'
                                         '已停止，這台的應用沒有任何變更。', stage=stage)
+    return drift
 
 
 HA_ANSWERS_DIFFER = ('這份 HA 備份的 Omnigent 資料庫回報的內容和它實際的資料不一致（備份可能被竄改過），已停止，'
@@ -1089,48 +1482,44 @@ def audit_new_cluster(cluster, superuser):
                                         '這台的應用沒有任何變更。')
 
 
-def require_registered_secrets(work, app):
-    """Every target Quadlet secret must be carried by the real import adapter.
-
-    This registers names, not values; cookie/artifact and pi credentials are carried
-    inside their volumes. Never read credentials merely to enumerate dependencies.
-    """
-    declared = [item['name'] for item in app.secrets]
-    referenced = {spec.split(',', 1)[0] for text in work.quadlets(app).values()
-                  for spec in tempctr.quadlet_secrets(text)}
-    if len(declared) != len(set(declared)) or not referenced <= set(declared):
-        raise BackupError('incompatible', 'Omnigent 的 Quadlet 機密未完整登記於應用設定，無法建立可回復候選。',
-                          app=app.id)
-
-
 def convert(work, app, test_mode, out_dir):
     """Build the app's volumes in `out_dir/volumes` (module docstring: the trusted schema, HA's data only); returns
-    {volumes {name: path}, counts, kept_accounts, conflicts, paused_tasks, ...}."""
-    require_registered_secrets(work, app)
+    {volumes {name: path}, counts, kept_accounts, conflicts, paused_tasks, ...}. The same findings as the check come again
+    from the sink (a stop raises, a line the customer did not confirm raises `confirmation-required`) before anything of HA
+    is dumped."""
+    sink = _sink(work, app)
+    unregistered = unregistered_secrets(work, app)      # O-48: names only, from the Quadlet files
     adapter = work.adapter(app)
     tmp = work.temp(app)
-    target, version, alembic, addon, blocker = _prepare(work, app)
-    if blocker:
-        raise BackupError('incompatible', f'Omnigent 不能搬過來：{blocker}', app=app.id)
+    target = Target(work, app, sink)
+    hatarget.ensure_image(work, app, target.db_image)
+    addon = work.addon_info(SLUG)
+    version = target_version(work, app, target.info_url)
+    alembic = live_alembic(work, app, target)
+    note_versions(sink, addon, version)
+    note_secrets(sink, unregistered)
     ids = adapter.owner_ids()
     staging = work.staging / 'omnigent-work'
     staging.mkdir(mode=0o700)
     (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
     pg_ids = tmp.user_ids('ids-pg', target.db_image, 'postgres')
+    report = habackup.Report(names=haissues.Names)
     artifacts = hacommon.TreeTar(staging / 'ha-artifacts.tar', 0, 0, work.guard)
     try:
-        src = member_pass(work, app, tmp, pg_ids, artifacts=artifacts)
+        src = member_pass(work, app, tmp, pg_ids, artifacts=artifacts, report=report)
     finally:
         artifacts.close()
+    sink.skipped(report)
+    if src.pg_links.count:
+        sink.auto('omnigent.hardlinks-copied', f'HA 的資料庫資料夾裡有 {src.pg_links.count} 個硬連結（正常的資料庫不會有），'
+                  '匯入時會把它們當成一般檔案複製。', src.pg_links)
     work.phase('convert')
     work.guard.check(2 * src.pg_bytes + ha_odoo.WAL_ALLOWANCE)
     cluster = ha_odoo.start_ha_cluster(work, tmp, target.db_image)
-    found = analyse(cluster)
-    blockers, _warnings = verdict(src, found, live_alembic_value=alembic, ha_major=_ha_major(src),
-                                  target_major=ha_odoo.target_pg_major(work, app, target.db_image))
-    if blockers:
-        raise BackupError('incompatible', f'Omnigent 不能搬過來：{blockers[0]}', app=app.id)
+    found = analyse(cluster, sink)
+    judge(sink, src, found, live_alembic_value=alembic, ha_major=_ha_major(src), target_major=pg_major(work, app, target))
     ha_schema = read_schema(cluster, found['alembic'])
+    ignored = unknown_tables(found)
     dump = staging / 'omnigent.dump'
     work.log('匯出 HA 的 Omnigent 資料（只當作資料來源，HA 的資料庫結構不會使用）')
     with open(dump, 'xb') as handle:
@@ -1153,17 +1542,27 @@ def convert(work, app, test_mode, out_dir):
     schema_dump = staging / 'target-schema.dump'
     work.log('讀取這台 Omnigent 自己的資料庫結構（同一個快照；前後比對確認期間沒有結構變更）')
     trusted = trusted_schema(work, app, target, schema_dump, alembic)
-    differ = schema_differences(ha_schema, trusted)
+    differ = schema_differences(ha_schema, trusted, ignore=ignored)
     if differ:
-        raise BackupError('incompatible', f'Omnigent 不能搬過來：{schema_blocker(differ)}', app=app.id)
+        sink.stop('omnigent.schema-different', schema_blocker(differ), action=ACTION_UNCHANGED)
     work.log('用這台的資料庫結構建立資料表，只把 HA 的資料（資料列與序號）以沒有任何管理權限的暫用角色載入')
-    restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=ha_schema.columns,
-                         tables=trusted.tables(), sequences=trusted.sequences())
+    entries = haissues.Names()
+    restore_trusted_data(work, tmp, schema_dump, dump, target.db_user, source_columns=moved_columns(ha_schema.columns, ignored),
+                         tables=trusted.tables(), sequences=trusted.sequences(), skipped=entries)
+    if entries.count:
+        sink.notice('omnigent.entries-skipped', f'HA 的資料庫匯出清單有 {entries.count} 個不屬於這台 Omnigent 的資料項目，沒有載入。',
+                    entries)
     os.unlink(dump)
     os.unlink(schema_dump)
-    require_schema(pg, trusted, 'restored')
+    drift = list(require_schema(pg, trusted, 'restored'))
     require_answers(pg, found)
-    kept = carry_accounts_restricted(pg, live_users(work, app, target))
+    unsafe = bundle_locations(found)[1]
+    if unsafe:     # O-21: the locations that could leave the artifact store are cleared, as the role without privileges
+        blank_locations(pg, unsafe)
+        if bundle_locations({'keys': pg.query_json(KEYS_SQL, DATABASE) or {}})[1]:
+            raise BackupError('job-failed', '新資料庫裡仍有會跑出檔案區的代理程式位置，已停止；這台的應用沒有任何變更。')
+        work.log(f'清空了 {len(unsafe)} 個會跑出檔案區的代理程式位置')
+    kept = carry_accounts_restricted(pg, live_users(work, app, target, sink))
     conflicts = account_conflicts(found, target)
     paused = 0
     if test_mode:
@@ -1173,7 +1572,10 @@ def convert(work, app, test_mode, out_dir):
         if ha_odoo._int(pg.query_json(ACTIVE_SQL, DATABASE)):
             raise BackupError('job-failed', '測試匯入沒有暫停全部 Omnigent 排程。')
     finish_trusted_data(pg)
-    require_schema(pg, trusted, 'loaded')
+    drift += require_schema(pg, trusted, 'loaded')
+    if drift:
+        sink.auto('omnigent.extension-version', '新資料庫的擴充功能版本和這台原本的不同（新的是這台映像附的版本，Omnigent 不受影響）。',
+                  sorted(set(drift)))
     audit_new_cluster(pg, target.db_user)
     counts = table_counts(pg, found['tables'])
     expected = dict(found['counts'], users=found['counts'].get('users', 0) + len(kept))
@@ -1185,8 +1587,8 @@ def convert(work, app, test_mode, out_dir):
              + (f'，保留這台的帳號 {"、".join(kept)}' if kept else ''))
     pg.statement('CHECKPOINT;')
     code = tmp.stop('omni-db', timeout=300)
-    if code != 0:
-        raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')
+    if code != 0:    # O-54: the control file below is the proof of a clean stop (a PostgreSQL that was killed says so there)
+        work.log(f'新的 PostgreSQL 叢集關閉時結束碼是 {code}；以 pg_controldata 的狀態判斷它有沒有正常關閉。')
     state = tmp.run('controldata', target.db_image, ['pg_controldata', target.pgdata], user='postgres',
                     volumes=[(tmp.name('omni-db'), target.db_target, 'ro')], timeout=300, read_only_root=True,
                     max_output=1024 * 1024).stdout or b''
@@ -1201,30 +1603,41 @@ def convert(work, app, test_mode, out_dir):
         os.fsync(handle.fileno())
     tmp.remove_volume('omni-db')
 
-    server_path = server_volume(work, app, target, staging, out_dir)
+    live_report = habackup.Report(names=haissues.Names)
+    server_path = server_volume(work, app, target, staging, out_dir, report=live_report)
     pi_path = out_dir / 'volumes' / f'{target.pi_volume}.tar'
     hacommon.live_export(work, app, target.pi_volume, pi_path)
+    carried = {'volumes': {}}
+    if target.extra_volumes:   # O-07: this device's other volumes of the app, as they are
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, report=live_report)
+    sink.skipped(live_report)
     for path in (db_path, server_path, pi_path):
         ha_odoo.check_volume_tar(path, ids)
-    return {'volumes': {target.db_volume: db_path, target.server_volume: server_path, target.pi_volume: pi_path},
+    volumes = {target.db_volume: db_path, target.server_volume: server_path, target.pi_volume: pi_path,
+               **carried['volumes']}
+    return {'volumes': volumes,
             'counts': {k: found['detail'].get(k, 0) for k in ('users', 'conversations', 'scheduled_tasks', 'hosts')},
             'kept_accounts': kept, 'conflicts': conflicts, 'paused_tasks': paused,
+            'accounts_unreadable': any(issue.id == 'omnigent.accounts-unreadable' for issue in sink.found),
             'scheduled_tasks_active': ha_odoo._int(found['detail'].get('scheduled_tasks_active')),
             'public_sessions': ha_odoo._int(found['detail'].get('public_sessions')),
-            'overrides': list(src.overrides), 'hosts': ha_odoo._int(found['detail'].get('hosts'))}
+            'overrides': list(src.overrides), 'hosts': ha_odoo._int(found['detail'].get('hosts')),
+            'extra_volumes': list(target.extra_volumes), 'cookie_missing': not src.cookie,
+            'skipped': skipped_names(src, found)[0].count, 'cleared_locations': len(unsafe)}
 
 
-def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced):
-    """Lab compatibility entry of the 2026-11-20..23 internal-candidate harnesses: the product conversion (`convert`
-    enforces the capture's stability itself; the flag is still required so those callers keep their contract)."""
-    if schema_ddl_quiesced is not True:
-        raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)
+def _convert_candidate(work, app, test_mode, out_dir, *, schema_ddl_quiesced=None):
+    """Lab compatibility entry of the 2026-11-20..23 internal-candidate harnesses: the product conversion. `convert` enforces
+    the capture's stability itself (trusted_schema), so the caller's promise that this device's DDL is quiet is no
+    condition any more (O-56: only these harnesses ever called it); the argument is still accepted for them."""
     return convert(work, app, test_mode, out_dir)
 
 
-def server_volume(work, app, target, staging, out_dir):
+def server_volume(work, app, target, staging, out_dir, report=None):
     """omnigent-server-data: the live export without `artifacts/**`, plus HA's artifacts owned like the live
-    artifacts folder (or the volume's top folder)."""
+    artifacts folder (or the volume's top folder). A link of this device's own data that leaves the volume is left out
+    and listed in `report` (X-NS-08). The top folder's owner and mode are those read last (O-57: a change between the two
+    readings is no reason to stop)."""
     import tarfile
     live = hacommon.live_export(work, app, target.server_volume, staging / 'live-server.tar')
     path = out_dir / 'volumes' / f'{target.server_volume}.tar'
@@ -1233,11 +1646,11 @@ def server_volume(work, app, target, staging, out_dir):
     try:
         hacommon.top_only(out, root)
         dirs = hacommon.copy_live(live, out, drop=lambda name: name == '.' or ha_odoo._under(name, 'artifacts'),
-                                  what='這台 Omnigent 的伺服器資料卷')
+                                  what='這台 Omnigent 的伺服器資料卷', report=report, label=f'{target.server_volume}：')
         # Podman exports may omit the root directory. Preserve its actual
         # namespace metadata through the existing bounded owner interface.
-        if '.' in dirs and dirs['.'] != root:
-            raise BackupError('job-failed', '這台 Omnigent 伺服器資料卷的根目錄權限已改變。', app=app.id)
+        if '.' in dirs and dirs['.'] != root and callable(getattr(work, 'log', None)):
+            work.log('這台 Omnigent 伺服器資料卷的根目錄權限在匯出前後不同，以最後讀到的為準。')
         uid, gid, _mode = dirs.get('artifacts') or root
         with tarfile.open(staging / 'ha-artifacts.tar', 'r|', encoding=habackup.ENCODING,
                           errors=habackup.ERRORS) as tar:
@@ -1266,6 +1679,8 @@ def import_texts(data):
              '這台目前登入的瀏覽器與裝置需要重新登入。',
              'Omnigent 只搬 HA 的資料：資料庫結構（資料表、欄位、預設值、檢查與索引）用這台 Omnigent 自己的，'
              'HA 備份裡的資料庫結構不會執行。']
+    if data.get('cookie_missing'):
+        notes.append('HA 備份裡沒有可用的登入金鑰，匯入後 Omnigent 會自己產生新的；所有瀏覽器、裝置授權和權杖都要重新登入，外部連線可能要重連。')
     kept = data.get('kept_accounts') or []
     if kept:
         notes.append(f'這台 Omnigent 的管理者與 runner 帳號（{hacommon.names(kept)}）會保留，密碼不變。')
@@ -1275,9 +1690,18 @@ def import_texts(data):
                      '請用 HA 的密碼登入，必要時更新這台的應用機密。')
     if data.get('overrides'):
         notes.append('HA 的 Omnigent 分享與管理者執行期設定不會搬過來，這台維持自己的設定。')
+    if data.get('skipped'):
+        notes.append(f'HA 的 Omnigent 備份裡有 {data["skipped"]} 個這台搬不過來的項目（資料表、物件、擴充功能、連結或不安全的檔案位置），'
+                     '已依匯入前的確認略過，其餘資料照常搬過來。')
+    if data.get('cleared_locations'):
+        notes.append(f'{data["cleared_locations"]} 個代理程式的檔案位置可能跑出檔案區，已清空；那些代理程式要在 Omnigent 裡重新設定。')
+    if data.get('extra_volumes'):
+        notes.append(f'這台 Omnigent 的其他資料卷（{hacommon.names(data["extra_volumes"])}）照現在的內容原樣帶過去。')
     reminders = ['匯入後請用 HA 那邊的 Omnigent 帳號和密碼登入。',
                  '請把每一台 runner（例如 HA 的 Pi Agent、其他電腦上的 omnigent host）改連到這台的 Omnigent 網址並重新登入；'
                  '在那之前 HA 的 runner 會顯示離線。']
+    if data.get('accounts_unreadable'):
+        reminders.append('這台原有的管理者與 runner 帳號沒有讀到，沒有保留；請用 HA 的帳號登入，並重新建立 runner 的帳號。')
     if data.get('paused_tasks'):
         reminders.append(f'測試匯入已暫停 {data["paused_tasks"]} 個排程，確認無誤後再到 Omnigent 重新啟用。')
     elif data.get('scheduled_tasks_active'):
