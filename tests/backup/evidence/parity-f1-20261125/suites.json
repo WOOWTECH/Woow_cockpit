@@ -1,0 +1,87 @@
+{
+ "lane": "F1-foundation (F1-OWNER-1005)",
+ "source_commit": "0f6e4d4208e3f47f0264d1665e69395f7581b0cd",
+ "tree_suites": "a clean detached worktree of the source commit with ONE uncommitted file: tests/backup/test_ha_litellm.py with the snippet F1-foundation/test_ha_litellm.py.patch (a file of lane LITELLM; without it exactly that one test is not ok)",
+ "runner": "team/heavy.sh + flock /tmp/woowbk-host-heavy-tests.lock; guard.py of integration-3 (no host podman, no remote, no systemd)",
+ "baseline_merge_9b05278": {
+  "tests": 1901,
+  "not_ok": [
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+  ]
+ },
+ "suites_fin6": {
+  "commit": "0f6e4d4208e3f47f0264d1665e69395f7581b0cd",
+  "steps": {
+   "b1": {
+    "rc": 1,
+    "seconds": 2435,
+    "line": "tests=2053 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=270"
+   },
+   "ha118": {
+    "rc": 0,
+    "seconds": 10,
+    "line": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=10"
+   }
+  },
+  "b1_not_ok": [
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+  ],
+  "only_the_5_known_not_ok": true
+ },
+ "sweeps_fin4": {
+  "commit": "77b33c0651ef128977304af267f2c62f7539a607",
+  "steps": {
+   "mutpg": {
+    "rc": 0,
+    "seconds": 21,
+    "line": "mutation check: PASS (15/15 caught)"
+   },
+   "mutf1": {
+    "rc": 0,
+    "seconds": 1380,
+    "line": "mutation check: PASS (205/205 caught, missed [], controls noticed [])"
+   },
+   "probes": {
+    "rc": 0,
+    "seconds": 84,
+    "line": "selection: real HA backups opened: 27; isolation: \"result\":\"pass\","
+   }
+  }
+ },
+ "suites_fin3": {
+  "commit": "77b33c0651ef128977304af267f2c62f7539a607",
+  "steps": {
+   "b1": {
+    "rc": 1,
+    "seconds": 393,
+    "line": "tests=2053 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=387"
+   },
+   "ha118": {
+    "rc": 0,
+    "seconds": 16,
+    "line": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=16"
+   },
+   "ui": {
+    "rc": 0,
+    "seconds": 496,
+    "line": "# tests 108 # pass 108 # fail 0 "
+   }
+  },
+  "b1_not_ok": [
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+   "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+  ],
+  "only_the_5_known_not_ok": true
+ }
+}
