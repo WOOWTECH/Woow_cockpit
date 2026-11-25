@@ -377,6 +377,22 @@ class FileScanTests(unittest.TestCase):
         self.assertEqual(ha_emqx.file_scan(odd), {'data': set(), 'outputs': set(), 'not_carried': set()},
                          'an authenticator\'s own bootstrap file is bootstrap_references\' (E-48, E-49), whatever it looks like')
 
+    def test_a_log_handler_that_is_switched_off_writes_nowhere(self):
+        """E-35: only the paths of handlers that run are places the candidate has to be able to write."""
+        config = {'log': {'file': {'default': {'enable': True, 'path': '${EMQX_LOG_DIR}/emqx.log'},
+                                   'old': {'enable': False, 'path': '/opt/emqx/etc/old.log'},
+                                   'audit': {'path': '/var/log/audit/emqx.log'}}},
+                  'node': {'crash_dump_file': '${EMQX_LOG_DIR}/erl_crash.dump'}}
+        self.assertEqual(ha_emqx.file_scan(config)['outputs'],
+                         {'/opt/emqx/log/emqx.log', '/var/log/audit/emqx.log', '/opt/emqx/log/erl_crash.dump'})
+
+    def test_a_certificate_or_key_given_as_content_is_no_file_to_carry_or_to_name(self):
+        """E-30, E-50: the setting holds the PEM itself (no path): nothing to carry, nothing to say."""
+        pem = '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n'
+        config = {'listeners': {'ssl': {'default': {'ssl_options': {'certfile': pem, 'keyfile': '  -----BEGIN PRIVATE KEY-----',
+                                                                     'cacertfile': 'two\nlines'}}}}}
+        self.assertEqual(ha_emqx.file_scan(config), {'data': set(), 'outputs': set(), 'not_carried': set()})
+
     def test_mounts_and_secrets_are_the_candidates_too_and_runtime_places_and_unknown_variables_are_named(self):
         config = {'authorization': {'sources': []}, 'a': {'certfile': '/opt/emqx/certs/a.pem', 'keyfile': '/opt/emqx/etc/k.pem',
                                                           'cacertfile': '/run/secrets/ca', 'init_file': '/run/other',

@@ -1108,6 +1108,8 @@ def file_scan(config, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None, mounts=(
         key = path[-1] if path else ''
         if not text.strip():
             return   # a file setting left empty (`bootstrap_file = ""`, `init_file = ""`) names nothing
+        if '\n' in text or text.lstrip().startswith('-----BEGIN'):
+            return   # the content of a certificate or key given in the setting itself: nothing to carry
         if key == 'bootstrap_file' and any(parent is entry for entry in entries):
             return   # an authenticator's own bootstrap file: bootstrap_references (E-48, E-49)
         output = (path[:2] == ('log', 'file') and key == 'path') or (path[:1] == ('node',) and key == 'crash_dump_file')
@@ -1119,8 +1121,8 @@ def file_scan(config, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None, mounts=(
         resolved = resolve_path(text, etc_dir=etc_dir, log_dir=log_dir, env=env)
         name = '.'.join(path)[:120]
         if output:
-            if resolved is not None:
-                found['outputs'].add(resolved)
+            if resolved is not None and not (isinstance(parent, dict) and parent.get('enable') is False):
+                found['outputs'].add(resolved)   # (a log handler that is switched off writes nowhere)
         elif resolved is None:
             found['not_carried'].add(name)
         elif resolved.startswith(DATA_PREFIX):
