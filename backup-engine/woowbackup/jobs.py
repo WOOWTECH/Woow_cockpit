@@ -1034,9 +1034,10 @@ def _sweep_pending(paths, store):
                     os.unlink(path)
 
 
-def _sweep_key_files(paths, store, now):
+def _sweep_key_files(paths, store, now, live_groups=frozenset()):
     """Delete transient key files no running job needs: `key-<job>` of a finished job and `key-inspect-*` older
-    than KEY_FILE_MAX_AGE (an inspect killed before its `finally` left the secret on tmpfs; review SEC-4)."""
+    than KEY_FILE_MAX_AGE (an inspect killed before its `finally` left the secret on tmpfs; review SEC-4). The key file of the
+    first job of an import that still has an active job stays: a restore chain hands it to every job that follows."""
     try:
         names = os.listdir(paths.run)
     except (FileNotFoundError, NotADirectoryError):
@@ -1048,7 +1049,8 @@ def _sweep_key_files(paths, store, now):
         job_id = name[4:]
         if valid_job_id(job_id):
             try:
-                if store.get(job_id).get('state') in ACTIVE:
+                record = store.get(job_id)
+                if record.get('state') in ACTIVE or _group_of(record) in live_groups:
                     continue
             except BackupError:
                 pass
@@ -1312,6 +1314,13 @@ def _sweep_orphans(store, now, live_groups=frozenset()):
                 os.unlink(path)
 
 
+def _group_of(record):
+    """The id of the import a job record belongs to (hachain.group_of), or None."""
+    from . import hachain
+    group = hachain.group_of(record.get('params'))
+    return group['id'] if group is not None else None
+
+
 def _live_groups(records):
     """The ids of the imports that have a queued or running job (hachain.group_of; a stop request of any other is stale)."""
     from . import hachain
@@ -1372,7 +1381,7 @@ def _recover_locked(paths, store, unit_active, now, restart_writers=None, cleanu
                 os.close(engine_fd)
     _sweep_staging(paths, store)
     _sweep_pending(paths, store)
-    _sweep_key_files(paths, store, now)
+    _sweep_key_files(paths, store, now, _live_groups(records))
     try:
         _retain(store, records, now)
     except Exception:  # noqa: BLE001 - housekeeping never breaks status/jobs/job-status; retried next pass

@@ -1040,8 +1040,14 @@ class KeyFileTests(ChainCase):
                                     launcher=self.launcher, unit_active=self.unit_active)['job_id']
         key_file = self.store.key_path(self.first)
         seen = []
+
+        def look(ctx, params):
+            # every status poll runs a recovery pass: it must not take the key of a chain that is still running
+            jobs.recover_interrupted(self.paths, unit_active=lambda unit: True)
+            seen.append((ctx.key_file, ctx.key_file.exists(), ctx.ha_key))
+
         for app in APPS:
-            self.script.before[('restore', app)] = lambda ctx, params: seen.append((ctx.key_file, ctx.key_file.exists(), ctx.ha_key))
+            self.script.before[('restore', app)] = look
         self.run_chain()
         self.assertEqual(seen, [(key_file, True, None)] * 3)
         self.assertFalse(key_file.exists())
