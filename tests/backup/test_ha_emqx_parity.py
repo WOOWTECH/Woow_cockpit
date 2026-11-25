@@ -521,6 +521,34 @@ class NoticeLinesTests(unittest.TestCase):
         self.assertNotIn(secret, json.dumps([i.view('emqx') for i in found.values()]))
 
 
+class MarkerTests(base.EmqxCase):
+    """H-2: the data volume says its access settings are HA's, so the package's smoke test can tell (and upgrade.sh does not
+    roll every upgrade back)."""
+
+    def test_the_candidate_gets_one_fixed_marker_with_no_value(self):
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertTrue(done['backup_id'])
+        writes = [command for role, command, _data in self.world.execs
+                  if role == 'emqx-new' and command[:2] == ['sh', '-c'] and ha_emqx.MARKER in command[2]]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0][2], "umask 077; printf '%s' '{\"kind\":\"woow-ha-import\",\"version\":1,\"app\":\"emqx\"}' > "
+                                       "/opt/emqx/data/woow-ha-import.json")
+        self.assertEqual(json.loads(ha_emqx.MARKER_BODY), {'kind': 'woow-ha-import', 'version': 1, 'app': 'emqx'})
+
+    def test_a_marker_that_cannot_be_written_stops_only_this_app_before_anything_is_packaged(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if role == 'emqx-new' and command[:2] == ['sh', '-c'] and ha_emqx.MARKER in command[2]:
+                return Result(1, b'', b'read-only')
+            return real(role, command, data, stdout)
+        self.world.exec = exec_
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
+        self.assertIn('匯入標記', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+
 class DeviceAccessWorld(base.World):
     """This device keeps its settings in an EnvironmentFile that also holds access settings (H1)."""
 

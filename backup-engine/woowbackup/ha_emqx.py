@@ -1998,6 +1998,23 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
 SYS_SLACK = 64   # retained messages: rows the broker's own $SYS topics may add or leave while its ticker runs (E-13)
 
 
+MARKER = 'woow-ha-import.json'
+MARKER_BODY = '{"kind":"woow-ha-import","version":1,"app":"emqx"}\n'
+
+
+def write_marker(tmp):
+    """DESIGN H-2: a file in the candidate's data volume that says this broker's access settings are HA's. The package's own
+    checks (tests/smoke.sh A4 the Dashboard login with its generated password, A5 no anonymous login, A6 its own MQTT
+    user, A10 no subscription to another user's topics) are about the settings the package installed; after an import
+    HA's authentication, authorization, ACL file and Dashboard accounts are in force (D0-D3, D5), and without this
+    marker every `upgrade.sh` of the package would fail its smoke test and roll the upgrade back. A fixed text, no value of
+    this device or of HA; it travels with the data volume and goes with it when an older backup is restored."""
+    result = tmp.exec('emqx-new', ['sh', '-c', f"umask 077; printf '%s' '{MARKER_BODY.strip()}' > {DATA_TARGET}/{MARKER}"],
+                      timeout=60, max_output=4096, check=False)
+    if result.returncode:
+        raise BackupError('job-failed', '無法在暫用的 EMQX 資料卷留下匯入標記，已停止；這台沒有任何改變。')
+
+
 def check_counts(ha, seeded, counts, *, observe=None, loose=()):
     """Tables where the import lost or invented rows (HA's rows must all be there, at most plus the seed). `loose`: the
     tables whose count may also differ by up to SYS_SLACK rows because a broker's system-message ticker could not be paused
@@ -2686,6 +2703,7 @@ def _build_candidate(work, app, tmp, target, staging, *, version, src=None, node
     if problems:
         raise BackupError('job-failed', f'EMQX 匯入後的資料筆數和 HA 不同，已停止：{"、".join(problems[:10])}。')
     readback = candidate_readback(tmp, notes=notes)
+    write_marker(tmp)
     candidate_lines(sink, target, readings, notes, device)
     return Built(src=src, node=node, readings=readings, export=export, counts=counts, strict=strict, live_authn=_live_authn,
                  readback=readback, notes=notes)
