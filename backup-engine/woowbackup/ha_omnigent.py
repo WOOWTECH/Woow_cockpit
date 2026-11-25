@@ -554,8 +554,8 @@ def bundle_locations(found):
 
 ODD_OBJECTS = (('functions', '函式'), ('triggers', '觸發程序'), ('views', '檢視表'), ('rules', '規則'),
                ('policies', '資料列政策'))
-MSG_SKIPPED = ('HA 的 Omnigent 備份裡有這台搬不過來、Omnigent 也用不到的項目（資料表、物件、擴充功能、連結或不安全的檔案位置），'
-               '只會略過它們，其餘的資料照常搬：{what}。')
+MSG_SKIPPED = ('HA 的 Omnigent 備份裡有這台搬不過來的項目，匯入時只會略過它們（Omnigent 用不到的資料表、物件、擴充功能和檔案區外的連結不搬；'
+               '會跑出檔案區的代理程式位置會被清空），其餘的資料照常搬：{what}。')
 MSG_FILES_MISSING = ('HA 的資料庫記著 {count} 個代理程式包或檔案，不在這份備份的檔案區裡{all}；它們在這台打不開，其他資料都正常。'
                      '請確認 HA 那邊本來就缺這些檔案，或把它們放在別的資料位置。')
 
