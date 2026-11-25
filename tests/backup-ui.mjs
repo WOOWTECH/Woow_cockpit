@@ -6850,6 +6850,20 @@ try {
       await page.getByText('「n8n 工作流程」的內容和檢查時不一樣，請重新檢查後再確認一次。').waitFor();
     });
 
+  await check('HAOS 一次確認: the choices, the one tick and the buttons are reachable with the keyboard, each with a visible focus ring',
+    v2Fixture(), async page => {
+      await ready(page);
+      await v2Check1(page, { keep: ['odoo', 'n8n', 'emqx'] });
+      await page.locator('#ha-db-0').check();
+      const seen = await tabKeys(page, 'HAOS options', 70);
+      for (const key of ['ha-db-0', 'ha-test-mode', 'ha-ack', 'ha-recheck', 'ha-options-back']) assert(seen.includes(key), `${key} reachable with Tab (${seen})`);
+      // The tick has its words: the box it confirms and the sentence next to it are what a screen reader reads.
+      assert.equal(await page.locator('#ha-ack').getAttribute('aria-describedby'), 'ha-confirm-list');
+      assert.equal(await page.locator('label[for="ha-ack"]').textContent(), '我了解上面列的事，開始匯入上面共 5 項；勾選一次，這些都算確認過。');
+      assert.equal(await page.locator('#ha-confirm-title').textContent(), '匯入前請確認');
+      assert.equal(await page.locator('section.ha-confirm').getAttribute('aria-labelledby'), 'ha-confirm-title');
+    });
+
   await check('HAOS 一次確認: names from a backup are only ever text, and the screens fit 1440 to 320 px without sideways scrolling',
     v2Fixture({ check: v2Check({ shared: [v2Issue('_shared', 'confirm', 'shared.pauses', '會暫停 <img src=x onerror="window.__pwned=1">', { items: ['<b>bold</b>', '"><script>window.__pwned=2</script>'] })],
       odoo: { issues: [v2Issue('odoo', 'confirm', 'odoo.missing-modules', '缺少 <i>模組</i>', { items: ['a'.repeat(120)], database: 'prod' })] } }) }), async page => {
