@@ -76,6 +76,10 @@ PG_READY_TIMEOUT = 300
 DUMP_TIMEOUT = 3 * 3600
 SQL_OUTPUT = 16 * 1024 * 1024
 SCAN_OUTPUT = 8 * 1024 * 1024    # the module listing of this device's Odoo
+# What the room for an answer grows to with the data (OD-73): a share of the bytes it is about, never more than the ceiling,
+# for HA's own server and its dump are untrusted and everything read is held in the engine's memory.
+SQL_OUTPUT_RATIO, SQL_OUTPUT_CEILING = 0.01, 256 * 1024 * 1024
+TOC_OUTPUT_RATIO, TOC_OUTPUT_CEILING = 0.05, 512 * 1024 * 1024
 TOC_OUTPUT = 128 * 1024 * 1024
 WAL_ALLOWANCE = 1024 * 1024 * 1024  # the new cluster's WAL while the dump is restored (max_wal_size)
 PG_HBA = b'# woowbk: throwaway copy, unix socket only\nlocal all all trust\n'
@@ -970,11 +974,14 @@ def parse_modules(rows):
     return modules
 
 
-def database_details(cluster, name):
+def database_details(cluster, name, size=None):
     """Counts, modules and extensions of one HA database, or None when it is not an Odoo database. The name is HA's: it
-    goes to PostgreSQL through PGDATABASE (OD-31)."""
+    goes to PostgreSQL through PGDATABASE (OD-31). `size`: the database's bytes; the room for its module list grows with
+    it (OD-73)."""
+    room = podman.scaled_limit(SQL_OUTPUT, size, ratio=SQL_OUTPUT_RATIO, ceiling=SQL_OUTPUT_CEILING)
+
     def ask(sql):
-        return cluster.query_json(sql, name, by_env=True)
+        return cluster.query_json(sql, name, by_env=True, max_output=room)
 
     flags = ask(IS_ODOO_SQL)
     if not isinstance(flags, list) or not all(flag is True for flag in flags):
@@ -1057,7 +1064,7 @@ def target_inventory(tmp, live, *, python=(), binaries=(), role='scan', size=Non
     for dep in request['bin']:
         if not BIN_DEP_RE.fullmatch(dep):
             raise BackupError('internal-error', '程式名稱格式不正確。')
-    room = podman.scaled_limit(SCAN_OUTPUT, size, ratio=1)
+    room = podman.scaled_limit(SCAN_OUTPUT, size, ratio=SQL_OUTPUT_RATIO, ceiling=SQL_OUTPUT_CEILING)
     result = tmp.run(role, live.web_image, ['-I', '-', json.dumps(request)], entrypoint='python3',
                      input=SCANNER.encode('utf-8'), volumes=live.web_mounts, secrets=[live.conf_secret],
                      timeout=podman.scaled_timeout(600, size), max_output=room, read_only_root=True)
@@ -1771,7 +1778,7 @@ def analyse(work, app, tmp, src, candidates, cluster, live, *, image16, size=Non
                  '請在 HA 把這個資料庫改成一般的名稱後重新備份；其他資料庫不受影響。')
         else:
             try:
-                details = database_details(cluster, name)
+                details = database_details(cluster, name, db['size'])
             except BackupError as error:
                 if error.code != 'job-failed' or haissues.is_job_wide(error):
                     raise
@@ -2343,7 +2350,8 @@ def restore_dump(work, tmp, dump, database, *, new_db=DEFAULT_DB_NAME, role=DEFA
     with open(dump, 'rb') as handle:
         toc = tmp.exec('odoo-db', ['pg_restore', '-l'], user='postgres', input=handle,
                        timeout=podman.scaled_timeout(DUMP_TIMEOUT, size),
-                       max_output=podman.scaled_limit(TOC_OUTPUT, size)).stdout or b''
+                       max_output=podman.scaled_limit(TOC_OUTPUT, size, ratio=TOC_OUTPUT_RATIO,
+                                                      ceiling=TOC_OUTPUT_CEILING)).stdout or b''
     text = toc.decode('utf-8', 'surrogateescape')
     check_listing(text)
     kinds = superuser_kinds(text)

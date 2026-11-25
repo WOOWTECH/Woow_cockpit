@@ -838,6 +838,49 @@ class WaitTests(unittest.TestCase):
         self.assertEqual(waited, [], 'it did not wait at all')
 
 
+class LimitTests(unittest.TestCase):
+    """OD-73: the room for an answer grows with the data, but never without an end (HA's server and dump are untrusted)."""
+
+    def test_the_room_for_a_modules_list_grows_with_the_database_up_to_a_ceiling(self):
+        seen = []
+
+        class Cluster:
+            def query_json(self, sql, database='postgres', **kwargs):
+                seen.append((kwargs['max_output'], kwargs['by_env']))
+                return [False]
+
+        for size in (None, 1024, 10 * 1024 ** 3, 10 * 1024 ** 4):
+            ha_odoo.database_details(Cluster(), 'x', size)
+        rooms = [room for room, _env in seen]
+        self.assertEqual(rooms[:2], [ha_odoo.SQL_OUTPUT, ha_odoo.SQL_OUTPUT])
+        self.assertGreater(rooms[2], ha_odoo.SQL_OUTPUT)
+        self.assertEqual(rooms[3], ha_odoo.SQL_OUTPUT_CEILING)
+        self.assertTrue(all(env is True for _room, env in seen), 'an HA name is always handed over by the environment')
+
+    def test_the_room_for_the_dump_list_and_the_time_to_read_it_grow_with_the_dump(self):
+        calls = []
+
+        class Tmp(hafakes.FakeTmp):
+            def exec(self, role, argv, **kwargs):
+                calls.append((list(argv), kwargs.get('timeout'), kwargs.get('max_output')))
+                return super().exec(role, argv, **kwargs)
+
+        def listing(role, argv, data, stdout):
+            return hafakes.Result(0, hx.toc_listing([b'3456; 1259 16400 TABLE public res_partner odoo']), b'')
+
+        tmp = Tmp(handlers={'pg_restore': listing})
+        with tempfile.TemporaryDirectory() as folder:
+            dump = Path(folder) / 'odoo.dump'
+            dump.write_bytes(b'x' * 1000)
+            with mock.patch.object(ha_odoo.os.path, 'getsize', lambda _p: 400 * 1024 ** 3):
+                ha_odoo.restore_dump(types.SimpleNamespace(log=lambda _t: None), tmp, dump, 'woowtest')
+        (_a, list_timeout, list_room), = [c for c in calls if c[0][:2] == ['pg_restore', '-l']]
+        (_b, restore_timeout, _r), = [c for c in calls if c[0][:1] == ['pg_restore'] and '-d' in c[0]]
+        self.assertGreater(list_timeout, ha_odoo.DUMP_TIMEOUT)
+        self.assertGreater(restore_timeout, ha_odoo.DUMP_TIMEOUT)
+        self.assertEqual(list_room, ha_odoo.TOC_OUTPUT_CEILING)
+
+
 class SmallPieceTests(unittest.TestCase):
     def test_the_list_filter_leaves_out_kinds_and_their_comments_but_nothing_that_only_looks_like_them(self):
         toc = (b'1; 0 0 ENCODING - ENCODING\n3500; 3466 16500 EVENT TRIGGER - grab postgres\n'
