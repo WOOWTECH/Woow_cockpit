@@ -556,6 +556,156 @@ class OdooCheckTests(OdooCase):
         self.assertEqual(self.runs('hapg'), [], 'refused before HA data is read')
 
 
+class OdooTargetTests(OdooCase):
+    """HAOS parity, this device's side: what the check reads is made ready instead of refused (rows OD-14 .. OD-23)."""
+
+    def test_an_image_this_device_lacks_is_downloaded_and_said(self):
+        """OD-14, OD-23."""
+        self.world.images.discard(self.world.db_image)
+        self.world.images.discard('docker.io/library/postgres:16.15-alpine')
+        row = self.check()
+        self.assertTrue(row['importable'], row['blockers'])
+        self.assertEqual(sorted(self.world.pulls), sorted([self.world.db_image, ha_odoo.PG16_PINNED]))
+        pulled = [i for i in row['issues'] if i['id'] == 'target.image-pulled']
+        self.assertEqual(sorted(i['items'][0] for i in pulled), sorted([self.world.db_image, ha_odoo.PG16_PINNED]))
+        self.assertTrue(all(i['level'] == 'auto' for i in pulled))
+
+    def test_an_image_that_cannot_be_had_stops_only_this_app_and_nothing_is_read(self):
+        """OD-14, OD-23: offline: Odoo is out of this import, with the reason; this device and HA's data stay as they are."""
+        self.world.images.discard('docker.io/library/postgres:16.15-alpine')
+        self.world.pull_works = False
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual([(i['id'], i['level']) for i in row['issues']], [('target.image-missing', 'stop')])
+        self.assertIn('連不上網路', row['issues'][0]['message'])
+        self.assertEqual(self.runs('hapg'), [], 'HA data was not read')
+        self.world.images.discard(self.world.db_image)       # the same for this device's own database image
+        row = self.check()
+        self.assertEqual([i['id'] for i in row['issues']], ['target.image-missing'])
+        self.assertEqual(self.reporter.partial.get('temp_owners'), [])
+
+    def test_a_locally_built_odoo_image_that_is_gone_cannot_be_pulled_and_says_so(self):
+        self.world.images.discard(self.world.web_image)
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertIn('在這台自己建置的', row['issues'][0]['message'])
+        self.assertEqual(self.world.pulls, [], 'a local image is never pulled')
+
+    def test_a_stopped_live_database_is_started_read_and_put_back(self):
+        """OD-15."""
+        self.world.live_db_stopped = True
+        row = self.check()
+        self.assertTrue(row['importable'], row['blockers'])
+        calls = self.world.owner.calls
+        self.assertIn(('systemctl', 'start', '--', 'odoo-db.service'), calls)
+        self.assertIn(('systemctl', 'stop', '--', 'odoo-db.service'), calls, 'put back when the check is over')
+        self.assertIn('target.service-started', [i['id'] for i in row['issues']])
+
+    def test_the_database_and_the_account_are_those_of_the_configuration(self):
+        """OD-15, OD-20: the live database is read under the name its odoo.conf gives; the converted one gets it too."""
+        self.world.conf = {'db_name': 'prod', 'db_user': 'odoo18', 'db_password': 'conf-secret-Pw-0123456789'}
+        self.world.live_role = None            # no role odoo18 yet
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'], row['blockers'])
+        reads = [args for args in self.world.owner.calls if args[:2] == ('exec', 'odoo18-db')]
+        self.assertTrue(reads and all('prod' in args or 'postgres' in args for args in reads))
+        self.assertIn('odoo.role-created', self.ids(row))
+        result = self.convert(ha_id, ['odoo'])
+        executed = self.executed()
+        self.assertTrue(any(s.startswith('CREATE ROLE "odoo18" LOGIN') for s in executed), executed)
+        create = next(cmd for _r, cmd, _d in self.world.execs if cmd[:1] == ['createdb'])
+        self.assertEqual((create[create.index('-O') + 1], create[-1]), ('odoo18', 'prod'))
+        restore = next(cmd for _r, cmd, _d in self.world.execs if cmd[:1] == ['pg_restore'] and '-d' in cmd)
+        self.assertEqual((restore[restore.index('-U') + 1], restore[restore.index('-d') + 1]), ('odoo18', 'prod'))
+        self.assertTrue(any(db == 'prod' for psql in self.world.owner.psql.values() for db, _s, _t in psql.executed))
+        self.assertEqual(result['apps'], ['odoo'])
+
+    def test_a_password_of_the_configuration_never_reaches_a_command_line_or_a_log(self):
+        """OD-20, OD-21: it is sent on stdin to psql and masked."""
+        self.world.live_role = {**self.world.live_role, 'password': None}      # no usable password (OD-21)
+        row = self.check()
+        self.assertEqual(self.ids(row)['odoo.role-password-reset'], 'auto')
+        self.convert(self.upload_odoo(), ['odoo'])
+        secret = self.world.conf['db_password']
+        self.assertFalse([args for args in self.world.owner.calls if any(secret in str(part) for part in args)])
+        self.assertFalse([cmd for _r, cmd, _d in self.world.execs if any(secret in part for part in cmd)])
+        create = [s for s in self.executed() if s.startswith('CREATE ROLE odoo')]
+        self.assertEqual(len(create), 1)
+        self.assertIn(f"PASSWORD '{secret}'", create[0], 'the new cluster hashes it itself')
+        self.assertNotIn(secret, '\n'.join(self.reporter.logs if hasattr(self.reporter, 'logs') else []))
+
+    def test_a_role_without_any_password_anywhere_stops_only_this_app(self):
+        self.world.live_role = {**self.world.live_role, 'password': None}
+        self.world.conf = {'db_name': 'odoo', 'db_user': 'odoo'}
+        row = self.check()
+        self.assertFalse(row['importable'])
+        self.assertEqual([(i['id'], i['level']) for i in row['issues']], [('odoo.role-unusable', 'stop')])
+        self.assertEqual(self.runs('hapg'), [])
+
+    def test_a_superuser_role_becomes_an_ordinary_one(self):
+        """OD-22: HA's content never runs as a superuser: the new role has none of the live role's powers."""
+        self.world.live_role = {**self.world.live_role, 'super': True, 'createrole': True, 'replication': True,
+                                'bypassrls': True}
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.ids(row)['odoo.role-normalised'], 'auto')
+        self.convert(ha_id, ['odoo'])
+        (create,) = [s for s in self.executed() if s.startswith('CREATE ROLE odoo')]
+        self.assertTrue(create.startswith('CREATE ROLE odoo LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION '
+                                          'NOBYPASSRLS'), create)
+
+    def test_settings_that_cannot_be_read_get_the_defaults_and_a_reminder(self):
+        """OD-16, OD-17, OD-18: no settings table: the default address, a marker written by the engine."""
+        self.world.live_table = False
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'])
+        self.assertEqual({k: v for k, v in self.ids(row).items() if k.startswith('odoo.')},
+                         {'odoo.settings-unreadable': 'notice', 'odoo.marker-written': 'auto',
+                          'odoo.website-domains': 'notice', 'odoo.crons-active': 'notice'})
+        self.convert(ha_id, ['odoo'])
+        executed = self.executed()
+        self.assertIn("DELETE FROM ir_config_parameter WHERE key = 'web.base.url'", '\n'.join(executed))
+        self.assertTrue(any("'woow_paas_platform.upgrade_done'" in s and '"core_date":"18.0.20260926"' in s
+                            for s in executed))
+
+    def test_an_address_that_is_not_text_is_replaced_by_the_default(self):
+        """OD-19."""
+        self.world.live_base_url = 12345
+        row = self.check()
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.ids(row)['odoo.base-url-invalid'], 'notice')
+
+    def test_a_mount_that_is_no_odoo_data_is_left_out_and_said(self):
+        """OD-08, OD-09: a time zone file or another host path is no reason to refuse; it is never mounted anywhere."""
+        quadlets = dict(QUADLETS)
+        quadlets['odoo.container'] += b'Volume=/etc/localtime:/etc/localtime:ro\nVolume=%h/../elsewhere:/mnt/x:ro\n'
+        quadlets['odoo-db.container'] += b'Volume=/mnt/data:/mnt/data\n'
+        self.world.quadlets['odoo'] = quadlets
+        ha_id = self.upload_odoo()
+        row = self.check(ha_id)
+        self.assertTrue(row['importable'], row['blockers'])
+        (line,) = [i for i in row['issues'] if i['id'] == 'odoo.mount-skipped']
+        self.assertEqual(sorted(line['items']), sorted(['odoo-db.container：/mnt/data', 'odoo.container：/mnt/x',
+                                                         'odoo.container：/etc/localtime']))
+        self.convert(ha_id, ['odoo'])
+        mounted = [part for run in self.world.runs for part in run[3] if '/etc/localtime' in str(part) or '/mnt/data' in str(part)]
+        self.assertEqual(mounted, [], 'a skipped mount is in no throwaway container')
+
+    def test_a_database_user_with_odd_characters_is_no_longer_a_reason_to_refuse(self):
+        """OD-05: the name is handed over as one argument and never put into a shell or SQL."""
+        quadlets = dict(QUADLETS)
+        quadlets['odoo-db.container'] = QUADLETS['odoo-db.container'].replace(
+            b'Environment=POSTGRES_USER=postgres', b'Environment="POSTGRES_USER=my admin$1"')
+        self.world.quadlets['odoo'] = quadlets
+        row = self.check()
+        self.assertTrue(row['importable'], row['blockers'])
+        user = [args[args.index('-U') + 1] for args in self.world.owner.calls if args[:2] == ('exec', 'odoo18-db')]
+        self.assertTrue(user and set(user) == {'my admin$1'})
+
+
 class VerifyConvertedTests(unittest.TestCase):
     """verify_converted: what the conversion checks before it exports the new cluster."""
 
