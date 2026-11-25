@@ -1416,6 +1416,16 @@ class ScanTests(unittest.TestCase):
                 self.assertEqual(src.outside_links.first, [f'檔案區裡指到區外的硬連結 {name}' for name in left_out])
                 self.assertEqual(src.keys, {BUNDLE, BLOB, 'accounts-cookie-secret'}, 'it is no key of the store')
                 self.assertEqual(src.artifact_files, 3)
+        # a link that comes BEFORE the file it names (the reader hands it out after the walk, as a link: copied just the same)
+        early = [{'name': 'data/postgres/base/1/3', 'type': 'hardlink', 'linkname': 'data/postgres/base/1/late'},
+                 {'name': 'data/postgres/base/1/late', 'data': b'late'}]
+        report = habackup.Report(names=haissues.Names)
+        src = ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(extra=early))), report)
+        self.assertEqual((src.pg_links.first, report.copied_links, src.pg_files), (['base/1/3'], 1, 7))
+        art = 'data/omnigent-home/.omnigent/artifacts'
+        early_in = [{'name': f'{art}/z', 'type': 'hardlink', 'linkname': f'{art}/late'}, {'name': f'{art}/late', 'data': b'x'}]
+        src = ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(extra=early_in))), habackup.Report())
+        self.assertEqual((src.outside_links.count, 'z' in src.keys, 'late' in src.keys), (0, True, True))
         inside = [{'name': 'data/omnigent-home/.omnigent/artifacts/z', 'type': 'hardlink',
                    'linkname': f'data/omnigent-home/.omnigent/artifacts/{BLOB}'}]
         src = ha_omnigent.scan_member(io.BytesIO(gzip.decompress(addon_tar(extra=inside))), habackup.Report())
