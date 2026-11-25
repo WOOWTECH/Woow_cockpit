@@ -145,7 +145,7 @@ class Plan:
         self.edits = {}              # {'prefixes.v4': text}: written into this device's config.yaml (HS-22)
         self.copy_policies = False   # this device's stored policy goes into the converted database (S3)
         self.keep_noise = False      # HA's identity key cannot be used: this device's stays (HS-20, HS-38)
-        self.skip_records = False    # HA's DNS records are not written (HS-23, HS-34)
+        self.skip_records = False    # no DNS records file is written: this device's path for it lies on its database or key (HS-34)
         self.policy = None           # 'kept' | 'replaced' | None
 
 
@@ -471,8 +471,7 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
         sink.confirm('headscale.devices-outside-range', f'HA 有 {outside.count} 個裝置位址不在匯入後這台的 IP 位址範圍內，這些裝置的位址不會重新配置，'
                                                         '可能連不上，需要重新註冊（其他裝置不受影響）。', outside)
     # the DNS extra records (HS-23, HS-34)
-    if src.records_bad:
-        plan.skip_records = True
+    if src.records_bad:   # no record of HA's is moved: an empty list is written where this device keeps them
         sink.confirm('headscale.dns-records-invalid', 'HA 的 Headscale DNS 額外記錄（dns_records.json）格式不正確或太大，這次不搬它；'
                                                       '匯入後沒有額外的 DNS 記錄（其他資料照搬）。', ['dns_records.json'])
     if records_conflict(config):

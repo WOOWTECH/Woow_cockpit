@@ -712,3 +712,591 @@ class PrefixTests(HeadscaleCase):
         result = self.checked(ha_id)
         self.assertEqual((result['importable'], result['ok']), (True, True), result['issues'])
         self.convert(ha_id, ['headscale'])
+
+
+class IdentityKeyTests(HeadscaleCase):
+    """HS-20, HS-38: HA's identity key that cannot be used (none, not a key, longer than a key) is no refusal: this device's own key
+    stays, every device has to log in again, and the customer confirms that once."""
+
+    def test_without_a_key_the_line_is_to_confirm_and_nothing_is_made_without_it(self):   # HS-20
+        ha_id = self.upload_headscale(noise=None)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        line = self.issues(result, 'confirm')['headscale.noise-key-kept']
+        self.assertIn('重新登入', line['message'])
+        self.assertEqual(line['items'], ['noise_private.key'])
+        self.refused(ha_id, 'confirmation-required')
+
+    def test_confirmed_this_devices_key_moves_and_not_has(self):   # HS-20
+        for kwargs in ({'noise': None}, {'noise': 'not a key'}):
+            with self.subTest(kwargs=kwargs):
+                self.convert_confirmed(self.upload_headscale(**kwargs))
+                data = self.volume('headscale-data')
+                self.assertEqual(data['noise_private.key'][1], (LIVE_NOISE + '\n').encode(), "this device's identity stays")
+                self.assertEqual(data['noise_private.key'][0].mode, 0o600)
+                self.assertNotIn(NOISE.encode(), data['noise_private.key'][1])
+                self.assertEqual(self.keys_of(data['db.sqlite'][1])[1], ['alice'], "HA's users and devices move")
+
+    def test_a_key_longer_than_a_key_is_the_same_line(self):   # HS-38
+        ha_id = self.upload_headscale(noise_data=b'privkey:' + b'a' * 5000)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertIn('headscale.noise-key-kept', self.issues(result, 'confirm'))
+        self.refused(ha_id, 'confirmation-required')
+        self.convert_confirmed(ha_id)
+        self.assertEqual(self.volume('headscale-data')['noise_private.key'][1], (LIVE_NOISE + '\n').encode())
+
+    def test_the_confirmation_of_another_line_is_no_confirmation_of_this_one(self):   # HS-20, HS-23: exact keys
+        other = self.confirmations(self.checked(self.upload_headscale(records=b'{"name": "x"}')))
+        self.assertEqual(len(other), 1)
+        self.refused(self.upload_headscale(noise=None), 'confirmation-required', acknowledged={'headscale': other})
+
+    def test_a_device_that_has_no_key_either_gets_a_new_one_from_headscale(self):   # HS-20
+        self.world.live_noise = 'not a key'
+        self.convert_confirmed(self.upload_headscale(noise=None))
+        self.assertNotIn('noise_private.key', self.volume('headscale-data'), 'Headscale makes its own at the first start')
+
+
+class DnsRecordTests(HeadscaleCase):
+    """HS-23, HS-34, HS-39: HA's extra DNS records that cannot be moved are left out and listed; a large valid file moves."""
+
+    def test_an_invalid_file_is_left_out_and_listed(self):   # HS-23
+        ha_id = self.upload_headscale(records=b'{"name": "x"}')
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertEqual(self.issues(result, 'confirm')['headscale.dns-records-invalid']['items'], ['dns_records.json'])
+        self.assertEqual(self.issues(result, 'stop'), {})
+        self.refused(ha_id, 'confirmation-required')
+        self.convert_confirmed(ha_id)
+        self.assertEqual(self.volume('headscale-data')['extra_records.json'][1], b'[]', 'no record of HA is moved')
+
+    def test_one_more_confirmation_is_needed_for_another_line(self):   # HS-23
+        ha_id = self.upload_headscale(records=b'{"name": "x"}')
+        keys = self.confirmations(self.checked(ha_id))
+        with_key_missing = self.upload_headscale(records=b'{"name": "x"}', noise=None)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(with_key_missing, ['headscale'], acknowledged={'headscale': keys})
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_file_larger_than_any_valid_one_is_not_read_and_listed(self):   # HS-39
+        with mock.patch.object(ha_headscale, 'MAX_SMALL', 1000):
+            result = self.checked(self.upload_headscale(records=b'[' + b'{"name": "a", "type": "A", "value": "b"},' * 60 + b']'))
+        self.assertIn('headscale.dns-records-invalid', self.issues(result, 'confirm'))
+        self.assertTrue(result['importable'])
+
+    def test_a_valid_file_over_the_old_limit_moves(self):   # HS-39
+        records = json.dumps([{'name': f'{"h" * 100}{n}.ts.local', 'type': 'A', 'value': f'100.64.{n // 250}.{n % 250}'}
+                              for n in range(10000)]).encode()
+        self.assertGreater(len(records), 1024 * 1024)
+        ha_id = self.upload_headscale(records=records)
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok'], result['headscale']['dns_records']), (True, True, 10000))
+        self.convert(ha_id, ['headscale'])
+        self.assertEqual(self.volume('headscale-data')['extra_records.json'][1], records)
+
+    def test_a_settings_file_over_the_old_limit_is_read(self):   # HS-40
+        config = HA_CONFIG + b'# ' + b'x' * (2 * 1024 * 1024) + b'\n'
+        result = self.checked(self.upload_headscale(config=config))
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.assertEqual(result['headscale']['prefixes'], {'v4': '100.64.0.0/10', 'v6': 'fd7a:115c:a1e0::/48'})
+        self.assertEqual(result['headscale']['server_url'], 'http://homeassistant.local:28080')
+
+    def test_a_settings_file_larger_than_any_valid_one_is_no_refusal(self):   # HS-40
+        with mock.patch.object(ha_headscale, 'MAX_SMALL', 1000):
+            result = self.checked(self.upload_headscale(config=HA_CONFIG + b'# ' + b'x' * 2000 + b'\n'))
+        self.assertEqual(result['importable'], True)
+        self.assertIn('headscale.prefixes-unknown', self.issues(result, 'notice'))
+
+    def test_a_dns_path_that_would_overwrite_the_database_is_not_written_and_listed(self):   # HS-34
+        self.live_config(**{'/var/lib/headscale/extra_records.json': '/var/lib/headscale/db.sqlite-wal'})
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertEqual(self.issues(result, 'confirm')['headscale.dns-path-conflict']['items'], ['dns.extra_records_path'])
+        self.refused(ha_id, 'confirmation-required')
+        self.convert_confirmed(ha_id)
+        self.assertEqual(sorted(self.volume('headscale-data')), ['.', 'db.sqlite', 'noise_private.key'], 'nothing on top of the database')
+
+    def test_a_dns_path_conflict_is_one_line_with_its_own_key(self):   # HS-34
+        self.live_config(**{'/var/lib/headscale/extra_records.json': '/var/lib/headscale/db.sqlite-wal'})
+        keys = self.confirmations(self.checked(self.upload_headscale()))
+        self.refused(self.upload_headscale(noise=None), 'confirmation-required', acknowledged={'headscale': keys})
+
+
+class LiveCopyTests(HeadscaleCase):
+    """HS-24, HS-26, HS-27, HS-29, HS-36: a copy of this device's database that was being written is read again; a Headscale that
+    never ran is started once and put back; a configuration that changes meanwhile is read again."""
+    TORN = b'SQLite format 3\x00' + b'\xff' * 4000
+
+    def test_a_torn_copy_is_read_again_in_the_check(self):   # HS-24
+        self.world.live_dbs = [self.TORN]
+        result = self.checked(self.upload_headscale())
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.assertEqual(self.world.exported, 2)
+        self.assertTrue(any('再試一次' in line for line in self.reporter.logs), 'the pause is in the job log')
+
+    def test_an_export_that_is_no_tar_is_read_again(self):   # HS-26
+        self.world.garbage_exports = 1
+        self.assertTrue(self.checked(self.upload_headscale())['importable'])
+        self.assertEqual(self.world.exported, 2)
+
+    def test_a_torn_copy_is_read_again_in_the_conversion(self):   # HS-29
+        self.world.live_dbs = [self.TORN, self.TORN]
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(self.world.exported, 3)
+        self.assertEqual(self.keys_of(self.volume('headscale-data')['db.sqlite'][1])[0], ['live-headplane', 'live-mcp'])
+
+    def test_a_copy_that_stays_unreadable_stops_only_headscale(self):   # HS-24, HS-26, HS-29
+        self.world.live_db = self.TORN
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertFalse(result['importable'])
+        self.assertEqual(self.world.exported, 3, 'three tries')
+        line = self.issues(result, 'stop')['headscale.live-copy-unreadable']
+        self.assertIn('這台沒有任何變更', line['message'])
+        self.assertTrue(line['action'])
+        error = self.refused(ha_id, 'job-failed')
+        self.assertIn('一直讀不出來', error.message)
+
+    def test_a_headscale_that_never_ran_is_started_once_and_put_back(self):   # HS-27
+        self.world.live_db, self.world.running = None, False
+        self.world.db_after_start = database(prefixes=['live-headplane'])
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.assertEqual(self.world.started, ['headscale.service'])
+        self.assertIn('target.service-started', self.issues(result, 'auto'))
+        self.assertFalse(self.world.running, 'put back (stopped) when the check ended')
+        self.convert(ha_id, ['headscale'])
+        self.assertEqual(self.keys_of(self.volume('headscale-data')['db.sqlite'][1])[0], ['live-headplane'])
+        self.assertFalse(self.world.running)
+
+    def test_a_headscale_that_makes_no_database_stops_only_headscale(self):   # HS-27
+        self.world.live_db, self.world.running = None, False
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertFalse(result['importable'])
+        self.assertEqual(self.world.started, ['headscale.service'])
+        self.assertTrue(self.issues(result, 'stop')['headscale.live-db-missing']['action'])
+        self.assertFalse(self.world.running, 'also then it is put back')
+        self.refused(ha_id, 'incompatible')
+
+    def test_a_running_headscale_without_a_database_is_not_waited_for(self):   # HS-27
+        self.world.live_db = None
+        result = self.checked(self.upload_headscale())
+        self.assertFalse(result['importable'])
+        self.assertEqual(self.world.started, [])
+        self.assertIn('headscale.live-db-missing', self.issues(result, 'stop'))
+
+
+class ConfigChangeTests(HeadscaleCase):
+    """HS-36: this device's configuration folder is packed again when its config.yaml changed while it was packed."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog['headscale'].data_dirs = [{'path': CONFIG_DIR}]
+
+    def test_a_config_that_changed_while_it_was_packed_is_packed_again(self):
+        changed = config_dir_tar(LIVE_CONFIG.replace(b'ts.local', b'other.local'))
+        self.world.dirs[CONFIG_DIR] = [changed, config_dir_tar()]
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual([c for c in self.world.owner.calls if c[0] == 'dir_pack'], [('dir_pack', CONFIG_DIR)] * 2)
+        self.assertTrue(any('重做一次' in line for line in self.reporter.logs))
+
+    def test_a_config_that_keeps_changing_stops_only_headscale(self):
+        for tar in (config_dir_tar(LIVE_CONFIG.replace(b'ts.local', b'other.local')),
+                    fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'sub', 'type': 'dir'},
+                               {'name': 'sub/config.yaml', 'data': LIVE_CONFIG}])):
+            with self.subTest(size=len(tar)):
+                self.world.dirs[CONFIG_DIR] = tar
+                error = self.refused(self.upload_headscale(), 'job-failed')
+                self.assertIn('一直在變', error.message)
+                self.assertEqual(len([c for c in self.world.owner.calls if c[0] == 'dir_pack']) % 3, 0, 'three packs, then it stops')
+                self.world.owner.calls.clear()
+
+
+class PolicyCopy:
+    """A stand-in for the SQLite child's `replace_policies_from` (the patch snippets/parity-hh/hasqlite.py.patch): while it is on, the
+    module sees `hasqlite.COPY_POLICIES`, the real child runs without that key and what it would have done is done to its output with
+    sqlite3 (this device's policy rows replace the converted database's). The specs the module sent are in `seen`."""
+
+    def __init__(self):
+        self.seen = []
+
+    def __enter__(self):
+        real = hasqlite.run
+
+        def run(specs, files, work_dir, **kwargs):
+            self.seen.append(specs)
+            wanted = [spec for spec in specs if spec.get('replace_policies_from')]
+            answers = real([{k: v for k, v in spec.items() if k != 'replace_policies_from'} for spec in specs], files, work_dir, **kwargs)
+            for spec in wanted:
+                live = sqlite3.connect(files[spec['replace_policies_from']])
+                rows = live.execute('SELECT data FROM policies ORDER BY id').fetchall()
+                live.close()
+                out = sqlite3.connect(answers[None][spec['db']])
+                out.execute('DELETE FROM policies')
+                out.executemany('INSERT INTO policies(data) VALUES (?)', rows)
+                out.commit()
+                out.close()
+            return answers
+
+        self.patches = [mock.patch.object(hasqlite, 'COPY_POLICIES', True, create=True),
+                        mock.patch.object(hasqlite, 'run', side_effect=run)]
+        for patch in self.patches:
+            patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        for patch in reversed(self.patches):
+            patch.stop()
+        return False
+
+
+HA_DB_POLICY = HA_CONFIG.replace(b'policy:\n  mode: file\n  path: ""\n', b'policy:\n  mode: database\n')
+DEVICE_FILE_POLICY = LIVE_CONFIG.replace(b'policy:\n  mode: database\n', b'policy:\n  mode: file\n  path: /etc/headscale/policy.json\n')
+
+
+class PolicyTests(HeadscaleCase):
+    """HS-24, HS-25, HS-30 (owner decision D6, S3): HA's access policy replaces this device's; when HA has none this device's stays
+    (a policy that lives in this device's database is copied into the converted one; where the child cannot do that only Headscale
+    stops: never an empty policy that opens every device to every device)."""
+
+    def policies_of(self, data):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / 'db.sqlite'
+        path.write_bytes(data)
+        conn = sqlite3.connect(path)
+        try:
+            return [row[0] for row in conn.execute('SELECT data FROM policies ORDER BY id')]
+        finally:
+            conn.close()
+
+    def test_a_policy_of_this_device_that_cannot_be_kept_stops_only_headscale(self):   # HS-25, HS-30
+        self.world.live_db = database(prefixes=['live'], policies=['{"acls": []}'])
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertFalse(result['importable'])
+        line = self.issues(result, 'stop')['headscale.policy-keep-unsupported']
+        self.assertIn('所有裝置就會互通', line['message'])
+        self.assertTrue(line['action'])
+        self.refused(ha_id, 'incompatible')   # the conversion asks again (HS-30)
+        self.assertEqual(self.world.manifests, {})
+
+    def test_when_ha_has_none_this_devices_stays_in_the_converted_database(self):   # HS-25
+        self.world.live_db = database(prefixes=['live'], policies=['{"acls": ["mine"]}'])
+        with PolicyCopy() as child:
+            ha_id = self.upload_headscale()
+            result = self.checked(ha_id)
+            self.assertEqual((result['importable'], result['ok']), (True, True))
+            self.assertIn('這台現有的存取政策會保留', self.issues(result, 'notice')['headscale.policy-kept']['message'])
+            self.assertEqual(result['headscale']['policy'], 'kept')
+            self.convert(ha_id, ['headscale'])
+        self.assertEqual(self.policies_of(self.volume('headscale-data')['db.sqlite'][1]), ['{"acls": ["mine"]}'])
+        converting = [spec for specs in child.seen for spec in specs if spec.get('replace_policies_from')]
+        self.assertEqual([(spec['db'], spec['replace_policies_from']) for spec in converting], [('ha.sqlite', 'live.sqlite')])
+
+    def test_ha_policy_in_its_database_replaces_this_devices_after_the_confirmation(self):   # HS-25
+        self.world.live_db = database(prefixes=['live'], policies=['{"acls": ["mine"]}'])
+        ha_id = self.upload_headscale(config=HA_DB_POLICY, db=database(prefixes=['ha'], policies=['{"acls": ["ha"]}']))
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertEqual(self.issues(result, 'confirm')['headscale.policy-replaced']['message'], '這台現有的存取政策會換成 HA 的。')
+        self.refused(ha_id, 'confirmation-required')
+        self.convert_confirmed(ha_id)
+        self.assertEqual(self.policies_of(self.volume('headscale-data')['db.sqlite'][1]), ['{"acls": ["ha"]}'])
+
+    def test_where_this_device_has_no_policy_ha_comes_without_a_question(self):   # HS-25
+        ha_id = self.upload_headscale(config=HA_DB_POLICY, db=database(prefixes=['ha'], policies=['{"acls": ["ha"]}']))
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.convert(ha_id, ['headscale'])
+        self.assertEqual(self.policies_of(self.volume('headscale-data')['db.sqlite'][1]), ['{"acls": ["ha"]}'])
+
+    def test_a_device_with_a_policy_file_keeps_it(self):   # HS-25
+        self.live_config()
+        self.world.files['.config/headscale/headscale/config.yaml'] = DEVICE_FILE_POLICY
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, True))
+        self.assertIn('headscale.policy-kept', self.issues(result, 'notice'))
+        self.convert(ha_id, ['headscale'])
+
+    def test_ha_policy_in_its_database_is_not_applied_to_a_device_with_a_policy_file(self):   # HS-25
+        self.world.files['.config/headscale/headscale/config.yaml'] = DEVICE_FILE_POLICY
+        ha_id = self.upload_headscale(config=HA_DB_POLICY, db=database(prefixes=['ha'], policies=['{"acls": ["ha"]}']))
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertIn('不會套用', self.issues(result, 'confirm')['headscale.policy-not-applied']['message'])
+        self.refused(ha_id, 'confirmation-required')
+
+    def test_ha_policy_file_is_said_not_to_be_applied(self):   # HS-25
+        ha_id = self.upload_headscale(config=HA_CONFIG.replace(b'path: ""', b'path: /etc/headscale/acl.hujson'))
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        line = self.issues(result, 'confirm')['headscale.policy-not-applied']
+        self.assertEqual(line['items'], ['policy.path'])
+        self.assertIn('所有裝置可以互相連線', line['message'])
+        self.refused(ha_id, 'confirmation-required')
+        self.convert_confirmed(ha_id)
+
+    def test_a_policy_ha_does_not_use_must_not_apply_here(self):   # HS-25
+        stale = database(prefixes=['ha'], policies=['{"acls": ["old"]}'])
+        ha_id = self.upload_headscale(db=stale)   # HA's mode is file: the row in its database is not in use
+        result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertIn('headscale.policy-stale', self.issues(result, 'confirm'))
+        with PolicyCopy():   # where the child can replace it, it is replaced by this device's (none): no question
+            clean = self.checked(ha_id)
+            self.assertEqual((clean['importable'], clean['ok']), (True, True))
+            self.convert(ha_id, ['headscale'])
+        self.assertEqual(self.policies_of(self.volume('headscale-data')['db.sqlite'][1]), [])
+
+    def test_a_policy_that_cannot_be_read_stops_only_headscale(self):   # HS-24
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / 'db.sqlite'
+        conn = sqlite3.connect(path)
+        populate(conn, prefixes=['live'])
+        conn.execute('DROP TABLE policies')
+        conn.commit()
+        conn.close()
+        self.world.live_db = path.read_bytes()
+        ha_id = self.upload_headscale()
+        result = self.checked(ha_id)
+        self.assertFalse(result['importable'])
+        self.assertTrue(self.issues(result, 'stop')['headscale.policy-unreadable']['action'])
+        self.refused(ha_id, 'incompatible')
+
+
+class ConvertTests(HeadscaleCase):
+    def test_the_whole_conversion(self):
+        result = self.convert(self.upload_headscale(), ['headscale'])
+        data = self.volume('headscale-data')
+        self.assertEqual(sorted(data), ['.', 'db.sqlite', 'extra_records.json', 'noise_private.key'])
+        self.assertEqual(data['noise_private.key'][1], (NOISE + '\n').encode(), "HA's identity moves")
+        self.assertEqual(data['noise_private.key'][0].mode, 0o600)
+        self.assertEqual(data['extra_records.json'][1], RECORDS)
+        keys, users = self.keys_of(data['db.sqlite'][1])
+        self.assertEqual(keys, ['live-headplane', 'live-mcp'], "only this device's API keys")
+        self.assertEqual(users, ['alice'], "HA's tailnet")
+        self.assertEqual(self.volume('headplane-data')['hp_persist.db'][1], b'live headplane')
+        run = self.runs('hs-configtest')[0]
+        self.assertEqual((run[1], run[2]), ('localhost/woow-headscale:0.29.4-r1', ['configtest']))
+        self.assertEqual(run[3]['--network'], ['none'])
+        self.assertIn('--read-only', run[3])
+        self.assertIn('/home/appowner/.config/headscale/headscale:/etc/headscale:ro', run[3]['--volume'])
+        self.assertEqual(self.world.checked_volume, self.world.volume_data['headscale-data'], 'the tested copy')
+        imp = result['ha_import']
+        reminders = imp['reminders_by_app']['headscale']
+        self.assertIn('https://woow-hs-podman-46.ngrok.app', reminders[0])
+        self.assertIn('http://homeassistant.local:28080', reminders[0])
+        self.assertTrue(any('永久停用' in line for line in reminders))
+        self.assertTrue(any('Woow Headscale MCP Server' in line for line in reminders))
+        self.assertTrue(any('IP 位址範圍保持不變' in note for note in imp['notes']))
+        self.assertNotIn(NOISE, '\n'.join(self.reporter.logs))
+        self.assertNotIn(NOISE, jobs.redact(f'a {NOISE} b'))
+
+    def test_a_database_without_api_keys_converts(self):   # HS-33: SQLite's own bookkeeping row is no data
+        ha_id = self.upload_headscale(db=database(prefixes=[]))
+        result = self.convert(ha_id, ['headscale'])
+        keys, users = self.keys_of(self.volume('headscale-data')['db.sqlite'][1])
+        self.assertEqual((keys, users), (['live-headplane', 'live-mcp'], ['alice']))
+        self.assertEqual(result['results'][0]['status'], 'converted')
+
+    def test_a_database_whose_data_is_only_in_the_wal(self):
+        """The RPi5 add-on was killed before it checkpointed: db.sqlite is the header page, all data in the -wal. The
+        WAL is carried and applied in the sandboxed child (never HA's -shm) and one checkpointed file moves."""
+        db, wal = wal_only_database(prefixes=['ha-key-1'])
+        self.assertLessEqual(len(db), 4096)
+        self.assertGreater(len(wal), 8 * 4096)
+        result = self.check(self.upload_headscale(db=db, wal=wal), ['headscale'])[0]
+        self.assertEqual((result['ok'], result['headscale']['users'], result['headscale']['nodes']), (True, 1, 1))
+        self.convert(self.upload_headscale(db=db, wal=wal), ['headscale'])
+        data = self.volume('headscale-data')
+        self.assertNotIn('db.sqlite-wal', data)
+        self.assertNotIn('db.sqlite-shm', data)
+        self.assertGreater(len(data['db.sqlite'][1]), len(db), 'the WAL was checkpointed into the file')
+        keys, users = self.keys_of(data['db.sqlite'][1])
+        self.assertEqual((keys, users), (['live-headplane', 'live-mcp'], ['alice']))
+
+    def test_nondefault_identity_paths_are_used(self):
+        self.world.live_db_path = 'nested/custom.db'
+        self.world.files['.config/headscale/headscale/config.yaml'] = LIVE_CONFIG + (
+            b'database:\n  sqlite:\n    path: /var/lib/headscale/nested/custom.db\n'
+            b'noise:\n  private_key_path: /var/lib/headscale/keys/noise.key\n')
+        self.convert(self.upload_headscale(), ['headscale'])
+        data = self.volume('headscale-data')
+        self.assertEqual(self.keys_of(data['nested/custom.db'][1])[0], ['live-headplane', 'live-mcp'])
+        self.assertEqual(data['keys/noise.key'][1], (NOISE + '\n').encode())
+        self.assertNotIn('db.sqlite', data)
+
+    def test_tampered_output_is_rejected_by_fresh_reader(self):   # HS-32 (kept)
+        run = ha_headscale.hasqlite.run
+
+        def tamper(*args, **kwargs):
+            answers = run(*args, **kwargs)
+            if kwargs.get('outputs'):
+                conn = sqlite3.connect(answers[None]['ha.sqlite'])
+                conn.execute("UPDATE api_keys SET prefix='attacker' WHERE id=(SELECT min(id) FROM api_keys)")
+                conn.commit()
+                conn.close()
+            return answers
+
+        with mock.patch.object(ha_headscale.hasqlite, 'run', side_effect=tamper):
+            error = self.refused(self.upload_headscale(), 'job-failed')
+        self.assertIn('驗證沒有通過', error.message)
+
+    def test_a_real_difference_in_the_data_is_still_caught(self):   # HS-33: only SQLite's own table is left out of the comparison
+        run = ha_headscale.hasqlite.run
+
+        def tamper(*args, **kwargs):
+            answers = run(*args, **kwargs)
+            if kwargs.get('outputs'):
+                conn = sqlite3.connect(answers[None]['ha.sqlite'])
+                conn.execute('DELETE FROM nodes')
+                conn.commit()
+                conn.close()
+            return answers
+
+        with mock.patch.object(ha_headscale.hasqlite, 'run', side_effect=tamper):
+            error = self.refused(self.upload_headscale(), 'job-failed')
+        self.assertIn('驗證沒有通過', error.message)
+
+    def test_a_failed_configtest_changes_nothing(self):   # HS-37 (kept)
+        self.world.configtest = 1
+        error = self.refused(self.upload_headscale(), 'job-failed')
+        self.assertIn('configtest', error.message)
+
+    def test_a_damaged_live_copy_stops_the_conversion(self):
+        self.world.live_db = b'SQLite format 3\x00' + b'\xff' * 4000
+        error = self.refused(self.upload_headscale(), 'job-failed')
+        self.assertIn('一直讀不出來', error.message)
+
+    def test_records_outside_the_volume_are_a_warning(self):
+        self.live_config(**{'/var/lib/headscale/extra_records.json': '/etc/headscale/extra_records.json'})
+        result = self.check(self.upload_headscale(), ['headscale'])[0]
+        self.assertTrue(result['ok'])
+        self.assertTrue(any('資料卷以外' in w for w in result['warnings']))
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertNotIn('extra_records.json', self.volume('headscale-data'))
+
+
+class ConfigFolderTests(HeadscaleCase):
+    """The entry catalog-suggest drafts for the package names its read-only configuration folder as the app's host folder:
+    the import carries this device's own folder instead of refusing that entry (found on an ARM64 test machine)."""
+    dirs = [{'path': CONFIG_DIR}]
+
+    def setUp(self):
+        super().setUp()
+        self.world.dirs[CONFIG_DIR] = config_dir_tar()
+
+    def catalog_apps(self):
+        app = super().catalog_apps()['headscale']
+        app.data_dirs = list(self.dirs)
+        return {'headscale': app}
+
+    def packs(self):
+        return [c for c in self.world.owner.calls if c[0] == 'dir_pack']
+
+    def test_the_drafted_entry_is_importable_and_carries_this_devices_folder(self):
+        result = self.check(self.upload_headscale(), ['headscale'])[0]
+        self.assertEqual((result['ok'], result['blockers']), (True, []))
+        self.assertEqual(self.packs(), [], 'the check packs nothing')
+        carried = {}
+        seen = fk.Adapter.import_manifest
+
+        def import_manifest(adapter, staging_dir, **items):
+            carried.update({rel: Path(path).read_bytes() for rel, path in items['dirs'].items()})
+            carried['modes'] = {Path(path).stat().st_mode & 0o777 for path in items['dirs'].values()}
+            return seen(adapter, staging_dir, **items)
+
+        with mock.patch.object(fk.Adapter, 'import_manifest', import_manifest):
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(self.packs(), [('dir_pack', CONFIG_DIR)])
+        self.assertEqual(carried, {CONFIG_DIR: config_dir_tar(), 'modes': {0o600}}, "this device's folder, byte for byte")
+        self.assertEqual(sorted(self.volume('headscale-data')),
+                         ['.', 'db.sqlite', 'extra_records.json', 'noise_private.key'])
+
+    def test_an_entry_without_the_folder_hands_over_no_folder(self):
+        self.catalog['headscale'].data_dirs = []
+        self.convert(self.upload_headscale(), ['headscale'])
+        self.assertNotIn('dirs', self.world.manifests['headscale'])
+        self.assertEqual(self.packs(), [])
+
+    def test_any_other_folder_is_carried_as_it_is(self):   # HS-04 (it was refused before)
+        for dirs in (['.config/headscale'], [CONFIG_DIR + '/sub'], [CONFIG_DIR, '.config/other'], ['.config/other']):
+            with self.subTest(dirs=dirs):
+                self.catalog['headscale'].data_dirs = [{'path': d} for d in dirs]
+                for d in dirs:
+                    self.world.dirs[d] = fk.tar_of([{'name': '.', 'type': 'dir'}, {'name': 'mine.txt', 'data': b'mine'}]) \
+                        if d != CONFIG_DIR else config_dir_tar()
+                self.assertTrue(self.check(self.upload_headscale(), ['headscale'])[0]['importable'])
+                self.world.owner.calls.clear()
+                self.convert(self.upload_headscale(), ['headscale'])
+                self.assertEqual(sorted(self.world.manifests['headscale']['dirs']), sorted(dirs))
+                self.assertEqual(sorted(c[1] for c in self.packs()), sorted(dirs))
+
+    def test_a_config_that_changed_during_the_conversion_stops_it(self):   # HS-36 (the details: ConfigChangeTests)
+        self.world.dirs[CONFIG_DIR] = config_dir_tar(LIVE_CONFIG.replace(b'ts.local', b'other.local'))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertIn('在轉換期間一直在變', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+    def test_a_folder_a_restore_would_refuse_stops_it(self):   # HS-35 (kept)
+        self.world.dirs[CONFIG_DIR] = config_dir_tar(extra=[{'name': '../escape', 'data': b'x'}])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_headscale(), ['headscale'])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('設定資料夾無法還原', caught.exception.message)
+        self.assertEqual(self.storage.list_backups(), [])
+
+
+class EditTests(unittest.TestCase):
+    """HS-22: HA's range is written into this device's config.yaml by changing the value of the line only."""
+
+    def test_only_the_value_changes(self):
+        text = ('server_url: https://x\nprefixes:\n  v4: "100.64.0.0/10"   # tailnet\n  v6: fd7a:115c:a1e0::/48\n'
+                '  allocation: sequential\ndns:\n  v4: not-a-prefix\n')
+        new = ha_headscale.edit_prefixes(text, {'prefixes.v4': '100.200.0.0/16'})
+        self.assertEqual(new, text.replace('"100.64.0.0/10"', '"100.200.0.0/16"'))
+        both = ha_headscale.edit_prefixes(text, {'prefixes.v4': '100.200.0.0/16', 'prefixes.v6': 'fd00::/48'})
+        self.assertIn('  v6: fd00::/48\n', both)
+        self.assertIn('dns:\n  v4: not-a-prefix\n', both, 'a v4 of another block is not touched')
+
+    def test_what_cannot_be_written_is_refused(self):
+        for text in ('prefixes: {v4: 100.64.0.0/10}\n', 'server_url: x\n', 'prefixes:\n  v6: fd00::/48\n',
+                     'prefixes:\n  v4: 100.64.0.0/10\n  v4: 100.65.0.0/10\n', 'dns:\n  prefixes:\n    v4: 100.64.0.0/10\n'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                ha_headscale.edit_prefixes(text, {'prefixes.v4': '100.200.0.0/16'})
+
+    def test_the_line_ending_stays(self):
+        text = 'prefixes:\r\n  v4: 100.64.0.0/10\r\n'
+        self.assertEqual(ha_headscale.edit_prefixes(text, {'prefixes.v4': '10.0.0.0/8'}), 'prefixes:\r\n  v4: 10.0.0.0/8\r\n')
+
+
+class RecordTests(unittest.TestCase):
+    def test_identity_paths_reject_escapes_and_collisions(self):
+        for value in ('/etc/headscale/db', '/var/lib/headscale/../db', '/var/lib/headscale/a//b'):
+            with self.subTest(value=value), self.assertRaises(BackupError):
+                ha_headscale.data_paths({'database.sqlite.path': value})
+        with self.assertRaises(BackupError):
+            ha_headscale.data_paths({'database.sqlite.path': '/var/lib/headscale/noise_private.key'})
+        self.assertEqual(ha_headscale.data_paths({'database.sqlite.path': '/var/lib/headscale/a b/數據 (1).db'})[0], 'a b/數據 (1).db')
+
+    def test_valid_records(self):
+        self.assertEqual(ha_headscale.valid_records(RECORDS), 1)
+        self.assertEqual(ha_headscale.valid_records(b'[]'), 0)
+        for bad in (b'{}', b'[{"name": "a", "type": "A", "value": "1", "extra": "x"}]', b'[{"name": 1}]',
+                    b'[{"Name": "a", "name": "b"}]', b'not json'):
+            self.assertIsNone(ha_headscale.valid_records(bad), bad)
+        self.assertEqual(ha_headscale.records_rel({'dns.extra_records_path': '/var/lib/headscale/x.json'}), 'x.json')
+        for path in ('/etc/headscale/x.json', '/var/lib/headscale/../x', '/var/lib/headscale/db.sqlite', ''):
+            self.assertIsNone(ha_headscale.records_rel({'dns.extra_records_path': path}))
+
+
+if __name__ == '__main__':
+    unittest.main()
