@@ -803,7 +803,10 @@
       state.jobCache.set(id, entry);
       jobChanged(id);
       return entry;
-    } catch (error) {
+    } catch (cause) {
+      // X-JOB-03: a record that is gone or unreadable only means its progress cannot be seen; the job may still run.
+      const error = cause.code === "not-found" ? new HelperError(`${cause.message}看不到進度不代表作業停了，它可能還在執行；請按「重試」重新讀取，或到「活動紀錄」確認。`,
+        { code: "not-found", details: cause.details }) : cause;
       const previous = state.jobCache.get(id);
       state.jobCache.set(id, { job: previous?.job || null, log: previous?.log || [], error, at: Date.now() });
       jobChanged(id);
@@ -4228,6 +4231,8 @@
       // A check cut short (e.g. HA's EMQX database did not load) has no section and no version of this device.
       return `HA 附加元件版本 ${ha}${product ? `（${short} ${product}）` : ""}${app.target_version ? `，這台的 ${short} ${here}` : ""}。`;
     }
+    // Schema 2 lists a module that differs as a line of its own (it informs, it no longer stops): nothing is claimed here.
+    if (app.v2) return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}。`;
     const verdict = haImportable(app) ? "，模組版本相同" : app.databases.length ? "，結果見下方各資料庫" : "的版本";
     return `HA 附加元件版本 ${ha}，這台的 Odoo ${here}；Odoo 逐一比對每個模組${verdict}。`;
   }
@@ -4809,7 +4814,7 @@
       }
     }
     wizard.notice = null;
-    throw new HelperError("這台設備還沒有回應，作業可能已經開始。請按「重新確認狀態」：不會重複開始，只會顯示同一個作業；"
+    throw new HelperError("這台設備還沒有回應，作業可能已經開始。請再按一次剛才的按鈕：不會重複開始，只會接上同一個作業；"
       + "也可以到「活動紀錄」看有沒有進行中的作業。", { code: "timeout", details: last?.details });
   }
 
@@ -4844,7 +4849,7 @@
       const data = await haStartCall(wizard, "ha-import-start", request);
       requireShape(isString(data.job_id) && JOB_ID_RE.test(data.job_id), "作業資訊");
       if (state.haWizard !== wizard) return;
-      Object.assign(wizard, { requestId: null, signature: "", step: "import", jobId: data.job_id, finishedJob: null, ui: null, group: null,
+      Object.assign(wizard, { requestId: null, signature: "", step: "import", jobId: data.job_id, finishedJob: null, ui: null, group: null, groupEnded: null,
         groupJobs: [data.job_id], keyCreated: data.key_created === true, thenRestore, importApps: apps, notice: null });
       announce(data.deduplicated ? "這個匯入要求先前已送出，正在顯示同一個作業。" : "已開始匯入。");
       watchJob(data.job_id);
@@ -4920,8 +4925,16 @@
     return { result: null, label: ["等待中", "neutral", "progress-clock"], doing: "前面的應用處理完才輪到它。" };
   }
 
-  function haGroupRows(info, { actions = true } = {}) {
-    return h("ol", { class: "ha-group-list", "aria-label": "各應用的匯入結果" }, info.apps.map(appId => {
+  // The selected apps that did not pass the check are not in the import; each says why, as the check did.
+  function haExcludedRows(wizard) {
+    return list(wizard.check).filter(app => wizard.selected.has(app.app_id) && !haImportable(app) && !list(wizard.importApps).includes(app.app_id)).map(app => ({
+      appId: app.app_id,
+      text: haStops(app).map(issue => `${issue.message}${issue.action ? ` ${issue.action}` : ""}`).join(" ") || "這個應用沒有通過檢查，沒有匯入。"
+    }));
+  }
+
+  function haGroupRows(info, { actions = true, excluded = [] } = {}) {
+    return h("ol", { class: "ha-group-list", "aria-label": "各應用的匯入結果" }, [...info.apps.map(appId => {
       const row = haGroupRowState(info, appId);
       const result = row.result;
       const safety = result?.safety_backup_id;
@@ -4938,7 +4951,11 @@
           safety && converted ? "　" : null,
           converted ? ["轉換好的備份：", link(converted, ["backups", converted], { class: "mono", dataset: { focus: `group-backup-${appId}` } })] : null) : null,
         actions && result ? haGroupActions(info, result, { reconfirm }) : null);
-    }));
+    }), ...excluded.map(item => h("li", { class: "ha-group-row ha-group-excluded", dataset: { haApp: item.appId, status: "excluded" } },
+      h("div", { class: "ha-group-head" }, h("strong", { class: "ha-group-name", text: haAppName(item.appId) }),
+        h("span", { class: "chips" }, chip("沒有匯入", "neutral", "minus-circle-outline"))),
+      h("p", { class: "ha-group-message", text: item.text }),
+      h("p", { class: "secondary", text: "這台的這個應用沒有任何變更。" })))]);
   }
 
   // What the customer can do next about one app: confirm again (the names changed since the check), or restore the backup that
@@ -5029,7 +5046,7 @@
         ? "一個應用接著一個應用轉換成這台的備份；轉換不會變更這台的應用，備份會留在備份列表。"
         : "一個應用接著一個應用處理：轉換、保存匯入前備份、換上 HA 的資料、檢查。每個應用只停自己的時間；哪個失敗，只退回它自己。" }),
       wizard.keyCreated ? haKeyCreatedNotice() : null,
-      haGroupRows(view, { actions: false }),
+      haGroupRows(view, { actions: false, excluded: haExcludedRows(wizard) }),
       wizard.jobId ? haJobBlock(wizard) : null,
       entry?.error && !job ? stableNotice(`ha-job-${wizard.jobId}`, entry.error, { live: false }) : null,
       wizardError(wizard),
@@ -5072,11 +5089,11 @@
         error ? errorNotice(error, { live: false }) : null,
         info ? h("p", { class: "muted", text: haGroupSummary(info) }) : null),
       wizard.keyCreated || state.status?.key?.kit_confirmed === false ? haKeyCreatedNotice() : null,
-      info ? haGroupRows(info) : null,
+      info ? haGroupRows(info, { excluded: haExcludedRows(wizard) }) : null,
       info && done.length && !converted ? haAfterGroup(wizard, info, done) : null,
       h("div", { class: "form-footer button-group" },
-        link("回到這份 HA 備份", ["ha", wizard.haId], { class: "button", dataset: { focus: "result-ha" }, on: { click: () => closeHaWizard() } }),
-        link("查看備份列表", ["backups"], { class: "button primary", dataset: { focus: "result-backups" }, on: { click: () => closeHaWizard() } }))
+        button("回到這份 HA 備份", () => closeHaWizard({ rerender: true }), { focus: "result-ha" }),
+        link("查看備份列表", ["backups"], { class: "button primary", dataset: { focus: "result-backups" } }))
     ];
   }
 
