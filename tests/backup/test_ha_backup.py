@@ -129,10 +129,44 @@ class RecognitionTests(TempFiles):
             with self.subTest(case=label):
                 self.assertFalse(habackup.looks_like_ha(self.fd(data)))
 
-    def test_a_directory_or_unreadable_input_is_not_ha(self):
-        fd = os.open(self.dir, os.O_RDONLY)
-        self.addCleanup(os.close, fd)
-        self.assertFalse(habackup.looks_like_ha(fd))
+    def test_what_is_no_regular_file(self):
+        """UP-01 (kept): a folder, a pipe or a device is no backup and is never read."""
+        pipe = self.dir / 'pipe'
+        os.mkfifo(pipe)
+        for path, flags in ((self.dir, os.O_RDONLY), (pipe, os.O_RDWR), ('/dev/zero', os.O_RDONLY)):
+            fd = os.open(path, flags)
+            self.addCleanup(os.close, fd)
+            with self.subTest(path=str(path)), mock.patch.object(os, 'pread', side_effect=AssertionError('read')):
+                self.assertFalse(habackup.looks_like_ha(fd))
+                code, error = code_of(habackup.describe, fd)
+                self.assertEqual((code, error.details['reason']), ('corrupt-archive', 'not a regular file'))
+
+    def test_a_description_that_is_too_large_is_never_read(self):
+        """UP-21: a name is no reason to read a member of any size into memory."""
+        for name in ('./backup.json', './snapshot.json'):
+            path = self.write(hx.raw_header(name, size=habackup.MAX_BACKUP_JSON + 1))
+            os.truncate(path, 512 + habackup.MAX_BACKUP_JSON + 512 + 1024)  # (sparse)
+            reads = []
+            real = os.pread
+
+            def pread(fd, n, offset):
+                reads.append(n)
+                return real(fd, n, offset)
+            fd = self.fd(path)
+            with self.subTest(name=name), mock.patch.object(os, 'pread', pread):
+                self.assertFalse(habackup.looks_like_ha(fd))
+                code, error = code_of(habackup.describe, fd)
+                self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'backup.json too large'))
+                self.assertLess(sum(reads), 10_000)
+
+    def test_positions_beyond_the_file(self):
+        fd = self.fd(b'x' * 1000)
+        for call in (lambda o: o.skip(1001), lambda o: o.read_exact(1001), lambda o: (o.skip(1000), o.skip(1))):
+            with self.assertRaises(habackup._Truncated):
+                call(habackup._Outer(fd, 1000))
+        outer = habackup._Outer(fd, 1000)
+        outer.skip(999)
+        self.assertEqual(outer.read_exact(1), b'x')
 
 
 class DescribeTests(TempFiles):
@@ -337,6 +371,10 @@ class DescribeTests(TempFiles):
                 self.assertEqual((good['slug'], good.get('problem')), (hx.ODOO, None))
                 self.assertIsNone(hastore.importable_app(bad['slug']))
                 self.assertEqual(code_of(layout.addon, 'invalid-1')[1].details['problem'], 'bad-slug')
+        doc = hx.ha_doc([hx.ODOO])
+        doc['addons'].append({'slug': '../x_odoo18ce', 'name': 'Other', 'version': '1'})
+        layout = self.describe(hx.outer_bytes([odoo, ('invalid-1.tar.gz', hx.addon_member())], doc))
+        self.assertEqual(([m.name for m in layout.members], layout.ignored), ([odoo[0]], (('unlisted', 'invalid-1.tar.gz'),)))
         doc = hx.ha_doc([hx.ODOO, 'invalid-1'])
         doc['addons'] += [{'slug': '/a\n', 'name': '', 'version': ''}, {'slug': None}, {'slug': '/a\n'}, {}]
         addons = self.describe(hx.outer_bytes([odoo], doc)).summary()['addons']
@@ -582,6 +620,7 @@ class OuterTarTests(TempFiles):
             ('pax record', self.backup(hx.pax_member(b'9999 path=x\n')), 'malformed pax record'),
             ('pax key twice', self.backup(hx.pax_member(hx.pax_records({'path': 'x'}) * 2)),
              'malformed or repeated pax record'),
+            ('pax after its zeros', self.backup(hx.pax_member(hx.pax_records({'path': 'x'}) + b'\0\0x')), 'malformed pax header'),
             ('pax size', self.backup(hx.pax_member({'size': 'many'}) + hx.raw_member('x')), 'pax size is not a number'),
             ('size field', self.backup(hx.fix_checksum(hx.raw_header('x')[:124] + b'9' * 11 + b'\0' + hx.raw_header('x')[136:])),
              'tar number field is not octal'),
@@ -604,6 +643,8 @@ class OuterTarTests(TempFiles):
         self.refused(self.backup(pax(habackup.MAX_PAX + 1)), 'limit-exceeded', 'extended header too large')
         self.refused(self.backup(hx.raw_member('L', b'n' * (habackup.MAX_LONG_NAME + 1), typeflag=b'L')),
                      'limit-exceeded', 'extended header too large')
+        self.taken(self.backup(hx.pax_member(hx.pax_records({'comment': 'x'}) + bytes(9)) + hx.raw_member('x')),
+                   [('unlisted', 'x')])  # zeros behind the records are padding
         filler = hx.raw_member('d/', typeflag=b'5')
         self.assertEqual(self.describe(self.backup(filler * (habackup.MAX_OUTER_MEMBERS - 2))).ignored_count,
                          habackup.MAX_OUTER_MEMBERS - 2)
@@ -940,9 +981,22 @@ class MemberStreamTests(TempFiles):
         with mock.patch.object(habackup, 'MAX_GZIP_MEMBERS', 100):
             self.assertEqual(self.gunzip(empty * 99 + gzip.compress(b'x')), b'x')
             self.gzip_refused(empty * 100 + gzip.compress(b'x'), 'too many gzip members', 'limit-exceeded')
-        started = time.monotonic()
-        self.assertEqual(self.gunzip(empty * 20_000), b'')
-        self.assertLess(time.monotonic() - started, 20, 'each member costs only its own bytes')
+        fed = []
+
+        class Inflate:  # what zlib gets at a time: what is left over of it is copied for every member
+            def __init__(self, wbits, real=zlib.decompressobj):
+                self.real = real(wbits)
+
+            def decompress(self, data, n):
+                fed.append(len(data))
+                return self.real.decompress(data, n)
+
+            def __getattr__(self, name):
+                return getattr(self.real, name)
+        with mock.patch.object(zlib, 'decompressobj', Inflate):
+            self.assertEqual(self.gunzip(empty * 10_000), b'')
+        self.assertEqual((len(fed), max(fed)), (10_000, habackup.GZIP_FEED))
+        self.assertEqual(habackup.GZIP_FEED, 64 << 10)
 
     def test_decompression_is_bounded(self):
         bomb = gzip.compress(hx.tar_bytes([{'name': 'zeros', 'data': bytes(64 * 1024 * 1024)}]), mtime=0)
@@ -1392,6 +1446,8 @@ class EntryTests(WalkCase):
             self.assertEqual(self.walk(entries, addon=True)[1].addon.slug, 'x')
             entries[0]['data'] += b' '
             self.assertEqual(self.refused(entries, addon=True), ('limit-exceeded', 'addon.json too large'))
+            self.assertEqual(self.refused([], raw=hx.raw_header('addon.json', size=101), addon=True),
+                             ('limit-exceeded', 'addon.json too large'), 'without reading it')
 
 
 class SkippedEntryTests(WalkCase):

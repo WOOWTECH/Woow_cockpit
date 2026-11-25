@@ -392,8 +392,6 @@ class _Outer:
         self.fd, self.size, self.pos = fd, size, 0
 
     def read_exact(self, n):
-        if self.pos + n > self.size:
-            raise _Truncated()
         data = _pread_exact(self.fd, self.pos, n)
         self.pos += n
         return data
@@ -482,7 +480,9 @@ def _is_ha_doc(doc):
 
 
 def _load_doc(fd, raw):
-    """The strict JSON of a member; ValueError when it is not one."""
+    """The strict JSON of a member (read only up to MAX_BACKUP_JSON: limit-exceeded); ValueError when it is not one."""
+    if raw.size > MAX_BACKUP_JSON:
+        raise _limit('backup.json too large', size=raw.size)
     return util.loads_strict(_pread_exact(fd, raw.offset, raw.size), max_bytes=MAX_BACKUP_JSON)
 
 
@@ -497,8 +497,8 @@ def looks_like_ha(fd):
         old = None
         for raw in _walk_outer(fd, size):
             if raw.name == BACKUP_JSON:
-                return raw.size <= MAX_BACKUP_JSON and _is_ha_doc(_load_doc(fd, raw))
-            if raw.name == SNAPSHOT_JSON and old is None and raw.size <= MAX_BACKUP_JSON:
+                return _is_ha_doc(_load_doc(fd, raw))
+            if raw.name == SNAPSHOT_JSON and old is None:
                 old = raw
         return old is not None and _is_ha_doc(_load_doc(fd, old))
     except (BackupError, OSError, ValueError, _Truncated):
@@ -752,8 +752,6 @@ def describe(fd):
         docs = raws.pop(doc_name)
         if len(docs) > 1:
             raise _corrupt('backup.json is in the file twice')
-        if docs[0].size > MAX_BACKUP_JSON:
-            raise _limit('backup.json too large', size=docs[0].size)
         try:
             doc = _load_doc(fd, docs[0])
         except ValueError:
