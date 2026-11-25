@@ -150,6 +150,12 @@ class FakeOwner:
                       'woowbk-demo-app.service': ['woowbk-demo-db.service', 'woowbk-demo-network.service']}
         self.fail_units = set()     # units whose start fails (also inside a multi-unit start)
         self.oneshots = set()       # units that are `Type=oneshot` (inactive after they did their work, on purpose)
+        # /etc/subuid and /etc/subgid, and what the owner's user namespace maps (id_map) only after `podman system migrate`
+        self.subid = {'uid': 'appowner:10000:55000\nother:100000:65536\n', 'gid': 'appowner:10000:55000\nother:100000:65536\n'}
+        self.next_map = None
+        self.migrations = 0
+        self.migrate_stops = set()  # units `podman system migrate` stops (the containers of the account)
+        self.root_calls = []
         self.isready_failures = 0   # this many `pg_isready` calls fail first (a database still recovering)
         # Requires= and BindsTo= of each unit (Quadlet does not add After= for them: review L7)
         self.requires = {'woowbk-demo-app.service': ['woowbk-demo-db.service']}
@@ -168,7 +174,29 @@ class FakeOwner:
         return None
 
     # ------------------------------------------------------------- plumbing
+    def root_command(self, argv):
+        """The commands the engine runs as root itself (podman.OwnerRunner.run_root): cat of the subid tables, usermod."""
+        self.root_calls.append(list(argv))
+        if argv[0] == podman.CAT:
+            kind = 'uid' if argv[1] == '/etc/subuid' else 'gid'
+            return podman.Result(0, self.subid[kind].encode(), b'')
+        assert argv[0] == podman.USERMOD and argv[-1] == 'appowner', argv
+        words, added = argv[1:-1], {}
+        for flag, kind in (('--add-subuids', 'uid'), ('--add-subgids', 'gid')):
+            if flag in words:
+                first, last = (int(part) for part in words[words.index(flag) + 1].split('-'))
+                self.subid[kind] += f'appowner:{first}:{last - first + 1}\n'
+                added[kind] = (first, last - first + 1)
+        if added.get('uid'):
+            have = sum(int(line.split(':')[2]) for line in self.subid['uid'].splitlines()
+                       if line.startswith('appowner:')) - added['uid'][1]
+            self.next_map = (self.next_map or self.id_map) + f'{have + 1} {added["uid"][0]} {added["uid"][1]}\n'
+        return podman.Result(0, b'', b'')
+
     def __call__(self, argv, *, input=None, stdout=None, timeout=None, cwd=None, env=None, max_output=None):
+        if argv and argv[0] in (podman.USERMOD, podman.CAT):
+            assert cwd == '/' and env == podman.ROOT_ENV, (cwd, env)
+            return self.root_command(argv)
         assert argv[:len(PREFIX)] == PREFIX, argv[:len(PREFIX)]
         assert cwd == '/home/appowner' and env == podman.ROOT_ENV, (cwd, env)
         inner = list(argv[len(PREFIX):])
@@ -270,6 +298,9 @@ class FakeOwner:
                 else:
                     blocks.append(f'Id={unit}\nLoadState=not-found\nActiveState=inactive\nSubState=dead')
             return podman.Result(0, ('\n\n'.join(blocks) + '\n').encode(), b'')
+        if verb == 'list-units':
+            rows = [f'{unit} loaded active running x' for unit, state in self.units.items() if state == 'active']
+            return podman.Result(0, ('\n'.join(rows) + '\n').encode(), b'')
         if verb in ('mask', 'unmask'):
             assert args[1] == '--'
             for unit in args[2:]:
@@ -407,6 +438,14 @@ class FakeOwner:
                     return missing
                 return self.out(0, f'/home/appowner/.local/share/containers/storage/volumes/{args[-1]}/_data\n'.encode(),
                                 stdout)
+        if cmd == 'system' and args[1:] == ['migrate']:
+            self.migrations += 1
+            if self.next_map is not None:
+                self.id_map, self.next_map = self.next_map, None
+            for unit in self.migrate_stops:
+                if self.units.get(unit) == 'active':
+                    self.units[unit] = 'inactive'
+            return ok
         if cmd == 'unshare':
             if args[1:3] == ['cat', '/proc/self/uid_map'] or args[1:3] == ['cat', '/proc/self/gid_map']:
                 return self.out(0, self.id_map.encode(), stdout)
@@ -1986,6 +2025,134 @@ class MissingVolumeTests(HaRestoreCase):
         with self.assertRaises(BackupError):
             self.converted().ensure_volumes()
         self.assertNotIn('woowbk-demo-files', self.owner.volumes)
+
+
+class WideningIdsTests(HaRestoreCase):
+    """X-NS-09 (HAOS parity 2026-11-25): files whose owners are outside the ids the account can use. The restore of a converted
+    HA backup widens the account's range (subordinate ids, `podman system migrate`, its services started again) after the
+    customer confirmed it; before that nothing is touched. An ordinary restore refuses, as before."""
+
+    ENTRY = 'apps/woowbk-demo/volumes/woowbk-demo-files.tar'
+
+    def setUp(self):
+        super().setUp()
+        self.owner.migrate_stops = {'woowbk-demo-app.service', 'woowbk-demo-db.service', 'woowbk-files.service'}
+        self.owner.units['woowbk-files.service'] = 'active'
+        self.tar(70000)
+
+    def tar(self, uid):
+        members = [{'name': 'files/', 'kind': tarfile.DIRTYPE, 'mode': 0o755},
+                   {'name': 'files/big.bin', 'data': b'x' * 100, 'mode': 0o644, 'uid': uid, 'gid': uid}]
+        (self.extract / self.ENTRY).write_bytes(volume_tar(members))
+
+    def key(self):
+        return qp.Issue('restore.id-range', 'confirm', 'x', ['appowner']).key('woowbk-demo')
+
+    def converted(self, owner=None, *, confirmed=True):
+        adapter = super().converted(owner)
+        adapter.acknowledged = frozenset({self.key()} if confirmed else ())
+        return adapter
+
+    def check(self, adapter):
+        return adapter.preflight(self.manifest, mode='inplace', extracted_dir=self.extract)
+
+    def test_the_owner_ids_a_backup_needs_are_read_from_its_headers(self):
+        self.assertEqual(nested.max_owner_ids(self.extract / self.ENTRY), (70000, 70000))
+
+    def test_an_unconfirmed_widening_asks_first_and_touches_nothing(self):
+        adapter = self.converted(confirmed=False)
+        with self.assertRaises(BackupError) as caught:
+            self.check(adapter)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (row,) = caught.exception.details['apps']['woowbk-demo']
+        self.assertEqual((row['id'], row['level'], row['items'], row['key']),
+                         ('restore.id-range', 'confirm', ['appowner'], self.key()))
+        self.assertIn('所有服務', row['message'])
+        self.assertEqual((self.owner.root_calls, self.owner.migrations), ([], 0))
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_a_confirmed_widening_adds_the_ids_migrates_and_starts_the_services_again(self):
+        adapter = self.converted()
+        checks = self.check(adapter)
+        self.assertEqual([c for c in checks if c['status'] == 'fail'], [])
+        self.assertEqual(self.owner.root_calls, [
+            [podman.CAT, '/etc/subuid'], [podman.CAT, '/etc/subgid'],
+            [podman.USERMOD, '--add-subuids', '196608-262143', '--add-subgids', '196608-262143', 'appowner']])
+        self.assertEqual(self.owner.migrations, 1)
+        self.assertEqual({unit: self.owner.units[unit] for unit in ('woowbk-demo-app.service', 'woowbk-demo-db.service',
+                                                                    'woowbk-files.service')},
+                         {'woowbk-demo-app.service': 'active', 'woowbk-demo-db.service': 'active',
+                          'woowbk-files.service': 'active'})
+        self.assertEqual(adapter.paused, [])
+        uids, gids = adapter.owner_ids()
+        self.assertTrue(70000 in uids and 70000 in gids)
+        self.assertEqual([issue.id for issue in adapter.restore_issues], ['restore.id-range'])
+        self.assertTrue(any('擴大帳號 appowner' in line for line in self.logs), self.logs)
+
+    def test_the_other_services_are_in_the_record_before_anything_stops_and_gone_from_it_after(self):
+        adapter = self.converted()
+        self.check(adapter)
+        self.assertIn('paused:woowbk-files.service', self.hook_calls[0])
+        self.assertEqual(self.hook_calls[-1], [])
+
+    def test_a_widening_that_fails_stops_this_app_and_the_services_run_again(self):
+        original = self.owner.root_command
+
+        def broken(argv):
+            if argv[0] == podman.USERMOD:
+                return podman.Result(1, b'', b'usermod: cannot lock /etc/subuid')
+            return original(argv)
+        self.owner.root_command = broken
+        adapter = self.converted()
+        with self.assertRaises(BackupError) as caught:
+            self.check(adapter)
+        self.assertIn('usermod', caught.exception.message)
+        self.assertEqual(self.owner.migrations, 0)
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+
+    def test_a_widening_that_does_not_reach_the_ids_stops_this_app(self):
+        original = self.owner.root_command
+
+        def useless(argv):
+            result = original(argv)
+            self.owner.next_map = None  # Podman does not pick the new ids up
+            return result
+        self.owner.root_command = useless
+        with self.assertRaises(BackupError) as caught:
+            self.check(self.converted())
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('仍不夠用', caught.exception.message)
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active', 'the services run again')
+
+    def test_an_owner_no_container_user_has_is_not_widened_for(self):
+        self.tar(4_000_000_000)
+        adapter = self.converted()
+        checks = self.check(adapter)
+        self.assertEqual(self.owner.root_calls, [])
+        self.assertEqual([c['id'] for c in checks if c['status'] == 'fail'], ['woowbk-demo/volume-archive'])
+
+    def test_an_ordinary_restore_never_widens_and_refuses_as_before(self):
+        adapter = self.make_adapter()
+        adapter.acknowledged = frozenset({self.key()})
+        checks = self.check(adapter)
+        self.assertEqual(self.owner.root_calls, [])
+        failing = [c for c in checks if c['status'] == 'fail']
+        self.assertEqual([c['id'] for c in failing], ['woowbk-demo/volume-archive'])
+        self.assertIn('超出這台設備應用帳號', failing[0]['message'])
+
+    def test_what_is_in_range_needs_no_widening_and_no_question(self):
+        self.tar(1000)
+        adapter = self.converted(confirmed=False)
+        self.check(adapter)
+        self.assertEqual((self.owner.root_calls, self.owner.migrations, adapter.restore_issues), ([], 0, []))
+
+    def test_the_new_ids_start_after_every_range_any_account_has_and_come_in_blocks(self):
+        runner = podman.OwnerRunner('appowner', runner=self.owner, user_lookup=user_lookup)
+        self.assertEqual(runner.widen_subids({'uid': 55001, 'gid': 0}), {'uid': (196608, 262143), 'gid': None})
+        self.assertEqual(runner.widen_subids({'uid': 60000, 'gid': 200000}), {'uid': None, 'gid': (196608, 393215)},
+                         'after the first widening the uids are covered; the gids (a table of their own) need three blocks')
+        self.assertEqual(runner.widen_subids({'uid': 1, 'gid': 1}), {'uid': None, 'gid': None})
 
 
 class Handler(http.server.BaseHTTPRequestHandler):

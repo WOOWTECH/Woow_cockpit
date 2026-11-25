@@ -37,6 +37,9 @@ class Adapter:
         # The restore (or its check) is of a backup converted from a Home Assistant backup (set by flows and the restore
         # check): what differs on this device is then handled and listed instead of refused (RESTORE lane, HAOS parity).
         self.ha_import = False
+        # The keys of the lines to confirm the request carried for this app (flows sets it from params.acknowledged); the
+        # adapter asks for one only at a point where nothing has changed yet.
+        self.acknowledged = frozenset()
 
     def probe(self):
         """{'deployed': bool, 'state': str, 'units': [{'name','active'}], 'problems': [str]}"""

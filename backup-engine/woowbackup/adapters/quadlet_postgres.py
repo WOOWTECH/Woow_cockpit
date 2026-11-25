@@ -47,22 +47,25 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from .. import digests, nested
+from .. import digests, haissues, nested
 from ..archive import Entry, carried_settings_problem
 from ..catalog import DB_NAME_RE, digest_target, paths_overlap
 from ..errors import BackupError
 from ..haissues import Issue
-from ..podman import DEVNULL, CommandError, stderr_tail
+from ..podman import DEVNULL, SUBID_MAX_NEED, CommandError, stderr_tail
 from .base import PAUSED_PREFIX, Adapter
 
 QUADLET_DIR = '.config/containers/systemd'
 # Issues the restore check of this adapter raises (haissues, CONTRACT section 7): lines of the ONE confirmation of an HA
 # import that only the restore can know (they are listed in `preflight.apps[].issues`, and a restore needs their keys).
 ISSUES = {
-    'restore.pauses': 'confirm',  # X-AD-14, X-AD-50: other services use what the restore replaces; they are paused meanwhile
+    'restore.pauses': 'confirm',    # X-AD-14, X-AD-50: other services use what the restore replaces; they are paused meanwhile
+    'restore.id-range': 'confirm',  # X-NS-09: the account's range of ids is widened (all its services stop for a minute)
 }
 UNIT_RE = re.compile(r'[A-Za-z0-9][A-Za-z0-9_.@:-]{0,190}\.service\Z')
 MAX_PAUSED = 40
+ID_RANGE_TEXT = ('備份裡有檔案的擁有者編號超出這個應用的帳號目前可用的範圍；匯入前會先擴大這個帳號可用的編號範圍，'
+                 '這個帳號的所有服務會因此停止約 1 分鐘，完成後自動啟動。')
 PAUSES_TEXT = ('匯入這個應用時，會先暫停下列也在使用它的資料的服務，匯入完成後自動啟動；暫停期間這些服務無法使用，'
                '它們使用的資料夾也會被備份裡的內容取代。')
 MAX_QUADLET_BYTES = 1024 * 1024
@@ -814,6 +817,73 @@ class QuadletPostgresAdapter(Adapter):
                 maps.append(ids)
             self._owner_ids = tuple(maps)
         return self._owner_ids
+
+    def _widen_ids(self, app_manifest, root):
+        """X-NS-09 (the restore of a converted HA backup; HAOS parity: it carries the files' owners over as they are): when a
+        volume or directory tar in the backup has an owner outside the ids this account can use, widen the account's
+        range -- subordinate ids added to /etc/subuid and /etc/subgid, `podman system migrate`, the services it stopped
+        started again -- after the customer confirmed it (`restore.id-range`; unconfirmed: confirmation-required, nothing has
+        changed). An owner id that no container user has (above SUBID_MAX_NEED) is not widened for: that tar is refused by the
+        checks that follow, as before. Runs before anything is stopped or written."""
+        found, _missing, _extra = self.match_items(app_manifest)
+        paths = [(nested.VOLUME, self.entry_path(root, item['entry'])) for item in found['volumes'].values()]
+        paths += [(nested.DIRECTORY, self.entry_path(root, item['entry'])) for item in found['dirs'].values()]
+        need = {'uid': 0, 'gid': 0}
+        for what, path in paths:
+            try:
+                top_uid, top_gid = nested.max_owner_ids(path, what)
+            except BackupError:
+                return  # an unreadable tar is the checks' to refuse, with their own words
+            need['uid'], need['gid'] = max(need['uid'], top_uid), max(need['gid'], top_gid)
+        uids, gids = self.owner_ids()
+        if need['uid'] in uids and need['gid'] in gids:
+            return
+        if max(need.values()) > SUBID_MAX_NEED:
+            return
+        issue = Issue('restore.id-range', 'confirm', ID_RANGE_TEXT, [self.runner.owner])
+        self.restore_issues.append(issue)
+        if issue.key(self.app.id) not in self.acknowledged:
+            raise haissues.confirmation_required({self.app.id: [issue]}, f'還原「{self.app.name}」前還有事情要確認。')
+        active = self._active_services()
+        own = [unit for unit in active if unit in self.app.units]
+        others = [unit for unit in active if unit not in self.app.units]
+        self.log(f'擴大帳號 {self.runner.owner} 的可用編號範圍（UID 到 {need["uid"]}、GID 到 {need["gid"]}），'
+                 f'這個帳號的所有服務會暫時停止（{len(active)} 個），完成後自動啟動。')
+        # Listed in the job's record first: the services run again, whatever happens next (also after a crash).
+        self.paused.extend(unit for unit in others if unit not in self.paused and len(self.paused) < MAX_PAUSED)
+        self._hook([*self._own_noted, *[unit for unit in own if unit not in self._own_noted]])
+        try:
+            added = self.runner.widen_subids(need)
+            for kind, got in added.items():
+                if got:
+                    self.log(f'已為帳號 {self.runner.owner} 加入 {"UID" if kind == "uid" else "GID"} 範圍 {got[0]}-{got[1]}')
+            self.runner.podman('system', 'migrate', timeout=300)
+        finally:
+            self._owner_ids = None
+            self._nested_checked = {}
+            self._restart_all(own)
+        uids, gids = self.owner_ids()
+        if need['uid'] not in uids or need['gid'] not in gids:
+            raise BackupError('incompatible', f'已擴大帳號 {self.runner.owner} 的編號範圍，但仍不夠用（需要 UID {need["uid"]}、'
+                                              f'GID {need["gid"]}）；這台設備沒有任何變更。', app=self.app.id)
+
+    def _active_services(self):
+        """The `.service` units of the owner's user manager that run now (what `podman system migrate` is about to stop)."""
+        out = self.runner.systemctl('list-units', '--type=service', '--state=active', '--plain', '--no-legend', '--no-pager',
+                                    timeout=SHORT_TIMEOUT, max_output=SMALL_OUTPUT).stdout or b''
+        units = [line.split()[0] for line in out.decode('utf-8', 'replace').splitlines() if line.split()]
+        return [unit for unit in units if UNIT_RE.fullmatch(unit)][:2 * MAX_PAUSED]
+
+    def _restart_all(self, own):
+        """Start again what the widening stopped: the app's own units that ran (the restore stops them itself later) and the
+        services in `paused`. What does not start stays in `paused` and in the record (the restore ends with a warning)."""
+        failed, interrupted = self._start_units(own, attempts=2, before='啟動服務') if own else ([], None)
+        self._hook(failed)
+        self.resume_paused()
+        if failed:
+            self.log(f'警告：無法重新啟動服務 {", ".join(failed)}，請到服務頁檢查。')
+        if interrupted is not None:
+            raise interrupted
 
     def _check_volume_entry(self, name, path, *, log=True):
         """Check one volume tar (cached per path); returns its nested.VolumeReport. Notes about what the canonical
@@ -2701,6 +2771,8 @@ class QuadletPostgresAdapter(Adapter):
 
     def _preflight_nested(self, app_manifest, root, sources, add):
         """Check the extracted image and volume tars now (cached for restore()); see preflight()."""
+        if self.ha_import and self.runtime_ready():
+            self._widen_ids(app_manifest, root)  # X-NS-09: before the checks, which would refuse an owner outside the range
         try:
             self._check_image_entries(app_manifest, root, self.container_images(sources))
         except BackupError as error:

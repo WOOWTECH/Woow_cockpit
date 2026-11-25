@@ -389,6 +389,18 @@ def volume_root(path, ids=None):
     return None
 
 
+def max_owner_ids(path, what=VOLUME):
+    """(the highest uid, the highest gid) among the members of a volume or host-directory tar, read from the headers without
+    unpacking anything (X-NS-09: how far the owner's id range would have to reach); (0, 0) for a tar without members.
+    The tar is not trusted: at most MAX_VOLUME_MEMBERS members are read, and the checks that follow refuse what is unsafe;
+    a header that cannot be read is the same refusal those checks give."""
+    top_uid = top_gid = 0
+    with _open(path, what, 'r:') as tar:
+        for member in _members(tar, what, MAX_VOLUME_MEMBERS):
+            top_uid, top_gid = max(top_uid, int(member.uid)), max(top_gid, int(member.gid))
+    return top_uid, top_gid
+
+
 def check_dir(path, ids=None):
     """Validate a host directory tar completely (no output); returns a VolumeReport (volume rules, see above)."""
     return _check(path, ids, DIRECTORY)

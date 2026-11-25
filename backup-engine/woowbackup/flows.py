@@ -189,6 +189,7 @@ class FlowContext:
         # differs on this device on their own (a slower start, a missing volume, other containers using a folder, ...) and
         # list it in the confirmation. Other restores keep their checks (owner decision H6, 2026-11-25).
         self.ha_import = False
+        self.acknowledged = {}  # {app id: frozenset of confirmation keys} the restore request carried (params.acknowledged)
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
@@ -300,6 +301,7 @@ class FlowContext:
                                             imported_hook=lambda app_id=app.id: self.note_imported(app_id))
         adapter.job_id = self.job_id  # names the restore's host-directory siblings
         adapter.ha_import = self.ha_import
+        adapter.acknowledged = self.acknowledged.get(app.id, frozenset())
         return adapter
 
     def identities(self):
@@ -1235,6 +1237,9 @@ def run_restore(ctx, params):
     header = ctx.archive.read_header(path)
     _require_key(ctx, header)
     ctx.ha_import = from_ha(ctx.paths, backup_id, meta)
+    ctx.acknowledged = {app_id: frozenset(keys) for app_id, keys in (params.get('acknowledged') or {}).items()
+                        if isinstance(app_id, str) and isinstance(keys, (list, tuple))
+                        and all(haissues.valid_key(key) for key in keys)}
     if _unauthenticated(meta, header) and params.get('accept_unauthenticated') is not True:
         raise BackupError('invalid-request', '這份上傳的備份沒有加密，內容無法驗證來源與完整性；'
                                              '需要另外確認信任這個檔案才能還原。', field='accept_unauthenticated')
@@ -1265,7 +1270,7 @@ def run_restore(ctx, params):
 
         ctx.phase('preflight')
         plans = _preflight(ctx, apps, manifest, extract_dir)
-        _require_confirmed(ctx, plans, params.get('acknowledged'))
+        _require_confirmed(ctx, plans, ctx.acknowledged)
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and encrypt_safety and device_key is None:

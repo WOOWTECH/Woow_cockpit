@@ -438,6 +438,35 @@ class MemberCapTests(TempCase):
         self.assertLess(at_the_cap, 512 * 1024 ** 2, f'{per_member:.0f} bytes per member: {at_the_cap / 1024 ** 2:.0f} MiB at the cap')
 
 
+class MaxOwnerIdsTests(TempCase):
+    """X-NS-09: how far the owner's id range would have to reach, read from the headers only."""
+
+    def test_the_highest_uid_and_gid_of_a_volume_and_of_a_directory(self):
+        members = [{'name': 'a', 'data': b'x', 'uid': 33, 'gid': 70000}, {'name': 'b', 'data': b'x', 'uid': 90000, 'gid': 5}]
+        path = self.file(volume_tar(members))
+        self.assertEqual(nested.max_owner_ids(path), (90000, 70000))
+        self.assertEqual(nested.max_owner_ids(path, nested.DIRECTORY), (90000, 70000))
+
+    def test_a_tar_without_members_needs_nothing(self):
+        self.assertEqual(nested.max_owner_ids(self.file(volume_tar([]))), (0, 0))
+
+    def test_the_member_cap_still_bounds_the_read(self):
+        path = self.file(volume_tar([{'name': f'f{i}', 'data': b''} for i in range(5)]))
+        original = nested.MAX_VOLUME_MEMBERS
+        nested.MAX_VOLUME_MEMBERS = 4
+        try:
+            with self.assertRaises(BackupError) as caught:
+                nested.max_owner_ids(path)
+        finally:
+            nested.MAX_VOLUME_MEMBERS = original
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+
+    def test_what_is_not_a_tar_is_refused_like_the_checks_refuse_it(self):
+        with self.assertRaises(BackupError) as caught:
+            nested.max_owner_ids(self.file(b'not a tar at all' * 100))
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+
+
 class HostDirectoryTests(TempCase):
     """Host directory tars: the volume rules, a root entry, symlinks that may point outside (kept, never followed)."""
 

@@ -2740,6 +2740,14 @@ class ConfirmedPausesTests(ConvertedRestoreCase):
                 self.restore_with(acknowledged)
             self.assertEqual(caught.exception.code, 'confirmation-required')
 
+    def test_every_adapter_gets_the_keys_the_request_carried_for_its_app_and_nothing_malformed(self):
+        self.converted()
+        mine, other = self.key('woowbk-files'), 'restore.id-range:' + '0' * 16
+        self.world.adapters.clear()
+        self.restore_with({'woowbk-demo': [mine], 'woowbk-two': [other], 'x': 'not a list', 'y': ['not a key']})
+        for adapter in self.world.adapters:
+            self.assertEqual(adapter.acknowledged, frozenset({mine}) if adapter.app.id == 'woowbk-demo' else frozenset())
+
     def test_an_ordinary_restore_has_no_lines_to_confirm(self):
         result = self.restore_with()  # the backup is not a converted one (H6)
         self.assertEqual(self.world.data['woowbk-demo'], b'notes-v1')
