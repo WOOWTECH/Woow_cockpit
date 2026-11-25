@@ -568,11 +568,15 @@ class ReferenceHostTests(unittest.TestCase):
                 app = self.apps[app_id]
                 self.assertTrue(app['valid'])
                 self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
-        for app_id in ('n8n', 'hermes'):
-            for mode in ('cold', 'instance'):
+        for app_id, modes in (('n8n', ('cold', 'instance')), ('hermes', ('instance',))):
+            for mode in modes:
                 with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
                     self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
                 self.assertEqual(caught.exception.code, 'incompatible')
+        # HAOS parity (H-03): a Hermes entry with a cold database is imported too (its database volume is carried as it is)
+        target = self.import_target('hermes', variant(self.apps['hermes'], 'cold')['entry'])
+        self.assertEqual(target.pgs, [])
+        self.assertTrue(target.extra_volumes, 'the cold database volume')
 
     def test_an_installed_cold_entry_keeps_its_mode_and_is_told_what_to_choose(self):
         installed = [variant(self.apps[app_id], 'cold')['entry'] for app_id in ('n8n', 'hermes')]

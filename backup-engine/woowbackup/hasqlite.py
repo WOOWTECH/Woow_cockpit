@@ -18,7 +18,10 @@ never runs those views (verified 2026-11-23 with SQLite 3.45.1). A database that
 itself.
 
 A spec is {db: name, check: 'quick'|'integrity'|None, schema: bool, counts: [table], queries: [QUERIES key],
-replace_api_keys_from: name|None}. The only write is Headscale's API keys: the target database's `api_keys` rows are
+replace_api_keys_from: name|None, replace_policies_from: name|None}. The only writes are Headscale's API keys and its access
+policies (the second, S3: a policy of this device's own database is kept when HA's database comes): the target database's
+`policies` rows are replaced by those of the source database in the same way as the API keys (same columns required, at most
+1000 rows, one transaction, WAL truncated). The target database's `api_keys` rows are
 replaced by the rows of the source database (another file of the same folder, integrity-checked first), in one
 transaction, on a database that has no trigger and no view, then the WAL is checkpointed and truncated; what this
 process reads back of a written file (`outputs`) is opened by name below a descriptor of the folder with O_NOFOLLOW
@@ -47,6 +50,7 @@ MAX_LINE = 32 * 1024 * 1024
 MAX_DBS = 64
 MAX_OUTPUT_FILE = 16 * 1024 ** 3
 NO_NETNS = 3            # CHILD's exit status when, as root, it cannot leave the network namespace
+COPY_POLICIES = True    # the child can put another database's access policies into one (`replace_policies_from`; Headscale, S3)
 
 # Fixed reads by name, sent to the child with the request (no other SQL ever is): (table, required columns,
 # statement, kind); a table that is not an ordinary one or lacks a column answers None.
@@ -167,6 +171,14 @@ def api_keys(conn, info):
         raise ValueError("api_keys table missing")
     return conn.execute("SELECT prefix, hash, expiration, last_seen, created_at FROM api_keys "
                         "ORDER BY id LIMIT 1001").fetchall()
+def policies(conn, info):
+    if "policies" not in info["tables"]:
+        raise ValueError("policies table missing")
+    names = [r[1] for r in conn.execute('PRAGMA table_info("policies")')]
+    if not names or len(names) > 16 or not all(IDENT.match(n) for n in names) or "id" not in names:
+        raise ValueError("policies table has columns this reader does not know")
+    rows = conn.execute("SELECT %s FROM policies ORDER BY id LIMIT 1001" % ", ".join('"%s"' % n for n in names)).fetchall()
+    return names, rows
 for spec in request["dbs"]:
     name = spec["db"]
     doc = {"db": name}
@@ -180,7 +192,7 @@ for spec in request["dbs"]:
             doc["check"] = checked(conn, spec["check"])
         if spec.get("schema"):
             doc["schema"] = info
-        if not spec.get("replace_api_keys_from"):
+        if not spec.get("replace_api_keys_from") and not spec.get("replace_policies_from"):
             conn.execute("PRAGMA query_only=ON")
         counts = {}
         for table in spec.get("counts") or []:
@@ -233,6 +245,36 @@ for spec in request["dbs"]:
             if checkpoint is None or checkpoint[0] != 0 or checkpoint[1] != checkpoint[2]:
                 raise ValueError("WAL checkpoint did not complete")
             doc["replaced"] = {"api_keys": len(rows), "prefixes": [str(p)[:64] for p in written]}
+        psource = spec.get("replace_policies_from")
+        if psource:
+            if info["triggers"] or info["views"]:
+                raise ValueError("the database has triggers or views")
+            other = connect(psource)
+            try:
+                other_info = layout(other)
+                if other_info["virtual"]:
+                    raise ValueError("virtual tables are not supported")
+                if checked(other, "integrity") != ["ok"]:
+                    raise ValueError("the source database is damaged")
+                names, prows = policies(other, other_info)
+            finally:
+                other.close()
+            if len(prows) > 1000:
+                raise ValueError("too many policies")
+            if names != policies(conn, info)[0]:
+                raise ValueError("the policies tables differ")
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DELETE FROM policies")
+            if prows:
+                conn.executemany('INSERT INTO policies (%s) VALUES (%s)' % (", ".join('"%s"' % n for n in names),
+                                                                           ", ".join("?" for _n in names)), prows)
+            conn.execute("COMMIT")
+            if conn.execute("SELECT count(*) FROM policies").fetchone()[0] != len(prows):
+                raise ValueError("the policies were not written")
+            checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is None or checkpoint[0] != 0 or checkpoint[1] != checkpoint[2]:
+                raise ValueError("WAL checkpoint did not complete")
+            doc.setdefault("replaced", {})["policies"] = len(prows)
     except Exception as exc:
         doc["error"] = (type(exc).__name__ + ": " + str(exc))[:300]
     finally:
@@ -258,9 +300,11 @@ def _spec(spec, names):
         raise BackupError('internal-error', 'SQLite 讀取要求的格式不正確。')
     check = spec.get('check')
     source = spec.get('replace_api_keys_from')
+    psource = spec.get('replace_policies_from')
     counts = list(spec.get('counts') or [])
     queries = list(spec.get('queries') or [])
     if (check not in (None, 'quick', 'integrity') or (source is not None and source not in names)
+            or (psource is not None and (psource not in names or psource == spec['db'] or spec.get('hermes_fts')))
             or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in counts)
             or not all(q in QUERIES for q in queries)
             or (spec.get('hermes_fts', False) is not False and
@@ -268,7 +312,8 @@ def _spec(spec, names):
                  or check != 'quick'))):
         raise BackupError('internal-error', 'SQLite 讀取要求的格式不正確。')
     return {'db': spec['db'], 'check': check, 'schema': spec.get('schema') is True, 'counts': counts,
-            'queries': queries, 'replace_api_keys_from': source, 'hermes_fts': spec.get('hermes_fts') is True}
+            'queries': queries, 'replace_api_keys_from': source, 'replace_policies_from': psource,
+            'hermes_fts': spec.get('hermes_fts') is True}
 
 
 def run(specs, files, work_dir, *, outputs=(), out_dir=None, checkpoint=None, timeout=TIMEOUT, what='資料庫'):

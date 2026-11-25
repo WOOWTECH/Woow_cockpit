@@ -288,5 +288,108 @@ class ApiKeyTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.out)), [])
 
 
+class PolicyTests(unittest.TestCase):
+    """Headscale (S3): a policy of this device's own database is kept when HA's database comes (`replace_policies_from`); HA's
+    own policy rows go, the other data stays; the same checks as for the API keys."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.out = self.root / 'out'
+        self.out.mkdir()
+
+    def database(self, name, texts, *, extra_column=False, triggers=False):
+        headscale_db(self.root / name, prefixes=['key'], triggers=triggers)
+        conn = sqlite3.connect(self.root / name)
+        conn.execute('CREATE TABLE policies(id integer PRIMARY KEY AUTOINCREMENT, created_at datetime, updated_at datetime, '
+                     f'deleted_at datetime, data text{", note text" if extra_column else ""})')
+        conn.executemany('INSERT INTO policies(created_at, data) VALUES (?, ?)', [('2026-11-01', text) for text in texts])
+        conn.commit()
+        conn.close()
+
+    def copy(self, ha='ha', live='live', keys=False):
+        spec = {'db': 'ha.sqlite', 'check': 'integrity', 'counts': ['policies', 'users'], 'replace_policies_from': 'live.sqlite'}
+        if keys:
+            spec['replace_api_keys_from'] = 'live.sqlite'
+        out = Path(tempfile.mkdtemp(dir=self.root))   # one folder for every run
+        return hasqlite.run([{'db': 'live.sqlite', 'check': 'integrity'}, spec], {'ha.sqlite': self.root / ha, 'live.sqlite': self.root / live},
+                            self.root / 'work', outputs=('ha.sqlite',), out_dir=out)
+
+    def rows(self, path):
+        conn = sqlite3.connect(path)
+        try:
+            return conn.execute('SELECT id, created_at, data FROM policies ORDER BY id').fetchall()
+        finally:
+            conn.close()
+
+    def test_this_devices_policies_replace_has(self):
+        self.database('ha', ['{"acls": ["ha"]}'])
+        self.database('live', ['{"acls": ["one"]}', '{"acls": ["two"]}'])
+        answers = self.copy()
+        self.assertEqual(answers['ha.sqlite']['replaced'], {'policies': 2})
+        self.assertEqual(answers['ha.sqlite']['counts'], {'policies': 1, 'users': 1}, 'read before the write')
+        written = answers[None]['ha.sqlite']
+        self.assertEqual(os.stat(written).st_mode & 0o777, 0o600)
+        self.assertEqual(self.rows(written), [(1, '2026-11-01', '{"acls": ["one"]}'), (2, '2026-11-01', '{"acls": ["two"]}')])
+        conn = sqlite3.connect(written)
+        self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)], "HA's other data is kept")
+        conn.close()
+
+    def test_a_device_without_a_policy_empties_has(self):
+        self.database('ha', ['{"acls": ["stale"]}'])
+        self.database('live', [])
+        answers = self.copy()
+        self.assertEqual(answers['ha.sqlite']['replaced'], {'policies': 0})
+        self.assertEqual(self.rows(answers[None]['ha.sqlite']), [])
+
+    def test_together_with_the_api_keys(self):
+        self.database('ha', ['{"acls": ["ha"]}'])
+        self.database('live', ['{"acls": ["mine"]}'])
+        answers = self.copy(keys=True)
+        self.assertEqual(answers['ha.sqlite']['replaced'], {'api_keys': 1, 'prefixes': ['key'], 'policies': 1})
+        self.assertEqual([row[2] for row in self.rows(answers[None]['ha.sqlite'])], ['{"acls": ["mine"]}'])
+
+    def test_nothing_is_written_without_the_request(self):
+        self.database('ha', ['{"acls": ["ha"]}'])
+        self.database('live', ['{"acls": ["mine"]}'])
+        answers = hasqlite.run([{'db': 'ha.sqlite', 'check': 'integrity', 'counts': ['policies']}],
+                               {'ha.sqlite': self.root / 'ha'}, self.root / 'work', outputs=('ha.sqlite',), out_dir=self.out)
+        self.assertNotIn('replaced', answers['ha.sqlite'])
+        self.assertEqual([row[2] for row in self.rows(answers[None]['ha.sqlite'])], ['{"acls": ["ha"]}'])
+
+    def test_what_does_not_fit_stops_it(self):
+        self.database('ha', ['ha'])
+        self.database('live', ['mine'], extra_column=True)
+        self.assertIn('differ', self.copy()['ha.sqlite']['error'])
+        self.database('ha2', ['ha'], triggers=True)
+        self.database('live2', ['mine'])
+        self.assertIn('triggers', self.copy('ha2', 'live2')['ha.sqlite']['error'])
+        self.database('ha3', ['ha'])
+        (self.root / 'live3').write_bytes(b'SQLite format 3\x00' + b'\xff' * 4000)
+        answers = self.copy('ha3', 'live3')
+        self.assertIsNotNone(hasqlite.problem(answers['ha.sqlite']))
+        self.database('ha4', ['ha'])
+        conn = sqlite3.connect(self.root / 'live4')
+        conn.execute('CREATE TABLE other(id integer)')
+        conn.commit()
+        conn.close()
+        self.assertIn('policies table missing', self.copy('ha4', 'live4')['ha.sqlite']['error'])
+
+    def test_too_many_policies_stop_it(self):
+        self.database('ha', ['ha'])
+        self.database('live', [f'p{n}' for n in range(1001)])
+        self.assertIn('too many policies', self.copy()['ha.sqlite']['error'])
+
+    def test_the_request_is_checked(self):
+        self.database('ha', ['ha'])
+        for bad in ('elsewhere', 'ha.sqlite'):
+            with self.subTest(source=bad), self.assertRaises(BackupError):
+                hasqlite.run([{'db': 'ha.sqlite', 'replace_policies_from': bad}], {'ha.sqlite': self.root / 'ha'}, self.root / 'work')
+
+    def test_the_capability_is_announced(self):
+        self.assertIs(hasqlite.COPY_POLICIES, True)
+
+
 if __name__ == '__main__':
     unittest.main()

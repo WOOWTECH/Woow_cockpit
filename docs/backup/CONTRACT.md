@@ -2363,27 +2363,44 @@ emqx,headscale,mcp-admin}.md` of the design notes.
 
 **Hermes** (`woow-hermes` → `hermes`: volumes `hermes-data`, `hermes-redis-data`, database `main` of an unused
 PostgreSQL 15).
-1. Versions: add-on 0.1.10–0.1.14 → Hermes 0.22.5 (≤ 0.1.9 → 2026.8.31) must equal the tag of the live image's label
-   `io.woowtech.hermes.base` (a different upstream digest is a warning); `config/.woow-image-version` must name the
-   add-on version (missing: a warning); `state.db` `schema_version` ≤ 32 and `config.yaml` `_config_version` ≤ 51.
+1. Versions only inform (HAOS parity 2026-11-25; H-06, H-07, H-09): add-on 0.1.10–0.1.14 → Hermes 0.22.5 (≤ 0.1.9 → 2026.8.31) is compared
+   with the tag of the live image's label `io.woowtech.hermes.base` by `haissues.version_issues`: an add-on version the table does
+   not know (`version.addon-unknown`) or a label that cannot be read (`version.target-unknown`) is a notice, both known and different
+   still stops only Hermes (`version.different`; wave 2, H-08); a different upstream digest (`hermes.digest-differs`) and a
+   `config/.woow-image-version` that is missing or names another add-on version (`hermes.image-version-missing`,
+   `hermes.image-version-differs`) are notices. What decides is the data: `state.db` `schema_version` that cannot be read
+   (`hermes.schema-unreadable`) or is newer than 32 (`hermes.schema-newer`) stops only Hermes; `config.yaml` `_config_version`
+   above 51 is moved and noted (`hermes.config-newer`).
 2. One pass over `config/**` (HERMES_HOME; `data/**` never) into the new `hermes-data` tar: every member owned by the
-   Quadlet's `HERMES_UID`/`HERMES_GID` (10000 when unset), permission bits without setuid/setgid, the top folder as the
-   live one; symlinks as link entries (relative ones staying in the tree; absolute ones only into `/opt/data`,
-   `/opt/hermes`, `/usr`, clean); hard links as hard links to an earlier file of the tree written to the tar -- one to a
-   file that does not move stops the job (`incompatible`); left out: `gateway.pid`, `gateway.lock`,
-   `gateway_state.json`, `processes.json`, `cron.pid`, `.backup.lock`, `.woow-image-version`, `.woow-dotenv`, every
-   `-shm`, `browser-profile(s)/`, `browser_profiles/`. HA's `.env` loses the lines of `API_SERVER_KEY`,
-   `WEBHOOK_SECRET`, `HERMES_DASHBOARD_BASIC_AUTH_*`, `HERMES_DASHBOARD_PUBLIC_URL`, `HERMES_BASE_URL`, `HERMES_PASEO_*`
-   (its other values are masked in the job's logs); the first start applies this device's hermes.env (no
-   `.woow-dotenv`), whose keys win. Special configuration files and known SQLite files and sidecars must be regular
-   files; cron must be a directory. An unknown state.db schema version is a blocker. Programs for another processor than this device's, a
-   damaged known SQLite file are blockers. The known databases (`state.db`, `kanban.db`, `response_store.db`,
-   `runs_idempotency.db`, `shared-state.db`, `projects.db`, `cron/{executions,notepad}.db`) move unchanged with their WAL
-   and are checked by the sandboxed child (`quick_check`; `state.db`: sessions, messages, schema version).
-   Warnings: HA-only hosts in `config.yaml`/`.env` (hosts only), `/media/` references, plugins (they replace this
-   device's and need re-pairing). HA's /media is never moved.
-3. `hermes-redis-data`: its top folder only, owned like the live one; database `main`: the live database's dump
-   (`adapter._dump_database`, read while it runs: nothing uses it).
+   Quadlet's `HERMES_UID`/`HERMES_GID` (10000 when unset; when they are no numbers: the live folder's owner,
+   `hermes.owner-from-folder`), permission bits without setuid/setgid, the top folder as the live one; symlinks as link entries
+   (relative ones staying in the tree; absolute ones only into `/opt/data`, `/opt/hermes`, `/usr`, clean); hard links as hard links
+   to an earlier file of the tree written to the tar -- one to a file that does not move (a runtime file) is copied as a file
+   (`hermes.links-copied`, CM-11); one the reader may never copy (a browser profile) is left out and listed (`files.skipped`, one
+   confirm line, with the entries the reader left out); left out: `gateway.pid`, `gateway.lock`, `gateway_state.json`,
+   `processes.json`, `cron.pid`, `.backup.lock`, `.woow-image-version` (only its first KiB is read), `.woow-dotenv`, every `-shm`,
+   `browser-profile(s)/`, `browser_profiles/`. HA's `.env` (filtered in memory up to 8 MiB; a larger one is left out and listed)
+   loses the lines of `API_SERVER_KEY`, `WEBHOOK_SECRET`, `HERMES_DASHBOARD_BASIC_AUTH_*`, `HERMES_DASHBOARD_PUBLIC_URL`,
+   `HERMES_BASE_URL`, `HERMES_PASEO_*` (its other values are masked in the job's logs, at most 500 of them); the first start
+   applies this device's hermes.env (no `.woow-dotenv`), whose keys win. `config.yaml`, `cron/jobs.json` and `SKILL.md` are copied
+   as they are and read for what they say up to 32 MiB (a larger one is copied unread, `hermes.text-unread`). A special
+   configuration file, a known SQLite file or a sidecar that is a link or a folder, or a `cron` that is no folder, is left out and
+   listed (`hermes.entries-skipped`, confirm; what lies below a folder goes with it); a database group with such a member stays
+   out as a whole (`hermes.databases-skipped`, confirm), when it is `state.db` Hermes stops (`hermes.state-db-unusable`); no
+   `state.db` stops only Hermes (`hermes.no-state-db`: this device's chats stay). Programs for another processor than this
+   device's are listed and moved (`hermes.foreign-programs`, notice). The known databases (`state.db`, `kanban.db`,
+   `response_store.db`, `runs_idempotency.db`, `shared-state.db`, `projects.db`, `cron/{executions,notepad}.db`) are checked by the
+   sandboxed child (`quick_check`; `state.db`: sessions, messages, schema version) and move unchanged with their WAL, written into
+   the tree only after the checks; a secondary one that is damaged stays out with its WAL and is listed
+   (`hermes.databases-skipped`), a damaged `state.db` stops only Hermes (`hermes.state-db-unusable`), one with an index structure
+   the child does not know (a virtual table other than Hermes's FTS5 layouts: it is never opened outside the child) moves
+   unchecked (`hermes.db-unchecked`, notice). Notices: HA-only hosts in `config.yaml`/`.env` (hosts only), `/media/` references,
+   plugins (they replace this device's and need re-pairing). HA's /media is never moved.
+3. `hermes-redis-data`: its top folder only, owned like the live one (the volume mounted at `/data`; none declared: none made);
+   every `database` entry of this device's app entry: the live database's dump (`adapter._dump_database`, read while it runs:
+   nothing uses it); every other volume and host folder of the entry (a cold database's volume, a workspace) is carried as it is
+   (`hatarget.carry`, `hermes.extras-carried`); an entry that dumps a whole PostgreSQL instance stops only Hermes
+   (`hermes.layout-unsupported`: `adapter.import_manifest` takes one dump file per entry).
 
 **EMQX** (`woow-emqx` → `emqx`: volumes `woow_emqx_data`, `woow_emqx_log`). Revised 2026-11-25 (HAOS parity, lane EMQX-A; owner decisions
 D0-D5, S1, S2, H1, H3, H7): restoring HA's backup is what HAOS does, so HA's access settings come with it; what could hurt the customer is a
@@ -2491,30 +2508,55 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
 
 **Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`; an entry may also name the package's
 read-only configuration folder, the one mounted at `/etc/headscale`, as its one host folder: the form catalog-suggest drafts).
-1. Versions: add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3) must equal the live image's
-   `org.opencontainers.image.version`; HA's `database_versions` row must name it and every applied migration must be one
-   0.29.4 knows (gormigrate's `SCHEMA_INIT` mark included). HA's prefixes (`config/config.yaml`) must equal this
-   device's and every node address must lie inside
-   them.
+1. Versions only inform (HAOS parity 2026-11-25; HS-10, HS-11, HS-16, HS-17, HS-18): add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3)
+   is compared with the live image's `org.opencontainers.image.version` by `haissues.version_issues` (an add-on version the table
+   does not know, `version.addon-unknown`, or a version that cannot be read, `version.target-unknown`, are notices; both known and
+   different still stops only Headscale, `version.different`; wave 2, HS-12); HA's `database_versions` row and migrations this
+   release does not know are a notice (`headscale.db-version-differs`): this device's `headscale configtest` opens the converted
+   database (item 4) and decides. HA's database must be a Headscale database (`users`, `nodes`, `api_keys` present, not empty:
+   `headscale.no-database`, `headscale.db-unusable`) and may only have tables that this device's own database has or that the
+   constant TABLES names, no trigger, no view (`headscale.db-extra-objects`: removing them needs a write operation of the SQLite
+   child that does not exist: stops only Headscale). No size refuses it (HS-02, HS-38, HS-39, HS-40): the database and its WAL
+   go to disk whatever their size (the job watches the free space), a `noise_private.key` over 4 KiB is no key, a
+   `dns_records.json` or `config.yaml` over 16 MiB is no valid / not read. HA's prefixes (`config/config.yaml`) replace this
+   device's when they differ and the entry names the configuration folder (item 5; `headscale.prefixes-replaced`, confirm); without
+   it this device's stay (`headscale.prefixes-kept`) and the nodes outside the range that will be there are listed
+   (`headscale.devices-outside-range`, confirm, HS-19); HA's prefixes that cannot be read: this device's are used
+   (`headscale.prefixes-unknown`, HS-21).
 2. One pass: `data/db.sqlite` (+ `-wal`, never `-shm`: an add-on killed before it checkpointed leaves all data in the
-   WAL, seen on the RPi5, and the child applies it) staged, `data/noise_private.key` (`privkey:<64 hex>`, masked),
-   `config/dns_records.json` (a JSON array of `{name, type, value}` strings, else a blocker), `config/config.yaml`
-   (plain keys only, for the checks); never Headplane's data, API key, cookie secret, options or the image.
-3. The sandboxed child reads HA's database (integrity, only Headscale's tables, no trigger or view, counts, version,
-   migrations, node addresses) and, for the conversion, replaces HA's `api_keys` rows by the rows of an
-   integrity-checked copy of the live database (taken from the live volume's export while it runs), in one transaction,
-   then requires a completed WAL checkpoint and independently reopens the output, original and live copies to verify integrity, table counts and API key prefixes: the live Headplane and MCP admin keys keep working, HA's keys do not exist
-   here.
-   A live database-mode ACL policy blocks import, because HA's database policies replace it; file-mode policy remains configured.
-4. `headscale-data` from scratch, owned like the live top folder: the converted database 0644 and HA's
-   Noise key 0600 at the live config's paths (which must be within `/var/lib/headscale/`), HA's records at the live config's `dns.extra_records_path` when it lies in the volume
-   (`[]` when HA has none; a warning when it lies elsewhere). Before packaging, `headscale configtest` of the live image
-   (network none, read-only root, the live configuration read-only) opens a throwaway copy of that volume: version path,
-   migrations and schema as the server will check them; failing it fails the job. `headplane-data`: the live export
-   (this device's Headplane logins and roles stay).
+   WAL, seen on the RPi5, and the child applies it) staged, `data/noise_private.key` (`privkey:<64 hex>`, masked; none or one that
+   is not: this device's key stays and every device logs in again, `headscale.noise-key-kept`, confirm; this device has none either:
+   Headscale makes one), `config/dns_records.json` (a JSON array of at most 10000 `{name, type, value}` strings; any other: not
+   moved, an empty list is written, `headscale.dns-records-invalid`, confirm), `config/config.yaml` (plain keys only, for the
+   checks); never Headplane's data, API key, cookie secret, options or the image.
+3. The sandboxed child reads HA's database (integrity, tables, no trigger or view, counts, version, migrations, node addresses)
+   and, for the conversion, replaces HA's `api_keys` rows by the rows of an integrity-checked copy of the live database (taken from
+   the live volume's export while it runs; read again, up to three times, when it was being written, HS-24/26/29; a Headscale that
+   never ran is started once so that it makes one and put back, HS-27), in one transaction, then requires a completed WAL
+   checkpoint and independently reopens the output, original and live copies to verify integrity, table counts (SQLite's own
+   `sqlite_sequence` is not compared: HS-33) and API key prefixes: the live Headplane and MCP admin keys keep working, HA's keys
+   do not exist here. Access policy (owner decision D6, S3): HA's replaces this device's when HA keeps its policy in its database
+   (`headscale.policy-replaced`, confirm when this device had one); HA's policy file is not applied (`headscale.policy-not-applied`,
+   confirm); when HA has none this device's stays (`headscale.policy-kept`): a policy in this device's database is copied into the
+   converted one by the child (`replace_policies_from`, `hasqlite.COPY_POLICIES`; a child that cannot: stops only Headscale,
+   `headscale.policy-keep-unsupported`), one in a file is not touched; a policy HA's database holds but HA did not use is replaced
+   by this device's (none) or, where the child cannot, listed (`headscale.policy-stale`, confirm).
+4. `headscale-data` from scratch, owned like the live top folder: the converted database 0644 and HA's Noise key 0600 (this
+   device's when HA's cannot be used) at the live config's paths (which must lie within `/var/lib/headscale/`; any characters but
+   `..` and control characters), HA's records at the live config's `dns.extra_records_path` when it lies in the volume (`[]` when
+   HA has none; a notice when it lies elsewhere; none written and a confirm line, `headscale.dns-path-conflict`, when that path lies
+   on the database or the key). Before packaging, `headscale configtest` of the live image (network none, read-only root, the
+   configuration read-only -- this device's folder, or, when HA's prefixes were written into it, the converted copy in a throwaway
+   volume) opens a throwaway copy of that volume: version path, migrations and schema as the server will check them; failing it
+   stops only Headscale. `headplane-data`: the live export (this device's Headplane logins and roles stay; an entry without
+   Headplane moves only Headscale, `headscale.headplane-absent`).
 5. The configuration folder, when the entry names it: this device's own folder packed as it is while Headscale runs (nothing
-   of HA's goes into it), checked like every host folder (§5); its `config.yaml` must still say what the conversion was made
-   with, else the job stops. Any other host folder makes the entry `incompatible`.
+   of HA's goes into it but HA's prefixes: the values of `prefixes.v4`/`prefixes.v6` on their lines, checked by reading the result
+   back), checked like every host folder (§5); its `config.yaml` must still say what the conversion was made with, else it is
+   packed again (up to three times, HS-36), then only Headscale stops. Every other volume and host folder of the entry is carried as it
+   is (`headscale.extras-carried`). This device's server is the container named `headscale`, else the only one that mounts
+   `/var/lib/headscale` and `/etc/headscale` and no Headplane (HS-03); its `config.yaml` may be a link to a file in the owner's home
+   folder (read once through `podman unshare readlink`, `headscale.config-link-followed`) or large (HS-06).
 
 **Batch 2: code-server** (branch `feat/ha-import-code-server-20261123`; `ha_codeserver.py`; owner decision 2026-11-23
 「決定2 A」 = the facts' recommended answers D1 b, D2 a, D3, D4 a, D6; facts `phase3/facts/code-server.md`). Add-on
