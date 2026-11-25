@@ -4884,7 +4884,7 @@
     if (wizard.busy || state.haWizard !== wizard) return;
     const { can } = haCheckedApps(wizard);
     const lines = haConfirmLines(wizard);
-    if (!can.length || wizard.ackSignature !== haConfirmSignature(lines)) return;
+    if (!can.length || haPendingChoice(wizard, can) || wizard.ackSignature !== haConfirmSignature(lines)) return;
     const active = activeJob();
     if (active) {
       wizard.error = new HelperError("已有作業正在進行，請等它完成後再匯入。", { code: "busy", details: { job_id: active.id } });
