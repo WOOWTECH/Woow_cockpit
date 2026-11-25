@@ -263,6 +263,8 @@ class Owner(fk.Owner):
         step = plan.pop(0) if plan else 'ok'
         if need and not need <= self.stopped():
             step = 'fail'
+        if step == 'limit':
+            raise BackupError('limit-exceeded', '匯出的輸出超過上限，已停止。')
         if step == 'fail':
             raise BackupError('job-failed', 'podman 執行失敗（結束碼 125）。')
         return step
@@ -784,6 +786,23 @@ class ParityCheckTests(ParityCase):
         self.assertEqual((sorted(carried), carried['note.txt'][1]), (['.', 'note.txt'], b'this device only'))
         self.assertEqual(self.volume(PI)['settings.json'][1], b'{"defaultProvider": "target"}', 'the three still convert')
 
+    def test_cs04_a_link_of_this_devices_own_volume_that_the_restore_would_refuse_is_left_out_and_asks_once_more(self):
+        self.world.live[self.EXTRA] = fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000},
+                                                 {'name': 'note.txt', 'data': b'this device only', 'uid': 1000, 'gid': 1000},
+                                                 {'name': 'out', 'type': 'symlink', 'linkname': '../../etc/passwd', 'uid': 1000, 'gid': 1000},
+                                                 {'name': 'ghost', 'type': 'hardlink', 'linkname': 'nothing-here', 'uid': 1000, 'gid': 1000}])
+        self.catalog_with(volumes=[self.EXTRA])
+        backup = self.upload_cs()
+        self.assertTrue(self.row(backup)['ok'], "the check does not read this device's volumes")
+        with self.assertRaises(BackupError) as caught:
+            self.convert(backup, [APP])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        line = caught.exception.issues[0]
+        self.assertEqual((line.id, sorted(line.names)), ('files.skipped', [f'{self.EXTRA}：ghost', f'{self.EXTRA}：out']))
+        result = self.convert(backup, [APP], acknowledged={APP: [line.key(APP)]})
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertEqual(sorted(self.volume(self.EXTRA)), ['.', 'note.txt'], 'the rest of the volume is carried as it is')
+
     def test_cs04_what_it_cannot_carry_stops_only_this_app(self):
         # no container, a missing one of the three volumes: as it was; a database in this device's entry: its own stop
         self.world.quadlets[APP] = dict(QUADLETS, **{'code-server.container': CONTAINER.replace(
@@ -1172,6 +1191,27 @@ class ParityLiveTests(ParityCase):
         self.assertEqual(self.world.owner.systemd, [('stop', UNIT), ('start', UNIT)])
         self.assertEqual(self.world.owner.stopped(), set())
         self.assertEqual((self.storage.list_backups(), self.world.manifests), ([], {}))
+
+    def test_cs14_a_failure_that_does_not_pass_is_neither_tried_again_nor_paused(self):
+        self.world.export_plan[EXT] = ['limit']
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_cs(), [APP])
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertEqual((len(self.relays(EXT)), self.world.owner.systemd), (1, []))
+
+    def test_a_conversion_that_stops_early_leaves_no_file_open(self):
+        class Tracking(cs.ha_odoo.FileTar):
+            made = []
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                Tracking.made.append(self)
+
+        backup = self.upload_cs(extra=[pi_link('sessions/--share-projects--/key', 'claude/.claude.json')])   # asks once more
+        with mock.patch.object(cs.ha_odoo, 'FileTar', Tracking), self.assertRaises(BackupError) as caught:
+            self.convert(backup, [APP])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertTrue(len(Tracking.made) >= 3 and all(item.handle.closed for item in Tracking.made))
 
     def test_cs14_nothing_is_paused_when_the_container_does_not_run(self):
         self.world.export_plan[PI] = ['fail'] * 10

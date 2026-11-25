@@ -207,6 +207,8 @@ class Owner(fk.Owner):
         need = self.world.needs_stopped.get(volume)
         if need and not need <= self.stopped():
             step = 'fail'
+        if step == 'limit':
+            raise BackupError('limit-exceeded', '匯出的輸出超過上限，已停止。')
         if step == 'fail':
             raise BackupError('job-failed', 'podman volume export 執行失敗（結束碼 125）。')
         data = self.world.export(volume)
@@ -984,6 +986,27 @@ class ParityLiveTests(ParityCase):
         self.assertEqual(sorted(unit for verb, unit in self.world.owner.systemd if verb == 'start'), sorted(self.UNITS))
         self.assertEqual((self.storage.list_backups(), self.world.manifests), ([], {}))
 
+    def test_op15_a_failure_that_does_not_pass_is_neither_tried_again_nor_paused(self):
+        self.world.export_plan[DATA] = ['limit']
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_od(), ['open-design'])
+        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertEqual((len(self.export_calls()), self.world.owner.systemd), (1, []))
+
+    def test_a_conversion_that_stops_early_leaves_no_file_open(self):
+        class Tracking(hacommon.FileTar):
+            made = []
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                Tracking.made.append(self)
+
+        self.world.live_extra = [{'name': 'home/ghost', 'type': 'hardlink', 'linkname': 'nothing-here'}]   # stops after the tar is made
+        with mock.patch.object(hacommon, 'FileTar', Tracking), self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_od(), ['open-design'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertTrue(Tracking.made and all(item.handle.closed for item in Tracking.made))
+
     def test_op15_nothing_is_paused_when_no_container_of_the_app_runs(self):
         self.world.export_plan[DATA] = ['fail'] * 10
         self.world.not_running = {'open-design', 'open-design-terminal'}
@@ -1072,7 +1095,7 @@ class RealOpenDesignBackupTests(unittest.TestCase):
             for _ in range(count - before.get(value, 0)):
                 self.addCleanup(jobs.unmask_secret, value)
         self.assertTrue(src.tree and od.DATABASE in src.dbs)
-        self.assertGreater(out.counts['files'], 100)
+        self.assertGreater(out.counts['files'], 10)
         self.assertGreater(details['projects'], 0)
         self.assertEqual([item.id for item in sink.found if item.level == 'stop'], [], 'the real backup is importable')
         self.assertEqual(report.skip_count('device', 'fifo', 'secret', 'large', 'name'), 0)

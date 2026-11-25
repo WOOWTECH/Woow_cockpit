@@ -1400,10 +1400,13 @@ def convert(work, app, test_mode, out_dir):
         skip_line(sink, ws_report)
     links_line(sink, report.copied_links + ws_report.copied_links)
     if target.extra_volumes or target.extra_dirs:          # CS-04: what this device has beyond them stays as it is
-        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs, report=report,
-                                 size=sum(sizes.values()))
+        carry_report = habackup.Report(names=haissues.Names)
+        carried = hatarget.carry(work, app, out_dir, ids, volumes=target.extra_volumes, dirs=target.extra_dirs,
+                                 report=carry_report, size=sum(sizes.values()))
         result['volumes'].update(carried['volumes'])
         result.setdefault('dirs', {}).update(carried['dirs'])
+        if carry_report.skip_count():       # this device's own links the restore would refuse (only the conversion can know)
+            sink.skipped(carry_report)
     if kept_links:
         sink.auto('codeserver.kept-links-copied',
                   f'這台 code-server 有 {kept_links} 個保留下來的硬連結，它指到的檔案會被 HA 的資料取代，'
