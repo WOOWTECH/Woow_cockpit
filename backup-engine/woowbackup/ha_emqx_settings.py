@@ -97,8 +97,7 @@ def _entries(config):
     if gateway:
         if isinstance(gateway, dict):
             for name, body in gateway.items():
-                if body not in ({}, None):
-                    found['integrations'][f'gateway.{_text(name)}'] = body
+                found['integrations'][f'gateway.{_text(name)}'] = body
         else:
             found['integrations']['gateway'] = gateway
     engine = config.get('rule_engine')

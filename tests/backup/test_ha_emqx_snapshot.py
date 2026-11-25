@@ -1,4 +1,7 @@
-"""Restricted target-volume snapshot and candidate seeding (fixtures only)."""
+"""Target-volume snapshot and candidate seeding (fixtures only). HAOS parity (lane EMQX-B, E-29, E-30, E-50): the snapshot takes
+every data-volume file the settings name wherever it is (not only authz/, configs/ and certs/); what stays refused is what the
+archive protections always refused (a link, a double, a too large file, an unsafe name) and the places that are not settings'
+files (the database, what the converted volume leaves out anyway)."""
 import io
 import os
 import tarfile
@@ -84,6 +87,58 @@ class SnapshotTests(unittest.TestCase):
                     ha_emqx.target_config_snapshot(self.source, self.snapshot,
                         {'configs/cluster.hocon', 'authz/custom.acl'}, limit=limit)
                 self.assertFalse(self.snapshot.exists())
+
+    def test_a_name_anywhere_in_the_data_volume_is_carried_with_its_folders(self):
+        """E-29: the files of a setting in a folder the old list never allowed (authz/, configs/, certs/ only)."""
+        extra = {'tls/clients/ca.pem': b'ca', 'custom/acl-2.conf': b'{allow, all}.\n', 'a/b/c/d/e.txt': b'deep'}
+        self.archive(list(self.files.items()) + list(extra.items()) + [('unrelated', b'do not copy')])
+        required = self.required | set(extra)
+        self.assertEqual(ha_emqx.target_config_snapshot(self.source, self.snapshot, required), required)
+
+        class Candidate:
+            def volume_import(self, role, producer):
+                out = io.BytesIO()
+                producer(out)
+                self.data = out.getvalue()
+        candidate = Candidate()
+        ha_emqx.import_target_snapshot(candidate, self.snapshot, (1000, 1000))
+        with tarfile.open(fileobj=io.BytesIO(candidate.data)) as tar:
+            self.assertEqual({m.name for m in tar if m.isfile()}, required)
+            self.assertEqual({m.name for m in tar if m.isdir()},
+                             {'.', 'configs', 'authz', 'certs', 'tls', 'tls/clients', 'custom', 'a', 'a/b', 'a/b/c', 'a/b/c/d'})
+            for member in tar:
+                self.assertEqual((member.uid, member.gid), (1000, 1000))
+                self.assertEqual(member.mode, 0o700 if member.isdir() else 0o600)
+            self.assertEqual(tar.extractfile('a/b/c/d/e.txt').read(), b'deep')
+
+    def test_the_database_and_what_the_converted_volume_drops_are_no_files_to_carry(self):
+        """E-29: only normalised names that are neither the Mnesia database nor generated configs, backups and traces."""
+        for name in ('configs/cluster.hocon', 'authz/acl.conf', 'certs/a.pem', 'tls/clients/ca.pem', 'a', 'x/y.z'):
+            self.assertTrue(ha_emqx.snapshot_name_ok(name), name)
+        for name in ('mnesia/emqx@127.0.0.1/schema.DAT', 'mnesia', 'backup/x.tar.gz', 'trace/t.log', 'configs/app.1.config',
+                     'configs/vm.1.args', 'configs/cluster.hocon.2026.bak', '../x', '/abs', 'a//b', 'a/./b', 'a/../b', '',
+                     None, 5, b'x'):
+            self.assertFalse(ha_emqx.snapshot_name_ok(name), name)
+        for name in ('mnesia/emqx@127.0.0.1/schema.DAT', 'backup/x.tar.gz', 'configs/app.1.config'):
+            self.archive(list(self.files.items()) + [(name, b'x')])
+            with self.assertRaises(BackupError):
+                ha_emqx.target_config_snapshot(self.source, self.snapshot, self.required | {name})
+            self.assertFalse(self.snapshot.exists())
+
+    def test_the_candidate_is_not_seeded_with_what_is_no_setting_file(self):
+        """The same predicate guards the seed: a snapshot that holds the database or a link is refused."""
+        for name in ('mnesia/x', 'backup/x.tar.gz', 'configs/vm.1.args'):
+            with tarfile.open(self.snapshot, 'w') as tar:
+                info = tarfile.TarInfo(name)
+                info.size = 1
+                tar.addfile(info, io.BytesIO(b'x'))
+
+            class Candidate:
+                def volume_import(self, role, producer):
+                    producer(io.BytesIO())
+            with self.subTest(name=name), self.assertRaises(BackupError):
+                ha_emqx.import_target_snapshot(Candidate(), self.snapshot, (1000, 1000))
+
 
 class ProvenAbsenceSnapshotTests(unittest.TestCase):
     setUp=SnapshotTests.setUp

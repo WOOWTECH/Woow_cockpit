@@ -1050,9 +1050,10 @@ def _file_key(key):
 def file_scan(config, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None, mounts=(), secrets=()):
     """HAOS parity (E-23, E-24, E-29, E-30, E-32, E-35, E-36, E-50): EVERY setting of this device, whatever its root, is looked
     at for the files it names, instead of reviewed lists of roots and fields. A setting names a file when its name says so
-    (_file_key; `path` of an authorization source of type `file`; the log handlers' and the crash dump's output paths) or its
-    value is a path into the data directory (`/opt/emqx/data/…`, `data/…`, the form the Dashboard writes) or a `file://`
-    secret. Where the file is decides what the candidate needs (resolve_path):
+    (_file_key; `path` of an authorization source of type `file`; the log handlers' and the crash dump's output paths -- the
+    value may then be relative, `data/authz/acl.conf`, the form the Dashboard writes) or its value is an absolute path into
+    the data directory (`/opt/emqx/data/…`) or a `file://` secret. Where the file is decides what the candidate needs
+    (resolve_path):
 
     * in the data volume: it is carried, so the snapshot takes it (`data`: relative names);
     * on one of this device's mounts (a host file or folder, a secret) or anywhere else in the image: the candidate has it
@@ -1084,14 +1085,16 @@ def file_scan(config, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None, mounts=(
 
     def leaf(text, path, parent):
         key = path[-1] if path else ''
+        if not text.strip():
+            return   # a file setting left empty (`bootstrap_file = ""`, `init_file = ""`) names nothing
         if key == 'bootstrap_file' and any(parent is entry for entry in entries):
             return   # an authenticator's own bootstrap file: bootstrap_references (E-48, E-49)
         output = (path[:2] == ('log', 'file') and key == 'path') or (path[:1] == ('node',) and key == 'crash_dump_file')
         named = _file_key(key)
         if key == 'path' and not output:
             named = isinstance(parent, dict) and parent.get('type') == 'file'
-        if not (output or named or text.startswith((DATA_PREFIX, 'data/', 'file://'))):
-            return
+        if not (output or named or text.startswith((DATA_PREFIX, 'file://'))):
+            return   # (a relative `data/…` is a path only where the setting says it names a file: `data/#` can be a topic)
         resolved = resolve_path(text, etc_dir=etc_dir, log_dir=log_dir, env=env)
         name = '.'.join(path)[:120]
         if output:
@@ -1137,7 +1140,7 @@ def scratch_plan(outputs, log_dir, mounts=()):
         elif _under(folder, mount_at):
             bad.append(folder)
         elif (not any(folder.startswith(root + '/') for root in SCRATCH_ROOTS) or _under(folder, IMAGE_TREES)
-              or folder == BASE_DIR or folder.count('/') < 2):
+              or folder == BASE_DIR or folder.count('/') < 2 or tempctr.TARGET_RE.fullmatch(folder) is None):
             bad.append(folder)
         else:
             extra.append(folder)
