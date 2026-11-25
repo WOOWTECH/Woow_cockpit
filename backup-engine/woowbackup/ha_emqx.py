@@ -2868,11 +2868,12 @@ def candidate_lines(sink, target, readings, notes, device):
                      security['exhook'])
     own = notes.get('device_items') or {}   # E-41, E-42, E-43, E-44, E-47: this device's own, next to HA's
     replaced = own.get('replaced') or {}
-    if own.get('integrations'):
+    mixed = own.get('mixed') or {}   # rules, connectors, rewrite ...: asked only when HA's import brought some of its own
+    if own.get('integrations') and mixed.get('integrations', True):
         sink.confirm('emqx.device-integrations', DEVICE_INTEGRATIONS.format(
             count=len(own['integrations']), replaced=_replaced_text(replaced.get('integrations'))),
             haissues.Names(own['integrations']))
-    if own.get('routing'):
+    if own.get('routing') and mixed.get('routing', True):
         sink.confirm('emqx.device-routing', DEVICE_ROUTING.format(
             count=len(own['routing']), replaced=_replaced_text(replaced.get('routing'))), haissues.Names(own['routing']))
     if own.get('psk'):

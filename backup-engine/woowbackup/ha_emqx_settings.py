@@ -151,12 +151,15 @@ def own_items(config, final=None):
     """The names of what this device's own configuration holds that HA's import is mixed with, by kind: `integrations`
     (E-41: rules, connectors, actions, sources, bridges, gateways), `routing` (E-42: topic rewrite, topic metrics,
     auto-subscribe, ExHook servers), `psk` (E-43), `plugins` (E-44) and `durable` (E-47), each a sorted list of setting names
-    (never a value), and `replaced`: per kind how many of them the import changed (`final`: the candidate's configuration
-    after HA's data came in -- an entry of HA's with the same name wins, the others stay next to HA's). Nothing here ever
-    refuses."""
+    (never a value), `replaced`: per kind how many of them the import changed (`final`: the candidate's configuration after
+    HA's data came in -- an entry of HA's with the same name wins, the others stay next to HA's) and `mixed`: per kind
+    whether HA's import brought anything of that kind at all (an entry of the same kind that this device did not have, or a
+    changed one); without `final` it is assumed. What this device has is untouched when HA brought nothing, so the
+    confirmation of E-41 and E-42 is asked only when `mixed`. Nothing here ever refuses."""
     own = _entries(config if isinstance(config, dict) else {})
     after = _entries(final) if isinstance(final, dict) else None
     result = {kind: sorted(names) for kind, names in own.items()}
     result['replaced'] = {kind: sum(1 for name, value in names.items() if after is not None and after[kind].get(name) != value)
                           for kind, names in own.items()}
+    result['mixed'] = {kind: after is None or after[kind] != names for kind, names in own.items()}
     return result

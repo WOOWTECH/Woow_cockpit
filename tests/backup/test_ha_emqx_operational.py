@@ -455,8 +455,10 @@ class OwnItemsTests(unittest.TestCase):
         self.assertEqual((own['psk'], own['durable']), (['psk_authentication'], ['durable_sessions']))
         self.assertEqual(own['plugins'], ['plugins.install_dir', 'plugins.p-1.0.0'])
         self.assertNotIn('secret-value', repr(own), 'names only, never a value')
+        kinds = ('integrations', 'routing', 'psk', 'plugins', 'durable')
         self.assertEqual(ha_emqx_settings.own_items({}), {'integrations': [], 'routing': [], 'psk': [], 'plugins': [], 'durable': [],
-                                                         'replaced': {k: 0 for k in ('integrations', 'routing', 'psk', 'plugins', 'durable')}})
+                                                         'replaced': {k: 0 for k in kinds}, 'mixed': {k: True for k in kinds}},
+                         'without the candidate\'s final configuration it is assumed that HA brought something')
 
     def test_empty_disabled_and_default_settings_are_no_own_items(self):
         config = {'connectors': {}, 'actions': {'http': {}}, 'gateway': {}, 'rule_engine': {'rules': {}}, 'rewrite': [],
@@ -479,6 +481,24 @@ class OwnItemsTests(unittest.TestCase):
         self.assertEqual(own['integrations'], ['connectors.http.erp', 'connectors.http.keep', 'rule_engine.rules.r1'],
                          "HA's own entries are not this device's")
         self.assertEqual(own['replaced'], {'integrations': 1, 'routing': 1, 'psk': 0, 'plugins': 0, 'durable': 0})
+        self.assertEqual(own['mixed'], {'integrations': True, 'routing': True, 'psk': False, 'plugins': False, 'durable': False})
+
+    def test_what_this_device_has_is_not_mixed_when_ha_brought_nothing_of_the_kind(self):
+        """E-41, E-42: nothing of HA's came in, so nothing of this device's is replaced or runs next to anything: no question."""
+        device = {'connectors': {'http': {'erp': {'url': 'http://erp'}}}, 'rewrite': [{'source_topic': 'a'}],
+                  'topic_metrics': [{'topic': 't'}]}
+        same = copy.deepcopy(device)
+        self.assertEqual(ha_emqx_settings.own_items(device, same)['mixed'],
+                         {'integrations': False, 'routing': False, 'psk': False, 'plugins': False, 'durable': False})
+        for change in (lambda c: c['connectors']['http'].update({'ha': {'url': 'http://ha'}}),
+                       lambda c: c['connectors']['http']['erp'].update(url='http://other'),
+                       lambda c: c.update(rewrite=[]), lambda c: c['topic_metrics'].append({'topic': 'ha/t'}),
+                       lambda c: c.update(rule_engine={'rules': {'ha-rule': {'sql': 'x'}}})):
+            after = copy.deepcopy(device)
+            change(after)
+            mixed = ha_emqx_settings.own_items(device, after)['mixed']
+            with self.subTest(after=after):
+                self.assertTrue(mixed['integrations'] or mixed['routing'])
 
     def test_a_setting_of_an_unexpected_shape_is_still_one_name_and_never_a_crash(self):
         for config in ({'connectors': 5, 'rule_engine': {'rules': [1]}, 'topic_metrics': 'x', 'exhook': {'servers': 3},
@@ -560,15 +580,26 @@ class OwnLinesTests(base.EmqxCase):
     def three(self, issue_id, make, more=None):
         return parity.ThreeStepsTests.three(self, issue_id, make, more=more)
 
+    def ha_adds_a_connector(self):
+        """HA's import brings a connector of its own: what this device has runs next to it (the import is a merge)."""
+        merged = copy.deepcopy(self.world.target_config['connectors'])
+        merged['http']['from-ha'] = {'url': 'http://from-ha.example/'}
+        self.world.import_changes = {'connectors': merged}
+
     def test_this_devices_own_integrations_are_a_line_to_confirm(self):
         """E-41: rules, connectors, actions, sources, bridges and gateways of this device, by name."""
         own = {'connectors': {'http': {'erp': {'url': 'http://erp.example/hook'}}},
                'rule_engine': {'rules': {'r1': {'sql': 'SELECT 1', 'actions': []}}}}
 
+        def make():
+            self.set_own(**own)
+            self.ha_adds_a_connector()
+
         def more():
             self.world.target_config['connectors']['http']['second'] = {'url': 'http://second.example/'}
             self.world.current_config = copy.deepcopy(self.world.target_config)
-        line = self.three('emqx.device-integrations', lambda: self.set_own(**own), more=more)
+            self.ha_adds_a_connector()
+        line = self.three('emqx.device-integrations', make, more=more)
         self.assertEqual(line.names, ('connectors.http.erp', 'rule_engine.rules.r1'))
         self.assertIn('2 項', line.message)
         self.assertNotIn('erp.example', repr(line.view('emqx')), 'names, never a value')
@@ -591,12 +622,32 @@ class OwnLinesTests(base.EmqxCase):
                'topic_metrics': [{'topic': 'sensors/t'}],
                'exhook': {'servers': [{'name': 'hook1', 'url': 'http://hook.example', 'enable': False}]}}
 
+        def ha_adds_a_topic():
+            self.world.import_changes = {'topic_metrics': self.world.target_config['topic_metrics'] + [{'topic': 'from/ha'}]}
+
+        def make():
+            self.set_own(**own)
+            ha_adds_a_topic()
+
         def more():
             self.world.target_config['topic_metrics'].append({'topic': 'sensors/h'})
             self.world.current_config = copy.deepcopy(self.world.target_config)
-        line = self.three('emqx.device-routing', lambda: self.set_own(**own), more=more)
+            ha_adds_a_topic()
+        line = self.three('emqx.device-routing', make, more=more)
         self.assertEqual(line.names, ('exhook.hook1', 'rewrite', 'topic_metrics.sensors/t'))
         self.assertNotIn('hook.example', repr(line.view('emqx')))
+
+    def test_nothing_of_ha_s_kind_means_no_question_about_this_devices_own(self):
+        """E-41, E-42: HA brought no connector, rule or rewrite of its own: this device's stay exactly as they are and nothing is
+        asked about them; what is not about HA's content (PSK, durable sessions, plugins) is told all the same."""
+        self.set_own(connectors={'http': {'erp': {'url': 'http://erp.example/hook'}}}, rewrite=[{'source_topic': 'a'}],
+                     psk_authentication={'enable': True}, durable_sessions={'enable': True},
+                     plugins={'states': [{'name_vsn': 'p-1.0.0'}], 'install_dir': 'plugins'})
+        found = levels(self.internal_candidate(self.upload_emqx(state='stopped'))['issues'])
+        self.assertNotIn('emqx.device-integrations', found)
+        self.assertNotIn('emqx.device-routing', found)
+        self.assertEqual([found[i] for i in ('emqx.device-psk', 'emqx.durable-sessions', 'emqx.device-plugins')],
+                         ['confirm', 'confirm', 'notice'])
 
     def test_this_devices_psk_is_a_line_to_confirm(self):
         """E-43: PSK authentication (or a PSK file): HA's keys replace this device's."""
@@ -641,6 +692,7 @@ class OwnLinesTests(base.EmqxCase):
 
     def test_the_check_lists_them_and_leaves_the_device_alone(self):
         self.set_own(connectors={'http': {'erp': {'url': 'http://erp.example/hook'}}}, durable_sessions={'enable': True})
+        self.ha_adds_a_connector()
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertTrue(result['importable'])
         confirm = {issue['id']: issue for issue in result['issues'] if issue['level'] == 'confirm'}
