@@ -1233,6 +1233,56 @@ class EntryTests(WalkCase):
         big = type('S', (io.BytesIO,), {'member': type('M', (), {'size': 4 * 1024 ** 3})()})
         self.assertEqual(habackup.inflate_budget(big(b'')), 400 * 1024 ** 3)
 
+    def checkpoints(self, data, *, bytes_every=None, entries_every=None, stop_at=None):
+        """The walk of `data` selecting nothing, with a checkpoint: (the stream positions at which it was called, what was
+        raised). The counts are patched: `bytes_every` (CHECK_BYTES, with reads of 64 KiB) or `entries_every`
+        (CHECK_ENTRIES); the one that is not asked for is out of reach. `stop_at`: the call that raises (a cancel)."""
+        stream, at = io.BytesIO(data), []
+
+        class Stop(Exception):
+            pass
+
+        def checkpoint():
+            at.append(stream.tell())
+            if len(at) == stop_at:
+                raise Stop()
+        raised = None
+        with mock.patch.object(habackup, 'CHUNK', 64 << 10), mock.patch.object(habackup, 'CHECK_BYTES', bytes_every or 1 << 50), \
+                mock.patch.object(habackup, 'CHECK_ENTRIES', entries_every or 1 << 50):
+            try:
+                for _entry in habackup.iter_entries(stream, habackup.Select(include=()), habackup.Report(), addon=False,
+                                                    checkpoint=checkpoint):
+                    pass
+            except Stop as error:
+                raised = error
+        return at, raised
+
+    def test_the_checkpoint_of_the_reading_is_called_every_so_many_bytes(self):
+        """IN-20: a cancel (the page's Stop, the watchdog) reaches a walk that skips data nobody selected -- one header and
+        megabytes of data -- by the bytes it has read, every CHECK_BYTES, not more often and not less."""
+        every = 256 << 10
+        data = hx.tar_bytes([{'name': 'big.bin', 'data': bytes(2 << 20)}, {'name': 'small', 'data': b'x'}])
+        at, raised = self.checkpoints(data, bytes_every=every)
+        self.assertEqual((at, raised), ([every * k for k in range(1, len(data) // every + 1)], None))
+        at, raised = self.checkpoints(data, bytes_every=every, stop_at=1)
+        self.assertEqual(at, [every], 'the cancel stopped the walk where the data is skipped: nothing else was read')
+        self.assertIsNotNone(raised)
+        at, raised = self.checkpoints(data, bytes_every=every, stop_at=3)
+        self.assertEqual((at, raised is None), ([every, 2 * every, 3 * every], False))
+        self.assertEqual(self.checkpoints(hx.tar_bytes([{'name': 'a', 'data': b'x'}]), bytes_every=every)[0], [],
+                         'less than CHECK_BYTES is no call')
+        self.assertEqual((habackup.CHECK_BYTES, habackup.CHECK_ENTRIES), (64 << 20, 1024))
+
+    def test_the_checkpoint_of_the_entries_is_called_every_so_many_headers(self):
+        """IN-20: many tiny entries read little but cost the walk time: a call every CHECK_ENTRIES headers, apart from the bytes."""
+        data = hx.tar_bytes([{'name': f'f{i}', 'data': b''} for i in range(40)])
+        at, raised = self.checkpoints(data, entries_every=16)
+        self.assertEqual((len(at), raised), (2, None), 'after the 16th and the 32nd')
+        at, raised = self.checkpoints(data, entries_every=16, stop_at=1)
+        self.assertEqual((len(at), raised is None), (1, False), 'a cancel at the 16th header stops the walk there')
+        self.assertEqual(self.checkpoints(data, entries_every=41)[0], [], 'not before the 41st')
+        self.assertEqual(len(self.checkpoints(data, entries_every=1)[0]), 40)
+
     def test_names_are_normalised(self):
         out, report = self.walk([{'name': '.', 'type': 'dir'}, {'name': './data/', 'type': 'dir'},
                                  {'name': './data/a.txt', 'data': b'a'}, {'name': 'data/b.txt', 'data': b'b'}])
@@ -2159,6 +2209,76 @@ class HardLinkTests(WalkCase):
                 result = self.second(gone, again, select)
                 self.assertEqual((result[1:4], result[4].complete), ((reason, 1, 1), False))
 
+    def replayed(self, first, again, select, *, stop_in_pass=None, bytes_every=None, entries_every=None):
+        """Walk the tar `first` as a stream that can be opened again and has a stored size of 1000 bytes (like a member), whose
+        second pass reads the tar `again`: (what was handed out, the error, the pass -- 1 or 2 -- of every checkpoint call, the
+        streams opened). `stop_in_pass`: the checkpoint raises (a cancel) in that pass; `bytes_every` and `entries_every` patch
+        CHECK_BYTES (reads of 64 KiB) and CHECK_ENTRIES, the one not asked for is out of reach."""
+        opened, ticks, got, error = [], [], {}, None
+
+        class Stop(Exception):
+            pass
+
+        class Stream(io.BytesIO):
+            member = type('M', (), {'size': 1000})()
+
+            def __init__(self, data):
+                super().__init__(data)
+                opened.append(self)
+
+            def reopen(self):
+                return Stream(again)
+
+        def checkpoint():
+            ticks.append(len(opened))
+            if stop_in_pass == len(opened):
+                raise Stop()
+        with mock.patch.object(habackup, 'CHUNK', 64 << 10), mock.patch.object(habackup, 'CHECK_BYTES', bytes_every or 1 << 50), \
+                mock.patch.object(habackup, 'CHECK_ENTRIES', entries_every or 1 << 50):
+            try:
+                for entry in habackup.iter_entries(Stream(first), select, habackup.Report(), addon=False, checkpoint=checkpoint):
+                    got[entry.name] = entry.read_all(1 << 22) if entry.kind == 'file' else entry.linkname
+            except (BackupError, Stop) as caught:
+                error = caught
+        return got, error, ticks, len(opened)
+
+    def test_the_second_pass_is_cancellable_like_the_first(self):
+        """IN-20: the member is read again for a hard link's copy; a cancel (the page's Stop, the watchdog) reaches that second
+        reading as it reaches the first -- by the headers it passes and by the bytes it skips."""
+        tail = [{'name': 'x/a', 'data': b'first'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/a'}]
+        select = habackup.Select(include=('y',))
+        many = hx.tar_bytes([{'name': f'z{i}', 'data': b''} for i in range(40)] + tail)  # the file comes after 40 headers
+        got, error, ticks, passes = self.replayed(many, many, select, entries_every=16)
+        self.assertEqual((got, error, ticks, passes), ({'y/b': b'first'}, None, [1, 1, 2, 2], 2), 'each pass: the 16th and 32nd')
+        got, error, ticks, passes = self.replayed(many, many, select, entries_every=16, stop_in_pass=2)
+        self.assertEqual((got, ticks, passes, type(error).__name__), ({}, [1, 1, 2], 2, 'Stop'), 'a cancel in the second pass')
+        every = 256 << 10
+        big = hx.tar_bytes([{'name': 'big.bin', 'data': bytes(1 << 20)}] + tail)  # the file comes after a megabyte of data
+        got, error, ticks, passes = self.replayed(big, big, select, bytes_every=every)
+        self.assertEqual((got, error, passes), ({'y/b': b'first'}, None, 2))
+        self.assertEqual(ticks.count(1), len(big) // every, 'the first pass read all of it')
+        self.assertGreaterEqual(ticks.count(2), (1 << 20) // every - 1, 'the second pass read the megabyte again: every 256 KiB')
+        self.assertEqual(sorted(ticks), ticks)
+        got, error, ticks, passes = self.replayed(big, big, select, bytes_every=every, stop_in_pass=2)
+        self.assertEqual((got, ticks[-1], ticks.count(2), passes, type(error).__name__), ({}, 2, 1, 2, 'Stop'))
+
+    def test_the_second_pass_has_the_budget_of_the_first(self):
+        """IN-20: the member is opened again for a copy, and what it holds then may be more than the first time: the budget
+        of its stored size (the ratio, at least the floor) holds for that reading too."""
+        head = [{'name': 'x/a', 'data': b'first'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/a'}]
+        first, select = hx.tar_bytes(head), habackup.Select(include=('y',))
+        with mock.patch.object(habackup, 'INFLATE_FLOOR', 64 << 10), mock.patch.object(habackup, 'INFLATE_RATIO', 1000):
+            # a stored size of 1000 bytes: the ratio lets 1,000,000 bytes be read, the floor alone only 65,536
+            grown = hx.tar_bytes([{'name': 'pad', 'data': bytes(600_000)}] + head)
+            got, error, _ticks, passes = self.replayed(first, grown, select)
+            self.assertEqual((got, error, passes), ({'y/b': b'first'}, None, 2), 'within the budget of the ratio')
+            grown = hx.tar_bytes([{'name': 'pad', 'data': bytes(2 << 20)}] + head)
+            got, error, _ticks, passes = self.replayed(first, grown, select)
+            self.assertEqual((got, passes), ({}, 2))
+            self.assertEqual((error.code, error.details['reason'], error.details['limit']),
+                             ('limit-exceeded', 'the add-on archive inflates too much', 1_000_000))
+            say_member(self, error)
+
     def test_no_second_pass_for_nothing(self):
         """Links that are known to have no content are listed at once: the member is not read again for them."""
         secret = [{'name': 'data/options.json', 'data': b'{}'}, {'name': 'x', 'type': 'hardlink', 'linkname': 'data/options.json'},
@@ -2215,6 +2335,28 @@ class NamesTests(unittest.TestCase):
         self.assertEqual(names.used, 100_000 + 256 + 3)
         self.assertLessEqual((len(names.keys) * names.keys.itemsize + len(names.states)) / names.used, 36)
         self.assertGreaterEqual(len(names.keys), 2 * names.used, 'at most half full')
+
+    def test_the_key_of_every_table_is_its_own_and_random(self):
+        """IN-34: names are kept as keyed 64-bit digests; a collision may refuse an archive, and a crafted archive cannot steer
+        one because the key is new for every table: two tables never give a name the same digest, and every walk makes its own."""
+        names = [f'data/filestore/db/{i % 256:02x}/{i:040x}' for i in range(200)]
+        first, second = habackup._Names(1000), habackup._Names(1000)
+        self.assertEqual((len(first.key), len(second.key)), (16, 16))
+        self.assertNotEqual(first.key, second.key)
+        self.assertNotIn(bytes(16), (first.key, second.key))
+        digests = [[table.digest(name) for name in names] for table in (first, second)]
+        self.assertEqual([table.digest(name) for table in (first, second) for name in names[:1]], [digests[0][0], digests[1][0]],
+                         'a table gives a name the same digest every time')
+        self.assertEqual({left == right for left, right in zip(*digests)}, {False}, 'the key is part of the digest')
+        self.assertEqual(len(set(digests[0])), len(names), 'no two of them alike')
+        self.assertEqual(len({habackup._Names(10).key for _ in range(20)}), 20, 'a new key for every table')
+        walks, real = [], habackup._Names
+        with mock.patch.object(habackup, '_Names', side_effect=lambda limit: walks.append(real(limit)) or walks[-1]):
+            for _ in range(2):
+                list(habackup.iter_entries(io.BytesIO(hx.tar_bytes([{'name': 'a', 'data': b'x'}])), habackup.Select(include=()),
+                                           habackup.Report(), addon=False))
+        self.assertEqual(len(walks), 2)
+        self.assertNotEqual(walks[0].key, walks[1].key, 'every walk makes its own table')
 
     def test_it_keeps_every_rule_while_it_grows(self):
         names = habackup._Names(10 ** 6)

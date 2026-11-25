@@ -583,6 +583,37 @@ class UploadTests(StorageTestCase):
                 self.storage.begin_upload('sixth.tar', 100)
         self.assertEqual(ctx.exception.code, 'busy')
 
+    def test_a_stale_upload_whose_record_is_a_link_is_left_alone(self):
+        """X-UP-03: the record of an upload is opened without following a link (O_NOFOLLOW): one that was put in the uploads
+        folder in its place is neither locked nor removed, and an upload with it makes no room."""
+        outside = self.base / 'outside.json'
+        outside.write_text('{"not": "an upload"}')
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        past = time.time() - 7200
+        for item in begun:
+            record = self.paths.uploads / f'{item["upload_id"]}.json'
+            record.unlink()
+            record.symlink_to(outside)
+            os.utime(record, (past, past), follow_symlinks=False)
+            os.utime(self.paths.uploads / f'{item["upload_id"]}.part', (past, past))
+        with mock.patch('fcntl.flock', side_effect=AssertionError('a lock was taken on what a link names')):
+            with self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(ctx.exception.code, 'busy')
+        self.assertEqual(self.pending(), {item['upload_id'] for item in begun})
+        for item in begun:
+            self.assertTrue(Path(item['path']).exists(), 'its placeholder stays')
+        self.assertEqual(outside.read_text(), '{"not": "an upload"}')
+        # the same uploads with their own records, idle as long: the oldest goes, as before
+        for item in begun:
+            record = self.paths.uploads / f'{item["upload_id"]}.json'
+            record.unlink()
+            record.write_text(json.dumps({'upload_id': item['upload_id'], 'filename': 'x.tar', 'size': 100}))
+            os.utime(record, (past, past))
+        self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(len(self.pending()), 4)
+        self.assertEqual(len(self.pending() & {item['upload_id'] for item in begun}), 3)
+
     def test_more_stale_uploads_than_there_may_be(self):
         """However many are left over, as many go as must."""
         begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
