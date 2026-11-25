@@ -407,6 +407,45 @@ class RewriteTests(unittest.TestCase):
             out.close()
             self.assertEqual(caught.exception.code, 'job-failed')
 
+    def test_a_link_of_this_devices_own_data_that_the_restore_would_refuse_is_left_out_and_listed(self):
+        """X-NS-08, CM-11 (F3's rows, this importer's call site): with a report the links the restore refuses are listed and
+        the rest is copied; without one nothing changes."""
+        entries = [
+            {'name': './', 'type': 'dir', 'uid': 100, 'gid': 101}, {'name': 'addons', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'addons/real', 'data': b'x', 'uid': 100, 'gid': 101},
+            {'name': 'addons/inside', 'type': 'symlink', 'linkname': 'real', 'uid': 100, 'gid': 101},
+            {'name': 'addons/out', 'type': 'symlink', 'linkname': '../../../etc/passwd', 'uid': 100, 'gid': 101},
+            {'name': 'addons/abs', 'type': 'symlink', 'linkname': '/etc/shadow', 'uid': 100, 'gid': 101},
+            {'name': 'addons/hard-ok', 'type': 'hardlink', 'linkname': 'addons/real', 'uid': 100, 'gid': 101},
+            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/odoo', 'type': 'dir', 'uid': 100, 'gid': 101},
+            {'name': 'filestore/odoo/aa', 'data': b'dropped', 'uid': 100, 'gid': 101},
+            {'name': 'addons/hard-gone', 'type': 'hardlink', 'linkname': 'filestore/odoo/aa', 'uid': 100, 'gid': 101}]
+        live = self.write('live.tar', entries)
+        report = habackup.Report(names=haissues.Names)
+        out = ha_odoo.FileTar(self.root / 'out.tar')
+        ha_odoo.web_data_tar(live, out, sessions_ids=(1, 1), report=report)
+        out.close()
+        names = set(members_of((self.root / 'out.tar').read_bytes()))
+        # (an absolute target counts as below the volume for the restore: podman joins it, nested._escapes: kept)
+        self.assertEqual(names, {'.', 'addons', 'addons/real', 'addons/inside', 'addons/abs', 'addons/hard-ok', 'filestore',
+                                 'sessions'})
+        self.assertEqual({kind: list(skipped.first) for kind, skipped in report.skips.items()},
+                         {'symlink': ['odoo-web-data：addons/out'], 'hardlink': ['odoo-web-data：addons/hard-gone']})
+        out = ha_odoo.FileTar(self.root / 'plain.tar')
+        ha_odoo.web_data_tar(live, out, sessions_ids=(1, 1))
+        out.close()
+        self.assertIn('addons/out', members_of((self.root / 'plain.tar').read_bytes()), 'no report: as before')
+        folder = self.write('folder.tar', [{'name': './', 'type': 'dir'}, {'name': './mine', 'data': b'x'},
+                                           {'name': './esc', 'type': 'symlink', 'linkname': '../../x'},
+                                           {'name': './ok', 'type': 'symlink', 'linkname': 'mine'}])
+        report = habackup.Report(names=haissues.Names)
+        out = ha_odoo.FileTar(self.root / 'folder-out.tar')
+        ha_odoo.addons_dir_tar(folder, self.write('none.tar', []), out, copy={}, report=report)
+        out.close()
+        self.assertEqual(set(members_of((self.root / 'folder-out.tar').read_bytes())), {'.', './mine', './ok'})
+        self.assertEqual(list(report.skips['symlink'].first), ['自訂模組資料夾：esc'])
+
     def test_custom_modules_folder(self):
         live = self.write('live-dir.tar', [
             {'name': './', 'type': 'dir', 'mode': 0o755},

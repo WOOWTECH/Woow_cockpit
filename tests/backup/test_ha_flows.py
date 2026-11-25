@@ -216,6 +216,7 @@ class World(HaWorld):
         self.extensions_by_db = {}
         self.dir_data = {}
         self.extra_symlink = False
+        self.web_link = False
         self.scan_broken = []
         self.live_db_stopped = False
         self.superuser_kinds = []
@@ -280,7 +281,9 @@ class World(HaWorld):
             link = [{'name': 'escape', 'type': 'symlink', 'linkname': '../../etc/passwd'}] if self.extra_symlink else []
             return tar_of([{'name': '.', 'type': 'dir'}, {'name': 'kept.txt', 'data': b'this device'}, *link])
         if volume == 'odoo18-web-data':
-            return tar_of([{'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
+            link = [{'name': 'addons/escape', 'type': 'symlink', 'linkname': '../../../etc/passwd', 'uid': 100, 'gid': 101}] \
+                if self.web_link else []
+            return tar_of([*link, {'name': '.', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore/odoo', 'type': 'dir', 'uid': 100, 'gid': 101},
                            {'name': 'filestore/odoo/old', 'data': b'old', 'uid': 100, 'gid': 101},
@@ -1030,6 +1033,21 @@ class OdooDatabaseTests(OdooCase):
         self.assertEqual(sorted(items['dirs']), ['.local/share/odoo-extra', '.local/share/odoo18/addons'])
         with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo-extra-vol'])) as tar:
             self.assertEqual(tar.extractfile('kept.txt').read(), b'this device')
+
+    def test_a_link_in_the_live_data_dir_that_the_restore_would_refuse_is_left_out_and_confirmed_once(self):
+        """X-NS-08 for this importer's own live copies: found while converting, so it is the one re-confirmation of B7."""
+        self.world.web_link = True
+        ha_id = self.upload_odoo()
+        with self.assertRaises(BackupError) as caught:
+            self.convert(ha_id, ['odoo'])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (line,) = caught.exception.issues
+        self.assertEqual((line.id, list(line.names)), ('files.skipped', ['odoo-web-data：addons/escape']))
+        self.assertEqual(self.storage.list_backups(), [])
+        self.convert(ha_id, ['odoo'], acknowledged={'odoo': [line.key('odoo')]})
+        with tarfile.open(fileobj=io.BytesIO(self.world.volume_data['odoo18-web-data'])) as tar:
+            self.assertNotIn('addons/escape', tar.getnames())
+            self.assertIn('sessions', tar.getnames())
 
     def test_a_link_of_this_devices_own_volume_that_leaves_it_is_left_out_and_confirmed_once(self):
         """OD-12, X-NS-08: the restore would refuse the volume for it; the link is left out and listed instead."""

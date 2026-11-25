@@ -1456,18 +1456,34 @@ def _live_tar(path, what):
         raise BackupError('job-failed', f'{what}的匯出內容無法讀取。') from None
 
 
-def web_data_tar(live_tar, out, *, sessions_ids, sessions_mode=0o700):
+def _left_out_link(member, name, kept, report, label):
+    """True when a link of a live copy is left out (X-NS-08, CM-11): the restore refuses a symlink that leaves the volume and a
+    hard link to a member that is not in the archive; with a `report` such a link of the customer's own is listed (the
+    importer's one `files.skipped` line) and the rest is copied. Without a report nothing is left out (the restore refuses)."""
+    if report is None:
+        return False
+    if member.issym() and nested._escapes(name, member.linkname):
+        report.skip('symlink', f'{label}{name}')
+        return True
+    if member.islnk() and _norm(member.linkname) not in kept:
+        report.skip('hardlink', f'{label}{name}')
+        return True
+    return False
+
+
+def web_data_tar(live_tar, out, *, sessions_ids, sessions_mode=0o700, report=None):
     """Copy the live data dir export (`podman volume export`) into the FileTar `out` without `filestore/odoo/**` and
     `sessions/**`; adds an empty `sessions/` owned like the live one (or `sessions_ids`). Returns the owner of the live
-    root entry."""
+    root entry. `report` (a habackup.Report): see `_left_out_link`."""
     try:
-        return _web_data_tar(live_tar, out, sessions_ids=sessions_ids, sessions_mode=sessions_mode)
+        return _web_data_tar(live_tar, out, sessions_ids=sessions_ids, sessions_mode=sessions_mode, report=report)
     except tarfile.TarError:
         raise BackupError('job-failed', '這台 Odoo 資料卷的匯出內容無法讀取。') from None
 
 
-def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode):
+def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode, report=None):
     root_ids = None
+    kept = set()
     with _live_tar(live_tar, '這台 Odoo 資料卷') as tar:
         for member in tar:
             name = _norm(member.name)
@@ -1480,6 +1496,10 @@ def _web_data_tar(live_tar, out, *, sessions_ids, sessions_mode):
                 continue
             if name == '.':
                 root_ids = (member.uid, member.gid)
+            if _left_out_link(member, name, kept, report, 'odoo-web-data：'):
+                tar.members.clear()
+                continue
+            kept.add(name)
             info = _copy_info(member, name)
             out.add_member(info, tar.extractfile(member) if member.isfile() else None)
             tar.members.clear()
@@ -1507,18 +1527,20 @@ def _copy_info(member, name):
     return info
 
 
-def addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime=None):
+def addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime=None, report=None):
     """The custom modules folder: the live folder (DIR_HELPER pack, names `./…`) without the modules `copy` replaces,
     plus those modules from `modules_tar` (`<source>/<module>/**`) as `./<module>/**`, owned by the app owner (0:0 in
-    his namespace), dirs 0755, files 0644 (0755 when executable). `copy`: {module: source label}."""
+    his namespace), dirs 0755, files 0644 (0755 when executable). `copy`: {module: source label}. `report`: see
+    `_left_out_link`."""
     try:
-        _addons_dir_tar(live_tar, modules_tar, out, copy=copy, mtime=mtime)
+        _addons_dir_tar(live_tar, modules_tar, out, copy=copy, mtime=mtime, report=report)
     except tarfile.TarError:
         raise BackupError('job-failed', '自訂模組資料夾的匯出內容無法讀取。') from None
 
 
-def _addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime):
+def _addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime, report=None):
     sources = {module: source for module, source in copy.items()}
+    kept = set()
     with _live_tar(live_tar, '自訂模組資料夾') as tar:
         for member in tar:
             name = _norm(member.name)
@@ -1528,6 +1550,10 @@ def _addons_dir_tar(live_tar, modules_tar, out, *, copy, mtime):
             if name != '.' and top in sources:
                 tar.members.clear()
                 continue
+            if _left_out_link(member, name, kept, report, '自訂模組資料夾：'):
+                tar.members.clear()
+                continue
+            kept.add(name)
             info = _copy_info(member, './' if name == '.' else f'./{name}')
             out.add_member(info, tar.extractfile(member) if member.isfile() else None)
             tar.members.clear()
@@ -2202,7 +2228,8 @@ def convert(work, app, database, test_mode, out_dir):
     web_path = out_dir / 'volumes' / f'{items.web_volume}.tar'
     web = FileTar(web_path, work.guard)
     web.ids = odoo_ids
-    web_data_tar(live_web, web, sessions_ids=odoo_ids)
+    live_report = habackup.Report(names=haissues.Names)   # a link of this device's own data that the restore would refuse
+    web_data_tar(live_web, web, sessions_ids=odoo_ids, report=live_report)
     os.unlink(live_web)
     live_dir = None
     if items.addons_rel is not None:
@@ -2262,13 +2289,14 @@ def convert(work, app, database, test_mode, out_dir):
         out = FileTar(dir_path, work.guard)
         try:
             addons_dir_tar(live_dir, staging / 'ha-modules.tar', out,
-                           copy={name: cand['from'] for name, cand in copy.items()})
+                           copy={name: cand['from'] for name, cand in copy.items()}, report=live_report)
         finally:
             out.close()
         os.unlink(live_dir)
         os.unlink(staging / 'ha-modules.tar')
         check_dir_tar(dir_path, ids)
         dirs[items.addons_rel] = dir_path
+    sink.skipped(live_report)   # X-NS-08: the links that were left out of this device's own data dir and modules folder
 
     # A new PostgreSQL 17 cluster exactly like the live one.
     work.log('建立新的 PostgreSQL 資料庫叢集（與這台相同的映像與設定）')
