@@ -1389,9 +1389,11 @@ class Target:
     def __init__(self, work, app):
         runner = work.runner(app)
         self.live = Live(work.quadlets(app), runner.home, app)
-        # NC-04: a stopped Nextcloud or database is started to be read, and put back when the app's throwaway objects go
-        hatarget.ensure_running(work, app, self.live.app_container)
-        hatarget.ensure_running(work, app, self.live.db_container, ready='postgres')
+        # NC-04: a stopped Nextcloud or database is started to be read, and put back when the app's throwaway objects go; the waits
+        # follow the size of the open HA backup, as those of hacommon.live_json do (a database that was stopped needs its recovery)
+        size = hatarget.size_hint(getattr(work, 'ha', None))
+        hatarget.ensure_running(work, app, self.live.app_container, size=size)
+        hatarget.ensure_running(work, app, self.live.db_container, ready='postgres', size=size)
         self.config = live_config(work, app, self.live)
         self.image_version = image_env(work, app, self.live.app_image, 'NEXTCLOUD_VERSION')
         self.php_version = image_env(work, app, self.live.app_image, 'PHP_VERSION')

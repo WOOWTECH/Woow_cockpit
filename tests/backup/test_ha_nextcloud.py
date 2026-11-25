@@ -1918,6 +1918,21 @@ class LiveTargetTests(NextcloudCase):
     def work_with_sink(self):
         return types.SimpleNamespace(sink=lambda app: haissues.Sink(app.id))
 
+    def test_the_waits_for_a_stopped_service_follow_the_size_of_the_backup(self):
+        # NC-04: a database that was stopped needs its recovery, and the longer the backup the longer it may take (X-PD-05)
+        calls = []
+        real = nc.hatarget.ensure_running
+
+        def spy(work, app, container, **kwargs):
+            calls.append((container, kwargs))
+            return real(work, app, container, **kwargs)
+        with mock.patch.object(nc.hatarget, 'size_hint', return_value=123456789), \
+                mock.patch.object(nc.hatarget, 'ensure_running', side_effect=spy):
+            self.check(self.upload_nextcloud(), ['nextcloud'])
+        self.assertTrue(len(calls) >= 2, calls)
+        self.assertEqual([kw.get('size') for _c, kw in calls[:2]], [123456789, 123456789])
+        self.assertEqual(calls[1][1].get('ready'), 'postgres')
+
     def test_what_cannot_be_started_stops_only_nextcloud(self):
         self.world.down = {'nextcloud-app'}
         self.world.cannot_start = {'nextcloud-app'}
