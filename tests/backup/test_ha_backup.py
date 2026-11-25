@@ -17,6 +17,7 @@ import random
 import shutil
 import struct
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -54,6 +55,26 @@ def say_member(test, error):
 def say_file(test, error):
     """A problem of the whole file has no scope and the text of a file that is refused."""
     test.assertEqual((error.details.get('scope'), error.message), (None, FILE_MESSAGES[error.code]))
+
+
+def count_lines(function, *args):
+    """(result, the number of source lines `function` executed while it ran): a cost that does not depend on the machine,
+    for code whose cost is the point (a crafted input must not make it loop once per byte)."""
+    code, lines = function.__code__, [0]
+
+    def local(_frame, event, _arg):
+        lines[0] += event == 'line'
+        return local
+
+    def trace(frame, _event, _arg):
+        return local if frame.f_code is code else None
+    previous = sys.gettrace()
+    sys.settrace(trace)
+    try:
+        result = function(*args)
+    finally:
+        sys.settrace(previous)
+    return result, lines[0]
 
 
 class TempFiles(unittest.TestCase):
@@ -1322,6 +1343,127 @@ class EntryTests(WalkCase):
         zeroed = bytearray(hx.tar_bytes([{'name': f'f{i}', 'data': b'x' * 512} for i in range(20)]))
         zeroed[1536 * 4:1536 * 4 + 4096] = bytes(4096)  # a damaged stretch of the file
         self.assertEqual(self.refused([], raw=bytes(zeroed))[0], 'corrupt-archive')
+
+    @staticmethod
+    def probe_of_iteration_two(reader):
+        """The probe behind a plain tar as it was until the cost fix: every 'ustar' of the data looked at, aligned or not.
+        It is the reference for 'the same answers'."""
+        block, magic_at = habackup.BLOCK, habackup.TAR_MAGIC_AT
+        while True:
+            reader._fill(block)
+            end = reader.off + reader._avail() // block * block
+            if end == reader.off:
+                return False
+            at = reader.buf.find(b'ustar', reader.off, end)
+            while at >= 0:
+                head = at - magic_at
+                if head >= reader.off and (head - reader.off) % block == 0 \
+                        and habackup._checksum_ok(reader.buf[head:head + block]):
+                    return True
+                at = reader.buf.find(b'ustar', at + 1, end)
+            reader.off = end
+
+    def test_the_probe_behind_a_plain_tar_answers_as_before(self):
+        """IN-41: looking only where a header can begin changes no answer: random data with good and damaged headers, words
+        and zeros at any offset, a reader that has read some bytes already, a tail that is no whole block, buffers of any
+        size -- the same answer as the probe that looked at every word."""
+        rng = random.Random(20261125)
+        headers = [hx.raw_header('a'), hx.raw_header('b' * 90, magic=hx.GNU), hx.raw_header('c', typeflag=b'5', mode=0o755),
+                   hx.raw_header('d', size=9999999), hx.raw_header('e', magic=hx.V7)]
+        word_block = bytes(habackup.TAR_MAGIC_AT) + b'ustar' + bytes(habackup.BLOCK - habackup.TAR_MAGIC_AT - 5)
+        answers = {True: 0, False: 0}
+        for round_ in range(600):
+            skip = rng.randrange(0, 700)
+            data = bytearray(rng.randbytes(skip))
+            for _ in range(rng.randrange(1, 10)):
+                if rng.random() < 0.6:  # the next piece starts where a header may
+                    data += bytes(-(len(data) - skip) % habackup.BLOCK)
+                kind = rng.randrange(8)
+                if kind == 0:
+                    data += bytes(rng.randrange(0, 2200))
+                elif kind == 1:
+                    data += rng.randbytes(rng.randrange(0, 1300))
+                elif kind == 2:
+                    data += b'ustar' * rng.randrange(1, 400)
+                elif kind == 3:
+                    data += rng.choice(headers)
+                elif kind == 4:  # a damaged header: one bit differs, the checksum no longer fits
+                    block = bytearray(rng.choice(headers))
+                    block[rng.randrange(512)] ^= 1 << rng.randrange(8)
+                    data += block
+                elif kind == 5:
+                    data += word_block * rng.randrange(1, 4)  # the word in the right place of a block, nothing else
+                elif kind == 6:
+                    data += rng.choice(headers)[:rng.randrange(1, 512)]  # a header cut off
+                else:
+                    data += bytes(rng.randrange(0, 600)) + rng.choice(headers)
+            data = bytes(data)
+            for chunk in (300, 512, 513, 1000, 4096, 1 << 20):
+                with mock.patch.object(habackup, 'CHUNK', chunk):
+                    new, old = habackup._Reader(io.BytesIO(data)), habackup._Reader(io.BytesIO(data))
+                    new.read_exact(skip)
+                    old.read_exact(skip)
+                    expected = self.probe_of_iteration_two(old)
+                    got = new.another_header()
+                if got != expected:
+                    self.fail(f'round {round_}, buffers of {chunk}: the probe says {got}, it used to say {expected}')
+            answers[expected] += 1
+        self.assertGreater(min(answers.values()), 60, 'both answers are given often enough to mean something')
+
+    def test_the_checksum_of_a_header_says_what_it_said(self):
+        """IN-41 (cost): the signed sum is counted in C now; it is the same sum -- against the sums written out byte by byte,
+        on blocks with and without bytes of 128 or more, whose field holds the unsigned sum, the signed one, or neither."""
+        rng = random.Random(1125)
+        counts = {'unsigned': 0, 'signed': 0, 'neither': 0, 'not a number': 0}
+        for _ in range(4000):
+            block = bytearray(rng.randbytes(512) if rng.random() < 0.6 else bytes(512))
+            for _ in range(rng.randrange(0, 40) if rng.random() < 0.5 else 0):
+                block[rng.randrange(512)] = rng.randrange(256)
+            block[148:156] = b' ' * 8
+            unsigned = sum(block)
+            signed = sum(b - 256 if b > 127 else b for b in block)
+            field, kind = rng.choice([(unsigned, 'unsigned'), (signed, 'signed'), (unsigned + 1, 'neither'),
+                                      (rng.randrange(0, 99999), 'neither')])
+            if field < 0:
+                field, kind = 0, 'neither'
+            block[148:156] = b'%06o\0 ' % field
+            if rng.random() < 0.05:
+                block[148 + rng.randrange(8)] = rng.choice((0x38, 0x41, 0x80, 0xff))  # not an octal digit
+                kind = 'not a number'
+            block = bytes(block)
+            try:
+                stored = habackup._number(block[148:156])
+            except BackupError:
+                written_out = False
+            else:
+                written_out = stored == sum(block[:148]) + 256 + sum(block[156:]) or stored == (
+                    sum(b - 256 if b > 127 else b for b in block[:148]) + 256 + sum(b - 256 if b > 127 else b for b in block[156:]))
+            self.assertIs(habackup._checksum_ok(block), written_out, kind)
+            counts[kind] += 1
+        self.assertGreater(min(counts.values()), 40, counts)
+        self.assertTrue(habackup._checksum_ok(hx.raw_header('a')))
+        self.assertTrue(habackup._checksum_ok(hx.raw_header('é' * 20)), 'bytes above 127: the signed sum')
+        high = bytearray(hx.raw_header('é' * 20))
+        high[148:156] = b'%06o\0 ' % (sum(high[:148]) + 256 + sum(high[156:]) - 256 * 40)  # what a signed-char tar wrote
+        self.assertTrue(habackup._checksum_ok(bytes(high)))
+
+    def test_a_filler_of_words_costs_a_few_steps_per_block(self):
+        """IN-41 (cost): a crafted tail of 'ustar' made the probe run its loop once per word -- 140 s of Python for a gigabyte
+        of it; now a few steps per block whatever the filler is. Counted (lines of the probe, checksums), not timed."""
+        blocks, block = 2048, habackup.BLOCK
+        in_step = bytes(habackup.TAR_MAGIC_AT) + b'ustar' + bytes(block - habackup.TAR_MAGIC_AT - 5)
+        for label, filler, checksums in (('words', b'ustar' * (blocks * block // 5), None),
+                                         ('a word in every block', in_step * blocks, blocks),
+                                         ('a word in half of the blocks', (in_step + bytes(block)) * (blocks // 2), blocks // 2),
+                                         ('zeros', bytes(blocks * block), 0), ('rubbish', os.urandom(blocks * block), 0)):
+            with self.subTest(filler=label), mock.patch.object(habackup, '_checksum_ok',
+                                                                wraps=habackup._checksum_ok) as checked:
+                answer, lines = count_lines(habackup._Reader.another_header, habackup._Reader(io.BytesIO(filler)))
+                self.assertIs(answer, False, 'no header in it')
+                self.assertLessEqual(lines, 16 * blocks + 100, 'a few steps per block')
+                if checksums is not None:
+                    self.assertEqual(checked.call_count, checksums, 'a checksum for each place a header can begin, once')
+                self.assertLessEqual(checked.call_count, blocks)
 
     def test_the_end_of_a_member_with_checks(self):
         """A stream with a checksum or authentication is read to its end for that check; what is behind the tar in it is

@@ -238,16 +238,21 @@ class _Truncated(Exception):
 
 # ====================================================================== tar header pieces (shared)
 
+LOW_BYTES = bytes(range(128))
+
+
 def _checksum_ok(block):
-    """The header checksum: the unsigned byte sum (what tarfile writes) or, like tarfile accepts, the signed one."""
+    """The header checksum: the unsigned byte sum (what tarfile writes) or, like tarfile accepts, the signed one (every
+    byte of 128 or more counts 256 less; counted in C, because a crafted tail is one block after the other of these)."""
     try:
         stored = _number(block[148:156])
     except BackupError:
         return False
-    if stored == sum(block[:148]) + 8 * 32 + sum(block[156:]):
+    before, after = block[:148], block[156:]
+    unsigned = sum(before) + 8 * 32 + sum(after)
+    if stored == unsigned:
         return True
-    return stored == (sum(b - 256 if b > 127 else b for b in block[:148]) + 8 * 32
-                      + sum(b - 256 if b > 127 else b for b in block[156:]))
+    return stored == unsigned - 256 * (len(before.translate(None, LOW_BYTES)) + len(after.translate(None, LOW_BYTES)))
 
 
 def _number(field, bad=_corrupt):
@@ -1489,18 +1494,24 @@ class _Reader:
         self.buf, self.off = b'', 0
 
     def another_header(self):
-        """True when a tar header stands at one of the next blocks (read and dropped, within the budget)."""
+        """True when a tar header stands at one of the next blocks (read and dropped, within the budget). Only the places
+        where a header's magic can be are looked at: a word anywhere else costs nothing, so a crafted filler of 'ustar' is a
+        few steps per block like any other (once per word it was 140 s of Python for a gigabyte)."""
         while True:
             self._fill(BLOCK)
             end = self.off + self._avail() // BLOCK * BLOCK
             if end == self.off:
                 return False
-            at = self.buf.find(b'ustar', self.off, end)
-            while at >= 0:
+            pos = self.off + TAR_MAGIC_AT
+            while True:
+                at = self.buf.find(b'ustar', pos, end)
+                if at < 0:
+                    break
                 head = at - TAR_MAGIC_AT
-                if head >= self.off and (head - self.off) % BLOCK == 0 and _checksum_ok(self.buf[head:head + BLOCK]):
+                inside = (head - self.off) % BLOCK          # 0: the word stands where the magic of a header does
+                if not inside and _checksum_ok(self.buf[head:head + BLOCK]):
                     return True
-                at = self.buf.find(b'ustar', at + 1, end)
+                pos = at - inside + BLOCK                    # the magic place of the next block
             self.off = end
 
 
