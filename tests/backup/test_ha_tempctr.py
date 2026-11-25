@@ -1,11 +1,12 @@
 """Throwaway containers of a job (tempctr.py, CONTRACT section 8 "Throwaway containers"): exact command lines, the
 Quadlet parsing that decides secrets/environment/images, clean-up and the sweep of a dead job's objects. Team E2."""
+import io
 import json
 import threading
 import types
 import unittest
 
-from woowbackup import tempctr
+from woowbackup import podman, tempctr
 from woowbackup.errors import BackupError
 from woowbackup.podman import CommandError, Result
 
@@ -600,6 +601,64 @@ class SweepListingTests(unittest.TestCase):
         with mock.patch('woowbackup.podman.OwnerRunner', Owner), \
                 mock.patch.object(haimport, '_importable_owners', lambda _paths: ['appowner']):
             self.assertIsNone(haimport.sweep_finished(types.SimpleNamespace()), 'never fails the job that starts')
+
+
+class ScaledWaitTests(unittest.TestCase):
+    """X-PD-05: every wait of a throwaway container grows with the app's data; the value a call asked for is the floor."""
+
+    def runner(self):
+        seen = {}
+
+        class Recording(FakeRunner):
+            def podman(self, *args, **kwargs):
+                seen[args[:2] if args[0] == 'volume' else args[:1]] = kwargs.get('timeout')
+                return super().podman(*args, **kwargs)
+
+            def relay(self, args, *, stdout, timeout=None, max_output=None, check=True):
+                seen[('relay',)] = timeout
+                return super().relay(args, stdout=stdout, timeout=timeout, max_output=max_output, check=check)
+
+        return Recording(), seen
+
+    def calls(self, tmp):
+        tmp.run('db', 'img:1', [], detach=True, timeout=600)
+        tmp.exec('db', ['pg_isready'], timeout=600)
+        tmp.volume('v')
+        tmp.volume_import('v', lambda out: out.write(b'tar'), timeout=3 * 3600)
+        tmp.volume_export('v', io.BytesIO(), timeout=3 * 3600)
+
+    WAITS = {('run',): 600, ('exec',): 600, ('volume', 'import'): 3 * 3600, ('relay',): 3 * 3600}
+
+    def test_nothing_changes_while_the_size_is_not_known(self):
+        runner, seen = self.runner()
+        tmp = tempctr.TempObjects(runner, JOB, cpus=None)
+        self.calls(tmp)
+        self.assertEqual({key: seen[key] for key in self.WAITS}, self.WAITS)
+        self.assertIsNone(tmp.size)
+
+    def test_a_big_app_gets_more_time_never_less(self):
+        runner, seen = self.runner()
+        tmp = tempctr.TempObjects(runner, JOB, cpus=None)
+        big = 500 * 1024 ** 3
+        tmp.scale_to(big)
+        self.calls(tmp)
+        for key, base in self.WAITS.items():
+            self.assertEqual(seen[key], podman.scaled_timeout(base, big), key)
+            self.assertGreater(seen[key], base, key)
+        self.assertEqual(seen[('volume', 'create')], 120, 'the short calls of the object itself are not stretched')
+
+    def test_a_small_size_or_a_bad_one_changes_nothing(self):
+        for size in (10, 0, -5, None, True, 'big'):
+            with self.subTest(size=size):
+                runner, seen = self.runner()
+                tmp = tempctr.TempObjects(runner, JOB, cpus=None)
+                tmp.scale_to(size)
+                tmp.run('db', 'img:1', [], detach=True, timeout=600)
+                self.assertEqual(seen[('run',)], 600)
+        tmp = tempctr.TempObjects(FakeRunner(), JOB, cpus=None)
+        tmp.scale_to(5 * 1024 ** 3)
+        tmp.scale_to(None)
+        self.assertIsNone(tmp.size, 'a size can be taken back')
 
 
 if __name__ == '__main__':

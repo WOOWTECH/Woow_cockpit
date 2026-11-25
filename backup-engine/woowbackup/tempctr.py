@@ -30,6 +30,8 @@ HAOS parity (2026-11-25, lane F3-helpers):
   nothing either (X-TC-07: `sweep` raises, its callers report it).
 * `put_back_later(label, action)`: what a job changed on the device for its reading (a service it started) and puts
   back: run by `cleanup` first, retried while it fails (hatarget.ensure_running).
+* `size` (bytes of the app's data, `scale_to`): every wait of a throwaway container grows with it -- the old value is the
+  floor, nothing is cut -- so a big app is only slow, not "too late" (X-PD-05).
 """
 import contextlib
 import io
@@ -40,6 +42,7 @@ import shlex
 import tarfile
 import threading
 
+from . import podman
 from .errors import BackupError
 
 LABEL = 'io.woowtech.backup.job'
@@ -224,6 +227,7 @@ class TempObjects:
         self._noted = set()    # objects whose removal failed once (one log line each: X-TC-05)
         self._puts_back = []   # [(label, action)] what cleanup() puts back first (put_back_later)
         self.services = {}     # {container: unit} of the services this job started for its reading (hatarget.ensure_running)
+        self.size = None       # bytes of the app's data when known (scale_to): the waits below grow with it
 
     def _long(self, kwargs):
         """kwargs of a long podman call: the job's abort hook when there is one."""
@@ -236,6 +240,14 @@ class TempObjects:
         error = self.abort() if self.abort is not None else None
         if error is not None:
             raise error
+
+    def scale_to(self, nbytes):
+        """The app's data is `nbytes` big: the waits of this job's throwaway containers grow with it (X-PD-05). Never shorter
+        than the value a call asked for."""
+        self.size = nbytes if isinstance(nbytes, (int, float)) and not isinstance(nbytes, bool) and nbytes > 0 else None
+
+    def _wait(self, seconds):
+        return podman.scaled_timeout(seconds, self.size)
 
     def name(self, role):
         return object_name(self.job_id, role if self.scope is None else f'{self.scope}-{role}')
@@ -358,7 +370,7 @@ class TempObjects:
         argv = self.run_argv(role, image, args, detach=detach, interactive=input is not None, remove=remove,
                              **options)
         self.containers.append(name)
-        result = self.runner.podman(*argv, input=input, stdout=stdout, timeout=timeout,
+        result = self.runner.podman(*argv, input=input, stdout=stdout, timeout=self._wait(timeout),
                                     max_output=max_output if max_output is not None else (64 * 1024 if detach else None),
                                     check=check, **self._long({}))
         if remove and not detach and result.returncode == 0:
@@ -392,7 +404,7 @@ class TempObjects:
                 raise BackupError('internal-error', '容器命令格式不正確。')
             command.append(arg)
         self._stopped()
-        return self.runner.podman(*command, input=input, stdout=stdout, timeout=timeout, max_output=max_output,
+        return self.runner.podman(*command, input=input, stdout=stdout, timeout=self._wait(timeout), max_output=max_output,
                                   check=check, **self._long({}))
 
     def stop(self, role, timeout=STOP_TIMEOUT):
@@ -502,7 +514,7 @@ class TempObjects:
         writer.start()
         try:
             try:
-                self.runner.podman('volume', 'import', name, '-', input=reader, timeout=timeout, max_output=64 * 1024,
+                self.runner.podman('volume', 'import', name, '-', input=reader, timeout=self._wait(timeout), max_output=64 * 1024,
                                    **self._long({}))
             finally:
                 reader.close()  # a producer still writing gets EPIPE and stops
@@ -540,7 +552,7 @@ class TempObjects:
         if name not in self.volumes:
             raise BackupError('internal-error', '只能匯出這個作業建立的資料卷。')
         self._stopped()
-        self.runner.relay(['volume', 'export', name], stdout=handle, timeout=timeout, max_output=max_output,
+        self.runner.relay(['volume', 'export', name], stdout=handle, timeout=self._wait(timeout), max_output=max_output,
                           **self._long({}))
 
     def kill_all(self):

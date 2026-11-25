@@ -169,7 +169,7 @@ def live_json(work, app, container, user, database, sql, *, size=None):
                 hatarget.ensure_running(work, app, container, ready='postgres', size=size)
                 started = True
                 continue
-            sentence = dict((row[0], row[1]) for row in podman.REASONS).get(reason)
+            sentence = podman.SENTENCES.get(reason)
             if reason in LIVE_REASONS and sentence:
                 raise BackupError('job-failed', f'無法讀取這台「{app.name}」的資料庫：{sentence}', app=app.id,
                                   reason=reason) from None

@@ -967,7 +967,8 @@ def classify(stderr, returncode=None):
     return BY_EXIT.get(returncode, (None, ''))
 
 
-KNOWN_REASONS = frozenset(row[0] for row in REASONS) | {'timeout'}
+SENTENCES = {**{row[0]: row[1] for row in REASONS}, 'timeout': '等待逾時，這台比預期的慢。'}   # code -> the sentence
+KNOWN_REASONS = frozenset(SENTENCES)
 
 
 def reason_code(error):

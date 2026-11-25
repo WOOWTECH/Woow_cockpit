@@ -226,7 +226,8 @@ class LeftOutLinksTests(unittest.TestCase):
     def customer_volume(self, links):
         """A live export of this device's volume: some files and `links` customer-made symlinks that leave it."""
         path = self.dir / 'live.tar'
-        members = [{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000}, {'name': 'data', 'data': b'd', 'uid': 1000, 'gid': 1000},
+        members = [{'name': '.', 'type': 'dir', 'uid': 1000, 'gid': 1000},
+                   {'name': 'data', 'data': b'd', 'uid': 1000, 'gid': 1000},
                    {'name': 'ok', 'type': 'symlink', 'linkname': 'data', 'uid': 1000, 'gid': 1000},
                    {'name': 'gone', 'data': b'g', 'uid': 1000, 'gid': 1000},
                    {'name': 'gone-link', 'type': 'hardlink', 'linkname': 'gone', 'uid': 1000, 'gid': 1000}]

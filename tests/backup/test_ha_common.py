@@ -1,7 +1,6 @@
 """What the batch 1 importers share (hacommon.py) and the throwaway containers' host lines (tempctr). Team E2."""
 import io
 import json
-import subprocess
 import tarfile
 import tempfile
 import types
@@ -185,11 +184,13 @@ class World:
         self.exec_results = []      # Result per psql call (the last one is repeated)
         self.volumes = {}           # name -> tar bytes of `volume export`
         self.dirs = {}
+        self.systemctl_kwargs = []
 
     def podman(self, args, kwargs):
         verb = args[0]
         if verb == 'image' and args[1] == 'inspect':
-            return podman.Result(0 if args[-1] in self.images else 125, b'sha256:abc\n', b'Error: image not known')
+            return podman.Result(0 if args[-1] in self.images else 125, b'sha256:abc\n',
+                                 b'Error: image not known')
         if verb == 'pull':
             if self.pull_error is not None:
                 raise self.pull_error
@@ -200,7 +201,8 @@ class World:
             return result
         if verb == 'container' and args[1] == 'inspect':
             running = args[-1] in self.running
-            return podman.Result(0 if running else 125, b'true\n' if running else b'', b'' if running else b'no such container')
+            return podman.Result(0 if running else 125, b'true\n' if running else b'',
+                                 b'' if running else b'no such container')
         if verb == 'exec' and args[2] == 'pg_isready':
             if self.not_ready > 0:
                 self.not_ready -= 1
@@ -235,6 +237,7 @@ class Owner:
 
     def systemctl(self, *args, **kwargs):
         self.calls.append(('systemctl', *args))
+        self.world.systemctl_kwargs.append((args[0], dict(kwargs)))
         result = self.world.stop if args[0] == 'stop' else self.world.start
         if result is not None and result.returncode != 0:
             raise podman.CommandError(f'systemctl {args[0]} 執行失敗（結束碼 {result.returncode}）。', returncode=result.returncode,
@@ -354,6 +357,7 @@ class EnsureImageTests(Case):
         with self.assertRaises(BackupError) as caught:
             hatarget.ensure_image(self.work, APP, self.REF)
         self.assertEqual(caught.exception.issues[0].id, 'target.image-missing')
+        self.assertIn('等待逾時', caught.exception.message)
         self.assertEqual(len([c for c in self.world.calls if c[1] == 'pull']), 2, 'a timeout may pass: once more')
         for error in (haissues.job_wide(BackupError('insufficient-space', 'disk')), BackupError('busy', 'other job'),
                       BackupError('owner-missing', 'no such account')):
@@ -417,7 +421,8 @@ class ImageLabelTests(Case):
 
         def answer(args, kwargs):
             if args[:3] == ('image', 'inspect', '--format') and args[3].startswith('{{json'):
-                return podman.Result(0 if args[-1] in self.world.images else 125, b'{"org.opencontainers.image.version":"5.8.9"}\n', b'')
+                present = args[-1] in self.world.images
+                return podman.Result(0 if present else 125, b'{"org.opencontainers.image.version":"5.8.9"}\n', b'')
             return real(args, kwargs)
 
         self.world.podman = answer
@@ -472,6 +477,13 @@ class EnsureRunningTests(Case):
         self.world.calls.clear()
         self.temp.cleanup()
         self.assertFalse([c for c in self.world.calls if c[0] == 'systemctl'], 'put back once')
+
+    def test_the_start_is_ended_by_the_watchdog_the_put_back_never_is(self):
+        self.start()
+        self.temp.cleanup()
+        kwargs = dict(self.world.systemctl_kwargs)
+        self.assertIs(kwargs['start']['abort'], self.work.abort)
+        self.assertNotIn('abort', kwargs['stop'], 'a cancel or a full disk must not stop what puts things back')
 
     def test_asking_again_changes_nothing(self):
         self.start()

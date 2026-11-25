@@ -232,7 +232,7 @@ def ensure_image(work, app, ref):
             if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy', 'owner-missing'):
                 raise
             reason = podman.reason_code(error)
-            sentence = dict((row[0], row[1]) for row in podman.REASONS).get(reason, '')
+            sentence = podman.SENTENCES.get(reason, '')
             failed = True
         if not failed:
             if image_present(work, app, ref):
@@ -248,18 +248,23 @@ def ensure_image(work, app, ref):
 
 def ensure_app_images(work, app):
     """`ensure_image` for every image the app's own containers use (the Quadlet files' Image=): the refs that were
-    downloaded. Call it before `adapter.import_manifest`, which records every one of them (X-AD-60)."""
-    images = work.adapter(app).container_images(work.quadlets(app))
-    return [ref for ref in dict.fromkeys(images.values()) if ensure_image(work, app, ref)]
+    downloaded. Call it before `adapter.import_manifest`, which records every one of them (X-AD-60). An adapter that cannot
+    list its images (a test double) has none to look for."""
+    adapter = work.adapter(app)
+    listing = getattr(adapter, 'container_images', None)
+    if listing is None:
+        return []
+    return [ref for ref in dict.fromkeys(listing(work.quadlets(app)).values()) if ensure_image(work, app, ref)]
 
 
 # ====================================================================== the owner's user manager (X-AD-01)
 
-def ensure_user_manager(work, app):
+def ensure_user_manager(work, app, runner=None):
     """The app owner's user manager runs (every `systemctl --user` and every Podman unit needs it): linger is enabled when
     it was not (`OwnerRunner.ensure_user_manager`); True then. Where it cannot be enabled only this app stops
-    (`target.linger-failed`, with what to do). A runner that is not the real one (every test double) does nothing."""
-    runner = work.runner(app)
+    (`target.linger-failed`, with what to do). A runner that is not the real one (every test double) does nothing.
+    `runner`: the app owner's runner when the caller has it already (the adapter that is just being made)."""
+    runner = runner or work.runner(app)
     ensure = getattr(runner, 'ensure_user_manager', None)
     if ensure is None:
         return False
@@ -348,7 +353,7 @@ def ensure_running(work, app, container, *, ready='running', size=None, timeout=
         except BackupError as error:
             if haissues.is_job_wide(error) or error.code in ('insufficient-space', 'busy'):
                 raise
-            sentence = dict((row[0], row[1]) for row in podman.REASONS).get(podman.reason_code(error), '')
+            sentence = podman.SENTENCES.get(podman.reason_code(error), '')
             raise _stop(app, 'target.service-failed',
                         f'無法啟動這台「{app.name}」停著的服務（容器 {_name(container)}）' + (f'：{sentence}' if sentence else '。')
                         + '這台的應用沒有任何變更。', [container],
