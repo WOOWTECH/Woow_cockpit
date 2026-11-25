@@ -319,9 +319,18 @@ class KeptOwner(strength.StrengthOwner):
                 return podman.Result(1, b'', b'ERROR:  database does not exist')
         return super().podman(args, data, stdout)
 
+    cut_script = False  # a script arrives short: psql exits 0 but never reaches the end mark
+
     def psql_file(self, database, sql, stdout):
         if sql.startswith("SELECT coalesce(json_agg(rolname), '[]'::json) FROM pg_roles"):
             return self.json(['notes'], stdout)  # the new cluster has only what the image created
+        if sql.startswith('BEGIN;\n') and '\\echo woowbk-sql-end-' in sql:
+            # a script with its own transaction and an end mark psql prints after running it (pg-stdin follow-up F1); this
+            # fake answers it itself, so these tests do not depend on test_strengthen.py's own fake being changed
+            body, _, tail = sql.rpartition('COMMIT;\n')
+            mark = tail.strip()[len('\\echo '):]
+            done = super().psql_file(database, body[len('BEGIN;\n'):], stdout)
+            return podman.Result(done.returncode, b'' if self.cut_script else (mark + '\n').encode(), done.stderr)
         return super().psql_file(database, sql, stdout)
 
 
