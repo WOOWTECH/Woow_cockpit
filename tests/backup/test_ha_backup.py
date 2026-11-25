@@ -2037,6 +2037,64 @@ class NamesTests(unittest.TestCase):
         names.admit('d1/g', 'fifo')
         self.assertEqual(code_of(names.admit, 'd1/g/h', 'file')[1].details['reason'], 'entry below a file or link')
 
+    def test_an_entry_costs_its_missing_folders_only(self):
+        """IN-34: the folders above an entry are looked at from the bottom: once one is in the table everything above it
+        is known to be a folder. Entries of two deep paths, one after the other, must not cost the depth every time."""
+        names = habackup._Names(10 ** 6)
+        deep = ['/'.join(f'{tag}{i}' for i in range(200)) for tag in 'ab']
+        calls, real = [], names.digest
+        names.digest = lambda name: (calls.append(len(name)), real(name))[1]
+        for i in range(10):
+            for parent in deep:
+                names.admit(f'{parent}/f{i}', 'file')
+        self.assertLess(len(calls), 2 * 201 + 18 * 2 + 10, 'two chains once, then the entry and its folder')
+        calls.clear()
+        names.admit(f'{deep[0]}/new/f', 'file')  # a new folder below a known chain: its own name and the known one
+        self.assertEqual(len(calls), 1 + 2)
+        names = habackup._Names(10 ** 6)
+        names.admit('a/b/c', 'file')
+        self.assertEqual(code_of(names.admit, 'a/b/c/d/e', 'file')[1].details['member'], 'a/b/c/d')
+
+    @staticmethod
+    def plain_admit(model, name, kind):
+        """The structure rules written the plain way: every folder above the entry looked at, the kinds in a dict."""
+        state = model.get(name)
+        if state and state != 'implied':
+            return 'duplicate entry'
+        if state and kind != 'dir':
+            return 'a non-directory replaces a directory'
+        parts = name.split('/')
+        for depth in range(1, len(parts)):
+            prefix = '/'.join(parts[:depth])
+            if model.get(prefix, 'implied') not in ('dir', 'implied'):
+                return 'entry below a file or link'
+            model.setdefault(prefix, 'implied')
+        model[name] = kind
+        return None
+
+    def test_it_agrees_with_the_plain_rules(self):
+        """Any order of files, folders, links and devices over a few names: the same entries are refused for the same
+        reason as by the rules written the plain way (and the same ones are accepted)."""
+        rng = random.Random(20261125)
+        refused = 0
+        for round_ in range(400):
+            names, model = habackup._Names(10 ** 4), {}
+            for step in range(rng.randrange(1, 60)):
+                name = '/'.join(rng.choice('abc') for _ in range(rng.randrange(1, 6)))
+                kind = rng.choice(['file', 'dir', 'dir', 'symlink', 'hardlink', 'fifo', 'device'])
+                expected = self.plain_admit(model, name, kind)
+                try:
+                    names.admit(name, kind)
+                    got = None
+                except BackupError as error:
+                    got = error.details['reason']
+                with self.subTest(round=round_, step=step, name=name, kind=kind):
+                    self.assertEqual(got, expected)
+                if got is not None:
+                    refused += 1
+                    break  # a refused walk ends
+        self.assertGreater(refused, 100, 'the sample refuses often enough to mean something')
+
     def test_implied_folders_are_limited(self):
         """A name of many folders costs a place each: as many as there may be entries twice over."""
         names = habackup._Names(1000)

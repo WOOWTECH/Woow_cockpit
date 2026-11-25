@@ -1675,15 +1675,22 @@ class _Names:
         self.used += 1
 
     def _folders(self, parent):
-        """`parent` and every folder above it must be folders (implied when they have no entry yet)."""
-        parts = parent.split('/')
-        for depth in range(1, len(parts) + 1):
-            key = self.digest('/'.join(parts[:depth]))
+        """`parent` and every folder above it must be folders (implied when they have no entry yet). Looked at from the
+        bottom: a name in the table was admitted with every folder above it checked, and a folder never becomes anything
+        else, so the walk ends at the first folder that is there. An entry costs its own missing folders, not the depth of
+        its path: names of 2000 folders on alternating paths must not keep a job busy for hours."""
+        missing, name = [], parent
+        while name:
+            key = self.digest(name)
             state = self.states[self._find(key)]
-            if not state:
-                self._put(key, self.IMPLIED)
-            elif state not in (self.DIR, self.IMPLIED):
+            if state in (self.DIR, self.IMPLIED):
+                break
+            if state:
                 raise _broken('entry below a file or link', member=shown_name(parent))
+            missing.append(key)
+            name = name.rpartition('/')[0]
+        for key in reversed(missing):
+            self._put(key, self.IMPLIED)
 
     def admit(self, name, kind):
         key = self.digest(name)
