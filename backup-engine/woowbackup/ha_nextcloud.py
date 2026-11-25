@@ -245,7 +245,8 @@ SELECT json_build_object(
 # left out of the restore and listed, the tables and their data are moved; nothing else of the shape list may be left out
 # (a type, a view, a rule, a CHECK or a default that calls a function would break the tables that use it).
 SKIPPABLE = ('functions', 'triggers')
-SKIPPED_TOC = ('FUNCTION', 'TRIGGER')
+# pg_proc holds functions, procedures and aggregates (SHAPE_SQL counts all of them as `functions`); pg_dump lists them as three kinds
+SKIPPED_TOC = ('FUNCTION', 'PROCEDURE', 'AGGREGATE', 'TRIGGER')
 OBJECTS_SQL = """WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'),
  ext AS (SELECT classid, objid FROM pg_depend WHERE deptype = 'e')
 SELECT json_build_object(

@@ -1334,6 +1334,32 @@ class CheckTests(NextcloudCase):
     def test_functions_and_triggers_of_other_apps_one_more_name_asks_again(self):
         self.assert_one_more_name_asks_again('nextcloud.db-objects-skipped')
 
+    def test_procedures_and_aggregates_are_programs_too(self):
+        # pg_proc holds functions, procedures and aggregates; the check counts them all as functions, the dump lists three kinds
+        self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=3)
+        self.world.objects = {'functions': ['public.f', 'public.p', 'public.agg'], 'triggers': []}
+        self.world.toc = toc_of('201; 1259 16390 TABLE public oc_users nextcloud',
+                                '202; 1255 16400 FUNCTION public f() nextcloud',
+                                '203; 1255 16401 PROCEDURE public p() nextcloud',
+                                '204; 1255 16402 AGGREGATE public agg(integer) nextcloud',
+                                '205; 0 0 COMMENT public AGGREGATE agg(integer) nextcloud',
+                                '206; 0 0 COMMENT public PROCEDURE p() nextcloud',
+                                '207; 2606 16403 EVENT TRIGGER - evt nextcloud')
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        self.assertEqual(issue_of(row, 'nextcloud.db-objects-skipped')['items'],
+                         ['函式 public.f', '函式 public.p', '函式 public.agg'])
+        with self.assertRaises(BackupError) as caught:     # an event trigger is not a program that is left out
+            self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+        self.assertIn('EVENT TRIGGER', caught.exception.message)
+        self.world.toc = toc_of('201; 1259 16390 TABLE public oc_users nextcloud',
+                                '202; 1255 16400 FUNCTION public f() nextcloud',
+                                '203; 1255 16401 PROCEDURE public p() nextcloud',
+                                '204; 1255 16402 AGGREGATE public agg(integer) nextcloud',
+                                '205; 0 0 COMMENT public AGGREGATE agg(integer) nextcloud')
+        self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
+        listing = self.world.container_files.files[('nc-db', '/tmp/woowbk-nc.toc')].decode()
+        self.assertEqual([line.split(' ', 3)[3].split(' ')[0] for line in listing.splitlines() if line[:1].isdigit()], ['TABLE'])
+
     def test_the_dump_may_not_hold_more_than_was_confirmed(self):
         # NC-45, second gate: confirmed are the kinds the check showed; any other kind that Nextcloud never creates stops
         self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=1)
