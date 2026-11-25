@@ -1312,6 +1312,7 @@ def database_role(work, app, doc, role, config, sink):
     config.php holds (the verifier is made here); a superuser role stays one (it is loaded by a plain role: build_cluster)."""
     from . import jobs
     row = doc.get('role') if isinstance(doc.get('role'), dict) else None
+    made = row is None      # not even the role is there (a role without a usable password is): the live lists have nothing of it
     password = row.get('password') if row else None
     if not (isinstance(password, str) and ha_odoo.VERIFIER_RE.fullmatch(password)):
         plain = config.get('dbpassword')
@@ -1333,6 +1334,7 @@ def database_role(work, app, doc, role, config, sink):
                   '這台 Nextcloud 用的資料庫帳號是超級使用者，不是 Nextcloud 安裝程式建立的樣子。放入 HA 的資料時改用權限低的暫時帳號，'
                   '放完再把資料交回這個帳號；匯入後它仍是超級使用者，和這台原本一樣。', [role])
     doc['role'] = row
+    doc['role_made'] = made
     return doc
 
 
@@ -2052,6 +2054,7 @@ def catalog_verify_sql(role):
 
 
 ROLE_ATTRS = ('super', 'login', 'createdb', 'createrole', 'replication', 'bypassrls', 'connlimit')
+BASELINE_KEYS = ('roles', 'datacl', 'nspacl')     # what a made role changes in the lists of this device's own database (NC-07)
 
 
 def _rows(rows):
@@ -2161,6 +2164,14 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
               and e in db.get('available', ()) and EXT_RE.fullmatch(e)]
     pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(loader)};\n'
               + ''.join(f'CREATE EXTENSION IF NOT EXISTS {_ext_ident(e)};\n' for e in extensions + extras), live.db_name)
+    baseline = None
+    if db.get('role_made'):
+        # NC-07: this device's database has no such role, so its list of roles and its rights (database, schema public) have nothing
+        # of the role to be compared with. What the new cluster is before HA's data goes in (the role, its rights, the extensions)
+        # is the baseline the converted one must still be after it: HA's dump may add no role and no right.
+        baseline = pg.query_json(catalog_verify_sql(role), live.db_name)
+        if not (isinstance(baseline, dict) and isinstance(baseline.get('roles'), list) and all(key in baseline for key in BASELINE_KEYS)):
+            raise BackupError('job-failed', '無法讀取新資料庫的角色與權限。')
     left_out = shape_objects(details.get('shape'))
     restore_dump(work, tmp, dump, loader, live.db_name, majors=majors, skip=SKIPPED_TOC if left_out and left_out[0] else ())
     # From here on the cluster holds HA's objects: every session is pinned (Pinned); the superuser reads catalogs only
@@ -2187,8 +2198,9 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
         doc = {**doc, **catalog}
     else:
         doc = None
-    problems = verify_converted(doc, expected=expected, db=dict(db, extensions=sorted(set(db['extensions']) | set(extras))),
-                                role=role, dbname=live.db_name, moves=moves)
+    problems = verify_converted(doc, expected=expected, role=role, dbname=live.db_name, moves=moves,
+                                db=dict(db, extensions=sorted(set(db['extensions']) | set(extras)),
+                                        **({key: baseline[key] for key in BASELINE_KEYS} if baseline else {})))
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
     carry_settings(work, app, live, admin, sink)

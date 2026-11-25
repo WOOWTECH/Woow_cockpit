@@ -282,6 +282,7 @@ class World(fk.World):
                            'enabled': ['dav', 'files', 'notes', 'richdocuments', 'gone_app'], 'encryption': None}
         self.verify = None
         self.catalog = None
+        self.catalog_changes = []
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
         self.objects = {'functions': [], 'triggers': []}
         self.pg_major = 16              # PG_MAJOR of this device's database image
@@ -389,11 +390,16 @@ class World(fk.World):
                 'appconfig': LIVE_DB['appconfig']}
         if sql.startswith("SELECT json_build_object(\n 'owners'"):
             made = re.findall(r"PASSWORD '(SCRAM-SHA-256\$[^']+)'", '\n'.join(x for _db, x, _tx in self.psql['nc-db'].executed))
-            return self.catalog if self.catalog is not None else {
+            # what the new cluster is: the role (made or this device's), its rights, the extensions; never what this device's own
+            # database has when the role is not there (LIVE_DB holds the lists with the role)
+            default = {
                 'owners': ['oc_admin'], 'verifier_md5': hashlib.md5((made[-1] if made else VERIFIER).encode()).hexdigest(),
                 'role': {k: v for k, v in (self.live_db['role'] or nc.INSTALLER_ROLE).items() if k != 'password'}, 'role_settings': 0,
                 'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
                 **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+            if self.catalog_changes:       # the n-th read of the catalog is the default with the n-th change (before / after HA's data)
+                return {**default, **self.catalog_changes.pop(0)}
+            return self.catalog if self.catalog is not None else default
         if sql == nc.ha_odoo.SETTINGS_SQL:
             if role == 'nextcloud-db' and self.live_settings is None:      # this device's settings cannot be read
                 raise CommandError('psql 執行失敗（結束碼 1）。', returncode=1, stderr=b'ERROR: x')
@@ -1922,9 +1928,17 @@ class LiveTargetTests(NextcloudCase):
                 self.assertEqual((row['importable'], issue['level']), (False, 'stop'))
                 self.assertTrue(issue['action'])
 
+    # This device's own database as it is when the role of config.php is not there: no such role in its list of roles, and none of the
+    # rights the installer gives it (the lists of LIVE_DB are those of a database that has it).
+    NO_ROLE = dict(LIVE_DB, role=None, roles=['nextcloud'], datacl=None,
+                   nspacl='{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}')
+
+    def catalog_reads(self):
+        return [x for x in self.world.sessions if x['role'] == 'nc-db' and "'owners'" in x['sql']]
+
     def test_a_missing_role_is_made_from_the_password_in_config_php(self):
         # NC-07: the database has no such role: config.php names it and holds its password
-        self.world.live_db = dict(LIVE_DB, role=None)
+        self.world.live_db = dict(self.NO_ROLE)
         row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
         issue = issue_of(row, 'nextcloud.db-role-created')
         self.assertEqual((row['ok'], issue['level'], issue['items']), (True, 'auto', ['oc_admin']))
@@ -1938,6 +1952,41 @@ class LiveTargetTests(NextcloudCase):
         import base64
         self.assertEqual(nc.scram_verifier('live-db-password-0001', iterations=int(iterations), salt=base64.b64decode(salt)),
                          made.group(2), 'the verifier of config.php\'s password')
+
+    def test_the_converted_database_of_a_made_role_is_compared_with_the_new_cluster_before_the_data_not_with_this_devices(self):
+        # NC-07: the new cluster has the role and its rights, this device's database has neither: the lists of roles and rights
+        # cannot be what this device's are; they must be what the new cluster was before HA's data went in
+        self.world.live_db = dict(self.NO_ROLE)
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        sessions = [x for x in self.world.sessions if x['role'] == 'nc-db']
+        reads = [i for i, x in enumerate(sessions) if "'owners'" in x['sql']]
+        self.assertEqual(len(reads), 2, 'the baseline before the restore and the verification after it')
+        first_table = next(i for i, x in enumerate(sessions) if 'public.oc_' in x['sql'])
+        self.assertTrue(reads[0] < first_table < reads[1], (reads, first_table))
+        # a plain role that exists on this device is compared with this device's lists as before: one read only
+        self.world.sessions.clear()
+        self.world.live_db = dict(LIVE_DB)
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(len(self.catalog_reads()), 1)
+
+    def test_what_the_dump_adds_to_the_roles_or_rights_of_a_made_role_stops_the_conversion(self):
+        # the baseline is not a way round the check: a role or a right that appears while HA's data is restored stops it
+        for change, label in (({'roles': ['nextcloud', 'oc_admin', 'evil']}, '資料庫角色和這台的不同'),
+                              ({'datacl': '{nextcloud=CTc/nextcloud,oc_admin=c/nextcloud,evil=c/nextcloud}'}, '資料庫權限和這台的不同'),
+                              ({'nspacl': '{pg_database_owner=UC/pg_database_owner,=UC/pg_database_owner,oc_admin=C/pg_database_owner}'},
+                               'public schema 權限和這台的不同')):
+            with self.subTest(change=list(change)):
+                self.world.live_db = dict(self.NO_ROLE)
+                self.world.catalog_changes = [{}, change]
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertIn(label, caught.exception.message)
+        self.world.live_db = dict(self.NO_ROLE)
+        self.world.catalog_changes = [{'roles': None}, {}]      # the baseline cannot be read
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('無法讀取新資料庫的角色與權限', caught.exception.message)
 
     def test_a_role_without_a_usable_password_keeps_its_rights_and_gets_a_new_verifier(self):
         for password in (None, 'plain-text-password', ''):
