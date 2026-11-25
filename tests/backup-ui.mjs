@@ -6892,6 +6892,23 @@ try {
       assert.equal(await page.locator('section.ha-confirm').getAttribute('aria-labelledby'), 'ha-confirm-title');
     });
 
+  await check('HAOS 一次確認 in the dark theme: the check, the one confirmation, the running import and its result keep WCAG AA contrast and fit every width',
+    v2Fixture({ outcomes: { n8n: { restore: 'rolled-back' } } }), async page => {
+      await ready(page);
+      assert.equal(await page.evaluate(() => document.documentElement.classList.contains('pf-v6-theme-dark')), true);
+      await v2Check1(page, { keep: ['odoo', 'n8n', 'emqx'] });
+      await page.locator('#ha-db-0').check();
+      await page.locator('#ha-ack').check();
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the check and the confirmation');
+      await allWidths(page, 'HAOS dark options');
+      await v2Import(page).click();
+      await page.locator('.ha-group-list').waitFor({ timeout: 30000 });
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the running import');
+      await page.locator('[data-result="group"]').waitFor({ timeout: 60000 });
+      assert.deepEqual((await contrastOf(page)).failures, [], 'the result');
+      await allWidths(page, 'HAOS dark result');
+    }, { beforeGoto: page => page.addInitScript(() => localStorage.setItem('shell:style', 'dark')) });
+
   await check('HAOS 一次確認: names from a backup are only ever text, and the screens fit 1440 to 320 px without sideways scrolling',
     v2Fixture({ check: v2Check({ shared: [v2Issue('_shared', 'confirm', 'shared.pauses', '會暫停 <img src=x onerror="window.__pwned=1">', { items: ['<b>bold</b>', '"><script>window.__pwned=2</script>'] })],
       odoo: { issues: [v2Issue('odoo', 'confirm', 'odoo.missing-modules', '缺少 <i>模組</i>', { items: ['a'.repeat(120)], database: 'prod' })] } }) }), async page => {
