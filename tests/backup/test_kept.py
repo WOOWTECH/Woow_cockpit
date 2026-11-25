@@ -225,6 +225,25 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertIn('完整複本', caught.exception.message)
         self.assertEqual([e for e in self.world.events if e[0] in ('backup', 'keep', 'restore')], [])
 
+    def test_the_room_is_checked_again_when_the_pre_restore_copy_has_used_some(self):
+        """The first question (before anything stops) said yes; the pre-restore copy then used the room: the copy of the service
+        is refused before its first service stops, the pre-restore copy is dropped and the app's units run again."""
+        self.world.kept_estimate = 100 * 1024 ** 2
+        reserve = self.paths.reserve_bytes
+        self.world.hook_probe = lambda: setattr(self.storage, 'free', reserve + 100 * 1024 ** 2)
+        self.converted()
+        with self.assertRaises(BackupError) as caught:
+            flows.run_restore(self.ctx(), {'backup_id': self.backup_id, 'apps': ['woowbk-demo']})
+        self.assertEqual(caught.exception.code, 'insufficient-space')
+        self.assertIn('保存還原前資料後', caught.exception.message)
+        self.assertIn('完整複本', caught.exception.message)
+        names = [e[0] for e in self.world.events]
+        self.assertIn('backup', names)
+        self.assertEqual([n for n in names if n in ('keep', 'restore', 'put-back')], [])
+        self.assertTrue(any(e[0] == 'start_units' and e[1] == 'woowbk-demo' for e in self.world.events), 'units run again')
+        self.assertEqual(self.kept_backups(), [])
+        self.assertFalse(self.pending().exists())
+
     def test_no_other_database_means_no_copy(self):
         self.world.kept_wanted.clear()
         result = self.run_converted()

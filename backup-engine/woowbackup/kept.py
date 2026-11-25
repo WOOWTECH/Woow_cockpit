@@ -84,9 +84,11 @@ class Kept:
                 'more': max(0, len(self.databases) - MAX_NAMES), 'put_back': [], 'not_put_back': [], 'notes': list(self.notes)}
 
 
-def check_space(ctx, plans):
+def check_space(ctx, plans, *, again=False):
     """Before anything stops: the kept copies need the export of every database volume twice (the plain copy a rollback
-    reads and the archive) and the device reserve. Refused with `insufficient-space` for this app only; nothing changed."""
+    reads and the archive) and the device reserve. Refused with `insufficient-space` for this app only; nothing changed.
+    `again`: the same question once the pre-restore copy is on disk (it has used some of the room), before the first
+    service of the copy stops."""
     need = sum(int(getattr(plan.adapter, 'kept_estimate', 0) or 0) for plan in plans if getattr(plan.adapter, 'kept_wanted', None))
     if not need:
         return
@@ -94,10 +96,12 @@ def check_space(ctx, plans):
     required = int(need * SPACE_FACTOR) + int(ctx.paths.reserve_bytes)
     from .flows import human
     if free < required:
-        raise BackupError('insufficient-space', f'這台的磁碟空間不夠保留資料庫服務的完整複本：需要約 {human(required, up=True)}，'
+        after = '保存還原前資料後，' if again else ''
+        raise BackupError('insufficient-space', f'{after}這台的磁碟空間不夠保留資料庫服務的完整複本：需要約 {human(required, up=True)}，'
                                                 f'目前可用 {human(free)}。沒有做任何變更，請先清出空間再匯入。',
                           required=required, free=free)
-    ctx.log(f'保留資料庫服務的完整複本，預估需要 {human(required, up=True)}，目前可用 {human(free)}')
+    if not again:
+        ctx.log(f'保留資料庫服務的完整複本，預估需要 {human(required, up=True)}，目前可用 {human(free)}')
 
 
 def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
@@ -109,6 +113,7 @@ def keep(ctx, plans, handover, *, staging, key, source_backup_id, result):
         adapter = plan.adapter
         if plan.mode != 'inplace' or not getattr(adapter, 'kept_wanted', None):
             continue
+        check_space(ctx, [plan], again=True)  # the pre-restore copy is on disk now: is there still room? (nothing has stopped for this)
         ctx.log(f'保留「{plan.app.name}」資料庫服務的完整複本…')
         work = Path(staging) / 'kept' / plan.app.id
         section, entries, info = adapter.keep_cluster(work)
