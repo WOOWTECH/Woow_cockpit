@@ -1357,6 +1357,286 @@ class DatabaseVerdictExtraTests(unittest.TestCase):
         self.assertIn('UPDATE website SET domain = NULL', ha_odoo.CLEAR_WEBSITE_DOMAINS_SQL)
 
 
+class GapTests(unittest.TestCase):
+    """Places of ha_odoo that no test ran before (a line-coverage pass of iteration 2): this device's Quadlet files, the
+    reading of what HA's server answers, the carried settings, the rewritten live folders and the share folder."""
+
+    def quadlets(self, db=None, web=None):
+        found = dict(QUADLETS)
+        if db is not None:
+            found['odoo-db.container'] = db
+        if web is not None:
+            found['odoo.container'] = web
+        return found
+
+    # ------------------------------------------------------------------ this device's Quadlet files
+    def test_a_database_container_without_any_mount_is_not_a_layout_the_import_knows(self):
+        db = QUADLETS['odoo-db.container'].replace(b'Volume=odoo-db-data.volume:/var/lib/postgresql/data\n',
+                                                   b'Environment=PGDATA=/var/lib/postgresql/data\n')
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.Live(self.quadlets(db=db), '/home/appowner')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('沒有資料卷設定', caught.exception.message)
+
+    def test_an_odoo_container_without_its_configuration_secret_or_a_database_without_its_image_is_not_known(self):
+        web = QUADLETS['odoo.container'].replace(
+            b'Secret=odoo18-odoo-conf,type=mount,target=/etc/odoo/odoo.conf,uid=100,gid=101,mode=0400\n',
+            b'Environment=X=target=/etc/odoo/odoo.conf\n')
+        db = QUADLETS['odoo-db.container'].replace(
+            b'Image=jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:7a47\n', b'')
+        for name, quadlets in (('configuration secret', self.quadlets(web=web)), ('database image', self.quadlets(db=db))):
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                ha_odoo.Live(quadlets, '/home/appowner')
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertIn('缺少映像或設定檔機密', caught.exception.message)
+
+    def test_a_database_container_with_no_password_provider_at_all_is_left_to_the_cluster_to_say(self):
+        """OD-57: only a password in an environment file or a plain variable is said at once; no password anywhere is not."""
+        db = (QUADLETS['odoo-db.container']
+              .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n', b'')
+              .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,uid=999,gid=999,'
+                       b'mode=0400\n', b''))
+        self.assertEqual(ha_odoo.Live(self.quadlets(db=db), '/home/appowner').db_secrets, [])
+        self.assertFalse(ha_odoo._password_elsewhere(db))
+        self.assertFalse(ha_odoo._password_elsewhere(db + b'Environment=TZ=Asia/Taipei\n'))
+
+    def test_an_environment_line_that_cannot_be_read_is_not_a_secret_in_a_message(self):
+        db = QUADLETS['odoo-db.container'] + b'Environment="POSTGRES_PASSWORD=never-in-a-message\n'
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.Live(self.quadlets(db=db), '/home/appowner')
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertNotIn('never-in-a-message', caught.exception.message + repr(caught.exception.details))
+        self.assertFalse(ha_odoo._password_elsewhere(db), 'the reader of the layout does not guess: it says no')
+
+    def test_odoos_data_that_is_not_mounted_at_var_lib_odoo_stops_only_this_app(self):
+        web = QUADLETS['odoo.container'].replace(b':/var/lib/odoo\n', b':/srv/odoo\n')
+        self.assertNotEqual(web, QUADLETS['odoo.container'])
+        runner = types.SimpleNamespace(home='/home/appowner')
+        work = types.SimpleNamespace(runner=lambda _app: runner, quadlets=lambda _app: self.quadlets(web=web))
+        app = types.SimpleNamespace(id='odoo', name='Odoo 18', volumes=[{'name': 'odoo18-db-data-isolated'},
+                                                                         {'name': 'odoo18-web-data'}],
+                                    data_dirs=[{'path': '.local/share/odoo18/addons'}], postgres=[])
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.Target(work, app, haissues.Sink('odoo'))
+        self.assertEqual([(i.id, i.level) for i in caught.exception.issues], [('odoo.layout-unsupported', 'stop')])
+        self.assertIn('/var/lib/odoo', caught.exception.issues[0].message)
+        self.assertTrue(caught.exception.issues[0].action)
+
+    # ------------------------------------------------------------------ what a server answers
+    def test_a_server_that_does_not_come_up_in_time_ends_the_wait_and_a_server_that_does_is_waited_for(self):
+        class Starting(hafakes.FakeTmp):
+            ready_after = 10 ** 9
+
+            def exec(self, role, argv, **kwargs):
+                self.calls.append((role, list(argv), None))
+                return hafakes.Result(0 if len(self.calls) > self.ready_after else 2, b'', b'')
+
+            def running(self, role):
+                return True
+
+        for ready_after, clock_values, expected in ((10 ** 9, (0, 100, 400), 'raises'), (2, (0, 1, 2, 3), 'ready')):
+            waited, ticks = [], iter(clock_values)
+            tmp = Starting()
+            tmp.ready_after = ready_after
+            cluster = ha_odoo.Cluster(tmp, 'hapg', sleep=waited.append, clock=lambda: next(ticks))
+            with self.subTest(expected):
+                if expected == 'raises':
+                    with self.assertRaises(BackupError) as caught:
+                        cluster.wait_ready(timeout=300)
+                    self.assertEqual(caught.exception.code, 'job-failed')
+                    self.assertIn('300 秒內沒有就緒', caught.exception.message)
+                else:
+                    cluster.wait_ready(timeout=300)
+                    self.assertEqual(waited, [1, 1], 'it waited a second, twice, and then went on')
+
+    def test_an_answer_that_is_not_json_is_a_failure_of_the_read_not_an_internal_error(self):
+        psql = hafakes.Psql(lambda sql, db: None)
+        tmp = hafakes.FakeTmp(psql)
+        cluster = ha_odoo.Cluster(tmp, 'hapg')
+        tmp.psql = lambda argv, data: hafakes.Result(0, b'{not json', b'')
+        with self.assertRaises(BackupError) as caught:
+            cluster.query_json('SELECT 1')
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('回應格式不正確', caught.exception.message)
+
+    def test_a_module_table_or_database_list_that_is_not_a_list_is_unreadable(self):
+        for rows in ({}, 'x', None, [['a', '1']], [['bad-name', '1', 'installed']], [['m', 'v' * 65, 'installed']]):
+            with self.subTest(rows=rows), self.assertRaises(BackupError) as caught:
+                ha_odoo.parse_modules(rows)
+            self.assertEqual((caught.exception.code, caught.exception.message), ('job-failed', ha_odoo.MSG_MODULES_UNREADABLE))
+        with self.assertRaises(BackupError):
+            ha_odoo.parse_modules([['m', '1', 'installed']] * (ha_odoo.MAX_MODULE_ROWS + 1))
+        stub = types.SimpleNamespace(query_json=lambda sql, **kwargs: {'not': 'a list'})
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.ha_databases(stub)
+        self.assertEqual(caught.exception.code, 'job-failed')
+
+    # ------------------------------------------------------------------ the role and the settings this device carries
+    def test_a_connection_limit_of_the_live_role_is_kept_and_no_limit_is_none(self):
+        for limit, wanted in ((5, ' CONNECTION LIMIT 5 '), (0, ' CONNECTION LIMIT 0 '), (-1, None), (True, None),
+                              ('5', None), (None, None)):
+            with self.subTest(limit=limit):
+                sql = ha_odoo.role_sql({'login': True, 'password': 'x', 'connlimit': limit})
+                self.assertEqual(wanted is not None and wanted.strip() in sql, wanted is not None)
+                self.assertEqual('CONNECTION LIMIT' in sql, wanted is not None)
+                self.assertIn('NOSUPERUSER', sql)
+
+    def test_a_setting_that_can_hold_a_command_or_a_password_is_never_carried(self):
+        rows = [[name, 'value', 'configuration file', 'sighup'] for name in
+                ('archive_command', 'ssl_passphrase_command', 'restore_command', 'cluster_name', 'krb_server_keyfile',
+                 'some_password_setting', 'ssl_key_passphrase', 'work_mem')]
+        carried = [name for name, _value in ha_odoo.settings_to_carry(rows, [])]
+        self.assertEqual(carried, ['cluster_name', 'krb_server_keyfile', 'work_mem'] if 'krb_server_keyfile' not in
+                         ha_odoo.SETTINGS_SKIPPED else ['cluster_name', 'work_mem'])
+        for name in carried:
+            self.assertNotRegex(name, 'command|password|passphrase')
+
+    def test_a_list_setting_that_cannot_be_split_is_skipped_said_and_never_written(self):
+        class Psql(hafakes.Psql):
+            pass
+
+        psql = hafakes.Psql(lambda sql, db: [] if 'pg_file_settings' not in sql else [])
+        live = [['search_path', '"unfinished, public', 'configuration file', 'user'],
+                ['temp_tablespaces', 'a,,b', 'configuration file', 'user']]
+
+        class Runner:
+            def podman(self, *args, **kwargs):
+                return hafakes.Result(0, json.dumps(live).encode(), b'')
+
+        sink = haissues.Sink('odoo')
+        work = types.SimpleNamespace(runner=lambda _app: Runner(), log=lambda _text: None, sink=lambda _app: sink)
+        cluster = ha_odoo.Cluster(hafakes.FakeTmp(psql), 'odoo-db')
+        carried = ha_odoo.carry_settings(work, types.SimpleNamespace(id='odoo'),
+                                         types.SimpleNamespace(db_container='odoo18-db', db_user='postgres'), cluster)
+        self.assertEqual(carried, [])
+        self.assertEqual(psql.auto_conf, {}, 'nothing was written for them')
+        (line,) = sink.found
+        self.assertEqual((line.id, line.level, list(line.names)), ('odoo.settings-not-carried', 'notice',
+                                                                    ['search_path', 'temp_tablespaces']))
+        with self.assertRaises(BackupError) as caught:
+            ha_odoo.alter_system_sql('Bad Name', 'x')
+        self.assertEqual(caught.exception.code, 'internal-error')
+
+    # ------------------------------------------------------------------ what is rewritten of this device's own data
+    def test_an_export_of_this_devices_data_that_is_not_a_tar_or_has_a_name_that_cannot_be_kept_fails_the_job(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        garbage = root / 'garbage.tar'
+        garbage.write_bytes(b'this is not a tar file' * 100)
+        escaping = root / 'escaping.tar'
+        escaping.write_bytes(hx.tar_bytes([{'name': '../outside', 'data': b'x'}]))
+        truncated = root / 'truncated.tar'      # a good start, then the data of a member ends too early
+        truncated.write_bytes(hx.tar_bytes([{'name': './', 'type': 'dir'}, {'name': 'f', 'data': b'x' * 3000}],
+                                           fmt=tarfile.GNU_FORMAT)[:1024 + 600])
+        for name, function in (('data dir', lambda src, out: ha_odoo.web_data_tar(src, out, sessions_ids=(100, 101))),
+                               ('modules folder', lambda src, out: ha_odoo.addons_dir_tar(src, root / 'none.tar', out,
+                                                                                         copy={}))):
+            for source in (garbage, escaping, truncated):
+                with self.subTest(name, source=source.name):
+                    out = ha_odoo.FileTar(root / f'out-{name[:3]}-{source.name}')
+                    self.addCleanup(out.close)
+                    with self.assertRaises(BackupError) as caught:
+                        function(source, out)
+                    self.assertEqual(caught.exception.code, 'job-failed')
+
+    def test_a_converted_modules_folder_that_the_restore_would_refuse_is_this_jobs_failure(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        for name, entries in (('device', [{'name': './', 'type': 'dir'}, {'name': './m/dev', 'type': 'chr'}]),
+                              ('twice', [{'name': './', 'type': 'dir'}, {'name': './m', 'type': 'dir'},
+                                         {'name': './m', 'type': 'dir'}]),
+                              ('outside', [{'name': '../x', 'data': b'x'}])):
+            bad = Path(tmp.name) / f'{name}.tar'
+            bad.write_bytes(hx.tar_bytes(entries))
+            with self.subTest(name), self.assertRaises(BackupError) as caught:
+                ha_odoo.check_dir_tar(bad, (nested_ids(), nested_ids()))
+            self.assertEqual(caught.exception.code, 'job-failed')
+            self.assertIn('無法還原', caught.exception.message)
+
+    def test_a_module_whose_tar_has_no_directory_entry_still_gets_its_folder(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        live = root / 'live.tar'
+        live.write_bytes(hx.tar_bytes([{'name': './', 'type': 'dir'}]))
+        modules = root / 'modules.tar'
+        modules.write_bytes(hx.tar_bytes([{'name': 'share/odoo_addons/shared/__init__.py', 'data': b''}]))
+        out = ha_odoo.FileTar(root / 'out.tar')
+        ha_odoo.addons_dir_tar(live, modules, out, copy={'shared': 'share/odoo_addons'}, mtime=1)
+        out.close()
+        names = set(members_of((root / 'out.tar').read_bytes()))
+        self.assertIn('./shared', names)
+        self.assertIn('./shared/__init__.py', names)
+
+    def test_a_backup_with_the_same_name_twice_is_corrupt_and_the_cluster_always_gets_its_root(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        web = ha_odoo.FileTar(root / 'web.tar')
+        self.addCleanup(web.close)
+        entry = types.SimpleNamespace(kind='file', size=1, mode=0o600, mtime=0, read=lambda n=-1: b'x', name='a')
+        web.add_entry('filestore/odoo/a', _EntryOf(entry), mode=0o600, uid=1, gid=1)
+        with self.assertRaises(BackupError) as caught:
+            web.add_entry('filestore/odoo/a', _EntryOf(entry), mode=0o600, uid=1, gid=1)
+        self.assertEqual(caught.exception.code, 'corrupt-archive')
+        with self.assertRaises(BackupError) as caught:
+            web.add_member(ha_odoo._info('filestore/odoo/a', 'dir', mode=0o700, uid=1, gid=1, mtime=0))
+        self.assertEqual(caught.exception.code, 'internal-error')
+        out = io.BytesIO()
+        sink = ha_odoo.PgSink(out, 70, 71)
+        sink.close()       # the stream had no root entry at all
+        written = members_of(out.getvalue())
+        root_member = written['.'][0]
+        self.assertEqual((root_member.isdir(), root_member.mode, root_member.uid, root_member.gid), (True, 0o700, 70, 71))
+        self.assertEqual(set(written) - {'.'}, set(ha_odoo.REPLACED_PG_FILES), 'and the known configuration files')
+
+    # ------------------------------------------------------------------ the share folder
+    def test_the_modules_of_the_share_folder_are_read_like_the_data_folders_and_a_big_manifest_only_loses_its_module(self):
+        entries = [{'name': 'odoo_addons', 'type': 'dir'},
+                   {'name': 'odoo_addons/ok_mod', 'type': 'dir'},
+                   {'name': 'odoo_addons/ok_mod/__manifest__.py', 'data': MANIFEST},
+                   {'name': 'odoo_addons/ok_mod/__init__.py', 'data': b''},
+                   {'name': 'odoo_addons/ok_mod/__pycache__/x.pyc', 'data': b'x'},
+                   {'name': 'odoo_addons/bad-name/__manifest__.py', 'data': MANIFEST},
+                   {'name': 'odoo_addons/big_mod/__manifest__.py', 'data': b'#' * (ha_odoo.MAX_MANIFEST + 1)},
+                   {'name': 'other_folder/x/__manifest__.py', 'data': MANIFEST}]
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        modules = ha_odoo.FileTar(root / 'modules.tar')
+        report = habackup.Report(names=haissues.Names)
+        ticks = []
+        found = ha_odoo.scan_share(io.BytesIO(hx.tar_bytes(entries)), report, modules=modules, checkpoint=lambda: ticks.append(1))
+        modules.close()
+        self.assertEqual(sorted(found), ['big_mod', 'ok_mod'])
+        self.assertEqual(found['ok_mod']['from'], 'share/odoo_addons')
+        self.assertEqual(found['ok_mod']['manifest']['version'], '18.0.1.0.0')
+        self.assertEqual(found['ok_mod']['files'], 2, 'the cache is not counted')
+        self.assertIsNone(found['big_mod']['manifest'])
+        self.assertEqual(report.skip_count(), 1, 'the big manifest is listed once, nothing stops')
+        names = set(members_of((root / 'modules.tar').read_bytes()))
+        self.assertIn('share/odoo_addons/ok_mod/__manifest__.py', names)
+        self.assertFalse(any('big_mod' in name or '__pycache__' in name or 'bad-name' in name for name in names))
+
+
+class _EntryOf:
+    """What a FileTar takes of a backup entry: kind, size, mode, mtime and a read."""
+
+    def __init__(self, entry):
+        self.kind, self.size, self.mode, self.mtime = entry.kind, entry.size, entry.mode, entry.mtime
+        self._data = entry.read(-1)
+
+    def read(self, n=-1):
+        data, self._data = self._data, b''
+        return data
+
+
+def nested_ids():
+    from woowbackup import nested
+    return nested.IdMap('0 1013 1\n1 100000 65536\n')
+
+
 def details_base(**extra):
     base = details([('base', '18.0.1.3', 'installed')])
     base.update(extra)
