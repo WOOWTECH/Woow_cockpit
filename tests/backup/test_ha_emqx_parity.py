@@ -613,6 +613,110 @@ def ids_of(result):
     return [issue['id'] for issue in result['issues']]
 
 
+class NeverGuessedTests(base.EmqxCase):
+    """What the coverage run of the lane showed no test ran: the places that stop only this app (with a sentence that says what
+    to do) when a reading of either broker is not what it must be, and the conversion's own choice of HA's database."""
+
+    def answers(self, role, expression, text, after_import=False):
+        real = self.world.evaluate
+
+        def evaluate(role_, expression_):
+            if role_ == role and expression_ == expression and (self.world.imported_into or not after_import):
+                return text.encode()
+            return real(role_, expression_)
+        self.world.evaluate = evaluate
+
+    def test_the_rule_the_candidate_answers_after_applying_must_be_ha_s(self):
+        """E-80, second reading: the raw configuration says HA's rule but the broker's own answer is another."""
+        self.answers('emqx-new', ha_emqx.STRICT_EXPR, '{deny,ignore}', after_import=True)
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法確認匯入後的 EMQX 存取政策', result['blockers'][0])
+
+    def test_this_devices_rule_that_cannot_be_read_stops_the_app(self):
+        self.answers('emqx-new', ha_emqx.STRICT_EXPR, '{badrpc,nodedown}')
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法讀取這台 EMQX 的設定', result['blockers'][0])
+
+    def test_ha_s_row_counts_that_cannot_be_read_stop_the_app_with_the_advice(self):
+        self.answers('emqx-ha', ha_emqx.COUNT_EXPR, '[]')
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法讀取 HA 的 EMQX 資料筆數', result['blockers'][0])
+        self.assertIn('停止 EMQX 附加元件', result['blockers'][0])
+
+    def test_a_broker_that_cannot_be_started_with_ha_s_node_name_is_said_with_the_name(self):
+        real = self.world.run
+
+        def run(role, image, command, options, data):
+            if role == 'emqx-ha':
+                raise BackupError('job-failed', 'podman said no')
+            return real(role, image, command, options, data)
+        self.world.run = run
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法以 HA 的 EMQX 節點名稱', result['blockers'][0])
+        self.assertIn(base.NODE, result['blockers'][0])
+
+    def test_the_file_the_settings_are_written_to_that_cannot_be_written_stops_the_app(self):
+        real = self.world.exec
+
+        def exec_(role, command, data, stdout):
+            if role == 'emqx-new' and command[:2] == ['sh', '-c'] and 'target-settings.hocon' in command[2]:
+                return Result(1, b'', b'read-only')
+            return real(role, command, data, stdout)
+        self.world.exec = exec_
+        # a setting of this device's own that the import changed has to be loaded back: that is what writes the file
+        self.world.target_config['mqtt'] = {'max_packet_size': '1MB'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        self.world.import_changes = {'mqtt': {'max_packet_size': '9MB'}}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['ok'])
+        self.assertIn('無法恢復 EMQX 目標設定', result['blockers'][0])
+
+    def test_the_conversion_uses_the_database_the_customer_chose_and_else_the_last_written_one(self):
+        other = 'emqx@127.0.0.1'
+
+        def node_of_ha_broker():
+            options = self.runs('emqx-ha')[-1][3]
+            return [value for value in options['--env'] if value.startswith('EMQX_NODE__NAME=')][0].split('=', 1)[1]
+        ha_id = self.upload_emqx(node_file=None, nodes=(base.NODE, other), state='stopped')
+        self.convert(ha_id, ['emqx'], choices={'emqx': {'node': other}})
+        self.assertEqual(node_of_ha_broker(), other, "the customer's choice")
+        self.world.again()
+        self.convert(self.upload_emqx(node_file=None, nodes=(base.NODE, other), state='stopped'), ['emqx'])
+        self.assertIn(node_of_ha_broker(), (base.NODE, other))   # the last written one: said in the job, never asked again
+
+    def test_a_ticker_that_cannot_be_asked_again_is_a_notice_never_a_stop(self):
+        """E-13: the broker's answer about its paused system process fails midway: the retained messages may differ by a few rows
+        (said), the app goes on; a full disk or a busy host still stops the job."""
+        class Tmp:
+            def __init__(self, error):
+                self.error = error
+
+            def exec(self, role, command, **kwargs):
+                raise self.error
+        self.assertFalse(ha_emqx.assert_system_ticker(Tmp(BackupError('job-failed', 'x')), 'emqx-new', '<0.1.0>'))
+        for code in ('insufficient-space', 'busy'):
+            with self.assertRaises(BackupError):
+                ha_emqx.assert_system_ticker(Tmp(BackupError(code, 'x')), 'emqx-new', '<0.1.0>')
+        self.assertFalse(ha_emqx.assert_system_ticker(Tmp(BackupError('job-failed', 'x')), 'emqx-ha', None), 'nothing was paused')
+
+    def test_a_probe_that_fails_while_the_restored_broker_starts_is_not_ready_yet_and_not_an_end(self):
+        """E-88: a status call that raises is waited past (the deadline and the container's life decide)."""
+        calls = []
+
+        def execute(command):
+            calls.append(command)
+            if len(calls) < 3:
+                raise BackupError('job-failed', 'timed out')
+            return Result(0, b"Node 'emqx@127.0.0.1' 5.8.9 is started\n", b'')
+        ticks = iter(range(0, 1000, 2))
+        ha_emqx.wait_live_ready(execute, sleep=lambda _s: None, clock=lambda: next(ticks), running=lambda: True)
+        self.assertEqual(len(calls), 3)
+
+
 class ImportTextsTests(unittest.TestCase):
     """D0 (4), DESIGN H-c: HA's add-on options (env_vars) are never read, so the customer is told once, after the import, that
     they did not move -- whatever else the conversion found, and without a value of any kind."""
