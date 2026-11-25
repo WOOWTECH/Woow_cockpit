@@ -75,8 +75,8 @@ HOST_TOOLS = (
 )
 TOOL_PACKAGES = tuple(dict.fromkeys(package for _tool, package, _probe in HOST_TOOLS))
 APT_GET = '/usr/bin/apt-get'
-# Waits for an automatic update that holds the dpkg lock; never removes a package to make room for these.
 APT_UPDATE = (APT_GET, '-q', '-o', 'Acquire::Retries=1', 'update')
+# Waits (up to 300 s) for an automatic update that holds the dpkg lock; never removes a package to make room for these.
 APT_INSTALL = (APT_GET, '-q', '-o', 'Acquire::Retries=1', '-o', 'DPkg::Lock::Timeout=300', '-y',
                '--no-install-recommends', '--no-remove', '--reinstall', 'install')
 # What cannot be done while a package is missing: (the packages of which one is needed, what stops without it).

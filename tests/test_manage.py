@@ -1802,7 +1802,7 @@ class HostToolsContract(HostFixture):
             'cryptography/hazmat/primitives/__init__.py': '',
             'cryptography/hazmat/primitives/ciphers/__init__.py': (
                 'class Cipher:\n    def __init__(self, algorithm, mode): pass\n    def decryptor(self): return self\n'
-                '    def update(self, data): return data\n'
+                '    def update(self, data):\n        open(__file__ + ".used", "w").close()\n        return data\n'
                 'class algorithms:\n    AES = staticmethod(lambda key: key)\n'
                 'class modes:\n    CBC = staticmethod(lambda iv: iv)\n')},
     }
@@ -1822,7 +1822,10 @@ class HostToolsContract(HostFixture):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
             code = f'import sys; sys.path.insert(0, {directory!r}); {probe[-1]}'
-            return subprocess.run([sys.executable, '-I', '-B', '-c', code], capture_output=True).returncode
+            returncode = subprocess.run([sys.executable, '-I', '-B', '-c', code], capture_output=True).returncode
+            self.used = sorted(str(path.relative_to(Path(directory) / 'cryptography/hazmat/primitives'))
+                               for path in Path(directory).rglob('*.used'))
+            return returncode
 
     def test_the_probes_really_run_and_every_name_they_use_counts(self):
         """Not through a stand-in runner: a misspelled import or name in a probe fails here (KEY-14, KEY-15, X-KEY-02)."""
@@ -1842,6 +1845,8 @@ class HostToolsContract(HostFixture):
                 continue
             with self.subTest(tool=tool, stand_in='complete'):
                 self.assertEqual(self.run_probe(probe, self.STAND_IN[package]), 0)
+                if package == 'python3-cryptography':  # it does what the engine does: a decryptor that works
+                    self.assertEqual(self.used, ['ciphers/__init__.py.used'])
             for module, name in self.STAND_IN_NAMES[package]:
                 with self.subTest(tool=tool, without=name):
                     files = dict(self.STAND_IN[package])
@@ -1971,6 +1976,10 @@ class HostToolsContract(HostFixture):
              tuple(missing), ['age'], '套件來源都無法更新（連不上、網址不存在）'),
             ((0, 'Err:1 http://a.example/ubuntu noble InRelease\n  Hash Sum mismatch\n', ''), tuple(missing), ['age'],
              '套件來源都無法更新（索引和檔案對不上）'),
+            # Only stderr says why a download failed (no Err lines in the progress).
+            ((0, '', ''), (100, '', 'E: Failed to fetch http://a.example/x/age.deb  Could not resolve \'a.example\'\n'
+                           'E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?\n'),
+             ['age'], manage.OFFLINE),
             # A download that ends on a mirror that is being synchronised.
             ((0, '', ''), (100, 'Err:1 http://a.example/ubuntu noble/main amd64 age 1.1.1\n  Hash Sum mismatch\n',
                            'E: Failed to fetch http://a.example/ubuntu/pool/age.deb  Hash Sum mismatch\n'), ['age'], manage.GONE),
@@ -2016,6 +2025,12 @@ class HostToolsContract(HostFixture):
         html = page.read_bytes()
         self.assertIn(b'native log view of the newer Cockpit', html, 'the newer page is not replaced by the old one')
         self.assertIn(b'static/branding.css', html, 'and it gets the branding link all the same')
+        # The same when apt-get could not add anything (it may have waited just as long).
+        self.reset()
+        host = recorded('locked', seen=another_job)
+        code, result, _notes = self.main('install', '--no-preview', '--no-services', host=host)
+        self.assertEqual((code, result['status'], result['packages']), (0, 'installed', []))
+        self.assertIn(b'native log view of the newer Cockpit', page.read_bytes())
 
     def test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle(self):
         native = self.source / 'native/podman/dist'
