@@ -1572,9 +1572,10 @@
       const fromHa = fromHaOf(backup);
       // 「手動」 lists the manual backups the schedule did not make; 「排程」 the ones it made; 「HA 備份」 the uploaded HA
       // backups and the backups converted from them.
-      if (state.list.type === "ha" ? !fromHa : state.list.type !== "all" && backupKind(backup) !== state.list.type) return false;
+      // 「保留的複本」: the full copies of a database service that an import kept (S4), wherever they are.
+      if (state.list.type === "ha" ? !fromHa : state.list.type === "kept" ? !isKept(backup) : state.list.type !== "all" && backupKind(backup) !== state.list.type) return false;
       return matches([backup.id, backup.note, backup.filename, backup.key_id, backup.source?.hostname, TYPE_LABELS[backupKind(backup)],
-        ...list(backup.apps).flatMap(app => [app?.id, app?.name]), fromHa ? "由 HA 轉換" : null, fromHa?.name], query);
+        ...list(backup.apps).flatMap(app => [app?.id, app?.name]), fromHa ? "由 HA 轉換" : null, fromHa?.name, isKept(backup) ? "保留的複本" : null], query);
     });
   }
 
@@ -1620,9 +1621,11 @@
     const scheduled = scheduleSupported() || state.backups.some(backup => backupKind(backup) === "scheduled");
     // 「HA 備份」 appears once the device holds an uploaded HA backup or a backup converted from one.
     const ha = list(state.haBackups).length > 0 || state.backups.some(backup => fromHaOf(backup));
+    // 「保留的複本」 appears once the device holds a kept copy of a database service (S4).
+    const kept = state.backups.some(isKept);
     const filters = h("div", { class: "filter-group", role: "group", "aria-label": "依類型篩選" },
       [["all", "全部"], ["manual", "手動"], scheduled ? ["scheduled", "排程"] : null, ["safety", "還原前備份"], ["uploaded", "上傳"],
-        ha ? ["ha", "HA 備份"] : null].filter(Boolean).map(([value, label]) =>
+        ha ? ["ha", "HA 備份"] : null, kept ? ["kept", "保留的複本"] : null].filter(Boolean).map(([value, label]) =>
         h("button", {
           type: "button", class: "filter", "aria-pressed": String(state.list.type === value), dataset: { focus: `filter-${value}` },
           on: { click: () => { state.list.type = value; render(); } }

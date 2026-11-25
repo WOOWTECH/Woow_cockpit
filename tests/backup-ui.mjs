@@ -7255,6 +7255,14 @@ try {
       await page.waitForFunction(() => !document.querySelector('.ha-reminders')?.textContent.includes('完整複本（'));
     });
 
+  await check('HAOS 一次確認: the backup list has no filter for kept copies while the device holds none',
+    haFixture(), async page => {
+      await ready(page);
+      await page.locator('[data-nav="backups"]').click();
+      await page.locator('[data-focus="filter-all"]').waitFor();
+      assert.equal(await page.locator('[data-focus="filter-kept"]').count(), 0);
+    });
+
   await check('HAOS 一次確認: the kept copy is found from the converted backup alone, and from the restore result alone (the page has two sources)',
     v2Fixture({ chain: { kept: { n8n: { backup: v2Kept('n8n'), detail: V2_KEPT_DETAIL, told: false } } } }), async page => {
       await ready(page);
@@ -7312,6 +7320,14 @@ try {
       assert.deepEqual(await row.locator('td[data-label="類型"] .chip').allTextContents(), ['還原前備份', '保留的複本']);
       assert.deepEqual(await row.locator('td[data-label="加密與驗證"] .chip').allTextContents(), ['已加密', '金鑰可用']);
       assert.equal(await page.locator(`tr[data-backup="${B_HA}"]`).getByText('保留的複本').count(), 0, 'only the copy is marked');
+      // The list of the kept copies: a filter that exists only while the device holds one.
+      await page.locator('[data-focus="filter-kept"]').click();
+      assert.deepEqual(await page.locator('#backup-results tbody tr').evaluateAll(rows => rows.map(item => item.dataset.backup)), [KEPT_ID]);
+      await page.locator('[data-focus="filter-all"]').click();
+      assert.equal(await page.locator('#backup-results tbody tr').count() > 1, true);
+      await page.locator('#backup-search').fill('保留的複本');
+      assert.deepEqual(await page.locator('#backup-results tbody tr').evaluateAll(rows => rows.map(item => item.dataset.backup)), [KEPT_ID], 'the words find it too');
+      await page.locator('#backup-search').fill('');
       await row.locator(`[data-focus="delete-${KEPT_ID}"]`).click();
       assert.equal(await page.locator('#confirm-title').textContent(), '刪除保留的複本？');
       assert.match(await page.locator('#confirm-body').textContent(), /刪除後，這些資料就沒有了/);
