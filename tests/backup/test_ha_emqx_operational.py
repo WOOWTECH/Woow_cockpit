@@ -2,7 +2,7 @@
 import copy
 import unittest
 from woowbackup.errors import BackupError
-from woowbackup import ha_emqx
+from woowbackup import ha_emqx, haissues
 from . import test_ha_emqx_candidate_flow as flow
 
 
@@ -26,7 +26,7 @@ class OperationalTests(unittest.TestCase):
         self.invoke(transport)
         for root, value in operational().items():
             self.assertEqual(transport.running_config[root], value)
-        self.assertFalse(set(transport.restore) & {'node', 'rpc', 'cluster'})
+        self.assertFalse(set(getattr(transport, 'restore', {})) & {'node', 'rpc', 'cluster'})
 
     def test_log_changes_restore_without_writing_immutable_roots(self):
         class ChangeLog(flow.Transport):
@@ -38,7 +38,7 @@ class OperationalTests(unittest.TestCase):
         transport = ChangeLog()
         self.invoke(transport)
         self.assertEqual(transport.restore['log'], operational()['log'])
-        self.assertFalse(set(transport.restore) & {'node', 'rpc', 'cluster'})
+        self.assertFalse(set(getattr(transport, 'restore', {})) & {'node', 'rpc', 'cluster'})
 
     def test_immutable_change_stops_before_restore_command(self):
         for root in ('node', 'rpc', 'cluster'):
@@ -90,7 +90,7 @@ class OperationalTests(unittest.TestCase):
         transport.config.update(values)
         self.invoke(transport)
         self.assertIn('from-ha', transport.running_config['rule_engine']['rules'])
-        self.assertNotIn('rule_engine', transport.restore)
+        self.assertNotIn('rule_engine', getattr(transport, 'restore', {}))
 
     def test_active_unreviewed_targets_remain_blocked(self):
         values = {'connectors': {'http': {'active': {}}}, 'gateway': {'mqttsn': {}},
@@ -133,12 +133,19 @@ class OperationalTests(unittest.TestCase):
         config = {'authorization': {'sources': []}, 'api_key': {'bootstrap_file': '/opt/emqx/data/configs/api.txt'}}
         self.assertIn('configs/api.txt', ha_emqx.configuration_references(config, []))
 
-    def test_internal_entry_refuses_unknown_version_before_creating_resources(self):
+    def test_a_build_with_nothing_to_stage_creates_nothing_for_a_node_that_is_unsupported(self):
+        """The version is judged before the build (version_lines: it only informs, HAOS parity); the build itself refuses
+        what the data cannot do without -- a node name EMQX would not take -- before it creates any resource."""
         from types import SimpleNamespace
-        work = SimpleNamespace(addon_info=lambda slug: SimpleNamespace(version='unreviewed'))
-        with self.assertRaises(BackupError) as caught:
-            ha_emqx._build_candidate(work, SimpleNamespace(id='emqx'), None, None, None, version='5.8.9')
+        from unittest.mock import patch
+        src = ha_emqx.Source()
+        src.node_dirs = {'bad node@127.0.0.1'}
+        work = SimpleNamespace(phase=lambda _: None, choice=lambda *_: None, sink=lambda app: haissues.Sink(app.id))
+        with patch.object(ha_emqx, 'member_pass', return_value=src), patch.object(ha_emqx, 'ha_broker') as broker:
+            with self.assertRaises(BackupError) as caught:
+                ha_emqx._build_candidate(work, SimpleNamespace(id='emqx'), None, None, None, version='5.8.9')
         self.assertEqual(caught.exception.code, 'incompatible')
+        broker.assert_not_called()
 
     def test_disabled_durable_storage_accepts_absent_lazy_defaults(self):
         config = {'authorization': {'sources': []}, 'durable_sessions': {'enable': False}, 'durable_storage': {}}

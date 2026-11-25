@@ -1,7 +1,8 @@
 """HA import, EMQX part (ha_emqx.py): HA's broker files staged without the cookie, generated configs, plugins or
 patches; HA's broker in a throwaway of the live image (network none, read-only root, root, HA's node name mapped to
-127.0.0.1) exports the data; this device's broker imports it, gets its strict settings back and is checked; versions,
-the default Dashboard account and the volumes (CONTRACT section 9). Team E2."""
+127.0.0.1) exports the data; this device's broker imports it, HA's authentication and authorization are what it holds
+after that (HAOS parity, D0) and this device's other settings come back; versions, the default Dashboard account and the
+volumes (CONTRACT section 9). The check builds the same candidate (H7). Team E2; HAOS parity lane EMQX-A."""
 import gzip
 import base64
 import copy
@@ -112,6 +113,9 @@ class World(fk.World):
         self.version = '5.8.9'
         self.default_admin = False
         self.ha_authn = '[{password_based,built_in_database,true,sha256,suffix}]'
+        self.ha_authz = '[{file,true},{built_in_database,true}]'
+        self.import_changes = {}
+        self.import_output = b'Importing data...\nData has been imported successfully.\n'
         self.live_authn = '[{password_based,built_in_database,true,sha256,suffix}]'
         # SR-5: the built-in password database's hashing (ha_emqx.HASH_EXPR) of HA's broker and of this device, and this
         # device's user ids there (ha_emqx.USERS_EXPR): its bootstrap user woow, as the product package seeds it.
@@ -132,6 +136,11 @@ class World(fk.World):
         self.files['.config/emqx/emqx.env'] = b'# woow emqx\nEMQX_LOG__CONSOLE__LEVEL=warning\nWOOW_EMQX_BIND=0.0.0.0\n'
         self.target_config = {'authorization': {'no_match': 'deny', 'deny_action': 'ignore',
             'sources': [{'type': 'file', 'enable': True, 'path': '/opt/emqx/etc/acl.conf'}]}}
+        self.current_config = copy.deepcopy(self.target_config)
+
+    def again(self):
+        """This device's broker as it was before the last conversion (a test that converts twice)."""
+        self.imported_into = self.restored = False
         self.current_config = copy.deepcopy(self.target_config)
 
     def labels(self, image):
@@ -167,8 +176,12 @@ class World(fk.World):
                               .encode(), b'')
             if command[2:4] == ['data', 'import']:
                 self.imported_into = True
-                self.current_config['authorization'] = {'no_match': 'allow', 'deny_action': 'ignore', 'sources': []}
-                return Result(0, b'Importing data...\nData has been imported successfully.\n', b'')
+                # HA's authorization comes with the import (D0): its sources as HA's broker answers AUTHZ_EXPR
+                self.current_config['authorization'] = {'no_match': 'allow', 'deny_action': 'ignore', 'sources': [
+                    {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'},
+                    {'type': 'built_in_database', 'enable': True}]}
+                self.current_config.update(copy.deepcopy(self.import_changes))
+                return Result(0, self.import_output, b'')
             if command[2:4] == ['conf', 'load']:
                 self.restored = True
                 if self.snippet and self.snippet.startswith(b'{'):
@@ -217,8 +230,10 @@ class World(fk.World):
             if expression == ha_emqx.USERS_EXPR:
                 return self.live_users.encode()
             return (self.ha_hashing if role == 'emqx-ha' else self.live_hashing).encode()
+        if expression == ha_emqx.AUTHZ_EXPR:
+            return self.ha_authz.encode() if role == 'emqx-ha' else b'[{file,true},{built_in_database,true}]'
         if expression == ha_emqx.STRICT_EXPR:
-            if role == 'emqx-ha' or (self.imported_into and not self.restored):
+            if role == 'emqx-ha' or self.imported_into:
                 return self.ha_strict.encode()
             return b'{deny,ignore}\n'
         if expression == ha_emqx.COUNT_EXPR:
@@ -269,18 +284,17 @@ class EmqxCase(fk.ConversionCase):
         with tarfile.open(fileobj=io.BytesIO(self.world.imported['emqx-src'])) as tar:
             return {m.name: m for m in tar.getmembers()}
 
-    def internal_candidate(self, ha_id):
-        """Actual internal build/package with generated transport, never public convert.
+    def internal_candidate(self, ha_id, *, acknowledged=None):
+        """Actual internal build/package with generated transport, never public convert. `acknowledged`: None collects what
+        the customer would be asked (the check's way), a list of keys converts the way a confirmed import does.
 
-        Public preservation tests remain separate. No target-policy helper or
-        preservation gate is patched out here; the fixture answers its native
-        config/volume protocol just as it answers counts and import outcomes.
-        """
+        Public preservation tests remain separate. No target-policy helper or preservation gate is patched out here; the
+        fixture answers its native config/volume protocol just as it answers counts and import outcomes."""
         ctx = self.ctx()
         ctx.storage.ensure_layout()
         staging = Path(ctx.storage.staging_dir(ctx.job_id))
         staging.mkdir(parents=True, exist_ok=True)
-        work = haimport.Work(ctx, None, None, staging)
+        work = haimport.Work(ctx, None, None, staging, acknowledged=None if acknowledged is None else {'emqx': acknowledged})
         try:
             work.record = haimport._open(work, ctx, {'ha_backup_id': ha_id})
             app = self.catalog['emqx']
@@ -290,40 +304,38 @@ class EmqxCase(fk.ConversionCase):
             private.mkdir(mode=0o700)
             built = ha_emqx._build_candidate(work, app, tmp, target, private, version=version)
             paths = ha_emqx._package_candidate(work, tmp, target, private, staging / 'internal-emqx-output',
-                built[3], ids=work.adapter(app).owner_ids(),
+                built.export, ids=work.adapter(app).owner_ids(),
                 log_root=ha_n8n.volume_root(work, app, target.log_volume))
-            data = {'ha_hosts': hacommon.ha_hosts(built[0].hocon), 'plugins': sorted(built[0].plugins),
-                    'api_keys': max(built[2]['counts'].get('emqx_app', 0), 0)}
+            data = {'ha_hosts': hacommon.ha_hosts(built.src.hocon), 'plugins': sorted(built.src.plugins),
+                    'api_keys': max(built.readings['counts'].get('emqx_app', 0), 0)}
             notes, _, reminders = haimport.import_texts({'emqx': data}, self.catalog)
-            return {'volumes': paths, 'notes': notes, 'reminders': reminders['emqx']}
+            return {'volumes': paths, 'notes': notes, 'reminders': reminders['emqx'], 'issues': work.sink(app).found,
+                    'built': built}
         finally:
             self.assertEqual(work.close(), [])
 
 
-BUILTIN_TARGET = [{'type': 'file', 'enable': True, 'path': '/opt/emqx/etc/acl.conf'},
-                  {'type': 'built_in_database', 'enable': True}]
+def ids(result, level=None):
+    """The issue ids of one app's check result (optionally of one level)."""
+    return [issue['id'] for issue in result['issues'] if level is None or issue['level'] == level]
 
 
 class CheckTests(EmqxCase):
-    def setUp(self):
-        super().setUp()
-        # HA's backup has ACL rows (HA_COUNTS): the import target is one that asks its built-in database too (OWNER
-        # DECISION 2026-11-23 「C」; a file-only target refuses them: test_ha_emqx_product.AclNeedsBuiltinTests).
-        self.world.target_config['authorization']['sources'] = copy.deepcopy(BUILTIN_TARGET)
-        self.world.current_config = copy.deepcopy(self.world.target_config)
-
     def test_a_clean_backup(self):
+        """A clean backup is importable with nothing to confirm; this device's authorization is no longer judged (D0)."""
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertEqual((result['ok'], result['blockers'], result['target_version']),
                          (True, [], '5.8.9'))
-        self.assertEqual(result['emqx']['target_authorization'], ['file', 'built_in_database'])
+        self.assertEqual(result['emqx']['target_authorization'], [])
+        self.assertEqual(ids(result, 'confirm'), [])
+        self.assertIn('emqx.access-from-ha', ids(result, 'auto'))
         section = result['emqx']
         self.assertEqual((section['node_name'], section['mqtt_users'], section['acl_rules'], section['api_keys'],
                           section['retained_messages'], section['default_dashboard_password']),
                          (NODE, 3, 2, 1, 0, False))
         self.assertEqual(section['plugins'], ['my_plugin-1.0.0'])
         joined = '\n'.join(result['warnings'])
-        for words in ('homeassistant', '/ssl/fullchain.pem', 'my_plugin', 'API 金鑰會取代', '未符合規則的主題'):
+        for words in ('homeassistant', '/ssl/fullchain.pem', 'my_plugin', 'API 金鑰會取代', '沒有符合規則的主題時允許'):
             self.assertIn(words, joined)
         run = self.runs('emqx-ha')[0]
         options = run[3]
@@ -340,25 +352,81 @@ class CheckTests(EmqxCase):
         for never in ('configs/app.2026.11.19.config', 'configs/vm.2026.11.19.args', 'patches/evil.beam'):
             self.assertNotIn(never, staged)
         self.assertFalse([n for n in staged if 'cookie' in n or 'plugins' in n or 'log' in n])
-        self.assertFalse(self.runs('emqx-new'), 'a check changes nothing')
-        self.assertFalse([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'export']])
+        # H7: the check builds the candidate the conversion builds, in throwaway objects; nothing of this device changes
+        self.assertEqual(len(self.runs('emqx-new')), 1)
+        self.assertEqual(len([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'export']]), 1)
+        self.assertEqual(len([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import']]), 1)
+        self.assertNotIn('woow_emqx_data', self.world.imported, 'no volume of this device is written')
 
-    def test_blockers(self):
+    def test_the_default_dashboard_account_is_a_notice_and_a_confirmation_when_the_network_reaches_it(self):
+        """D2, E-20, H3: HA's admin/public is restored; when this device's Dashboard is reachable from the network or a tunnel
+        reaches it, the customer confirms it."""
         self.world.default_admin = True
         result = self.check(self.upload_emqx(), ['emqx'])[0]
-        self.assertTrue(any('admin／public' in b for b in result['blockers']))
-        self.world.default_admin = False
-        for kwargs, words in (({'version': '5.9.2'}, '還不認得'),
-                              ({'node_file': None, 'nodes': (NODE, 'emqx@127.0.0.1')}, '2 個內建資料庫'),
-                              ({'nodes': ()}, '沒有 EMQX 的內建資料庫')):
-            with self.subTest(words=words):
-                result = self.check(self.upload_emqx(**kwargs), ['emqx'])[0]
-                self.assertFalse(result['ok'])
-                self.assertTrue(any(words in b for b in result['blockers']), result['blockers'])
+        self.assertTrue(result['importable'])
+        self.assertIn('emqx.default-dashboard', ids(result, 'notice'))
+        self.assertTrue(result['ok'], 'a notice asks nothing')
+        for line in ('PublishPort=0.0.0.0:18083:18083\n', 'PublishPort=192.168.2.5:18083:18083\n'):
+            exposed = dict(QUADLETS)
+            exposed['emqx.container'] = QUADLETS['emqx.container'].replace(b'Volume=emqx-data', line.encode() + b'Volume=emqx-data')
+            self.world.quadlets = {'emqx': exposed}
+            result = self.check(self.upload_emqx(), ['emqx'])[0]
+            self.assertTrue(result['importable'])
+            self.assertEqual(ids(result, 'confirm'), ['emqx.default-dashboard-exposed'])
+            self.assertFalse(result['ok'])
+            self.assertTrue(result['issues'][[i['id'] for i in result['issues']].index('emqx.default-dashboard-exposed')]['key'])
+        local = dict(QUADLETS)
+        local['emqx.container'] = QUADLETS['emqx.container'].replace(b'Volume=emqx-data', b'PublishPort=127.0.0.1:18083:18083\nVolume=emqx-data')
+        self.world.quadlets = {'emqx': local}
+        self.assertEqual(ids(self.check(self.upload_emqx(), ['emqx'])[0], 'confirm'), [])
+
+    def test_the_default_dashboard_account_behind_a_tunnel_is_a_confirmation(self):
+        self.world.default_admin = True
+        tunnel = dict(QUADLETS)
+        tunnel['emqx-ngrok.container'] = b'[Container]\nContainerName=woow-emqx-ngrok\nImage=docker.io/ngrok/ngrok:3\n'
+        self.world.quadlets = {'emqx': tunnel}
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertEqual(ids(result, 'confirm'), ['emqx.default-dashboard-exposed'])
+        self.assertIn('emqx-ngrok', json.dumps(result['issues'], ensure_ascii=False))
+
+    def test_versions_inform_and_the_data_decides(self):
+        """CM-01, E-03: an add-on version the table does not know is a notice, no stop."""
+        result = self.check(self.upload_emqx(version='5.9.2'), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertIn('version.addon-unknown', ids(result, 'notice'))
         self.world.version = '5.9.0'
         result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertFalse(result['importable'], 'both versions are known and differ: E-05 stays (wave 2 lifts it)')
+        self.assertEqual(ids(result, 'stop'), ['version.different'])
         self.assertTrue(any('HA 的 EMQX 是 5.8.9' in blocker for blocker in result['blockers']))
-        self.assertEqual(len(result['blockers']), 1, 'the version is the only blocker (no blanket guard any more)')
+
+    def test_no_database_in_the_backup_stops_only_this_app(self):
+        """E-06: nothing to move; this device's EMQX is not replaced by an empty one."""
+        result = self.check(self.upload_emqx(nodes=()), ['emqx'])[0]
+        self.assertFalse(result['importable'])
+        self.assertEqual(ids(result, 'stop'), ['emqx.no-database'])
+        self.assertIn('沒有 EMQX 的內建資料庫', result['blockers'][0])
+        self.assertFalse(self.runs('emqx-ha'), 'HA\'s broker is not even started')
+        self.assertFalse(self.runs('emqx-new'))
+
+    def test_several_databases_without_a_record_use_the_last_written_one_and_can_be_chosen(self):
+        """E-07: the last written database is the default (named), `choices.node` lets the customer pick another."""
+        other = 'emqx@127.0.0.1'
+        result = self.check(self.upload_emqx(node_file=None, nodes=(NODE, other)), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertIn('emqx.node-chosen', ids(result, 'auto'))
+        rows = result['choices']['node']
+        self.assertEqual({row['value'] for row in rows}, {NODE, other})
+        self.assertEqual([row['value'] for row in rows if row.get('default')], [result['emqx']['node_name']])
+        self.assertIn('最後寫入', rows[0]['label'])
+
+    def test_a_recorded_node_without_its_database_uses_the_only_one_there_is(self):
+        """E-09: the record names a node the backup has no database for, and there is just one: it is used."""
+        result = self.check(self.upload_emqx(node_file='emqx@gone.local', nodes=(NODE,)), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertEqual(result['emqx']['node_name'], NODE)
+        self.assertIn('emqx.node-chosen', ids(result, 'auto'))
+        self.assertNotIn('choices', result)
 
     def test_a_hot_backup_is_tried_and_named(self):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
@@ -429,8 +497,13 @@ class ConvertTests(EmqxCase):
         self.assertEqual(incoming.extractfile('in/' + EXPORT.rsplit('/', 1)[1]).read(), b'export-tarball')
         self.assertEqual({(m.uid, m.gid) for m in incoming.getmembers()}, {(1000, 1000)})
         self.assertIn(['data', 'import', '/work/in/' + EXPORT.rsplit('/', 1)[1]], [c[1] for c in self.world.ctl_calls])
-        self.assertEqual(json.loads(self.world.snippet)['authorization'], self.world.target_config['authorization'])
-        self.assertIn(['conf', 'load', '--replace', '/work/in/target-settings.hocon'], [c[1] for c in self.world.ctl_calls])
+        # D0: HA's authorization is what the candidate holds after the import; nothing of this device's is loaded back
+        self.assertEqual([i for i in self.world.current_config['authorization']['sources']],
+                         [{'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/acl.conf'},
+                          {'type': 'built_in_database', 'enable': True}])
+        self.assertEqual(self.world.current_config['authorization']['no_match'], 'allow')
+        self.assertNotIn(['conf', 'load', '--replace', '/work/in/target-settings.hocon'],
+                         [c[1] for c in self.world.ctl_calls])
         with tarfile.open(result['volumes']['woow_emqx_data']) as archive:
             data = {member.name: member for member in archive}
         self.assertIn('mnesia/emqx@127.0.0.1/emqx_admin.DCD', data)
@@ -462,18 +535,21 @@ class ConvertTests(EmqxCase):
         self.assertFalse(self.runs('emqx-new'), 'nothing is imported from a failed export')
         self.assertEqual(self.storage.list_backups(), [])
 
-    def test_a_partial_import_stops_the_conversion(self):
-        real = self.world.exec
-
-        def exec_(role, command, data, stdout):
-            if command[:4] == ['emqx', 'ctl', 'data', 'import']:
-                return Result(0, b'Data has been imported, but some errors occurred, see the log above.\n', b'')
-            return real(role, command, data, stdout)
-
-        self.world.exec = exec_
-        with self.assertRaises(BackupError) as caught:
-            self.internal_candidate(self.upload_emqx())
-        self.assertIn('部分資料無法匯入', caught.exception.message)
+    def test_a_partial_import_is_a_line_to_confirm_not_a_stop(self):
+        """E-67: what EMQX could not import is listed in the one confirmation (the check knows it: H7); the rest goes on."""
+        self.world.import_output = b'Data has been imported, but some errors occurred, see the log above.\n'
+        result = self.internal_candidate(self.upload_emqx())
+        line = next(issue for issue in result['issues'] if issue.id == 'emqx.import-partial')
+        self.assertEqual(line.level, 'confirm')
+        self.assertIn('部分設定無法匯入', line.message)
+        ha_id = self.upload_emqx()
+        self.world.again()
+        with self.assertRaises(BackupError) as caught:   # the conversion of a customer who did not confirm it
+            self.internal_candidate(ha_id, acknowledged=[])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.world.again()
+        confirmed = self.internal_candidate(ha_id, acknowledged=[line.key('emqx')])
+        self.assertTrue(confirmed['volumes'])
 
     def test_lost_rows_stop_the_conversion(self):
         self.world.import_lost = 'emqx_acl'
@@ -482,13 +558,34 @@ class ConvertTests(EmqxCase):
         self.assertIn('emqx_acl', caught.exception.message)
         self.assertEqual(self.storage.list_backups(), [])
 
-    def test_an_import_that_would_open_anonymous_login_is_refused(self):
+    def test_has_authentication_is_restored_as_it_is_even_when_nobody_has_to_log_in(self):
+        """D5, E-82 (S2): HA's disabled authentication is restored; the customer confirms it, no refusal."""
         self.world.ha_authn = '[{password_based,built_in_database,false,sha256,suffix}]'
+        ha_id = self.upload_emqx()
+        result = self.internal_candidate(ha_id)
+        line = next(issue for issue in result['issues'] if issue.id == 'emqx.no-authentication')
+        self.assertEqual(line.level, 'confirm')
+        self.assertIn('不用帳號就能連線', line.message)
+        self.assertIn('MQTT 埠目前', line.message)   # says whether the port is open (here: not published at all)
+        self.assertIn('公開網址', line.message)       # a public address cannot be told from here: the sentence always says it
+        self.world.again()
         with self.assertRaises(BackupError) as caught:
-            self.internal_candidate(self.upload_emqx())
-        self.assertIn('匿名登入', caught.exception.message)
+            self.internal_candidate(ha_id, acknowledged=[])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.world.again()
+        self.assertTrue(self.internal_candidate(ha_id, acknowledged=[line.key('emqx')])['volumes'])
 
-    def test_the_strict_settings_must_come_back(self):
+    def test_settings_of_this_device_that_the_import_changed_are_loaded_back_and_must_come_back(self):
+        """E-72/E-74 stay: this device's own roots are loaded back (`conf load --replace`) and read again."""
+        self.world.target_config['mqtt'] = {'max_packet_size': '1MB'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        self.world.import_changes = {'mqtt': {'max_packet_size': '9MB'}}
+        result = self.internal_candidate(self.upload_emqx())
+        self.assertEqual(self.world.current_config['mqtt'], {'max_packet_size': '1MB'})
+        self.assertIn(['conf', 'load', '--replace', '/work/in/target-settings.hocon'], [c[1] for c in self.world.ctl_calls])
+        self.assertTrue(result['volumes'])
+
+    def test_the_settings_of_this_device_must_come_back(self):
         real = self.world.exec
 
         def exec_(role, command, data, stdout):
@@ -496,6 +593,9 @@ class ConvertTests(EmqxCase):
                 return Result(0, b'', b'')  # the load silently did nothing
             return real(role, command, data, stdout)
 
+        self.world.target_config['mqtt'] = {'max_packet_size': '1MB'}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+        self.world.import_changes = {'mqtt': {'max_packet_size': '9MB'}}
         self.world.exec = exec_
         with self.assertRaises(BackupError) as caught:
             self.internal_candidate(self.upload_emqx())

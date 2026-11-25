@@ -37,8 +37,6 @@ class EnvFileConversionTests(base.EmqxCase):
     def setUp(self):
         super().setUp()
         # HA's backup has ACL rows: the import target asks its built-in database too (OWNER DECISION 「C」).
-        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
-        self.world.current_config = copy.deepcopy(self.world.target_config)
 
     def test_env_file_values_never_reach_a_command_line(self):
         self.world.files[ENV_FILE] = (b'# woow emqx\nEMQX_LOG__CONSOLE__LEVEL=warning\n'
@@ -56,49 +54,44 @@ class EnvFileConversionTests(base.EmqxCase):
 
 
 class EnvFileLinesTests(unittest.TestCase):
-    """The checks read the lines as podman 4.9.3 does (T10, evidence/.../iteration2/t10-tip.json)."""
+    """The lines are read as podman 4.9.3 does (T10, evidence/.../iteration2/t10-tip.json) -- for the one thing that is still read
+    here, the NAMES of the settings that decide access (H1). E-53: what else a file holds is no longer judged (quotes,
+    escapes, `$`, doubles, conflicts): the candidate gets the file from podman itself."""
 
     def candidate(self, content):
-        return product.EnvironmentFileTests.target(self, LINE, {ENV_FILE: content}).candidate_env()
+        target = product.EnvironmentFileTests.target(self, LINE, {ENV_FILE: content})
+        env, files = target.candidate_env()
+        return env, files, target.access_env
 
     def test_one_podman_line_is_one_line(self):
-        for sep in (b'\x0b', b'\x0c', b'\x1c', b'\x1d', b'\x1e', '\x85'.encode(), '\u2028'.encode(),
-                    '\u2029'.encode(), b'\r'):
+        for sep in (b'\x0b', b'\x0c', b'\x1c', b'\x1d', b'\x1e', '\x85'.encode(), '\u2028'.encode(), '\u2029'.encode(), b'\r'):
             with self.subTest(sep=sep):
-                # podman: ONE variable EMQX_LOG__CONSOLE__LEVEL (the separator and the rest are its value); the old
-                # splitlines() saw a second, conflicting EMQX_LOG__CONSOLE__LEVEL and refused
-                env, files = self.candidate(b'EMQX_LOG__CONSOLE__LEVEL=warning' + sep + b'EMQX_LOG__CONSOLE__LEVEL=debug\n')
-                self.assertEqual(files, ['/home/appowner/' + ENV_FILE])
-                self.assertNotIn('EMQX_LOG__CONSOLE__LEVEL', env)
-                # podman: one variable X (not EMQX configuration): nothing hidden after the separator is EMQX's
-                self.assertEqual(self.candidate(b'X=1' + sep + b'EMQX_NODE__NAME="emqx@10.0.0.1"\n')[1],
-                                 ['/home/appowner/' + ENV_FILE])
+                # podman: ONE variable X (the separator and the rest are its value): nothing hidden after it is a setting
+                env, files, names = self.candidate(b'X=1' + sep + b'EMQX_AUTHORIZATION__NO_MATCH=allow\n')
+                self.assertEqual((files, names), (['/home/appowner/' + ENV_FILE], []))
+                self.assertEqual(self.candidate(b'EMQX_AUTHORIZATION__NO_MATCH=allow' + sep + b'EMQX_AUTHENTICATION__A=1\n')[2],
+                                 ['EMQX_AUTHORIZATION__NO_MATCH'])
 
     def test_only_blanks_and_tabs_are_trimmed(self):
-        # podman keeps U+3000/\x1c in the name: `\\u3000EMQX_NODE__NAME` is no EMQX setting (the old lstrip() made it
-        # one, conflicting with the Quadlet's EMQX_NODE__NAME)
+        # podman keeps U+3000/\x1c in the name: `\u3000EMQX_AUTHORIZATION__A` is no EMQX setting
         for lead in ('\u3000'.encode(), b'\x1c'):
             with self.subTest(lead=lead):
-                self.assertEqual(self.candidate(lead + b'EMQX_NODE__NAME=emqx@10.0.0.1\n')[1],
-                                 ['/home/appowner/' + ENV_FILE])
+                self.assertEqual(self.candidate(lead + b'EMQX_AUTHORIZATION__A=1\n')[2], [])
         for lead in (b' ', b'\t', b' \t '):
             with self.subTest(lead=lead):
-                with self.assertRaises(BackupError) as caught:   # a real EMQX line: conflicts with the Quadlet
-                    self.candidate(lead + b'EMQX_NODE__NAME=emqx@10.0.0.1\n')
-                self.assertIn('EnvironmentFile（~/.config/emqx/emqx.env）', caught.exception.message)
+                self.assertEqual(self.candidate(lead + b'EMQX_AUTHORIZATION__A=1\n')[2], ['EMQX_AUTHORIZATION__A'])
 
-    def test_a_final_carriage_return_is_dropped_like_podman(self):
-        env, files = self.candidate(b'EMQX_LOG__CONSOLE__LEVEL=warning\r\nEMQX_LOG__CONSOLE__LEVEL=warning\r\n')
-        self.assertEqual(files, ['/home/appowner/' + ENV_FILE])
-        with self.assertRaises(BackupError):
-            self.candidate(b'EMQX_LOG__CONSOLE__LEVEL=warning\r\nEMQX_LOG__CONSOLE__LEVEL=debug\r\n')
+    def test_a_final_carriage_return_is_no_part_of_the_name(self):
+        self.assertEqual(self.candidate(b'EMQX_AUTHENTICATION__A=1\r\nEMQX_LOG__X=2\r\n')[2], ['EMQX_AUTHENTICATION__A'])
 
-    def test_what_podman_reads_literally_but_is_not_plain_still_refuses(self):
-        for content in (b'EMQX_A=1\rEMQX_B="q"\n', b'EMQX_A="1"\r\n', b'EMQX_A=$B\n', b'EMQX_A=1 \n'):
+    def test_what_podman_reads_literally_is_passed_on_not_judged(self):
+        for content in (b'EMQX_A=1\rEMQX_B="q"\n', b'EMQX_A="1"\r\n', b'EMQX_A=$B\n', b'EMQX_A=1 \n',
+                        b'EMQX_LOG__CONSOLE__LEVEL=warning\r\nEMQX_LOG__CONSOLE__LEVEL=debug\r\n',
+                        b'EMQX_NODE__NAME=emqx@10.0.0.1\n'):
             with self.subTest(content=content):
-                with self.assertRaises(BackupError) as caught:
-                    self.candidate(content)
-                self.assertEqual(caught.exception.code, 'incompatible')
+                env, files, names = self.candidate(content)
+                self.assertEqual(files, ['/home/appowner/' + ENV_FILE])
+                self.assertEqual(env['EMQX_NODE__NAME'], 'emqx@127.0.0.1', 'the Quadlet\'s own setting stays in --env')
 
 
 class EnvFilesArgvTests(unittest.TestCase):
@@ -128,8 +121,6 @@ class VolumeTopTests(base.EmqxCase):
 
     def setUp(self):
         super().setUp()
-        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
-        self.world.current_config = copy.deepcopy(self.world.target_config)
 
     def hostile(self):
         """The add-on member with every entry (its top directory too) set-id, writable for all and foreign-owned."""

@@ -17,12 +17,31 @@ class EffectiveAclTests(unittest.TestCase):
             ({'type': 'file', 'path': '/opt/emqx/etc/acl.conf'}, []),
             ({'type': 'file', 'path': '/opt/emqx/etc/acl.conf'}, [('/fixture/acl', '/opt/emqx/etc/acl.conf', 'rw')]),
             ({'type': 'file', 'path': 'authz/custom.acl'}, []),
-            ({'type': 'redis'}, []),
             ({'type': 'file', 'path': ''}, []),
+            ({'type': 'file', 'path': [47, 0, 120]}, []),
+            ({'type': 'file', 'path': list(range(1, 128)) * 40}, []),
         ]:
             with self.subTest(source=source, mounts=mounts):
                 with self.assertRaises(BackupError):
                     ha_emqx.authorization_file_references({'sources': [source]}, mounts)
+
+    def test_sources_of_other_types_carry_no_file_of_their_own(self):
+        """E-26, E-27: HA's authorization replaces this device's; a source that is no file names nothing to snapshot."""
+        for source in ({'type': 'redis'}, {'type': 'built_in_database', 'enable': True, 'max_rules': 7}, {'type': 'http'}):
+            self.assertEqual(ha_emqx.authorization_file_references({'sources': [source]}, []), {'configs/cluster.hocon'})
+        for bad in ({'sources': 'x'}, {'sources': [1]}, {}, None):
+            with self.subTest(bad=bad), self.assertRaises(BackupError):
+                ha_emqx.authorization_file_references(bad, [])
+
+    def test_a_path_EMQX_made_of_character_codes_is_the_same_path(self):
+        """E-28: a path the broker holds as a list of ASCII codes (an ACL file written from the Dashboard)."""
+        path = [ord(char) for char in '/opt/emqx/data/authz/acl.conf']
+        self.assertEqual(ha_emqx.ascii_path(path), '/opt/emqx/data/authz/acl.conf')
+        self.assertEqual(ha_emqx.authorization_file_references({'sources': [{'type': 'file', 'path': path}]}, []),
+                         {'configs/cluster.hocon', 'authz/acl.conf'})
+        for other in (None, 5, [], [0], [200], ['x'], {}):
+            self.assertIsNone(ha_emqx.ascii_path(other))
+
 
 class CandidateWiringTests(unittest.TestCase):
     def test_effective_acl_drives_snapshot_before_candidate(self):

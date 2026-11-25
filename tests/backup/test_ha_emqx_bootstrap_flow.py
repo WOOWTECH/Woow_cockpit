@@ -1,4 +1,6 @@
-"""Bootstrap integration through candidate entry; fixture transport, no real secrets."""
+"""Bootstrap integration through candidate entry; fixture transport, no real secrets. HAOS parity: this device's own
+pre-created MQTT accounts (the bootstrap file) stay attached to HA's built-in database authenticator when they can; when
+they cannot (E-48, E-49, E-61, E-68, E-69) the import goes on and says so."""
 import copy
 import unittest
 from woowbackup import ha_emqx as emqx
@@ -30,8 +32,8 @@ class BootstrapTransport(flow.Transport):
 
 
 class BootstrapFlowTests(unittest.TestCase):
-    def invoke(self, transport):
-        return flow.CandidateFlowTests.invoke(self, transport)
+    def invoke(self, transport, notes=None, readings=True):
+        return flow.CandidateFlowTests.invoke(self, transport, readings=readings, notes=notes)
 
     def test_secret_stays_mounted_and_never_enters_snapshot(self):
         transport = BootstrapTransport()
@@ -41,33 +43,41 @@ class BootstrapFlowTests(unittest.TestCase):
         self.assertLess(transport.events.index('bootstrap-readable'), transport.events.index('import'))
         self.assertFalse(any(SPEC in line for line in transport.logs))
 
-    def test_unreadable_mount_blocks_before_import(self):
+    def test_an_unreadable_mount_is_said_and_the_import_goes_on(self):
+        """E-61: the candidate cannot read the bootstrap file: the pre-created accounts may have to be made again."""
         transport = BootstrapTransport()
         transport.readable = False
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('import', transport.events)
+        notes = {}
+        self.invoke(transport, notes)
+        self.assertIn('import', transport.events)
+        self.assertEqual(notes['lost'], [PATH, PATH])   # the first look and the one at the end
 
-    def test_missing_duplicate_env_and_public_mode_block_before_export(self):
+    def test_missing_duplicate_env_and_public_mode_are_said_and_the_import_goes_on(self):
+        """E-49: a bootstrap file that is not one unique restricted mount cannot follow the import."""
         for specs in [[], [SPEC, SPEC], [SPEC.replace('type=mount', 'type=env')],
                       [SPEC.replace('0400', '0644')], [SPEC + ',mode=0400']]:
             with self.subTest(specs=specs):
                 transport = BootstrapTransport()
                 transport.secret_specs = specs
-                with self.assertRaises(BackupError):
-                    self.invoke(transport)
-                self.assertNotIn('export', transport.events)
+                notes = {}
+                self.invoke(transport, notes)
+                self.assertIn('export', transport.events)
+                self.assertIn('import', transport.events)
+                self.assertEqual(notes['lost'][0], PATH)
 
-    def test_relative_interpolated_and_unknown_schema_block(self):
-        for key, value in [('bootstrap_file', '${EMQX_ETC_DIR}/bootstrap.csv'),
-                           ('bootstrap_file', '../bootstrap.csv'), ('backend', 'redis'),
-                           ('bootstrap_type', 'unknown')]:
+    def test_relative_interpolated_and_unknown_schema_are_said_and_the_import_goes_on(self):
+        """E-48: a bootstrap file of a kind or at a place this engine cannot follow."""
+        for key, value, lost in [('bootstrap_file', '${EMQX_ETC_DIR}/bootstrap.csv', '${EMQX_ETC_DIR}/bootstrap.csv'),
+                                 ('bootstrap_file', '../bootstrap.csv', '../bootstrap.csv'), ('backend', 'redis', PATH),
+                                 ('bootstrap_type', 'unknown', PATH)]:
             with self.subTest(key=key, value=value):
                 transport = BootstrapTransport()
                 transport.config['authentication'][0][key] = value
-                with self.assertRaises(BackupError):
-                    self.invoke(transport)
-                self.assertNotIn('export', transport.events)
+                transport.running_config = copy.deepcopy(transport.config)
+                notes = {}
+                self.invoke(transport, notes)
+                self.assertIn('export', transport.events)
+                self.assertEqual(notes['lost'][0], lost)
 
     def test_explicit_readonly_file_supported_but_shadowing_rejected(self):
         config = BootstrapTransport().config
@@ -75,6 +85,9 @@ class BootstrapFlowTests(unittest.TestCase):
         self.assertEqual(emqx.bootstrap_references(config, mounts, []), {PATH})
         with self.assertRaises(BackupError):
             emqx.bootstrap_references(config, mounts, [SPEC])
+        lost = []   # E-48/E-49: asked to collect, the same shadowing is only said
+        self.assertEqual(emqx.bootstrap_references(config, mounts, [SPEC], lost=lost), set())
+        self.assertEqual(lost, [PATH])
 
     def test_ha_import_restores_target_bootstrap_before_restart(self):
         class ChangedBootstrap(BootstrapTransport):
@@ -104,19 +117,24 @@ class BootstrapFlowTests(unittest.TestCase):
         self.assertEqual(row['bootstrap_file'], PATH)
         self.assertEqual(row['password_hash_algorithm'], {'name': 'bcrypt'})
 
-    def test_hash_bootstrap_algorithm_conflict_blocks_restore(self):
+    def test_a_hash_bootstrap_file_of_another_hashing_is_said_not_attached(self):
+        """E-69: HA hashes differently than this device's `hash` bootstrap file: the import goes on, the accounts are said."""
         class Changed(BootstrapTransport):
             def exec(self, role, command, **kwargs):
                 result = super().exec(role, command, **kwargs)
                 if command[:4] == ['emqx', 'ctl', 'data', 'import']:
-                    self.running_config['authentication'][0]['password_hash_algorithm'] = {'name': 'bcrypt'}
+                    row = self.running_config['authentication'][0]
+                    row['password_hash_algorithm'] = {'name': 'bcrypt'}
+                    row.pop('bootstrap_file')
+                    row.pop('bootstrap_type')
                 return result
         transport = Changed()
         transport.config['authentication'][0].update(bootstrap_type='hash', password_hash_algorithm={'name': 'sha256'})
         transport.running_config = copy.deepcopy(transport.config)
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('restore', transport.events)
+        notes = {}
+        self.invoke(transport, notes)
+        self.assertEqual(notes['bootstrap'], ['hash'])
+        self.assertNotIn('bootstrap_file', transport.running_config['authentication'][0])
 
     def test_bootstrap_readback_mismatch_is_rejected(self):
         class Changed(BootstrapTransport):
@@ -128,14 +146,32 @@ class BootstrapFlowTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             self.invoke(Changed())
 
-    def test_changed_authenticator_identity_is_rejected(self):
+    def test_a_ha_authenticator_that_does_not_match_the_bootstrap_identity_is_said(self):
+        """E-68: HA's built-in database authenticator takes the client id as the account (this device's takes the user
+        name): this device's pre-created accounts have no authenticator to live in; the import goes on."""
         class Changed(BootstrapTransport):
             def exec(self, role, command, **kwargs):
                 result = super().exec(role, command, **kwargs)
                 if command[:4] == ['emqx', 'ctl', 'data', 'import']:
-                    self.running_config['authentication'][0]['user_id_type'] = 'clientid'
+                    row = self.running_config['authentication'][0]
+                    row['user_id_type'] = 'clientid'
+                    row.pop('bootstrap_file')
                 return result
         transport = Changed()
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('restore', transport.events)
+        notes = {}
+        self.invoke(transport, notes)
+        self.assertEqual(notes['bootstrap'], ['ha-authn'])
+        self.assertNotIn('bootstrap_file', transport.running_config['authentication'][0])
+
+    def test_a_ha_authenticator_that_is_switched_off_leaves_the_accounts_unattached(self):
+        class Off(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authentication'][0].update(enable=False)
+                    self.running_config['authentication'][0].pop('bootstrap_file')
+                return result
+        transport = Off()
+        notes = {}
+        self.invoke(transport, notes)
+        self.assertEqual(notes['bootstrap'], ['ha-authn'])

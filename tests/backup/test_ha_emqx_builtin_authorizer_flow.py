@@ -1,106 +1,161 @@
-"""Actual internal product entry, generated transport only; no broker/lab."""
+"""Actual internal product entry, generated transport only; no broker/lab. HAOS parity (D0): HA's authorization sources
+replace this device's after the import, so this device's own sources are no longer judged (E-26, E-27, E-31) and a built-in
+database source HA does not have is switched off before it is removed (EMQX clears the ACL rules of a source it destroys)."""
 import copy
+import json
 import unittest
+
 from woowbackup import ha_emqx as emqx
 from woowbackup.errors import BackupError
 from . import test_ha_emqx_candidate_flow as flow
 
-class BuiltinProductFlowTests(unittest.TestCase):
-    def invoke(self,transport):
-        return flow.CandidateFlowTests.invoke(self,transport)
 
-    def fixture(self,source):
-        transport=flow.Transport()
+class BuiltinProductFlowTests(unittest.TestCase):
+    def invoke(self, transport, readings=True, notes=None):
+        return flow.CandidateFlowTests.invoke(self, transport, readings=readings, notes=notes)
+
+    def fixture(self, source):
+        transport = flow.Transport()
         transport.config['authorization']['sources'].append(source)
-        transport.running_config=copy.deepcopy(transport.config)
+        transport.running_config = copy.deepcopy(transport.config)
         return transport
 
-    def assert_disabled_builtin_refused(self,t):
-        """Only [file] and [file, built_in_database] (enabled) are proven end to end (2026-11-23): a disabled
-        built-in source is refused before anything is read from the volume, naming the combination."""
-        with self.assertRaises(BackupError) as caught:self.invoke(t)
-        self.assertIn('授權來源組合（ACL 檔案＋內建資料庫（停用））',caught.exception.message)
-        self.assertNotIn('export',t.events)
+    def test_this_devices_own_sources_of_any_shape_are_no_longer_refused(self):
+        """E-26, E-27, E-31: a disabled source, an extra field, a limit other than 100, another type: HA's replace them."""
+        for source in ({'type': 'built_in_database', 'enable': True}, {'type': 'built_in_database', 'enable': False},
+                       {'type': 'built_in_database', 'enable': True, 'max_rules': 101},
+                       {'type': 'built_in_database', 'enable': True, 'loader': {}}, {'type': 'built_in_database'},
+                       {'type': 'redis', 'enable': True}, {'type': 'http', 'enable': True, 'url': 'http://auth.invalid/'}):
+            transport = self.fixture(source)
+            with self.subTest(source=sorted(source)):
+                self.assertEqual(len(self.invoke(transport)), 4)
+                self.assertIn('import', transport.events)
+                self.assertEqual(transport.running_config['authorization'], flow.HA_AUTHORIZATION)
 
-    def test_raw_observation_preserves_order_and_exact_sources_through_import(self):
-        for enabled in (True,False):
-            t=self.fixture({'type':'built_in_database','enable':enabled})
-            original=copy.deepcopy(t.config['authorization'])
-            if not enabled:
-                with self.subTest(enabled=enabled):self.assert_disabled_builtin_refused(t)
-                continue
-            with self.subTest(enabled=enabled):
-                self.assertEqual(len(self.invoke(t)),4)
-                self.assertEqual(t.restore['authorization'],original)
-                self.assertEqual(t.running_config['authorization'],original)
-                self.assertEqual(t.seed['authz/custom.acl'],b'{deny, all}.')
-                self.assertEqual(set(t.seed),{'configs/cluster.hocon','authz/custom.acl','certs/lab.pem'})
-                self.assertLess(t.events.index('import'),t.events.index('restore'))
+    def test_a_file_reference_of_an_unknown_kind_still_stops_until_the_generic_scan_exists(self):
+        """Not E-31 (the shape of a built-in source): a `path` field is a file reference the walk cannot place (EMQX-B)."""
+        transport = self.fixture({'type': 'built_in_database', 'enable': False, 'path': '/fixture/loader'})
+        with self.assertRaises(BackupError):
+            self.invoke(transport)
+        self.assertNotIn('export', transport.events)
+
+    def test_a_list_of_sources_that_cannot_be_read_still_stops(self):
+        for sources in (None, 'x', [1]):
+            transport = flow.Transport()
+            transport.config['authorization']['sources'] = sources
+            transport.running_config = copy.deepcopy(transport.config)
+            with self.subTest(sources=sources), self.assertRaises(BackupError):
+                self.invoke(transport)
+            self.assertNotIn('export', transport.events)
+
+    def test_builtin_does_not_hide_unsafe_file_in_either_order(self):
+        for reverse in (False, True):
+            t = self.fixture({'type': 'built_in_database', 'enable': True})
+            t.config['authorization']['sources'][0]['path'] = '/outside/unmounted.acl'
+            if reverse:
+                t.config['authorization']['sources'].reverse()
+            with self.subTest(reverse=reverse), self.assertRaises(BackupError):
+                self.invoke(t)
+            self.assertNotIn('export', t.events)
 
     def test_raw_reader_never_expands_or_drops_fields(self):
-        self.assertIn('emqx:get_raw_config([])',emqx.CONFIG_EXPR)
-        self.assertNotIn('emqx:get_config(',emqx.CONFIG_EXPR)
-        for source in ({'type':'built_in_database','enable':True},
-                       {'type':'built_in_database','enable':True,'max_rules':100}):
-            config=self.fixture(source).config
-            commands=[]
+        self.assertIn('emqx:get_raw_config([])', emqx.CONFIG_EXPR)
+        self.assertNotIn('emqx:get_config(', emqx.CONFIG_EXPR)
+        for source in ({'type': 'built_in_database', 'enable': True},
+                       {'type': 'built_in_database', 'enable': True, 'max_rules': 100}):
+            config = self.fixture(source).config
+            commands = []
+
             def execute(command):
                 commands.append(command)
                 return flow.response(config)
-            self.assertEqual(emqx.read_effective_config(execute),config)
-            self.assertEqual(commands,[['emqx','eval',emqx.CONFIG_EXPR]])
+            self.assertEqual(emqx.read_effective_config(execute), config)
+            self.assertEqual(commands, [['emqx', 'eval', emqx.CONFIG_EXPR]])
 
-    def test_expanded_unknown_and_untyped_source_refuse_before_export(self):
-        for source in ({'type':'built_in_database','enable':True,'max_rules':101},
-                {'type':'built_in_database','enable':False,'path':'/fixture/loader'},
-                {'type':'built_in_database','enable':True,'loader':{}},
-                {'type':'built_in_database'}, {'type':'built_in_database','enable':1},
-                {'type':'redis','enable':True}):
-            t=self.fixture(source)
-            with self.subTest(keys=sorted(source)),self.assertRaises(BackupError):self.invoke(t)
-            self.assertNotIn('export',t.events)
-            self.assertNotIn('start',t.events)
+    def merging(self, device_sources, ha_sources, **fields):
+        """A transport whose import MERGES (as EMQX does): HA's sources by type, what only this device has stays."""
+        class Merge(flow.Transport):
+            def __init__(self):
+                super().__init__()
+                self.loads = []
 
-    def test_builtin_does_not_hide_unsafe_file_in_either_order(self):
-        for reverse in (False,True):
-            t=self.fixture({'type':'built_in_database','enable':True})
-            t.config['authorization']['sources'][0]['path']='/outside/unmounted.acl'
-            if reverse:t.config['authorization']['sources'].reverse()
-            with self.subTest(reverse=reverse),self.assertRaises(BackupError):self.invoke(t)
-            self.assertNotIn('export',t.events)
-
-    def test_restored_builtin_mutation_refuses_on_readback(self):
-        class ChangedRestore(flow.Transport):
-            def exec(self,role,command,**kwargs):
-                result=super().exec(role,command,**kwargs)
-                if command[:4]==['emqx','ctl','conf','load']:
-                    self.running_config['authorization']['sources'][-1]['enable']=False
+            def exec(self, role, command, **kwargs):
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    ha = copy.deepcopy(self.ha_authorization)
+                    mine = copy.deepcopy(self.running_config['authorization'])
+                    kinds = {s['type'] for s in ha['sources']}
+                    ha['sources'] += [s for s in mine['sources'] if s['type'] not in kinds]
+                    self.events.append('import')
+                    self.running_config['authorization'] = ha
+                    return flow.Result(0, b'imported successfully', b'')
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                    self.loads.append(copy.deepcopy(self.restore))
                 return result
-        t=ChangedRestore()
-        t.config['authorization']['sources'].append({'type':'built_in_database','enable':True})
-        t.running_config=copy.deepcopy(t.config)
-        with self.assertRaises(BackupError):self.invoke(t)
-        self.assertIn('restore',t.events)
+        transport = Merge()
+        transport.config['authorization']['sources'] = copy.deepcopy(device_sources)
+        transport.running_config = copy.deepcopy(transport.config)
+        transport.ha_authorization = {'no_match': 'allow', 'deny_action': 'ignore', 'sources': copy.deepcopy(ha_sources)}
+        for name, value in fields.items():
+            setattr(transport, name, value)
+        return transport
 
-    def test_three_key_target_source_survives_product_restore_and_readback(self):
-        for enabled in (True,False):
-            t=self.fixture({'type':'built_in_database','enable':enabled,'max_rules':100})
-            if not enabled:
-                with self.subTest(enabled=enabled):self.assert_disabled_builtin_refused(t)
-                continue
-            self.invoke(t)
-            self.assertEqual(t.running_config['authorization'],t.config['authorization'])
-            self.assertEqual(t.restore['authorization']['sources'][-1],
-                {'type':'built_in_database','enable':enabled,'max_rules':100})
+    FILE = {'type': 'file', 'enable': True, 'path': '/opt/emqx/data/authz/custom.acl'}
+    BUILTIN = {'type': 'built_in_database', 'enable': True}
 
-    def test_dropping_third_key_during_restore_refuses(self):
-        class DropThird(flow.Transport):
-            def exec(self,role,command,**kwargs):
-                result=super().exec(role,command,**kwargs)
-                if command[:4]==['emqx','ctl','conf','load']:
-                    self.running_config['authorization']['sources'][-1].pop('max_rules',None)
+    def test_ha_authorization_is_what_the_candidate_holds_in_ha_order(self):
+        """D0, E-21: HA asks its built-in database (and its ACL rules count), this device only had a file."""
+        ha = [dict(self.BUILTIN), dict(self.FILE)]
+        transport = self.merging([self.FILE], ha)
+        readings = flow.ha_readings(authz=[{'type': 'built_in_database', 'enable': True}, {'type': 'file', 'enable': True}])
+        self.invoke(transport, readings=readings)
+        self.assertEqual([s['type'] for s in transport.running_config['authorization']['sources']],
+                         ['built_in_database', 'file'])
+        self.assertEqual(transport.running_config['authorization']['no_match'], 'allow')
+
+    def test_what_only_this_device_has_goes_and_a_built_in_source_is_switched_off_before_it_is_removed(self):
+        """The corner: HA has no built-in source, this device's enabled one survives the merge. EMQX clears the ACL rules of a
+        source it destroys, not of a disabled one: the load is made in two steps and the rows are counted afterwards."""
+        transport = self.merging([self.FILE, self.BUILTIN], [self.FILE])
+        self.invoke(transport)
+        self.assertEqual(transport.running_config['authorization']['sources'], [self.FILE])
+        self.assertEqual(len(transport.loads), 2)
+        first, last = (load['authorization']['sources'] for load in transport.loads)
+        self.assertIn({'type': 'built_in_database', 'enable': False}, first)
+        self.assertEqual(last, [self.FILE])
+
+    def test_the_no_match_rule_is_explicitly_ha_s_even_when_this_device_had_its_own(self):
+        """D0, E-80: HA's 'allow' replaces this device's 'deny' (the merge would have kept a value only this device set)."""
+        class KeepsDeny(flow.Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authorization']['no_match'] = 'deny'   # the merge kept this device's value
                 return result
-        t=DropThird()
-        t.config['authorization']['sources'].append({'type':'built_in_database','enable':True,'max_rules':100})
-        t.running_config=copy.deepcopy(t.config)
-        with self.assertRaises(BackupError):self.invoke(t)
+        transport = KeepsDeny()
+        self.invoke(transport)
+        self.assertEqual(transport.running_config['authorization']['no_match'], 'allow')
+        self.assertEqual(transport.restore['authorization']['no_match'], 'allow')
+
+    def test_an_authorization_that_does_not_become_ha_s_stops_the_app(self):
+        """E-80: right after applying it, the setting must really be HA's."""
+        class Ignores(flow.Transport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authorization']['no_match'] = 'deny'
+                if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                    self.running_config['authorization']['no_match'] = 'deny'   # the load did not take
+                return result
+        with self.assertRaises(BackupError):
+            self.invoke(Ignores())
+
+    def test_a_ha_without_any_authenticator_is_an_explicit_empty_list(self):
+        """D5: left alone, the merge would keep this device's authenticators and nobody could reach HA's open broker."""
+        transport = flow.Transport()
+        transport.config['authentication'] = [{'mechanism': 'password_based', 'backend': 'built_in_database'}]
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.invoke(transport, readings=flow.ha_readings(authn=[]), notes=notes)
+        self.assertEqual(transport.running_config['authentication'], [])
+        self.assertEqual(json.loads(json.dumps(transport.restore)), {'authentication': []})
