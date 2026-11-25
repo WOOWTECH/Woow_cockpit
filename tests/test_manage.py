@@ -1454,7 +1454,7 @@ APT_RECORDED = {
         (100,
          'Get:1 http://repo.example:80/ubuntu noble InRelease [1636 B]\n'
          'Reading package lists...\n',
-         'E: Release file for http://repo.example:80/ubuntu/dists/noble/InRelease is expired (invalid since 1059d 2h 20min 52s). Updates for this repository will not be applied.\n'),
+         'E: Release file for http://repo.example:80/ubuntu/dists/noble/InRelease is expired (invalid since 1059d 2h 33min 31s). Updates for this repository will not be applied.\n'),
         (100,
          'Reading package lists...\n'
          'Building dependency tree...\n',
@@ -1467,6 +1467,20 @@ APT_RECORDED = {
          'Get:1 http://repo.example:80/ubuntu noble InRelease [1591 B]\n'
          'Reading package lists...\n',
          'E: Release file for http://repo.example:80/ubuntu/dists/noble/InRelease is not valid yet (invalid for another 1497d 21h 38min 58s). Updates for this repository will not be applied.\n'),
+        (100,
+         'Reading package lists...\n'
+         'Building dependency tree...\n',
+         'E: Unable to locate package age\n'
+         'E: Unable to locate package zstd\n'
+         'E: Unable to locate package python3-nacl\n'
+         'E: Unable to locate package python3-cryptography\n')),
+    'unsigned-source': (
+        (100,
+         'Ign:1 http://repo.example:80 ./ InRelease\n'
+         'Get:2 http://repo.example:80 ./ Release [483 B]\n'
+         'Ign:3 http://repo.example:80 ./ Release.gpg\n'
+         'Reading package lists...\n',
+         "E: The repository 'http://repo.example:80 ./ Release' is not signed.\n"),
         (100,
          'Reading package lists...\n'
          'Building dependency tree...\n',
@@ -1732,6 +1746,7 @@ class HostToolsContract(HostFixture):
         'sources-unreadable': ['套件來源的設定檔有錯', 'sources.list.d'],
         'signature-no-key': [manage.SIGNATURE], 'release-expired': [manage.SIGNATURE],
         'dists-release-expired': [manage.SIGNATURE], 'dists-release-not-valid-yet': [manage.SIGNATURE],
+        'unsigned-source': [manage.SIGNATURE],
         'locked': ['另一個套件作業（例如系統自動更新）正在進行'], 'package-gone': [manage.GONE],
         'disk-full': ['磁碟空間不足'], 'dpkg-interrupted': ['sudo dpkg --configure -a'],
         'held': ['套件被鎖定（apt-mark hold）'], 'conflict': [manage.CONFLICT_REASON],
@@ -1991,6 +2006,85 @@ class HostToolsContract(HostFixture):
         for number, (update, install, left, reason) in enumerate(cases):
             with self.subTest(number=number):
                 self.assertIn(reason, manage.apt_reason(update, install, left))
+
+    def test_texts_of_apt_that_were_not_provoked_are_told_from_its_catalogue(self):
+        """Synthetic, one line each: messages of apt's own catalogue (libapt-pkg, libc) that no recording has."""
+        fine, source = (0, '', ''), 'http://a.example/ubuntu noble/main amd64 age 1.1.1'
+
+        def download(why):  # a download that failed: its Err line of the progress and the line of stderr
+            return 100, f'Err:1 {source}\n  {why}\n', f'E: Failed to fetch http://a.example/pool/age.deb  {why}\n'
+
+        def lists(*lines, code=100):  # what apt-get update says only on stderr, about a source it did fetch from
+            return (code, 'Get:1 http://a.example/ubuntu noble InRelease [1 kB]\n', ''.join(f'{line}\n' for line in lines))
+
+        missing = (100, '', 'E: Unable to locate package age\n')
+        cases = (  # (update, install, what the reason holds)
+            (fine, (100, '', 'E: Could not get lock /var/lib/dpkg/lock. It is held by process 42 (apt)\n'), '另一個套件作業'),
+            (fine, (100, '', 'E: Write error - write (28: No space left on device)\n'), '磁碟空間不足'),
+            (fine, (100, '', 'E: Packages need to be removed but remove is disabled.\n'), '要先移除別的套件'),
+            (fine, (100, '', "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).\n"),
+             '相依的套件湊不齊'),
+            (fine, (100, ' age : Breaks: zstd (< 2) but 1.5.5 is to be installed\n', ''), manage.CONFLICT_REASON),
+            (fine, download("Temporary failure resolving 'a.example'"), manage.OFFLINE),
+            (fine, download("Something wicked happened resolving 'a.example:80' (-5 - No address associated with hostname)"),
+             manage.OFFLINE),
+            (fine, download('Cannot initiate the connection to a.example:80 (192.0.2.1). - connect (101: Network is unreachable)'),
+             manage.OFFLINE),
+            (fine, download('Could not connect to a.example:80 (192.0.2.1), connection timed out'), manage.OFFLINE),
+            (fine, download('Connection failed [IP: 192.0.2.1 80]'), manage.OFFLINE),
+            (fine, download('Connection reset by peer'), manage.OFFLINE),
+            (fine, download('Could not connect to a.example:80 (192.0.2.1). - connect (113: No route to host)'), manage.OFFLINE),
+            # Other transports (a libcurl one) say it in their own words.
+            (fine, download('Failed to connect to a.example port 443: Network is unreachable'), manage.OFFLINE),
+            (fine, download('Failed to connect to a.example port 443: No route to host'), manage.OFFLINE),
+            (fine, download('407  Proxy Authentication Required [IP: 192.0.2.1 80]'), manage.OFFLINE),
+            (fine, download('410  Gone [IP: 192.0.2.1 80]'), manage.GONE),
+            (fine, download('File has unexpected size (10 != 20). Mirror sync in progress? [IP: 192.0.2.1 80]'), manage.GONE),
+            (fine, download('Hash Sum mismatch'), manage.GONE),
+            (fine, (100, '', "E: Package 'age' has no installation candidate\n"), '這台啟用的套件來源沒有 age'),
+            # What update says only on stderr about a source: each kind of text, and a text of no kind at all.
+            (lists("E: The repository 'http://a.example/ubuntu noble InRelease' is no longer signed."), missing, manage.SIGNATURE),
+            (lists("W: GPG error: http://a.example/ubuntu noble InRelease: something about the key"), missing, manage.SIGNATURE),
+            (lists("E: Release file for http://a.example/ubuntu/dists/noble/InRelease is not valid yet (invalid for another 1d)."),
+             missing, manage.SIGNATURE),
+            (lists("E: Failed to fetch http://a.example/ubuntu/dists/noble/InRelease  403  Forbidden [IP: 192.0.2.1 80]"),
+             missing, '套件來源都無法更新（其他錯誤）'),
+            (lists("W: Skipping acquire of configured file 'universe/binary-amd64/Packages' as repository "
+                   "'http://a.example/ubuntu noble InRelease' doesn't have the component 'universe'", code=0),
+             missing, '這台啟用的套件來源沒有 age'),
+        )
+        for number, (update, install, reason) in enumerate(cases):
+            with self.subTest(number=number, install=install[2][:60] or install[1][:60]):
+                self.assertIn(reason, manage.apt_reason(update, install, ['age']))
+
+    def test_what_the_downloads_say_beats_what_the_index_lacks(self):
+        """A package apt cannot reinstall and another that cannot be downloaded: the network is the reason, not the sources."""
+        install = (100, 'Reinstallation of age is not possible, it cannot be downloaded.\n'
+                        'Err:1 http://a.example/ubuntu noble/main amd64 zstd 1.5.5\n  Could not resolve \'a.example\'\n',
+                   'E: Failed to fetch http://a.example/pool/zstd.deb  Could not resolve \'a.example\'\n')
+        update = (0, 'Hit:1 http://a.example/ubuntu noble InRelease\n', '')
+        self.assertIn(manage.OFFLINE, manage.apt_reason(update, install, ['age', 'zstd']))
+
+    def test_the_notices_of_the_install_and_of_the_packages_come_together(self):
+        result = self.live(recorded('offline-no-index'), FakeSystemctl(self.root, masked=True))
+        self.assertEqual(len(result['notices']), 2)
+        self.assertTrue(result['notices'][0].startswith('備份與還原需要的套件沒有裝好：'))
+        self.assertEqual(result['notices'][1], manage.MASKED_NOTICE)
+
+    def test_the_install_uses_the_new_plan_as_a_whole(self):
+        """Desired files and state come from the same new plan: Cockpit changed while apt-get ran."""
+        status = self.root / 'var/lib/dpkg/status'
+        before = status.read_text()
+
+        def another_job(_argv):
+            status.write_text(before.replace('362-1', '363-1'))
+
+        with patch.object(manage, 'install', wraps=manage.install) as install:
+            self.live(FakeHost({'zstd'}, seen=another_job))
+        (_root, desired, state, _systemd), _options = install.call_args
+        self.assertEqual(state['cockpit_version'], '363-1')
+        self.assertEqual(json.loads(desired[manage.STATE][0])['cockpit_version'], '363-1')
+        self.assertEqual(json.loads((self.root / manage.STATE).read_text())['cockpit_version'], '363-1')
 
     def test_what_works_afterwards_decides_not_the_exit_code_of_apt(self):
         # apt is content, age-keygen still does not answer: said so, nothing is claimed about the network.
