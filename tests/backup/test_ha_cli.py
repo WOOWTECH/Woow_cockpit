@@ -630,6 +630,26 @@ class ImportStartTests(HaCliCase):
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             return jobs.run_job(self.paths, response['job_id'], deps=self.deps)
 
+    def test_the_run_job_command_runs_the_whole_import(self):
+        """The unit's own command line: `run-job <first job>` answers with the first job's state and has run the chain."""
+        from .test_ha_import import HaWorld, app
+        response = self.call(['ha-import-start'], {**self.base, 'then_restore': False, 'overwrite': False,
+                                                  'choices': {'odoo': {'database': 'prod'}}})
+        self.deps.adapter_factory = HaWorld().factory
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = app(importer.app_id, importer.name)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'convert', ConvertStubs.odoo))
+            stack.enter_context(mock.patch.object(ha_n8n, 'convert', ConvertStubs.n8n))
+            stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
+            stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            reply = self.call(['run-job', response['job_id']])
+        self.assertEqual(reply, {'ok': True, 'state': 'succeeded'})
+        self.assertEqual([(r['params']['group']['app_id'], r['state']) for r in self.group_records(response)],
+                         [('odoo', 'succeeded'), ('n8n', 'succeeded')])
+        self.assertEqual(len(self.storage.list_backups()), 2)
+
     def group_records(self, response):
         rows = [r for r in jobs.JobStore(self.paths).list(limit=None) if (r['params'].get('group') or {}).get('id') == response['group']]
         return sorted(rows, key=lambda r: (r['created'], r['id']))

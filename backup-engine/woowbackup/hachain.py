@@ -70,6 +70,8 @@ CONVERTED_KEPT = '已轉換成備份，但匯入被停止，這台的這個應�
 CANCELLED_RESTORE = '你取消了匯入，這個應用已轉換成備份但還沒有匯入。這台的這個應用沒有任何變更，轉換好的備份還在備份列表，要匯入時可以還原它。'
 ROLLED_BACK_TAIL = '這個應用已自動退回匯入前的狀態。'
 UNCHANGED_TAIL = '這台的這個應用沒有變更；轉換好的備份還在備份列表，可以再試一次。'
+UNCHANGED_BAD_TAIL = '這台的這個應用沒有變更；轉換好的備份內容有問題，再還原一次也不會成功，請從 HA 備份重新匯入這個應用（必要時先在 HA 重新備份）。'
+BAD_BACKUP_CODES = ('corrupt-archive', 'invalid-manifest', 'unsupported-format', 'limit-exceeded')
 NO_BACKUP = '轉換作業結束了，但找不到轉換出來的備份，這個應用沒有匯入。這台的這個應用沒有任何變更，請查看作業紀錄後重新匯入。'
 STOP_REQUESTED_LOG = '已收到「做完這個應用就停止」的要求'
 
@@ -349,7 +351,8 @@ def _entry(record, params, group, chain, outcome):
         if error.get('code') == 'confirmation-required':
             entry['status'] = 'skipped'  # kept out before anything of it was touched (a line of the restore check)
         if result.get('changed') is not True and error.get('message'):
-            entry['message'] = _short(f'{_reason(error)}{UNCHANGED_TAIL}')
+            tail = UNCHANGED_BAD_TAIL if error.get('code') in BAD_BACKUP_CODES else UNCHANGED_TAIL
+            entry['message'] = _short(f'{_reason(error)}{tail}')
     return clean_result(entry) or entry
 
 

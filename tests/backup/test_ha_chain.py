@@ -271,7 +271,7 @@ class ParamsTests(unittest.TestCase):
                 self.assertRegex(text, '重新|請')
                 self.assertNotRegex(text, r'[`$]')
         for text in (hachain.NOT_STARTED, hachain.CONVERTED_KEPT, hachain.CANCELLED_RESTORE, hachain.UNCHANGED_TAIL,
-                     hachain.ROLLED_BACK_TAIL, hachain.NO_BACKUP):
+                     hachain.UNCHANGED_BAD_TAIL, hachain.ROLLED_BACK_TAIL, hachain.NO_BACKUP):
             self.assertLessEqual(len(text), haissues.MAX_MESSAGE)
             self.assertNotRegex(text, r'[`$]')
 
@@ -1648,6 +1648,7 @@ class NestedArchiveTests(RestoreSideCase):
         row = self.last_results()['woowbk-two']
         self.assertEqual(row['code'], 'corrupt-archive', label)
         self.assertIn('這台設備沒有任何變更', row['message'], label)
+        self.assertTrue(row['message'].endswith(hachain.UNCHANGED_BAD_TAIL), 'a backup that is bad is not offered again: ' + label)
         self.assertEqual(self.restores(), (['woowbk-demo', 'woowbk-three'], []), label)
         self.assert_imported('woowbk-demo', 'woowbk-three')
         self.assert_untouched('woowbk-two')
@@ -1655,6 +1656,7 @@ class NestedArchiveTests(RestoreSideCase):
         self.assertTrue(self.storage.get(row['backup_id']), 'the converted backup of the app stays')
         self.assertEqual(self.records()[3]['state'], 'failed')
         self.assertEqual(self.records()[3]['result']['changed'], False)
+        self.assertEqual(self.records()[3]['result']['group']['results'][-1]['status'], 'failed')
         self.assertEqual(self.records()[-1]['state'], 'succeeded')
 
     def test_every_hostile_tar_of_the_list_leaves_only_its_app(self):
