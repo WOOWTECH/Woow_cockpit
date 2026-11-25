@@ -1421,6 +1421,11 @@ class SkippedLineTests(OmnigentCase):
     this app stops, before anything of HA is loaded; confirmed -> the conversion goes on and leaves exactly that out; one
     more name -> the same line asks again."""
 
+    def restores(self):
+        """Every pg_restore that writes into the new cluster: (role it runs as, argv, what it read)."""
+        return [(cmd[cmd.index('-U') + 1], cmd, data) for role, cmd, data in self.world.execs
+                if role == 'omni-db' and cmd[0] == 'pg_restore' and '-U' in cmd]
+
     def kind_tables(self, more=False):
         extra = ['evil', 'evil2'] if more else ['evil']
         self.world.objects = dict(self.world.objects, tables=self.world.objects['tables'] + extra)
@@ -1541,6 +1546,26 @@ class SkippedLineTests(OmnigentCase):
 
     def test_extensions_one_more(self):
         self.assert_one_more_asks('extensions')
+
+    def test_nothing_of_the_superuser_kinds_is_ever_selected(self):
+        """O-15 (security re-review, DESIGN H-c): the objects only a database superuser can make stay in HA's cluster, which
+        is opened in the isolated throwaway as it was for the check; what the conversion restores into the new cluster
+        is the list of table data and sequence values of this device's own tables, whatever else HA's dump lists, and
+        it is loaded by the role without privileges (never the superuser)."""
+        kinds = ha_odoo.SUPERUSER_KINDS + ('FUNCTION', 'TRIGGER', 'VIEW', 'RULE', 'POLICY', 'EXTENSION hstore', 'SCHEMA evil',
+                                           'FOREIGN TABLE', 'LARGE OBJECT')
+        listing = ''.join(f'4{n:03d}; 1255 17{n:03d} {kind} public x{n} omnigent\n' for n, kind in enumerate(kinds))
+        self.world.toc = TOC + listing.encode()
+        self.world.superuser = ['EVENT TRIGGER', 'FOREIGN DATA WRAPPER']
+        ha_id = self.upload_omnigent()
+        result = self.check(ha_id, ['omnigent'])[0]
+        self.convert(ha_id, ['omnigent'], acknowledged=self.confirmed(result))
+        self.assertEqual(self.world.written['/tmp/woowbk-omnigent.toc'].decode().splitlines(), DATA_LINES)
+        data = [(user, cmd) for user, cmd, _d in self.restores() if '-L' in cmd]
+        self.assertEqual([(u, c[c.index('-L') + 1]) for u, c in data], [(ha_omnigent.RESTORE_ROLE, '/tmp/woowbk-omnigent.toc')])
+        self.assertEqual([user for user, cmd, _d in self.restores() if '-L' not in cmd], ['omnigent', 'omnigent'],
+                         "the rest is this device's own schema, by the app role")
+        self.assertEqual(len(self.runs('omni-db')), 1)
 
     def test_links_not_confirmed(self):
         self.assert_not_confirmed('links')
