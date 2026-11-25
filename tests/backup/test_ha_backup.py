@@ -40,6 +40,22 @@ def code_of(callable_, *args, **kwargs):
     raise AssertionError('no BackupError')
 
 
+MEMBER_MESSAGES = {'corrupt-archive': hasecuretar.MEMBER_MESSAGE, 'limit-exceeded': habackup.MEMBER_LIMIT_MESSAGE}
+FILE_MESSAGES = {'corrupt-archive': hasecuretar.CORRUPT_MESSAGE, 'limit-exceeded': habackup.LIMIT_MESSAGE}
+
+
+def say_member(test, error):
+    """The problem of one member says so (detail `scope`, the zh-TW text of one member that is left out) and does not
+    end the job: only the app of that member stops (DESIGN C1)."""
+    test.assertEqual((error.details['scope'], error.message), ('member', MEMBER_MESSAGES[error.code]))
+    test.assertIsNot(getattr(error, 'job_wide', False), True)
+
+
+def say_file(test, error):
+    """A problem of the whole file has no scope and the text of a file that is refused."""
+    test.assertEqual((error.details.get('scope'), error.message), (None, FILE_MESSAGES[error.code]))
+
+
 class TempFiles(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='woowbk-ha-')
@@ -68,9 +84,7 @@ class TempFiles(unittest.TestCase):
     def refused(self, data, code, reason):
         got, error = self.describe_code(data)
         self.assertEqual((got, error.details['reason']), (code, reason))
-        self.assertEqual(error.details.get('scope'), None, 'the whole file')
-        if code == 'corrupt-archive':
-            self.assertEqual(error.message, hasecuretar.CORRUPT_MESSAGE)
+        say_file(self, error)
 
     def problems(self, data):
         """{add-on slug: problem} of a backup that is taken."""
@@ -157,6 +171,7 @@ class RecognitionTests(TempFiles):
                 self.assertFalse(habackup.looks_like_ha(fd))
                 code, error = code_of(habackup.describe, fd)
                 self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'backup.json too large'))
+                say_file(self, error)
                 self.assertLess(sum(reads), 10_000)
 
     def test_a_description_of_too_many_pieces_is_never_parsed(self):
@@ -172,9 +187,11 @@ class RecognitionTests(TempFiles):
             self.assertFalse(habackup.looks_like_ha(fd))
             code, error = code_of(habackup.describe, fd)
             self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'backup.json too large'))
+            say_file(self, error)
             addon = b'{"system":{"slug":"x"},"version":"1"}'
             code, error = code_of(habackup.parse_addon_json, addon[:-1] + b',"y":[' + b','.join([b'[]'] * items) + b']}')
             self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'addon.json too large'))
+            say_member(self, error)  # an add-on's own file: only that add-on
         self.assertTrue(1000 * 400 < habackup.MAX_JSON_ITEMS <= 10 ** 6, 'the largest real one has 400')
 
     def test_positions_beyond_the_file(self):
@@ -946,8 +963,7 @@ class MemberStreamTests(TempFiles):
     def gzip_refused(self, data, reason, code='corrupt-archive', **kwargs):
         got, error = code_of(self.gunzip, data, **kwargs)
         self.assertEqual((got, error.details['reason']), (code, reason))
-        if code == 'corrupt-archive':
-            self.assertEqual((error.details['scope'], error.message), ('member', hasecuretar.MEMBER_MESSAGE))
+        say_member(self, error)
 
     def test_gzip_layer(self):
         """IN-01 to IN-08: a damaged or unclear gzip stream stops its member."""
@@ -1063,6 +1079,7 @@ class MemberStreamTests(TempFiles):
                 code, error = code_of(self.read_addon, data, hx.ODOO)
                 self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'the add-on archive inflates too much'))
                 self.assertLess(error.details['limit'], 16 << 20)
+                say_member(self, error)
             with self.subTest(case=label, floor='as it is'):
                 self.assertTrue(self.read_addon(data, hx.ODOO)[1].complete, 'below the floor it is only large')
 
@@ -1132,9 +1149,8 @@ class WalkCase(unittest.TestCase):
         try:
             self.walk(entries, select, **kwargs)
         except BackupError as error:
-            message = {'corrupt-archive': hasecuretar.MEMBER_MESSAGE, 'limit-exceeded': habackup.MEMBER_LIMIT_MESSAGE}
-            if error.code in message:
-                self.assertEqual((error.details['scope'], error.message), ('member', message[error.code]))
+            if error.code in MEMBER_MESSAGES:
+                say_member(self, error)
             return error.code, error.details.get('reason')
         raise AssertionError('accepted')
 
@@ -1490,7 +1506,9 @@ class EntryTests(WalkCase):
         self.assertEqual(second.read_all(10), b'd')
         with self.assertRaises(ValueError):
             first.read(1)
-        self.assertEqual(code_of(second.read_all, 0)[0], 'limit-exceeded')
+        code, error = code_of(second.read_all, 0)
+        self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'file too large to read'))
+        say_member(self, error)
         walk.close()
         self.assertEqual(first.fileobj, first)
         out = io.BytesIO()
@@ -1537,7 +1555,9 @@ class EntryTests(WalkCase):
         doc = json.dumps({'system': {'slug': 'x'}, 'x': 'y' * room}).encode()
         self.assertEqual((len(doc), habackup.MAX_ADDON_JSON), (32 << 20, 32 << 20))
         self.assertEqual(habackup.parse_addon_json(doc).slug, 'x')
-        self.assertEqual(code_of(habackup.parse_addon_json, doc + b' ')[0], 'limit-exceeded')
+        code, error = code_of(habackup.parse_addon_json, doc + b' ')
+        self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'addon.json too large'))
+        say_member(self, error)
         with mock.patch.object(habackup, 'MAX_ADDON_JSON', 100):
             entries = [{'name': 'addon.json', 'data': b' ' * 60 + b'{"system": {"slug": "x"}}' + b' ' * 15}]
             self.assertEqual(self.walk(entries, addon=True)[1].addon.slug, 'x')
@@ -1939,6 +1959,18 @@ class HardLinkTests(WalkCase):
             with self.subTest(again=label):
                 result = self.second(entries, again, select)
                 self.assertEqual((result[1:4], result[4].complete), ((reason, 1, 1), False))
+        # the same where the link names nothing: that pass ends at the end of the archive, not at what it looked for, and
+        # the rest of the stream (more than one read) still has to hold its checksum
+        gone = [{'name': 'x/a', 'data': b'first'}, {'name': 'y/b', 'type': 'hardlink', 'linkname': 'x/gone'}]
+        padded = gzip.compress(hx.tar_bytes(gone) + bytes(3 << 20), mtime=0)
+        got, reason, passes, closed, report = self.second(gone, padded, select)
+        self.assertEqual((got, reason, passes, closed, report.skip_names('hardlink'), report.complete),
+                         ({}, None, 1, 1, ['y/b'], True))
+        for label, again, reason in (('trailer', padded[:-8] + bytes(8), 'gzip checksum mismatch'),
+                                     ('cut', padded[:-2000], 'gzip stream is truncated')):
+            with self.subTest(again=label, names='nothing'):
+                result = self.second(gone, again, select)
+                self.assertEqual((result[1:4], result[4].complete), ((reason, 1, 1), False))
 
     def test_no_second_pass_for_nothing(self):
         """Links that are known to have no content are listed at once: the member is not read again for them."""
@@ -2009,12 +2041,15 @@ class NamesTests(unittest.TestCase):
         """A name of many folders costs a place each: as many as there may be entries twice over."""
         names = habackup._Names(1000)
         names.admit('/'.join('a' * 900), 'file')
-        self.assertEqual(code_of(names.admit, '/'.join('b' * 200), 'file')[1].details['reason'],
-                         'too many names in an inner tar')
+        code, error = code_of(names.admit, '/'.join('b' * 200), 'file')
+        self.assertEqual((code, error.details['reason']), ('limit-exceeded', 'too many names in an inner tar'))
+        say_member(self, error)
         deep = [{'name': '/'.join([f'{i:x}'] + ['a'] * 40), 'data': b''} for i in range(10)]
         with self.assertRaises(BackupError) as caught:
             list(habackup.iter_entries(io.BytesIO(hx.tar_bytes(deep)), habackup.Select(max_members=100), addon=False))
-        self.assertEqual(caught.exception.code, 'limit-exceeded')
+        self.assertEqual((caught.exception.code, caught.exception.details['reason']),
+                         ('limit-exceeded', 'too many names in an inner tar'))
+        say_member(self, caught.exception)
 
 
 def haos_doc(doc):
