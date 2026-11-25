@@ -161,7 +161,8 @@ PAX_TIME_RE = re.compile(r'-?[0-9]{1,20}(?:\.[0-9]{1,20})?\Z')
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f]')
 
 LIMIT_MESSAGE = 'HA 備份檔超出安全限制（檔案數量或大小），已拒絕處理。'                      # the whole file
-MEMBER_LIMIT_MESSAGE = 'HA 備份裡這一項超出安全限制（檔案數量或大小），所以不會使用它；這台的應用不會變更。'  # one member
+MEMBER_LIMIT_MESSAGE = ('HA 備份裡這一項超出安全限制（檔案數量或大小），所以不會使用它。'
+                        '請在 HA 重新備份後再匯入；這台的應用不會變更。')  # one member
 # Why a member of a backup is listed but never opened (the sidecar's `addons[].problem`): code -> (error code, text).
 PROBLEMS = {
     'missing': ('not-found', 'HA 備份的說明檔有列出這一項，但檔案裡沒有它的資料（可能是 HA 備份時失敗，或檔案被刪減過），'
