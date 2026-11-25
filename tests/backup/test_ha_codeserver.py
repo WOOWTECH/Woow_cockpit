@@ -900,6 +900,7 @@ class ParityConfirmTests(ParityCase):
         self.assertEqual(sorted(issue_of(row, 'files.skipped')['items']),
                          [f'{P_TREE}/claude/history.jsonl', f'{P_TREE}/shared/mcp.json', f'{U_TREE}/settings.json'])
         self.assertEqual(sorted(row[APP]['files_kept']), ['claude/history.jsonl', 'settings.json', 'shared/mcp.json'])
+        self.assertEqual((issue_of(row, 'codeserver.files-kept')['level'], len(issue_of(row, 'codeserver.files-kept')['items'])), ('notice', 3))
         self.convert(backup, [APP], acknowledged=ack(row))
         self.assertEqual(json.loads(self.volume(PI)['shared/mcp.json'][1]), LIVE_MCP, 'HA\'s servers were not added')
         self.assertEqual(self.volume(PI)['claude/history.jsonl'][1], history(200, project='/workspace'), 'not merged')
@@ -917,6 +918,19 @@ class ParityConfirmTests(ParityCase):
         self.assertEqual(json.loads(ext['extensions.json'][1]), LIVE_EXTS, 'this device\'s list is not touched')
         self.assertFalse([n for n in ext if n.startswith('streetsidesoftware')])
         self.assertEqual(result['results'][0]['status'], 'converted')
+
+    def test_cs11_what_the_reader_leaves_out_of_the_share_folder_is_a_line_of_its_own(self):
+        # the workspace is walked from another member: its device files, FIFOs ... are listed the same way (a second line)
+        share = share_tar(extra=[{'name': 'projects/t1/pipe', 'type': 'fifo'}])
+        backup = self.upload_cs(share=share)
+        row = self.row(backup)
+        self.assertEqual(issue_of(row, 'files.skipped')['items'], ['projects/t1/pipe'])
+        with self.assertRaises(BackupError) as caught:
+            self.convert(backup, [APP])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        result = self.convert(backup, [APP], acknowledged=ack(row))
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertFalse([n for n in self.desktop() if n.endswith('/pipe')])
 
     def test_cs11_a_file_below_the_limit_is_read_as_before(self):
         row = self.row(self.upload_cs())

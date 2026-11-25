@@ -698,6 +698,7 @@ class ParityConfirmTests(ParityCase):
         backup = self.big_prefs()
         row = self.row(backup)
         self.assertEqual(row['open-design']['config_skipped'], ['app-config.json'])
+        self.assertEqual(issue_of(row, 'opendesign.config-kept')['level'], 'notice')
         result = self.assert_confirmed(backup, 'files.skipped', ['data/opendesign/app-config.json'])
         self.assertEqual(json.loads(self.volume(DATA)['app-config.json'][1]), LIVE_PREFS)
         self.assertTrue(any('設定檔 app-config.json' in line and '太大' in line
