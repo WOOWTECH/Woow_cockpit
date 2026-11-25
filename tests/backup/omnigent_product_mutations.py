@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parents[2]
 MODULE = 'woowbackup/ha_omnigent.py'
 TESTS = ('tests.backup.test_ha_omnigent', 'tests.backup.test_ha_omnigent_candidate',
          'tests.backup.test_ha_omnigent_trusted', 'tests.backup.test_b1_01_guard',
-         'tests.backup.test_ha_omnigent_server_volume', 'tests.backup.test_ha_omnigent_install')
+         'tests.backup.test_ha_omnigent_server_volume', 'tests.backup.test_ha_omnigent_install', 'tests.backup.test_jobs')
 
 # (id, protection, exact text, replacement, occurrences[, module under backup-engine/; default MODULE])
 MUTATIONS = (
@@ -366,7 +366,8 @@ def run_tests(root, *options, tests=TESTS):
                           timeout=1800)
     tail = proc.stderr.decode('utf-8', 'replace').strip().splitlines()
     ran = next((int(m.group(1)) for line in tail if (m := re.match(r'Ran (\d+) tests?', line))), 0)
-    last = tail[-1] if tail else ''
+    # the summary line is `FAILED (failures=1, errors=2)`; noise can follow it (a tar of a double that is collected later)
+    last = next((line for line in reversed(tail) if re.match(r'(?:OK|FAILED)\b', line)), '')
     failures = sum(int(n) for n in re.findall(r'(?:failures|errors)=(\d+)', last))
     failed = [m.group(1) for line in tail if (m := re.match(r'(?:FAIL|ERROR): (\w+)', line))]
     return proc.returncode, ran, failures, list(dict.fromkeys(failed))
