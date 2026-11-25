@@ -640,6 +640,14 @@ class MountTests(unittest.TestCase):
         quadlets = dict(QUADLETS)
         quadlets['odoo-db.container'] += b'EnvironmentFile=%h/.config/odoo18/other.env\n'   # next to the standard secret: fine
         self.assertEqual(ha_odoo.Live(quadlets, '/home/appowner').db_user, 'postgres')
+        quadlets['odoo-db.container'] = (QUADLETS['odoo-db.container']
+                                         .replace(b'Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password\n',
+                                                  b'EnvironmentFile=%h/.config/odoo18/other.env\n')
+                                         .replace(b'Secret=odoo18-postgres-super-password,type=mount,target=postgres_password,'
+                                                  b'uid=999,gid=999,mode=0400\n',
+                                                  b'Secret=odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD\n'))
+        live = ha_odoo.Live(quadlets, '/home/appowner')    # the password is a podman secret that sets the variable: fine
+        self.assertEqual(live.db_secrets, ['odoo18-postgres-super-password,type=env,target=POSTGRES_PASSWORD'])
 
     def test_the_superuser_name_may_hold_any_character_but_a_control_one(self):
         """OD-05: it is one argument, never a shell word or SQL."""

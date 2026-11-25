@@ -592,7 +592,8 @@ class Live:
         self.db_env = tempctr.quadlet_environment(db_text, DB_ENV_KEYS)
         self.db_secrets = tempctr.quadlet_secrets(db_text)
         self.db_container = quadlet_container_name(quadlets, self.db_file)
-        if 'POSTGRES_PASSWORD_FILE' not in self.db_env and _password_elsewhere(db_text):
+        if ('POSTGRES_PASSWORD_FILE' not in self.db_env and not any('POSTGRES_PASSWORD' in spec for spec in self.db_secrets)
+                and _password_elsewhere(db_text)):
             # OD-57 (the part that cannot be made): the new cluster is started from the live container's own settings; a
             # superuser password that lives in an environment file or a plain variable cannot be handed to it without
             # putting a secret on a command line, so this is said at once instead of as a cluster that does not start.
