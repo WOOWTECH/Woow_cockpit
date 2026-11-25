@@ -85,7 +85,39 @@ class CountReadTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             ha_emqx.quiesce_system_ticker(None, 'production')
 
-    def test_ticker_pause_missing_ack_refused(self):
+    def test_ticker_pause_missing_ack_is_no_reason_to_stop(self):
+        """E-13: a ticker that cannot be paused is told apart (None): the import goes on and says it."""
         tmp = SimpleNamespace(exec=lambda *args, **kwargs: SimpleNamespace(stdout=b'ok'))
-        with self.assertRaises(BackupError):
-            ha_emqx.quiesce_system_ticker(tmp, 'emqx-new')
+        self.assertIsNone(ha_emqx.quiesce_system_ticker(tmp, 'emqx-new'))
+
+        def broken(*args, **kwargs):
+            raise BackupError('job-failed', 'x')
+        self.assertIsNone(ha_emqx.quiesce_system_ticker(SimpleNamespace(exec=broken), 'emqx-new'))
+        cancelled = BackupError('busy', 'x')
+
+        def busy(*args, **kwargs):
+            raise cancelled
+        with self.assertRaises(BackupError):   # the job's own end is never swallowed
+            ha_emqx.quiesce_system_ticker(SimpleNamespace(exec=busy), 'emqx-new')
+
+    def test_a_paused_ticker_is_checked_again_and_a_changed_one_is_only_said(self):
+        good = SimpleNamespace(exec=lambda *a, **k: SimpleNamespace(stdout=b'ticker_unchanged'))
+        changed = SimpleNamespace(exec=lambda *a, **k: SimpleNamespace(stdout=b'{badmatch,x}'))
+        self.assertTrue(ha_emqx.assert_system_ticker(good, 'emqx-ha', '<0.1.0>'))
+        self.assertFalse(ha_emqx.assert_system_ticker(changed, 'emqx-ha', '<0.1.0>'))
+        self.assertFalse(ha_emqx.assert_system_ticker(good, 'emqx-ha', None), 'nothing was paused')
+        for role, pid in (('production', '<0.1.0>'), ('emqx-ha', 'not a pid')):
+            with self.assertRaises(BackupError):
+                ha_emqx.assert_system_ticker(good, role, pid)
+
+    def test_the_retained_messages_may_differ_by_a_few_rows_only_when_the_ticker_ran(self):
+        ha, seeded = {'emqx_retainer_message': 5, 'emqx_acl': 2}, {'emqx_retainer_message': 0, 'emqx_acl': 0}
+        counts = {'emqx_retainer_message': 5 + ha_emqx.SYS_SLACK, 'emqx_acl': 2}
+        self.assertTrue(ha_emqx.check_counts(ha, seeded, counts), 'exact when both tickers were paused')
+        self.assertEqual(ha_emqx.check_counts(ha, seeded, counts, loose=('emqx_retainer_message',)), [])
+        too_many = dict(counts, emqx_retainer_message=5 + ha_emqx.SYS_SLACK + 1)
+        self.assertTrue(ha_emqx.check_counts(ha, seeded, too_many, loose=('emqx_retainer_message',)))
+        lost_rows = dict(counts, emqx_acl=1)   # the slack is for retained messages only, never for an account or a rule
+        self.assertTrue(ha_emqx.check_counts(ha, seeded, lost_rows, loose=('emqx_retainer_message', 'emqx_acl')))
+        fewer = dict(counts, emqx_retainer_message=4)
+        self.assertTrue(ha_emqx.check_counts(ha, seeded, fewer, loose=('emqx_retainer_message',)))

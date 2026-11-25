@@ -1,7 +1,9 @@
-"""SR-5, OWNER DECISION 2026-11-24 (option C): HA's EMQX replaces this device's MQTT password hashing, so the CHECK warns
-before any conversion and names this device's own MQTT accounts that stop working (names only, control characters
-shown as `?`); HA's `plain` (unencrypted) hashing is refused by the check and by the conversion; equal hashing changes
-nothing. Vendor: emqx_authn_password_hashing.erl:206-269, emqx_passwd.erl:67-104, emqx_authn_mnesia.erl:130-161."""
+"""SR-5, OWNER DECISION 2026-11-24 (option C) and HAOS parity (D1, E-16..E-19, E-52): HA's EMQX replaces this device's MQTT
+password hashing, so the CHECK warns before any conversion and names this device's own MQTT accounts that stop working
+(names only, control characters shown as `?`); HA's `plain` (unencrypted) hashing is no longer refused: HAOS restores such rows
+as they are, so they are named in a notice that says the clear text stays on this device and in every later backup; an
+unreadable answer is said, never guessed, and stops nothing; equal hashing changes nothing.
+Vendor: emqx_authn_password_hashing.erl:206-269, emqx_passwd.erl:67-104, emqx_authn_mnesia.erl:130-161."""
 import base64
 import copy
 import re
@@ -29,13 +31,6 @@ def hashing(name, salt=None, mac_fun=None, iterations=None, dk_length=None, enab
 
 
 class Sr5Case(base.EmqxCase):
-    def setUp(self):
-        super().setUp()
-        # HA's backup has ACL rows: a target that also asks its built-in database (OWNER DECISION 2026-11-23 「C」), so
-        # nothing but SR-5 decides these checks.
-        self.world.target_config['authorization']['sources'] = copy.deepcopy(base.BUILTIN_TARGET)
-        self.world.current_config = copy.deepcopy(self.world.target_config)
-
     def run_check(self):
         return self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
 
@@ -46,11 +41,10 @@ class Sr5Case(base.EmqxCase):
         return [command[2] for role, command, _data in self.world.execs
                 if role == 'woow-emqx' and command[:2] == ['emqx', 'eval']]
 
-    def assert_nothing_built(self):
-        self.assertFalse(self.runs('emqx-new'), 'no candidate was built')
-        self.assertFalse([c for c in self.world.ctl_calls if c[1][:2] in (['data', 'export'], ['data', 'import'])],
-                         'nothing was exported or imported')
-        self.assertFalse(self.world.imported_into or self.world.restored)
+    def assert_nothing_of_the_device_changed(self):
+        """The check builds a throwaway candidate (H7); no volume or file of this device is written."""
+        self.assertNotIn('woow_emqx_data', self.world.imported)
+        self.assertFalse(self.storage.list_backups())
 
 
 class WarningTests(Sr5Case):
@@ -64,7 +58,7 @@ class WarningTests(Sr5Case):
         for words in ('woow、sensor-01', '匯入後無法再用原本的密碼登入', '要在匯入後重新設定', '存取控制 → 認證',
                       '刪除後重新啟動 EMQX 就會用原本的密碼建回'):
             self.assertIn(words, warning)
-        self.assert_nothing_built()
+        self.assert_nothing_of_the_device_changed()
 
     def test_equal_hashing_gives_no_warning_and_the_result_is_unchanged(self):
         result = self.run_check()
@@ -137,7 +131,8 @@ class WarningTests(Sr5Case):
         self.world.ha_hashing = '[]'
         self.assertEqual(self.sr5_warnings(self.run_check()), [])
 
-    def test_an_unreadable_device_answer_is_a_blocker_never_a_guess(self):
+    def test_an_unreadable_device_answer_is_said_never_guessed(self):
+        """E-52: the accounts cannot be named; the import goes on and the notice says so (no stop, no guess)."""
         cases = {'hashing': ('live_hashing', 'ok\n'), 'two authenticators': ('live_hashing', SHA256_SUFFIX[:-1] + ','
                  + SHA256_SUFFIX[1:]), 'users': ('live_users', 'WOOWUSERS:2:d29vdw==:ENDok\n'),
                  'users junk': ('live_users', 'ok\n')}
@@ -149,11 +144,12 @@ class WarningTests(Sr5Case):
                     setattr(self.world, name, value)
                 setattr(self.world, attribute, answer)
                 result = self.run_check()
-                self.assertFalse(result['ok'])
-                self.assertIn(ha_emqx.HASH_UNREADABLE.format(side='這台'), result['blockers'])
-                self.assertEqual(self.sr5_warnings(result), [])
+                self.assertTrue(result['importable'], result['blockers'])
+                self.assertIn('emqx.accounts-unknown', [issue['id'] for issue in result['issues'] if issue['level'] == 'notice'])
+                self.assertIn(ha_emqx.ACCOUNTS_UNKNOWN, result['warnings'])
+                self.assertEqual(self.sr5_warnings(result), [], 'no account is named from a guess')
 
-    def test_a_failing_device_read_is_a_blocker(self):
+    def test_a_failing_device_read_is_said_not_a_blocker(self):
         real = self.world.exec
 
         def exec_(role, command, data, stdout):
@@ -163,51 +159,67 @@ class WarningTests(Sr5Case):
         self.world.exec = exec_
         self.world.ha_hashing = BCRYPT
         result = self.run_check()
-        self.assertIn(ha_emqx.HASH_UNREADABLE.format(side='這台'), result['blockers'])
+        self.assertTrue(result['importable'])
+        self.assertIn(ha_emqx.ACCOUNTS_UNKNOWN, result['warnings'])
 
-    def test_a_target_outside_the_profile_is_not_read(self):
-        self.world.target_config['authorization']['sources'] = [{'type': 'http', 'enable': True}]
+    def test_this_devices_authorization_sources_do_not_change_what_is_read(self):
+        """D0: HA's authorization replaces this device's; a source of any type of this device's does not keep its MQTT
+        accounts from being read and named."""
+        self.world.ha_hashing = BCRYPT
+        self.world.target_config['authorization']['sources'] = [{'type': 'http', 'enable': True, 'url': 'http://auth.invalid/'}]
         self.world.current_config = copy.deepcopy(self.world.target_config)
         result = self.run_check()
-        self.assertFalse(result['ok'])
-        self.assertNotIn(ha_emqx.HASH_EXPR, self.device_evals())
+        self.assertTrue(result['importable'], result['blockers'])
+        self.assertIn(ha_emqx.HASH_EXPR, self.device_evals())
+        self.assertEqual(len(self.sr5_warnings(result)), 1)
 
 
 class PlainTests(Sr5Case):
-    def test_the_refusal_names_the_change_in_ha_and_the_password_reset(self):
-        text = ha_emqx.PLAIN_REFUSED
-        for words in ('「plain」（不加密）', '明文密碼', '存取控制 → 認證', 'password_hash_algorithm', '改成 plain 以外的方式',
-                      '替每個 MQTT 帳號重新設定一次密碼', 'EMQX 不會轉換已經存好的密碼', '重新製作 HA 備份再匯入'):
-            self.assertIn(words, text)
+    def test_the_notice_says_the_clear_text_stays_and_how_to_avoid_it(self):
+        for words in ('「plain」（不加密）', '明文密碼會留在這台', '之後每一份備份', '存取控制 → 認證', '改成 plain 以外的方式', '重設密碼'):
+            self.assertIn(words, ha_emqx.PLAIN_PASSWORDS)
+        self.assertIn('明文密碼會留在這台', ha_emqx.PLAIN_ELSEWHERE)
+        self.assertIn('明文密碼會留在這台', ha_emqx.CLEAR_ROWS)
 
-    def test_plain_is_refused_at_the_check_with_or_without_salt_and_even_when_disabled(self):
+    def test_plain_is_a_notice_with_or_without_salt_and_even_when_disabled(self):
+        """D1, E-17: restored as it is; the customer is told, nothing is refused."""
         for answer in ('[{true,plain,disable,none,none,none}]', '[{true,plain,prefix,none,none,none}]',
                        '[{true,plain,suffix,none,none,none}]', '[{false,plain,disable,none,none,none}]'):
             with self.subTest(answer=answer):
                 self.world.ha_hashing = answer
                 result = self.run_check()
-                self.assertFalse(result['ok'])
-                self.assertEqual(result['blockers'], [ha_emqx.PLAIN_REFUSED])
-                self.assertEqual(self.sr5_warnings(result), [], 'the refusal says it all; no account warning')
+                self.assertTrue(result['importable'], result['blockers'])
+                self.assertTrue(result['ok'], 'a notice asks nothing')
+                self.assertIn('emqx.plain-passwords', [issue['id'] for issue in result['issues'] if issue['level'] == 'notice'])
+                self.assertIn(ha_emqx.PLAIN_PASSWORDS, result['warnings'])
                 self.assertEqual(result['emqx']['mqtt_users'], 3, 'HA\'s facts are still shown')
-                self.assert_nothing_built()
+                self.assert_nothing_of_the_device_changed()
 
-    def test_plain_stops_the_conversion_before_anything_is_built(self):
+    def test_plain_does_not_stop_the_conversion(self):
         self.world.ha_hashing = '[{true,plain,disable,none,none,none}]'
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
-        self.assertEqual(caught.exception.code, 'incompatible')
-        self.assertEqual(caught.exception.message, 'EMQX 不能搬過來：' + ha_emqx.PLAIN_REFUSED)
-        self.assert_nothing_built()
-        self.assertEqual(self.storage.list_backups(), [])
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])['ha_import']
+        self.assertEqual(done['apps'], ['emqx'])
+        self.assertEqual(len(self.storage.list_backups()), 1)
 
-    def test_an_unreadable_ha_answer_refuses_the_check(self):
+    def test_clear_rows_and_plain_elsewhere_are_named_in_notices(self):
+        self.world.ha_plain = 'WOOWPLAIN:1:2:' + ','.join(
+            base64.b64encode(user.encode()).decode() + '.' + base64.b64encode(group.encode()).decode()
+            for user, group in (('old-sensor', 'mqtt:global'), ('gw-user', 'stomp:global'))) + ':ENDok\n'
+        result = self.run_check()
+        self.assertTrue(result['importable'])
+        notices = {issue['id']: issue for issue in result['issues'] if issue['level'] == 'notice'}
+        self.assertIn('emqx.plain-elsewhere', notices)
+        self.assertEqual(notices['emqx.clear-rows']['items'], ['old-sensor', 'gw-user（stomp:global）'])
+        self.assertIn('2 個', notices['emqx.clear-rows']['message'])
+
+    def test_an_unreadable_ha_answer_is_said_and_the_check_goes_on(self):
+        """E-16: HA's hashing cannot be read: a notice that no clear text can be ruled out, no stop."""
         self.world.ha_hashing = '{badrpc,nodedown}\n'
         result = self.run_check()
-        self.assertFalse(result['ok'])
-        self.assertTrue(any(b.startswith(ha_emqx.HASH_UNREADABLE.format(side='HA 的')) for b in result['blockers']),
-                        result['blockers'])
-        self.assert_nothing_built()
+        self.assertTrue(result['importable'])
+        self.assertTrue(result['ok'])
+        self.assertIn(ha_emqx.HASH_NOT_READ, result['warnings'])
+        self.assertIn('emqx.hashing-unreadable', [issue['id'] for issue in result['issues']])
 
 
 class ConversionTextTests(Sr5Case):
@@ -224,13 +236,12 @@ class ConversionTextTests(Sr5Case):
         done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])['ha_import']
         self.assertFalse([n for n in done['notes'] + done['reminders_by_app']['emqx'] if 'MQTT 密碼' in n or '重新設定這台' in n])
 
-    def test_an_unreadable_device_stops_the_conversion_before_anything_is_built(self):
+    def test_an_unreadable_device_does_not_stop_the_conversion(self):
+        """E-52: the accounts cannot be named in the notes; the conversion goes on."""
         self.world.live_users = 'garbage'
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_emqx(state='stopped'), ['emqx'])
-        self.assertEqual(caught.exception.message, ha_emqx.HASH_UNREADABLE.format(side='這台'))
-        self.assert_nothing_built()
-        self.assertFalse(self.runs('emqx-ha'), 'refused before HA\'s broker started')
+        done = self.convert(self.upload_emqx(state='stopped'), ['emqx'])['ha_import']
+        self.assertEqual(done['apps'], ['emqx'])
+        self.assertFalse([n for n in done['notes'] if '保存 MQTT 密碼的方式' in n])
 
     def test_import_texts(self):
         change = {'ha': 'bcrypt', 'mine': 'sha256，鹽在後', 'names': 'woow'}
@@ -291,11 +302,17 @@ class RuleTests(unittest.TestCase):
                          'pbkdf2（sha512，10000 次，64 位元組）')
         self.assertEqual(ha_emqx.hashing_text(hashing('md5', 'disable')), 'md5，不加鹽')
 
-    def test_plain_blocker(self):
-        self.assertEqual(ha_emqx.plain_blocker({'hashing': hashing('plain', 'suffix', enable=False)}), ha_emqx.PLAIN_REFUSED)
-        self.assertIsNone(ha_emqx.plain_blocker({'hashing': hashing('sha256', 'suffix')}))
-        self.assertIsNone(ha_emqx.plain_blocker({'hashing': None}))
-        self.assertIsNone(ha_emqx.plain_blocker(None))
+    def test_plain_notices(self):
+        found = ha_emqx.plain_notices({'hashing': hashing('plain', 'suffix', enable=False)})
+        self.assertEqual([(i, m, n) for i, m, n in found], [('emqx.plain-passwords', ha_emqx.PLAIN_PASSWORDS, [])])
+        self.assertEqual(ha_emqx.plain_notices({'hashing': hashing('sha256', 'suffix')}), [])
+        self.assertEqual(ha_emqx.plain_notices({'hashing': None}), [])
+        self.assertEqual(ha_emqx.plain_notices(None), [])
+        self.assertEqual([i for i, _m, _n in ha_emqx.plain_notices({'hash_unreadable': True, 'hashing': None})],
+                         ['emqx.hashing-unreadable'])
+        many = ha_emqx.plain_notices({'plain': {'elsewhere': 1, 'clear': 12, 'names': [(f'u{i}', 'mqtt:global') for i in range(10)]}})
+        self.assertEqual([i for i, _m, _n in many], ['emqx.plain-elsewhere', 'emqx.clear-rows'])
+        self.assertEqual(len(many[1][2]), 10)
 
 
 class DocsTests(unittest.TestCase):
@@ -304,13 +321,11 @@ class DocsTests(unittest.TestCase):
 
     def test_the_docs_quote_the_engine(self):
         guide = (self.ROOT / 'docs' / 'backup.md').read_text(encoding='utf-8')
-        self.assertIn(ha_emqx.PLAIN_REFUSED, guide)
         self.assertIn(ha_emqx.HASH_UNREADABLE.format(side='這台'), guide)
         self.assertIn(ha_emqx.RESET_HOW.split('；')[0].replace('這些帳號', ''), guide.replace('這些帳號', ''))
         def bare(text):   # the CONTRACT wraps its lines
             return re.sub(r'\s+', '', text)
         contract = bare((self.ROOT / 'docs' / 'backup' / 'CONTRACT.md').read_text(encoding='utf-8'))
-        self.assertIn(bare(ha_emqx.PLAIN_REFUSED), contract)
         self.assertIn(bare(ha_emqx.ACCOUNTS_STOP.format(ha='<HA\'s>', mine='<this device\'s>', names='<names>')), contract)
 
 
