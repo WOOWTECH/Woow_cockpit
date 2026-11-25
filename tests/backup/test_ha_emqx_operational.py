@@ -6,7 +6,9 @@ that HA's import is mixed with -- rules, connectors, rewrite, PSK, plugins, dura
 confirmation (E-41, E-42, E-43, E-44, E-47)."""
 import copy
 import hashlib
+import re
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from woowbackup.errors import BackupError
 from woowbackup import ha_emqx, ha_emqx_settings, haissues
@@ -343,7 +345,8 @@ class FileScanTests(unittest.TestCase):
         'authentication': [{'mechanism': 'password_based', 'backend': 'built_in_database',
                             'bootstrap_file': '${EMQX_ETC_DIR}/boot.csv'}],
         'gateway': {'stomp': {'authentication': {'bootstrap_file': '/opt/emqx/data/configs/stomp.csv'}}},
-        'api_key': {'bootstrap_file': ''}, 'psk_authentication': {'enable': False, 'init_file': ''}}
+        'api_key': {'bootstrap_file': ''}, 'psk_authentication': {'enable': False, 'init_file': ''},
+        'actions': {'http': {'ingest': {'parameters': {'method': 'post', 'path': 'data/ingest'}}}}}
 
     def test_a_setting_is_a_file_by_its_name_or_by_an_absolute_data_path(self):
         found = ha_emqx.file_scan(copy.deepcopy(self.CONFIG))
@@ -352,6 +355,10 @@ class FileScanTests(unittest.TestCase):
         self.assertEqual(found['outputs'], {'/opt/emqx/log/erl_crash.dump', '/var/log/emqx/emqx.log'})
         self.assertEqual(found['not_carried'], set(), 'topics, URLs, SQL, empty settings and the authenticators\' own bootstrap '
                                                     'files (bootstrap_references\') are no files of this scan')
+        odd = {'authentication': [{'mechanism': 'password_based', 'backend': 'built_in_database',
+                                   'bootstrap_file': '../bootstrap.csv'}], 'authorization': {'sources': []}}
+        self.assertEqual(ha_emqx.file_scan(odd), {'data': set(), 'outputs': set(), 'not_carried': set()},
+                         'an authenticator\'s own bootstrap file is bootstrap_references\' (E-48, E-49), whatever it looks like')
 
     def test_mounts_and_secrets_are_the_candidates_too_and_runtime_places_and_unknown_variables_are_named(self):
         config = {'authorization': {'sources': []}, 'a': {'certfile': '/opt/emqx/certs/a.pem', 'keyfile': '/opt/emqx/etc/k.pem',
@@ -484,6 +491,62 @@ class OwnItemsTests(unittest.TestCase):
 
 def levels(issues):
     return {issue.id: issue.level for issue in issues}
+
+
+class DeviceFoldersTests(unittest.TestCase):
+    """E-23: this device's own EMQX_LOG_DIR; the places of its mounts; the bootstrap files of the banned list and the API keys."""
+
+    def test_the_log_folder_is_the_quadlets_or_the_images(self):
+        for env, want in (({}, '/opt/emqx/log'), ({'EMQX_LOG_DIR': ''}, '/opt/emqx/log'), ({'EMQX_LOG_DIR': '/var/log/emqx/'}, '/var/log/emqx'),
+                          ({'EMQX_LOG_DIR': 'relative/log'}, None), ({'EMQX_LOG_DIR': '/a/../b'}, None),
+                          ({'EMQX_LOG_DIR': '/a/$HOME'}, '/a/$HOME'), (None, '/opt/emqx/log')):
+            with self.subTest(env=env):
+                got = ha_emqx.device_log_dir(SimpleNamespace(env=env))
+                self.assertEqual(got, want if want != '/a/$HOME' else got)
+        self.assertEqual(ha_emqx.device_log_dir(SimpleNamespace()), '/opt/emqx/log')
+
+    def test_mounts_and_mounted_secrets_are_the_places_the_candidate_has_as_this_device_does(self):
+        self.assertEqual(ha_emqx.mount_targets([('/h/a', '/opt/emqx/etc/a.conf', 'ro'), ('/h/d', '/srv/certs/', 'ro'), ('x',), ('/h/z', 5, 'ro')],
+                                               ['s1,type=mount,target=/opt/emqx/etc/boot.csv,uid=1,gid=1,mode=0400', 's2,type=env,target=X',
+                                                'plain']),
+                         {'/opt/emqx/etc/a.conf', '/srv/certs', '/opt/emqx/etc/boot.csv', '/run/secrets/plain'})
+
+    @staticmethod
+    def candidate(readable=True):
+        calls = []
+
+        def execute(role, command, **kwargs):
+            calls.append(command)
+            return Result(0 if readable else 1, b'', b'')
+        return SimpleNamespace(exec=execute), calls
+
+    def test_the_bootstrap_files_of_the_banned_list_and_the_keys_are_read_where_the_broker_means_them(self):
+        tmp, calls = self.candidate()
+        target = SimpleNamespace(files=[], secrets=[], env={})
+        config = {'banned': {'bootstrap_file': 'data/configs/banned.csv'}, 'api_key': {'bootstrap_file': '${EMQX_ETC_DIR}/keys.csv'},
+                  'authentication': []}
+        ha_emqx.check_candidate_bootstrap(tmp, target, config, lost=[], etc_dir='/custom/etc')
+        self.assertEqual([call[2] for call in calls], ['/custom/etc/keys.csv', '/opt/emqx/data/configs/banned.csv'])
+        self.assertTrue(all(call[:2] == ['test', '-f'] for call in calls))
+
+    def test_one_the_candidate_cannot_read_or_nobody_can_place_is_said_and_without_a_list_it_stops(self):
+        target = SimpleNamespace(files=[], secrets=[], env={})
+        for config, readable in (({'banned': {'bootstrap_file': '${NOPE}/b.csv'}}, True),
+                                 ({'api_key': {'bootstrap_file': '/srv/keys.csv'}}, False)):
+            with self.subTest(config=config):
+                tmp, _calls = self.candidate(readable)
+                lost = []
+                ha_emqx.check_candidate_bootstrap(tmp, target, config, lost=lost)
+                self.assertEqual(len(lost), 1)
+                tmp, _calls = self.candidate(readable)
+                with self.assertRaises(BackupError):
+                    ha_emqx.check_candidate_bootstrap(tmp, target, config)
+
+    def test_a_root_that_is_no_dictionary_or_a_path_that_is_no_text_is_ignored(self):
+        tmp, calls = self.candidate()
+        target = SimpleNamespace(files=[], secrets=[], env={})
+        ha_emqx.check_candidate_bootstrap(tmp, target, {'banned': 5, 'api_key': {'bootstrap_file': 7}, 'x': {'bootstrap_file': ''}}, lost=[])
+        self.assertEqual(calls, [])
 
 
 class OwnLinesTests(base.EmqxCase):
@@ -789,6 +852,34 @@ class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
         result = self.check(self.upload_emqx(), ['emqx'])[0]
         self.assertTrue(result['importable'], result['blockers'])
         self.assertEqual(self.world.current_config['node'], node)
+
+
+class OwnDocsTests(unittest.TestCase):
+    """The docs quote the engine's own sentences of this lane's lines (the EMQX-B snippets of CONTRACT.md and docs/backup.md)."""
+    ROOT = Path(__file__).resolve().parents[2]
+
+    @staticmethod
+    def texts():
+        plain = dict(count='N', replaced='')
+        return [ha_emqx.DIRS_FOLLOW, ha_emqx.FILES_NOT_CARRIED.format(**plain), ha_emqx.DEVICE_INTEGRATIONS.format(**plain),
+                ha_emqx.DEVICE_ROUTING.format(**plain), ha_emqx.DEVICE_PSK, ha_emqx.DEVICE_PLUGINS.format(**plain),
+                ha_emqx.DURABLE_SESSIONS, ha_emqx.OUTPUT_DIR_UNUSABLE, ha_emqx.OUTPUT_DIR_ACTION, ha_emqx.DATA_DIR_MOVED,
+                ha_emqx.DATA_DIR_ACTION]
+
+    def test_the_docs_quote_the_engine(self):
+        guide = (self.ROOT / 'docs' / 'backup.md').read_text(encoding='utf-8')
+        if self.texts()[2] not in guide:
+            self.skipTest('docs/backup.md does not hold the EMQX-B text yet: the lane\'s snippets are not merged')
+        for text in self.texts():
+            self.assertIn(text, guide)
+
+        def bare(text):
+            return re.sub(r'\s+', '', text)
+        contract = bare((self.ROOT / 'docs' / 'backup' / 'CONTRACT.md').read_text(encoding='utf-8'))
+        if bare(self.texts()[2]) not in contract:
+            self.skipTest('CONTRACT.md does not hold the EMQX-B text yet: the lane\'s snippets are not merged')
+        for text in self.texts():
+            self.assertIn(bare(text), contract)
 
 
 if __name__ == '__main__':

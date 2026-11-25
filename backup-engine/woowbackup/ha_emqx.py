@@ -21,8 +21,12 @@ EMQX's own data export and import move the data, node-name independent, in two t
    other settings) and the table sets (TABLE_SETS: MQTT users, ACL rules, banned, Dashboard users, API keys, PSK, retained
    messages).
 2. This device's broker (the candidate). First this device's running broker is read (target_static; a stopped one is
-   started for the read and put back): its effective RAW configuration, EMQX_ETC_DIR, the override state. Its cluster.hocon
-   and the data-volume files it names are snapshotted. The candidate: the live environment and secret mounts, the live
+   started for the read and put back): its effective RAW configuration, EMQX_ETC_DIR, the override state. No setting is judged
+   against a list of roots or fields (HAOS parity, lane EMQX-B): file_scan looks at EVERY setting for the files it names, its
+   cluster.hocon and the data-volume files it names, wherever in the volume they lie, are snapshotted, files on this device's
+   mounts or in the image are the candidate's as they are this device's, and what this device already has of its own that
+   HA's import is mixed with (rules, connectors, rewrite, PSK, plugins, durable sessions) is named in the confirmation
+   (ha_emqx_settings.own_items). The candidate: the live environment and secret mounts, the live
    base.hocon/acl.conf read-only, the snapshot in an otherwise empty data volume, `emqx ctl data import`; then HA's
    authentication and authorization roots are made exactly HA's (D0: identities, `no_match`, `deny_action`; the ACL file
    HA's import wrote replaces this device's: a notice, nothing written back), this device's bootstrap file stays attached to
