@@ -88,7 +88,8 @@ unchanged.
 Revised 2026-11-23 (branch `feat/ha-import-nextcloud-20261123`, engine + page; owner decision 2026-11-23 「決定2 A」): imports
 the WOOWTECH **Nextcloud Office** add-on (`woow-nextcloud-office` → `nextcloud`, `ha_nextcloud.py`; §9 "Batch 2: Nextcloud"):
 HA's PostgreSQL 16 database (restored as the live Nextcloud role), config.php's identity, the custom apps and the users'
-files, which live in HA's **share folder** (a backup without it, or without the data directory, is refused); the target keeps
+files, which live in HA's **share folder** (when they are absent, the check asks for one confirmation and imports the
+remaining Nextcloud data; §9 describes the empty data folder and file-scan reminder); the target keeps
 its URLs, database credentials, mail, caches, secrets and Office (Collabora) settings. The app id enumerations gain
 `nextcloud`; `HaCheck` gains the `nextcloud` section (§7); no other shape changes.
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
@@ -1201,17 +1202,13 @@ Shapes:
   batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
-  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (app
-  not installed or not deployed here, no owner account in HA's n8n, version differences that remain stops for an app
-  (OpenDesign's two known core revisions, §9), missing modules with the
-  share-folder hint, missing Python packages or programs of custom modules, a custom module to copy with an ELF file for
-  another processor, newer PostgreSQL, unsupported extensions,
-  pending module operations, not enough space; batch 1: an add-on version the engine's table does not know, a different
-  alembic revision, unexpected database objects, a missing Omnigent cookie key or artifact, a damaged SQLite file, a hard
-  link to a file that does not move, programs for another processor in Hermes's data (EMQX: since 2026-11-25 only no database in
-  the backup, a node that is not in it, this device's settings that keep changing and a different version stop the app; the admin/public
-  Dashboard account, a node to choose and MQTT passwords stored with `plain` are notices, choices or lines to confirm), different Headscale prefixes
-  or a node outside them, Headscale migrations this release does not know, a missing Noise key).
+  is `ok` only without blockers (Odoo: and at least one database `ok`). A blocker is an app-specific stop sentence,
+  such as an app not deployed here, data that cannot be read safely, a known incompatible data structure or insufficient
+  space. An unknown add-on version alone can be a notice in the revised per-app checks; a known mismatch can still stop an
+  app where its data cannot be opened or safely migrated (for example two known but different OpenDesign core revisions).
+  Missing Nextcloud user files, programs for another processor in Hermes data and a different Headscale prefix follow
+  the confirmation, notice or automatic paths in §9. EMQX's admin/public Dashboard account, a node to choose and MQTT
+  passwords stored with `plain` likewise follow the specific notice, choice and confirmation rules in §9.
   Odoo section (lane ODOO, 2026-11-25): `odoo.databases[]` is as it was (`name, ok, blockers[], warnings[], partners, users, attachments, attachment_bytes, modules, custom_modules[], crons_active, mail_servers_active, size, filestore_files, filestore_bytes`) and `choices.database` is returned by the module; the sentences of `blockers` are the stop and confirm lines of the database, those of `warnings` its automatic and notice lines. `ha_import.left_databases` and the registry's `left_databases` hold the names of the HA databases that were not moved.
 * `HaImport` (part B; `result.ha_import` and `BackupMeta.from_ha`): `ha_backup_id, name, date, apps[app_id],
   odoo_database|null, test_mode(bool), workflows_to_fix[{name, active, reasons[]}], reminders[zh-TW],
