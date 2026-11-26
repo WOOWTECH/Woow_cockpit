@@ -1,0 +1,467 @@
+{
+  "started": "2026-11-26T23:52:27.468057+08:00",
+  "before_free": 31947460608,
+  "policy": "local test images older than 7 days, plus unused RC14-RC22 superseded by an existing RC23; preserve every container, installed Quadlet and current lab source",
+  "chosen": [
+    {
+      "id": "473ae67af704d6fecba22f9bb4cb5dcf5ba08ec256b8694913bc621551aac746",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.22-2"
+      ]
+    },
+    {
+      "id": "2886cd362e6600d524cbf33f764919fb8783ff6bd4a316e87790912d12b55ed7",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.22-1"
+      ]
+    },
+    {
+      "id": "0ccc0f0e0b29b18094deb6f131f5328ceda1cfe2fe88def07d83e536c2de23d4",
+      "names": [
+        "localhost/woowtechbot-podman-candidate:0.1.7-rc.22-1"
+      ]
+    },
+    {
+      "id": "def32252b04543afbcbe27847fd846610a7ae4a0f63ceb8f236fb3eea75f4760",
+      "names": [
+        "localhost/woowtechbot-ha-candidate:0.1.7-rc.22"
+      ]
+    },
+    {
+      "id": "c57b37eb431aa2b63d95ebf15b2299b5fa09098c6f9771bf0890d0ba8d57aa3f",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.20-2"
+      ]
+    },
+    {
+      "id": "e86412c33ceaff4384b06d955c12ec016ff10039f15a6733ff31456a7c4fc8a1",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.20-1"
+      ]
+    },
+    {
+      "id": "42448727119f8ef3ae9615b280cc2318880c551a15ab2c0baa642b020b1c0c71",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.19-1"
+      ]
+    },
+    {
+      "id": "d6d33e9cbf86e503aff30d7740f8e282bc4376448bb7bf696226ee0df8ce2a6c",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.14-5"
+      ]
+    },
+    {
+      "id": "942ff4b6418b8d0748045b4484b5282c42724530a424eea59c375acb8d46c797",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.14-3"
+      ]
+    },
+    {
+      "id": "ba737c68010a8df160693fdb213d462721585c2a11012e305e67f4af17fed0ea",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.14-2"
+      ]
+    },
+    {
+      "id": "e80fd8c1088823a4b2c11b8c6044b783acf120bfd9833f682108685e14d74f86",
+      "names": [
+        "localhost/woowtechbot-podman:0.1.7-rc.14-1"
+      ]
+    },
+    {
+      "id": "066d96ef0823c7f956857a013b33b9573ab2ffea45d85a7946486e1789cba8e7",
+      "names": [
+        "localhost/woow-k8s-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "aba95490a38d3ae267df4a83bea7c7458c43742fdd9438810e1b0a4b367c0e11",
+      "names": [
+        "localhost/woow-opendesign-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "ce14e6df978d5ef8bdff7eb33b4f98a52e673853d89d2e40f7195ed8fb0ba722",
+      "names": [
+        "localhost/woow-nextcloud-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "b33c384046eb1be451ea00002e4c952451a8ac0f80b37549567da17dda0f0fd6",
+      "names": [
+        "localhost/woow-litellm-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "47fe255c96f6093e13c692d602df34a7e6f279653a998d97b5657d9d26acb02e",
+      "names": [
+        "localhost/woow-odoo-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "9b4fb61177885b24a641e9e8d442986b0295029f525bb8833dfdc43a9fad03f2",
+      "names": [
+        "localhost/woow-n8n-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "4909e8eef5c40fe59894daf17f6157a4b266b086ed9c43c46469ce034a1310b3",
+      "names": [
+        "localhost/woow-hermes-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "8731deb1000b11ed8dea6506b664492e5240599d905c18fe78a74d4ceb7265b6",
+      "names": [
+        "localhost/woow-emqx-mcp-admin:paas-48f394d-podman.2"
+      ]
+    },
+    {
+      "id": "85c764b4ace986adbbf280a45de4cb20cbea26cfa728f2ca0a831761baf15515",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.7-podman.1"
+      ]
+    },
+    {
+      "id": "c577c32ff2d6841f289ef28f3e16e9c18c29f8ced131b0ab18fc476bc1138da7",
+      "names": [
+        "localhost/woow-k8s-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "ca129b935c2c8ebf7b1b1670d1f3d9f69da4d087b5f5d3a4f3de19c8f4ce6b6c",
+      "names": [
+        "localhost/woow-opendesign-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "79c7e9448057cd831012f223f38cb2a776d132819825e5f89a43b6142ddc7c65",
+      "names": [
+        "localhost/woow-nextcloud-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "c616b1a84ba3e297bc78c3b3a94d2236170726a9aff6be2a28c8ac618e38c51a",
+      "names": [
+        "localhost/woow-litellm-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "66eda7e05808b0f6e356b7c8dd3ee6dad04d66a14794a632628a1cbec3559f9e",
+      "names": [
+        "localhost/woow-odoo-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "8ccf2811d6ab1eca97b35bc8fa19e164787b1ee5c3b800fa948656ab77343c14",
+      "names": [
+        "localhost/woow-n8n-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "9b9873f9a71f6c80cadea313cbd4c2191c23bdc25a14441e4469c4845c9f1ce1",
+      "names": [
+        "localhost/woow-hermes-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "aeebf9d3cef302b22849ff3bf275816a01eab8517232c6022a8a077bce0dd18b",
+      "names": [
+        "localhost/woow-emqx-mcp-admin:paas-5b84b5d-podman.1"
+      ]
+    },
+    {
+      "id": "a91c7219c9cae114874df471eadb96f43c5daeafaa03f1ff65909fc0a672e2f9",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.6-podman.1"
+      ]
+    },
+    {
+      "id": "81b6c6a964c878d416bb60d7ec40d51ced82217aa2edff42934aed6bfb8fb63b",
+      "names": [
+        "localhost/woow-k8s-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "df1fdeb1827c67b9d2d2f65b2c2c40d976655049c0928665fd81252693d4a4ce",
+      "names": [
+        "localhost/woow-opendesign-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "dea5a6acfa09926a33e9d745c4705e2fc020cf4b4a61b6ed09fbf58938ad2ecb",
+      "names": [
+        "localhost/woow-nextcloud-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "0765f0704e2b7f1fc3538908bb4b18a3085e07b76cb19d29d5d3e18ffb541d5c",
+      "names": [
+        "localhost/woow-litellm-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "97108907737a3c7868d62bda0c6a70c08a46e0068e801c212686da12cb59de5e",
+      "names": [
+        "localhost/woow-odoo-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "a2851bff4e965f5d00d7f7cce519d3aada1999ad23fdfde4e6206edea4227562",
+      "names": [
+        "localhost/woow-n8n-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "058e40bcb032ee9a42db1aa0e6bf298aa48454e534b76c410dc0b469d1a46f05",
+      "names": [
+        "localhost/woow-hermes-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "48ef8dad194f82973b32e7ca49093d832a620fba2a70320e3450c0eec1e8f5e6",
+      "names": [
+        "localhost/woow-emqx-mcp-admin:paas-5a06d53-podman.1"
+      ]
+    },
+    {
+      "id": "7efa98d1649d577ebe20c3f98162e784a60f9df21d1a4d89804e48c14b24c49a",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.5-podman.1"
+      ]
+    },
+    {
+      "id": "bc20098910976d8ef6a87b88fc04d9eee94d5481505398c782f18fd402867da5",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.4-podman.1",
+        "localhost/woow-headscale-mcp-admin:pr26-merged-a640bd4029b9"
+      ]
+    },
+    {
+      "id": "c6811a6f663f8e49fd5abf47f2248a2d730b943bf7d261851b373e11763c217f",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.3-podman.1"
+      ]
+    },
+    {
+      "id": "b103e6392f4b7c87045e9457b8e3dc6fa27d1857b86b1911647736a8cbdfe9a3",
+      "names": [
+        "localhost/woow-headplane:0.7.1-ssr1"
+      ]
+    },
+    {
+      "id": "e6c60d60fc92a933dd03cc4340add36d69f1d6ce284b09682549b3b3abfd462f",
+      "names": [
+        "localhost/woow-k8s-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "64fe5be23d80d55aed744b8148a9212fcbd8a58fb56b53b6bf313dd3fd721cc8",
+      "names": [
+        "localhost/woow-n8n-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "68b8788fc8e2addc335b78579f869d9a166775d2e322066c5931a6bfcb606e97",
+      "names": [
+        "localhost/woowtech/ha-preinstalled:2026.9.1-r6"
+      ]
+    },
+    {
+      "id": "a6e22db0e8b3aa137a86c78d70f83e55b6193cdcf53b007ea4225358c0a3775a",
+      "names": [
+        "localhost/woow-cf-tunnel:1.2.0-9ceaf0662d36"
+      ]
+    }
+  ],
+  "protected": [
+    {
+      "id": "4e0c053e23a218a0050dc3116cb846c42646242fef8215ef3bad868b60855d9a",
+      "names": [
+        "localhost/woow-k8s-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "3a5033503e4b7a364477b9f897f59497f6ee23bb71d4376b8c8743e079e25207",
+      "names": [
+        "localhost/woow-opendesign-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "dc65820917e80dafed6cdf523ad49cb41af3c96cb91aae2b60d792b0636bd0b5",
+      "names": [
+        "localhost/woow-nextcloud-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "0e54c6c21b261a815252bc5053537382dcabe4d40eafc18de58e4cba0dbfd43a",
+      "names": [
+        "localhost/woow-litellm-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "fed3188ac80268bddb22cd819b279be086ce211dc03d84e2f7d94aaef950b0cb",
+      "names": [
+        "localhost/woow-odoo-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "8c665b8366e16e6dd1cc7b78283630f3eb96d288af7c5ec5ccd4ed5015f10517",
+      "names": [
+        "localhost/woow-n8n-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "3c7423a94aa04f6ac5b2ccb1c691bef376571aac04c22f41ab3ddd77bfcb8bd9",
+      "names": [
+        "localhost/woow-hermes-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "f2417c4508bcc2db5c8d184dc46760a81c36652f1cbb74f06a6da898b706f0ce",
+      "names": [
+        "localhost/woow-emqx-mcp-admin:paas-48f394d-podman.3"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "a9137408e116a5d04e2125cec52ae9281ad80d9f46c18c88e1d19a0dadee7fd1",
+      "names": [
+        "localhost/woow-headscale-mcp-admin:0.1.7-podman.2"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "d01b1c14c9b18f78ee1c681fcdde44f47d1eaa359c304fda003832f7ea5295bf",
+      "names": [
+        "localhost/woow-cf-tunnel:1.2.1-e6226c53db2c"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "68794c7302df51c24539009635483e9300ff00e353192d7b7bb656ddf1eef373",
+      "names": [
+        "localhost/woow-omnigent-runner:0.21.0-2"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "a5f7b9715dea9116f435ff7892e6925895d1c92d4a265cc02eff1a2abadb227d",
+      "names": [
+        "localhost/woow-headscale:0.29.4-r1"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+      "names": [
+        "localhost/woow-nextcloud:35.0.1-office2"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "44655d1475918e2fcc8733eb23f9e0e9bee0e5aba51c3c1bd068bc33436dc04f",
+      "names": [
+        "localhost/woowtech/ha-preinstalled:2026.9.1-r7"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "dd0982f37ae8628bbe146004058c6e7fcb5ed54c5cefe0a0901bab79a703c0fe",
+      "names": [
+        "localhost/woow-odoo-tenant-ha:20261101.1152-51856b0"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "c4b91d71074200a5e4965191aa937019899f1ddd140c7e58d53a8fefffdf8a12",
+      "names": [
+        "localhost/woow-litellm:1.104.0-0.3.16"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "9a40b79b61494622331629225c9c40196196c04c96bea0cb89f5c314d567533a",
+      "names": [
+        "localhost/woow-hermes-agent:v0.22.5-woow4"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "5bf5f9b959b30391e69d3cdbfe71bfcb44188d3cf5b3384087247e223db640ea",
+      "names": [
+        "localhost/woow-open-design:4.2.1"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    },
+    {
+      "id": "0b4481f9ad05b6c6632825f093988d120006d61cb300001753cd8e27c41a0a7f",
+      "names": [
+        "localhost/woow-headplane:0.7.1-woow2"
+      ],
+      "reason": "current container, installed Quadlet or current lab source"
+    }
+  ],
+  "removed_tags": [
+    "localhost/woowtechbot-podman:0.1.7-rc.22-2",
+    "localhost/woowtechbot-podman:0.1.7-rc.22-1",
+    "localhost/woowtechbot-podman-candidate:0.1.7-rc.22-1",
+    "localhost/woowtechbot-ha-candidate:0.1.7-rc.22",
+    "localhost/woowtechbot-podman:0.1.7-rc.20-2",
+    "localhost/woowtechbot-podman:0.1.7-rc.20-1",
+    "localhost/woowtechbot-podman:0.1.7-rc.19-1",
+    "localhost/woowtechbot-podman:0.1.7-rc.14-5",
+    "localhost/woowtechbot-podman:0.1.7-rc.14-3",
+    "localhost/woowtechbot-podman:0.1.7-rc.14-2",
+    "localhost/woowtechbot-podman:0.1.7-rc.14-1",
+    "localhost/woow-k8s-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-opendesign-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-nextcloud-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-litellm-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-odoo-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-n8n-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-hermes-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-emqx-mcp-admin:paas-48f394d-podman.2",
+    "localhost/woow-headscale-mcp-admin:0.1.7-podman.1",
+    "localhost/woow-k8s-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-opendesign-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-nextcloud-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-litellm-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-odoo-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-n8n-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-hermes-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-emqx-mcp-admin:paas-5b84b5d-podman.1",
+    "localhost/woow-headscale-mcp-admin:0.1.6-podman.1",
+    "localhost/woow-k8s-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-opendesign-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-nextcloud-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-litellm-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-odoo-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-n8n-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-hermes-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-emqx-mcp-admin:paas-5a06d53-podman.1",
+    "localhost/woow-headscale-mcp-admin:0.1.5-podman.1",
+    "localhost/woow-headscale-mcp-admin:0.1.4-podman.1",
+    "localhost/woow-headscale-mcp-admin:pr26-merged-a640bd4029b9",
+    "localhost/woow-headscale-mcp-admin:0.1.3-podman.1",
+    "localhost/woow-headplane:0.7.1-ssr1",
+    "localhost/woow-k8s-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-n8n-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woowtech/ha-preinstalled:2026.9.1-r6",
+    "localhost/woow-cf-tunnel:1.2.0-9ceaf0662d36"
+  ],
+  "refused": [],
+  "containers_unchanged": true,
+  "volumes_unchanged": true,
+  "after_free": 34652192768,
+  "finished": "2026-11-26T23:53:35.982550+08:00",
+  "net_free_gain": 2704732160
+}
