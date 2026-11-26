@@ -2541,8 +2541,13 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
    bridges, gateways; asked only when HA's import brought entries of that kind, otherwise this device's own stay exactly as they are; the message says
    how many the import replaced): 「這台的 EMQX 已經有自己的規則、連接器、動作、來源、橋接或閘道（共 N 項，列在下面）。匯入會把 HA 的加進來：同名的以 HA 的為準，其他的留在原處、和 HA 的一起運作（HA 的規則也可能觸發這台的連接器）。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-routing` (confirm, topic rewrite, topic metrics, auto-subscribe,
    ExHook servers, asked under the same condition; the same ExHook servers may also be named by `emqx.exhook`, which reads the finished candidate): 「這台的 EMQX 已經有自己的主題改寫、主題統計、自動訂閱或 ExHook 伺服器（共 N 項，列在下面）。匯入後它們和 HA 的並存，同名的以 HA 的為準，會和 HA 的一起改寫主題或把訊息送出去。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-psk`
-   (confirm): 「這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。」 `emqx.durable-sessions` (confirm): 「這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。」 `emqx.device-plugins` (notice; the plugin records are kept, a plugin
-   that is not installed is only logged by the broker): 「這台的 EMQX 裝了外掛（共 N 個，列在下面）：外掛程式放在容器裡、不在資料卷裡，這次匯入不會搬動或改動它們，設定裡的外掛記錄照舊保留。匯入後如果外掛沒有啟動，請到這台 EMQX 管理頁重新安裝。」
+   (confirm): 「這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。」 `emqx.durable-sessions` (confirm): 「這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。」 `emqx.device-plugins` (notice; available device plugins retain configuration, records and order): 「這台 EMQX 的外掛設定（共 N 項，列在下面）會保留；已核對外掛程式、設定及執行狀態可在暫用的 EMQX 保留。HA 備份的外掛程式及啟用記錄不會搬入，需要 HA 的外掛時請另外安裝。」
+   E-44: only state records proven absent on both the device and candidate are removed. Presence includes the
+   extracted directory, installation archive, data/config directory and running app; unreadable metadata is not absence.
+   Available plugin configuration fingerprints and runtime states must survive, or only EMQX stops. HA plugin code and
+   enable records are excluded at source boot and the validated export boundary. All operational roots remain compared.
+   `emqx.plugin-records-remove` (confirm): 「這台 EMQX 有 N 個啟用中的外掛記錄（列在下面），但這台與暫用的 EMQX 都找不到其程式、安裝包、外掛資料或執行中的程式。匯入會移除這些啟用記錄，以後補上程式也不會自動啟用；需要時請重新安裝並啟用。匯入前的自動備份保留原記錄。」
+   `emqx.plugin-records-unused` (notice): 「這台 EMQX 有 N 個已停用、且這台與暫用的 EMQX 都沒有程式或資料的外掛記錄（列在下面），匯入會移除這些記錄。」
    H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
    `EnvironmentFile=` lines: names only) win over HA's after the next start: `emqx.env-wins` (notice, names).
    `emqx ctl data import` then runs. Output that does not say "imported successfully" names, as far as it names roots or tables, what EMQX could
