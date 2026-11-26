@@ -2170,7 +2170,7 @@ secret and mounts); an entry of another shape is `incompatible`.
      lacks them (`hatarget.ensure_image`, as the app's owner, one more try; a `localhost/` image that is gone cannot be: the text says so).
      PostgreSQL 16: `pgvector:0.8.6-pg16`, else `postgres:16.15-alpine` (both only when already here), else the pinned official image
      (already cached by its pin, a verified offline release sidecar, or downloaded). OD-23 sidecars are opt-in per architecture;
-     the root-trusted manifest and artifact SHA bind the pinned ref/config ID, and the verified descriptor is streamed into the
+     the root-trusted manifest/artifact SHA and ordered layer diff_ids bind the pinned ref/config ID/content; the verified descriptor is streamed into the
      app owner's store before online fallback. A configured invalid sidecar stops only Odoo; no sidecar keeps the retry behavior.
      Release/installer CLI, bounded archive checks, immutable generations and lifetime are specified in
      [Offline PostgreSQL 16 sidecar](odoo-pg16-offline.md). When a database of HA uses `vector` and the image that read it cannot, the check downloads the pgvector image and reads
