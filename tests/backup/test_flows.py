@@ -2636,6 +2636,36 @@ class ConvertedRestoreCase(RestoreCase):
 
 
 class HaImportRegistryTests(ConvertedRestoreCase):
+    def with_owner_manager(self, manager):
+        factory = self.deps.adapter_factory
+
+        def managed_adapter(*args, **kwargs):
+            adapter = factory(*args, **kwargs)
+            adapter.runner = types.SimpleNamespace(owner='appowner', ensure_user_manager=manager)
+            return adapter
+
+        self.deps.adapter_factory = managed_adapter
+
+    def test_a_converted_backup_restored_directly_starts_its_owners_manager_before_preflight(self):
+        self.converted()
+        manager = mock.Mock(return_value=True)
+        self.with_owner_manager(manager)
+        result = self.restore()
+        self.assertEqual(result['apps'], ['woowbk-demo'])
+        manager.assert_called_once_with()
+        self.assertTrue(any('已自動開啟' in line for line in self.reporter.logs))
+
+    def test_an_owner_manager_that_cannot_start_stops_before_the_restore_changes_data(self):
+        self.converted()
+        manager = mock.Mock(side_effect=BackupError('job-failed', '使用者服務管理器沒有啟動。'))
+        self.with_owner_manager(manager)
+        with self.assertRaises(BackupError) as caught:
+            self.restore()
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
+        self.assertNotIn('restore', [event[0] for event in self.world.events])
+        manager.assert_called_once_with()
+
     def test_a_registered_backup_is_a_converted_one_and_an_unregistered_one_is_not(self):
         self.assertFalse(flows.from_ha(self.paths, self.backup_id, self.storage.get(self.backup_id)))
         self.converted()

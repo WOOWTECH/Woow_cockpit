@@ -2128,6 +2128,13 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
         if app_manifest is None:
             raise BackupError('incompatible', f'此備份不包含應用「{app.name}」。', app=app.id)
         adapter = ctx.adapter(app)
+        if ctx.ha_import:
+            # A converted HA backup can be restored directly later, without a fresh HA check first. Its owner's
+            # user manager still has to run before the adapter probes Podman or systemd (X-AD-01, H6).
+            runner = getattr(adapter, 'runner', None)
+            if runner is not None:
+                from .hatarget import ensure_user_manager
+                ensure_user_manager(ctx, app, runner)
         mode = adapter.detect_mode()
         checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes, extracted_dir=extract_dir)
         if app_manifest.get('import_check') is not None:
