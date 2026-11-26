@@ -94,6 +94,21 @@ class DerivedCopyTests(unittest.TestCase):
 
 
 class CurrentPageContractTests(unittest.TestCase):
+    def test_only_nonpersistent_oneshot_probe_is_outside_durable_state_gate(self):
+        rows=[{'unit':name,'active':state,'sub':'dead' if state=='inactive' else 'running'} for name,state in (
+            ('omnigent-server-health.service','inactive'),('hermes-agent.service','inactive'),
+            ('hermes-image-setup.service','active'),('omnigent-server-health.timer','active'),
+            ('headscale.service','activating'))]
+        props={'omnigent-server-health.service':{'Type':'oneshot','RemainAfterExit':'no'},
+               'hermes-image-setup.service':{'Type':'oneshot','RemainAfterExit':'yes'}}
+        states=ui.stable_units(rows,props)
+        self.assertNotIn('omnigent-server-health.service',states)
+        self.assertNotIn('headscale.service',states)
+        self.assertEqual(states['hermes-agent.service'][0],'inactive')
+        self.assertEqual(states['hermes-image-setup.service'][0],'active')
+        self.assertEqual(states['omnigent-server-health.timer'][0],'active')
+        self.assertIn('omnigent-server-health.service',ui.stable_units(rows,{}))
+
     def records(self):
         rows = [{'type':kind,'state':'succeeded'} for kind in ('backup','restore','backup','restore')]
         rows[-1]['result']={'group':{'results':[{'app_id':x,'status':'imported'} for x in ('hermes','omnigent')]}}

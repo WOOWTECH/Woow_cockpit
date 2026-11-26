@@ -111,6 +111,25 @@ def chain_complete(records):
             == {'hermes': 'imported', 'omnigent': 'imported'})
 
 
+def stable_units(rows, properties):
+    """Scheduled nonpersistent probes naturally return inactive between ticks.
+
+    Keep every application service and timer, including persistent oneshot setup
+    units. Only Type=oneshot + RemainAfterExit=no probes have no durable active
+    state to preserve. Unknown metadata never relaxes the active-service gate.
+    """
+    result={}
+    for row in rows:
+        name=row['unit']
+        if not name.startswith(('hermes-','omnigent-','emqx.','emqx-')) or not name.endswith(('.service','.timer')):
+            continue
+        kind=properties.get(name,{})
+        if name.endswith('.service') and kind.get('Type')=='oneshot' and kind.get('RemainAfterExit')=='no':
+            continue
+        result[name]=[row['active'],row['sub']]
+    return result
+
+
 def run(source):
     sys.path.insert(0, str(HERE))
     import ha_import_e2e as h
@@ -191,8 +210,17 @@ def run(source):
         proc = h.owner('systemctl', '--user', 'list-units', '--all', '--output=json', '--no-pager', timeout=60)
         if proc.returncode:
             raise h.Failed('unit state probe failed')
-        return {x['unit']: [x['active'], x['sub']] for x in json.loads(proc.stdout)
-                if x['unit'].startswith(('hermes-', 'omnigent-', 'emqx.', 'emqx-')) and x['unit'].endswith(('.service', '.timer'))}
+        rows=json.loads(proc.stdout)
+        names=[x['unit'] for x in rows if x['unit'].startswith(('hermes-','omnigent-','emqx.','emqx-')) and x['unit'].endswith('.service')]
+        meta=h.owner('systemctl','--user','show','--property=Id,Type,RemainAfterExit','--',*names,timeout=60)
+        if meta.returncode:
+            raise h.Failed('unit type probe failed')
+        properties={}
+        for block in meta.stdout.decode().strip().split('\n\n'):
+            fields=dict(x.split('=',1) for x in block.splitlines() if '=' in x)
+            if fields.get('Id'):
+                properties[fields['Id']]=fields
+        return stable_units(rows,properties)
 
     def images():
         proc = h.owner('podman', 'ps', '--format', '{{.Names}} {{.ImageID}}', timeout=60)
