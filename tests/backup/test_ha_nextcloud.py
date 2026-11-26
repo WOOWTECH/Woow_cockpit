@@ -282,6 +282,7 @@ class World(fk.World):
                            'enabled': ['dav', 'files', 'notes', 'richdocuments', 'gone_app'], 'encryption': None}
         self.verify = None
         self.catalog = None
+        self.catalog_changes = []
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
         self.objects = {'functions': [], 'triggers': []}
         self.pg_major = 16              # PG_MAJOR of this device's database image
@@ -389,11 +390,16 @@ class World(fk.World):
                 'appconfig': LIVE_DB['appconfig']}
         if sql.startswith("SELECT json_build_object(\n 'owners'"):
             made = re.findall(r"PASSWORD '(SCRAM-SHA-256\$[^']+)'", '\n'.join(x for _db, x, _tx in self.psql['nc-db'].executed))
-            return self.catalog if self.catalog is not None else {
+            # what the new cluster is: the role (made or this device's), its rights, the extensions; never what this device's own
+            # database has when the role is not there (LIVE_DB holds the lists with the role)
+            default = {
                 'owners': ['oc_admin'], 'verifier_md5': hashlib.md5((made[-1] if made else VERIFIER).encode()).hexdigest(),
                 'role': {k: v for k, v in (self.live_db['role'] or nc.INSTALLER_ROLE).items() if k != 'password'}, 'role_settings': 0,
                 'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
                 **{key: LIVE_DB[key] for key in ('roles', 'extensions', 'datacl', 'nspacl')}}
+            if self.catalog_changes:       # the n-th read of the catalog is the default with the n-th change (before / after HA's data)
+                return {**default, **self.catalog_changes.pop(0)}
+            return self.catalog if self.catalog is not None else default
         if sql == nc.ha_odoo.SETTINGS_SQL:
             if role == 'nextcloud-db' and self.live_settings is None:      # this device's settings cannot be read
                 raise CommandError('psql 執行失敗（結束碼 1）。', returncode=1, stderr=b'ERROR: x')
@@ -1477,6 +1483,37 @@ class CheckTests(NextcloudCase):
         sql = '\n'.join(x['sql'] for x in self.world.sessions if x['role'] == 'nc-db')
         self.assertNotIn('UPDATE public.oc_storages', sql)
 
+    def test_another_database_in_the_new_cluster_stops_the_conversion(self):
+        # SQL hidden in HA's dump could make one (the role may create databases): the cluster must hold only its own
+        self.world.catalog_changes = [{'databases': ['nextcloud', 'postgres', 'template0', 'template1', 'evil']}]
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('資料庫叢集裡有其他資料庫', caught.exception.message)
+        self.world.catalog_changes = [{'databases': ['template1', 'template0', 'postgres', 'nextcloud']}]      # the same, in another order
+        self.assertEqual(self.convert(self.upload_nextcloud(), ['nextcloud'])['results'][0]['status'], 'converted')
+
+    def test_lists_of_names_are_compared_whatever_their_order(self):
+        # the database sorts the names by its own collation (en_US: `_` and `-` do not count, pgcrypto comes before pg_trgm), Python's
+        # order is another: the verification compares the names, not the order they came in
+        self.world.live_db = dict(LIVE_DB, extensions=['pgcrypto', 'plpgsql', 'vector'],
+                                  available=['btree_gin', 'pg_trgm', 'pgcrypto', 'plpgsql', 'uuid-ossp', 'vector'])
+        self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm'])
+        catalog = {'owners': ['oc_admin'], 'verifier_md5': hashlib.md5(VERIFIER.encode()).hexdigest(),
+                   'role': {k: v for k, v in LIVE_DB['role'].items() if k != 'password'}, 'role_settings': 0,
+                   'grants': 0, 'databases': ['nextcloud', 'postgres', 'template0', 'template1'],
+                   'datacl': LIVE_DB['datacl'], 'nspacl': LIVE_DB['nspacl'], 'roles': LIVE_DB['roles'],
+                   'extensions': ['pgcrypto', 'pg_trgm', 'plpgsql', 'vector']}
+        self.world.catalog = dict(catalog, roles=['oc_admin', 'nextcloud'])
+        self.assertEqual(self.convert(self.upload_nextcloud(), ['nextcloud'])['results'][0]['status'], 'converted')
+        for change, label in (({'extensions': ['pgcrypto', 'plpgsql', 'vector']}, '擴充功能和這台的不同'),
+                              ({'roles': ['nextcloud']}, '資料庫角色和這台的不同'),
+                              ({'roles': ['nextcloud', 'oc_admin', 'oc_admin']}, '資料庫角色和這台的不同')):
+            with self.subTest(change=change):
+                self.world.catalog = dict(catalog, **change)
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertIn(label, caught.exception.message)
+
     def test_an_extension_this_devices_image_has_is_enabled_first(self):
         # NC-39
         self.world.ha_details = dict(self.world.ha_details, extensions=['plpgsql', 'pg_trgm', 'uuid-ossp'])
@@ -1819,10 +1856,12 @@ class StopsHoldTests(NextcloudCase):
 
     def test_a_stop_of_the_add_on_stops_the_conversion(self):
         config = HA_CONFIG.replace(b"'installed' => true,", b"'installed' => false,")
-        with self.collecting(), self.assertRaises(BackupError) as caught:
+        with self.collecting(), mock.patch.object(nc, 'datadir_pass', wraps=nc.datadir_pass) as walked, \
+                self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(config=config), ['nextcloud'])
         self.assertEqual([i.id for i in caught.exception.issues], ['nextcloud.not-installed'])
         self.assertFalse(self.runs('nc-db') or self.runs('hapg'), 'nothing is built')
+        walked.assert_not_called()      # the stop comes before HA's data directory (gigabytes) is read, not after it
 
     def test_a_stop_of_the_data_directory_stops_the_conversion(self):
         config = HA_CONFIG.replace(b"'datadirectory' => '/share/nextcloud',", b'')
@@ -1879,6 +1918,21 @@ class LiveTargetTests(NextcloudCase):
     def work_with_sink(self):
         return types.SimpleNamespace(sink=lambda app: haissues.Sink(app.id))
 
+    def test_the_waits_for_a_stopped_service_follow_the_size_of_the_backup(self):
+        # NC-04: a database that was stopped needs its recovery, and the longer the backup the longer it may take (X-PD-05)
+        calls = []
+        real = nc.hatarget.ensure_running
+
+        def spy(work, app, container, **kwargs):
+            calls.append((container, kwargs))
+            return real(work, app, container, **kwargs)
+        with mock.patch.object(nc.hatarget, 'size_hint', return_value=123456789), \
+                mock.patch.object(nc.hatarget, 'ensure_running', side_effect=spy):
+            self.check(self.upload_nextcloud(), ['nextcloud'])
+        self.assertTrue(len(calls) >= 2, calls)
+        self.assertEqual([kw.get('size') for _c, kw in calls[:2]], [123456789, 123456789])
+        self.assertEqual(calls[1][1].get('ready'), 'postgres')
+
     def test_what_cannot_be_started_stops_only_nextcloud(self):
         self.world.down = {'nextcloud-app'}
         self.world.cannot_start = {'nextcloud-app'}
@@ -1920,9 +1974,17 @@ class LiveTargetTests(NextcloudCase):
                 self.assertEqual((row['importable'], issue['level']), (False, 'stop'))
                 self.assertTrue(issue['action'])
 
+    # This device's own database as it is when the role of config.php is not there: no such role in its list of roles, and none of the
+    # rights the installer gives it (the lists of LIVE_DB are those of a database that has it).
+    NO_ROLE = dict(LIVE_DB, role=None, roles=['nextcloud'], datacl=None,
+                   nspacl='{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}')
+
+    def catalog_reads(self):
+        return [x for x in self.world.sessions if x['role'] == 'nc-db' and "'owners'" in x['sql']]
+
     def test_a_missing_role_is_made_from_the_password_in_config_php(self):
         # NC-07: the database has no such role: config.php names it and holds its password
-        self.world.live_db = dict(LIVE_DB, role=None)
+        self.world.live_db = dict(self.NO_ROLE)
         row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
         issue = issue_of(row, 'nextcloud.db-role-created')
         self.assertEqual((row['ok'], issue['level'], issue['items']), (True, 'auto', ['oc_admin']))
@@ -1936,6 +1998,41 @@ class LiveTargetTests(NextcloudCase):
         import base64
         self.assertEqual(nc.scram_verifier('live-db-password-0001', iterations=int(iterations), salt=base64.b64decode(salt)),
                          made.group(2), 'the verifier of config.php\'s password')
+
+    def test_the_converted_database_of_a_made_role_is_compared_with_the_new_cluster_before_the_data_not_with_this_devices(self):
+        # NC-07: the new cluster has the role and its rights, this device's database has neither: the lists of roles and rights
+        # cannot be what this device's are; they must be what the new cluster was before HA's data went in
+        self.world.live_db = dict(self.NO_ROLE)
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        sessions = [x for x in self.world.sessions if x['role'] == 'nc-db']
+        reads = [i for i, x in enumerate(sessions) if "'owners'" in x['sql']]
+        self.assertEqual(len(reads), 2, 'the baseline before the restore and the verification after it')
+        first_table = next(i for i, x in enumerate(sessions) if 'public.oc_' in x['sql'])
+        self.assertTrue(reads[0] < first_table < reads[1], (reads, first_table))
+        # a plain role that exists on this device is compared with this device's lists as before: one read only
+        self.world.sessions.clear()
+        self.world.live_db = dict(LIVE_DB)
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(len(self.catalog_reads()), 1)
+
+    def test_what_the_dump_adds_to_the_roles_or_rights_of_a_made_role_stops_the_conversion(self):
+        # the baseline is not a way round the check: a role or a right that appears while HA's data is restored stops it
+        for change, label in (({'roles': ['nextcloud', 'oc_admin', 'evil']}, '資料庫角色和這台的不同'),
+                              ({'datacl': '{nextcloud=CTc/nextcloud,oc_admin=c/nextcloud,evil=c/nextcloud}'}, '資料庫權限和這台的不同'),
+                              ({'nspacl': '{pg_database_owner=UC/pg_database_owner,=UC/pg_database_owner,oc_admin=C/pg_database_owner}'},
+                               'public schema 權限和這台的不同')):
+            with self.subTest(change=list(change)):
+                self.world.live_db = dict(self.NO_ROLE)
+                self.world.catalog_changes = [{}, change]
+                with self.assertRaises(BackupError) as caught:
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertIn(label, caught.exception.message)
+        self.world.live_db = dict(self.NO_ROLE)
+        self.world.catalog_changes = [{'roles': None}, {}]      # the baseline cannot be read
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('無法讀取新資料庫的角色與權限', caught.exception.message)
 
     def test_a_role_without_a_usable_password_keeps_its_rights_and_gets_a_new_verifier(self):
         for password in (None, 'plain-text-password', ''):
@@ -2166,6 +2263,21 @@ class ShapeTests(unittest.TestCase):
         for bad in (None, [], dict(CLEAN_SHAPE, defaults=None), dict(CLEAN_SHAPE, checks=True),
                     dict(CLEAN_SHAPE, others=-1)):
             self.assertIsNone(nc.shape_problems(bad), bad)
+
+
+    def test_what_an_extension_made_is_not_counted_as_another_object(self):
+        # NC-39: an extension this device's image has is enabled with its own objects (unaccent makes a text search dictionary, a
+        # collation or a conversion can come with another): the check counts them like the functions, operators and types of an
+        # extension, never as something HA's database added. They are this device's own code and are never in the dump.
+        for catalog, column in (('pg_collation', 'collnamespace'), ('pg_conversion', 'connamespace'),
+                                ('pg_ts_config', 'cfgnamespace'), ('pg_ts_dict', 'dictnamespace')):
+            with self.subTest(catalog=catalog):
+                self.assertRegex(nc.SHAPE_SQL, rf"FROM {catalog} WHERE {column} IN \(SELECT oid FROM ns\)\s+"
+                                               rf"AND oid NOT IN \(SELECT objid FROM ext WHERE classid = '{catalog}'::regclass\)\)")
+        self.assertEqual(nc.SHAPE_SQL.count('('), nc.SHAPE_SQL.count(')'))
+        # and a database that has one of them that is not an extension's still stops (the count is not 0)
+        self.assertIn('others', [key for key, _label in nc.SHAPE_LABELS])
+        self.assertEqual(nc.shape_problems(dict(CLEAN_SHAPE, others=1)), [dict(nc.SHAPE_LABELS)['others']])
 
 
 class TargetTests(unittest.TestCase):

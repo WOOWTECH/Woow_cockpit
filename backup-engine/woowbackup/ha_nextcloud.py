@@ -6,28 +6,41 @@ The add-on is all in one container: a PostgreSQL 16 cluster (`data/postgres`, so
 locks only) and Collabora (stateless). The users' files live OUTSIDE the add-on, in Nextcloud's data directory
 (`datadirectory` of config.php, by default /share/nextcloud): they are in the HA backup only when its `share` folder
 was included (`share.tar[.gz]`, entries `nextcloud/**`); a data directory under /data or /config is read from the
-add-on's own member. Without the data directory the import is refused (a database without its files would lose them).
+add-on's own member. Without the data directory (no share folder, no folder or no `.ncdata` in it, or a place no backup
+holds) the accounts, settings, calendars and shares still move and the users' files do not: one line to confirm (HAOS parity,
+NC-22, NC-23, NC-25), the data directory stays empty with its marker and this device's own files are in the safety backup.
 
 The target is the Podman package (Woow_podman_nextcloud): five units, four host data dirs (catalog `data_dirs`: the
 PostgreSQL cluster, Redis, the html dir with code, config.php and custom_apps, and the data dir), no volume and no
 database dump (cold). Versions: HA's config.php `version` (4 parts, written by Nextcloud) must equal the live
-config.php's, and its first three parts the live image's NEXTCLOUD_VERSION, so the image's entrypoint neither upgrades
-nor refuses; HA's PostgreSQL major must not be newer than the target's.
+config.php's (one that cannot be read is inferred from the add-on's version and told), and its first three parts the live
+image's NEXTCLOUD_VERSION, so the image's entrypoint neither upgrades nor refuses. HA's PostgreSQL being newer than the
+target's is not asked beforehand: the restore, in one transaction, says (NC-32).
+Since the HAOS parity line (2026-11-25) a finding is an ISSUE (haissues: `ISSUES` below, each id with its level and the
+DESIGN row it came from): a stop only stops this app, a line to confirm needs the customer's key (every name is in it), a
+notice and an automatic step are told; this device's own Nextcloud is read as it is (a stopped service is started to be read
+and put back, a config.php that is more than data is read by this device's own PHP, a missing or superuser database role is
+dealt with: NC-04, NC-05, NC-07, NC-08).
 
 check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 (socket only, network
 none, HA's settings never used: ha_odoo.start_ha_cluster; every session pinned to pg_catalog names: Pinned); its
 catalogs are read first and a database holding anything beyond Nextcloud's own tables, sequences and indexes
 (functions, triggers, rules, views, operators, types, policies, CHECK constraints, generated columns, non-constant
-defaults...: SHAPE_SQL) is refused without reading its tables; config.php is parsed strictly (never executed: only
-arrays, single-quoted strings, numbers, booleans and null); the data directory is walked (it must exist with its
-`.ncdata`; symlinks, server-side encryption and object storage are refused); counts, apps and storages are read.
+defaults...: SHAPE_SQL) is refused without reading its tables, except the functions, procedures, aggregates and triggers of
+other apps, which are left out of the restore and listed (one line to confirm; only what Memories makes again by itself is a
+notice); config.php is parsed strictly (never executed: arrays, single- and double-quoted texts without a variable, joined
+by a dot, numbers, booleans, null and a few constants: NC-12); the data directory is walked (symlinks and `.htaccess` are left
+out and listed, hard links to a file that is not moved are copied, server-side encryption is one line to confirm, object
+storage is refused); counts, apps and storages are read.
 
 convert: pg_dump of HA's database; a NEW cluster from the live database image, environment and secret (its superuser
 password is the live one), the live Nextcloud database role (`dbuser` of the live config.php, e.g. oc_admin) with the
 LIVE role's attributes and password verifier (read from the live cluster, passed on stdin, masked), the grants
 Nextcloud's installer gives it (lib/private/Setup/PostgreSQL.php: CONNECT, REVOKE ALL FROM PUBLIC, CREATE on public),
-the live extensions, then the dump restored AS THAT ROLE (`--no-owner --no-acl --exit-on-error --single-transaction`;
-refused before the restore when its list holds a kind of object Nextcloud never creates: TOC_ALLOWED); then, every
+the live extensions (and those of HA's database that this device's image has: NC-39), then the dump restored AS THAT ROLE
+(`--no-owner --no-acl --exit-on-error --single-transaction`; its list is checked against its own header first, the entries
+of the programs left out are taken out, and it is refused before the restore when it still holds a kind of object Nextcloud
+never creates: TOC_ALLOWED; a SUPERUSER role never loads it: a plain role does and hands it over, NC-08); then, every
 session pinned, the superuser reads the catalogs only (the same SHAPE_SQL refusal, the role's attributes, no per-role
 or per-database setting) and the fix-ups and table reads run as that role, never as the superuser; fix-ups: the root
 storage id `local::<HA datadirectory>/` -> `local::<target datadirectory>/` and every local storage below it (Team
@@ -46,7 +59,7 @@ The html dir is the live dir without config.php and without the custom apps HA b
 HA's custom apps (decision D2); the data dir is HA's data directory (owner www-data of the live image, top dir like
 the live one; the web updater's own folder `updater-<instanceid>` skipped, previews kept: decision D5) with Nextcloud's
 own `.htaccess` written on top: here the data dir is inside the web root and that file is what keeps the users' files
-private (HA's data directory is outside its web root; any other `.htaccess` in it is refused); the Redis dir is empty;
+private (HA's data directory is outside its web root; any other `.htaccess` in it is left out and listed); the Redis dir is empty;
 the PostgreSQL dir is the new cluster (top dir like the live one).
 """
 import base64
@@ -224,10 +237,14 @@ SELECT json_build_object(
             AND contype NOT IN ('p', 'u', 'f', 'n')),
  'generated', (SELECT count(*) FROM pg_attribute WHERE attrelid IN (SELECT oid FROM rel) AND attgenerated <> ''),
  'inherits', (SELECT count(*) FROM pg_inherits),
- 'others', (SELECT count(*) FROM pg_collation WHERE collnamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_conversion WHERE connamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_ts_config WHERE cfgnamespace IN (SELECT oid FROM ns))
-           + (SELECT count(*) FROM pg_ts_dict WHERE dictnamespace IN (SELECT oid FROM ns))
+ 'others', (SELECT count(*) FROM pg_collation WHERE collnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_collation'::regclass))
+           + (SELECT count(*) FROM pg_conversion WHERE connamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_conversion'::regclass))
+           + (SELECT count(*) FROM pg_ts_config WHERE cfgnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_ts_config'::regclass))
+           + (SELECT count(*) FROM pg_ts_dict WHERE dictnamespace IN (SELECT oid FROM ns)
+              AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_ts_dict'::regclass))
            + (SELECT count(*) FROM pg_opclass WHERE opcnamespace IN (SELECT oid FROM ns)
               AND oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_opclass'::regclass))
            + (SELECT count(*) FROM pg_opfamily WHERE opfnamespace IN (SELECT oid FROM ns)
@@ -1312,6 +1329,7 @@ def database_role(work, app, doc, role, config, sink):
     config.php holds (the verifier is made here); a superuser role stays one (it is loaded by a plain role: build_cluster)."""
     from . import jobs
     row = doc.get('role') if isinstance(doc.get('role'), dict) else None
+    made = row is None      # not even the role is there (a role without a usable password is): the live lists have nothing of it
     password = row.get('password') if row else None
     if not (isinstance(password, str) and ha_odoo.VERIFIER_RE.fullmatch(password)):
         plain = config.get('dbpassword')
@@ -1333,6 +1351,7 @@ def database_role(work, app, doc, role, config, sink):
                   '這台 Nextcloud 用的資料庫帳號是超級使用者，不是 Nextcloud 安裝程式建立的樣子。放入 HA 的資料時改用權限低的暫時帳號，'
                   '放完再把資料交回這個帳號；匯入後它仍是超級使用者，和這台原本一樣。', [role])
     doc['role'] = row
+    doc['role_made'] = made
     return doc
 
 
@@ -1383,9 +1402,11 @@ class Target:
     def __init__(self, work, app):
         runner = work.runner(app)
         self.live = Live(work.quadlets(app), runner.home, app)
-        # NC-04: a stopped Nextcloud or database is started to be read, and put back when the app's throwaway objects go
-        hatarget.ensure_running(work, app, self.live.app_container)
-        hatarget.ensure_running(work, app, self.live.db_container, ready='postgres')
+        # NC-04: a stopped Nextcloud or database is started to be read, and put back when the app's throwaway objects go; the waits
+        # follow the size of the open HA backup, as those of hacommon.live_json do (a database that was stopped needs its recovery)
+        size = hatarget.size_hint(getattr(work, 'ha', None))
+        hatarget.ensure_running(work, app, self.live.app_container, size=size)
+        hatarget.ensure_running(work, app, self.live.db_container, ready='postgres', size=size)
         self.config = live_config(work, app, self.live)
         self.image_version = image_env(work, app, self.live.app_image, 'NEXTCLOUD_VERSION')
         self.php_version = image_env(work, app, self.live.app_image, 'PHP_VERSION')
@@ -2052,10 +2073,19 @@ def catalog_verify_sql(role):
 
 
 ROLE_ATTRS = ('super', 'login', 'createdb', 'createrole', 'replication', 'bypassrls', 'connlimit')
+BASELINE_KEYS = ('roles', 'datacl', 'nspacl')     # what a made role changes in the lists of this device's own database (NC-07)
 
 
 def _rows(rows):
     return sorted(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in rows or [])
+
+
+def _same(found, expected):
+    """Two lists of names are the same names whatever their order (the database sorts them by its own collation, `_` and `-`
+    do not count there: Python's order is another one); anything else is compared as it is."""
+    if isinstance(found, list) and isinstance(expected, list):
+        return sorted(found) == sorted(expected)
+    return found == expected
 
 
 def verify_converted(doc, *, expected, db, role, dbname, moves):
@@ -2069,7 +2099,7 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
     if doc.get('role_settings') != 0:
         problems.append('出現了角色或資料庫層級的設定')
     # The role may create databases (CREATEDB, as on the live cluster): SQL hidden in HA's dump could leave one behind.
-    if doc.get('databases') != sorted({'postgres', 'template0', 'template1', dbname}):
+    if not _same(doc.get('databases'), sorted({'postgres', 'template0', 'template1', dbname})):
         problems.append('資料庫叢集裡有其他資料庫')
     # The dump is restored with --no-acl: a grant on a table or column can only come from SQL hidden in HA's dump.
     if doc.get('grants') != 0:
@@ -2086,7 +2116,7 @@ def verify_converted(doc, *, expected, db, role, dbname, moves):
         problems.append('使用者檔案資料夾的儲存空間記錄沒有改成這台的路徑')
     for key, label in (('roles', '資料庫角色'), ('extensions', '擴充功能'), ('datacl', '資料庫權限'),
                        ('nspacl', 'public schema 權限')):
-        if doc.get(key) != db.get(key):
+        if not _same(doc.get(key), db.get(key)):
             problems.append(f'{label}和這台的不同')
     if db.get('appconfig') is not None and _rows(doc.get('appconfig')) != _rows(db.get('appconfig')):
         problems.append('Office 或背景工作設定和這台的不同')
@@ -2161,6 +2191,14 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
               and e in db.get('available', ()) and EXT_RE.fullmatch(e)]
     pg.script(f'GRANT CREATE ON SCHEMA public TO {ha_odoo.pg_ident(loader)};\n'
               + ''.join(f'CREATE EXTENSION IF NOT EXISTS {_ext_ident(e)};\n' for e in extensions + extras), live.db_name)
+    baseline = None
+    if db.get('role_made'):
+        # NC-07: this device's database has no such role, so its list of roles and its rights (database, schema public) have nothing
+        # of the role to be compared with. What the new cluster is before HA's data goes in (the role, its rights, the extensions)
+        # is the baseline the converted one must still be after it: HA's dump may add no role and no right.
+        baseline = pg.query_json(catalog_verify_sql(role), live.db_name)
+        if not (isinstance(baseline, dict) and isinstance(baseline.get('roles'), list) and all(key in baseline for key in BASELINE_KEYS)):
+            raise BackupError('job-failed', '無法讀取新資料庫的角色與權限。')
     left_out = shape_objects(details.get('shape'))
     restore_dump(work, tmp, dump, loader, live.db_name, majors=majors, skip=SKIPPED_TOC if left_out and left_out[0] else ())
     # From here on the cluster holds HA's objects: every session is pinned (Pinned); the superuser reads catalogs only
@@ -2187,8 +2225,9 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
         doc = {**doc, **catalog}
     else:
         doc = None
-    problems = verify_converted(doc, expected=expected, db=dict(db, extensions=sorted(set(db['extensions']) | set(extras))),
-                                role=role, dbname=live.db_name, moves=moves)
+    problems = verify_converted(doc, expected=expected, role=role, dbname=live.db_name, moves=moves,
+                                db=dict(db, extensions=sorted(set(db['extensions']) | set(extras)),
+                                        **({key: baseline[key] for key in BASELINE_KEYS} if baseline else {})))
     if problems:
         raise BackupError('job-failed', f'轉換後的 Nextcloud 資料庫檢查沒有通過：{"；".join(problems)}。')
     carry_settings(work, app, live, admin, sink)
