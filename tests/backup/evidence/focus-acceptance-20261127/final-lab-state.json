@@ -1,0 +1,15 @@
+{
+  "device": "woowbk-dev-e",
+  "network_isolation_preserved": true,
+  "code_server_active": "inactive",
+  "code_server_health_timer_active": "inactive",
+  "schedule_timer_enabled": "enabled",
+  "schedule_timer_active": "failed",
+  "running_containers": 0,
+  "remaining_case_unit_count": 0,
+  "reviewed_image_rotated_out": true,
+  "original_baseline_retained_encrypted": true,
+  "original_ha_fixture_sha256_unchanged": true,
+  "host_free_mib": 35265,
+  "commercial_acceptance": "not-complete"
+}

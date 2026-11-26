@@ -1,8 +1,10 @@
 # Focused real acceptance, 2026-11-27
 
-This lane's current work is the independent DESIGN G4 R3 D10 case. No new
-acceptance result is claimed before a real run. Offline checks are harness
-verification only. `commercial_acceptance` stays `not-complete`.
+The independent DESIGN G4 R3 D10 case passed **71/71** on real source
+`5209c402b846ab00ae4453c5e4ca80447ed75030`, exit0 in314.6seconds.
+`d10-attempt2.json` is the fixed-status capture; the failed first attempt remains
+separately recorded below. Offline checks are harness verification only.
+`commercial_acceptance` stays `not-complete`.
 
 The original encrypted x86 HA code-server fixture is converted through the actual
 installed helper. Two disposable Quadlet services using the exact installed
@@ -39,6 +41,38 @@ deleted. Private evidence: `~/.woowbk-lab/evidence/focus-acceptance-d10/`.
 The outer image recovery phase records code-server and its health timer as
 inactive before wake; schedule timer was enabled/failed. Those outer service
 states must be restored after this case, since the D10 driver starts after wake.
+
+## Successful real run and final recovery
+
+Both actual mount consumers were named by preflight; the unacknowledged request
+started no job and changed neither consumer nor Desktop. The confirmed request
+paused and restarted both consumers. Existing Desktop contents, modes and owners
+were equal after replacement, its inode changed, both service invocation IDs
+changed and both new mounts could read the retained baseline. This used the
+original encrypted HA source, not a generated-only acceptance fixture.
+
+Ordinary safety restore and the independent original-baseline verifier passed.
+The scan covered registered credentials and moved HA values before rollback;
+device records, journal and private evidence had zero hits. `d10-final-summary.json`
+records numeric scan counts and confirms both public capture hashes match the
+private stdout. Private attempt2 evidence remains under
+`~/.woowbk-lab/evidence/focus-acceptance-d10/20261127T055945/`.
+
+The authorized outer `deploy-batch2.sh e rotate:code-server` finished successfully.
+`final-lab-state.json` confirms code-server and its health timer are inactive,
+schedule is enabled/failed as originally found, zero running containers and case
+units, the reviewed image rotated out, original encrypted baseline retained and
+original fixture SHA unchanged. Network remains none with zero published ports.
+Host disk at final verification was35265MiB free. The public inherited status
+labels say12GiB/1GiB; this driver actually enforces13GiB disk reserve and1200MiB
+host available RAM, plus1GiB device headroom. Image transfer separately used the
+existing script's12GiB floor plus1GiB reserve and reached a minimum24726MiB free.
+
+Guarded offline preparation check:10 tests,0 failures/errors/skips/blocks/shim
+hits (`acceptance-d10-offline-06.log`). This includes the saved n8n driver's
+offline default: that driver is prepared only, requires incoming instance source
+and a separate dev-c lease, and was **not rerun**. Its historical34/34 remains a
+different application-flow proof.
 
 ## First attempt and narrow harness repair
 

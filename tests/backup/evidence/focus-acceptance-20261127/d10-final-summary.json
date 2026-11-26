@@ -1,0 +1,28 @@
+{
+  "source_commit": "5209c402b846ab00ae4453c5e4ca80447ed75030",
+  "case": "R3-D10-code-server",
+  "fixture_kind": "original-encrypted-real-ha",
+  "passed": 71,
+  "failed": 0,
+  "baseline_restored": true,
+  "commercial_acceptance": "not-complete",
+  "scan": {
+    "scanned": 327,
+    "hits": 0,
+    "journal_hits": 0,
+    "journal_bytes": 4757974,
+    "moved_values": 0,
+    "app_log_hits": 0,
+    "private_evidence_files": 13,
+    "private_evidence_hits": 0
+  },
+  "both_capture_stdout_hashes_verified": true,
+  "offline_preparation_checks": {
+    "tests": 10,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "shim_hits": 0
+  }
+}

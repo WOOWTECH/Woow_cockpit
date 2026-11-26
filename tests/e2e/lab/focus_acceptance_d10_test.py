@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('focus_d10', Path(__file__).with_name('focus_acceptance_d10.py'))
 d10 = importlib.util.module_from_spec(spec)
@@ -72,6 +73,16 @@ class ConsumerTests(unittest.TestCase):
         for name in ('code-server', '../escape', 'woowbk-focus-d10-0123456789ab-home\nExec=oops'):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 d10.consumer_unit(name, True)
+
+
+class SavedN8nPreparationTests(unittest.TestCase):
+    def test_default_never_enters_real_saved_flow(self):
+        spec = importlib.util.spec_from_file_location('prepared_n8n', Path(__file__).with_name('focus_acceptance_n8n.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(module, '_run', side_effect=AssertionError('unleased runtime')) as run:
+            self.assertEqual(module.main([]), 0)
+            run.assert_not_called()
 
 
 if __name__ == '__main__':
