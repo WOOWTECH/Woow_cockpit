@@ -143,8 +143,10 @@ guard = _load_guard()
 Failed = drv.Failed
 
 
-def require_no_unreviewed_confirmation(result):
-    """An older real-flow script must not approve new product confirmation lines by accident."""
+def require_reviewed_check(result):
+    """An older real-flow script must not import a refused or newly conditional result."""
+    if result.get('ok') is not True or result.get('blockers'):
+        raise Failed('the check did not mark Headscale importable without blockers')
     issues = result.get('issues')
     if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
         raise Failed('the check did not return a usable issue list')
@@ -883,7 +885,7 @@ class Run:
         ev.check(f'check {tag}/headscale: HA\'s API key does not move',
                  any('API 金鑰不會搬過來' in line for line in result.get('warnings') or []),
                  result.get('warnings'))
-        require_no_unreviewed_confirmation(result)
+        require_reviewed_check(result)
         leftovers = drv.labelled()
         ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
 
