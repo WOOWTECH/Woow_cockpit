@@ -645,8 +645,8 @@ class PackageQuadletTests(unittest.TestCase):
     """The Quadlet files of the real tenant package (committed with the lab evidence: Woow_podman_odoo c578b8a), rendered
     with test values as its installer does, read by `Live`: the layout the import has to know is the package's own."""
 
-    FOLDER = (Path(__file__).resolve().parents[1] / 'e2e' / 'lab' / 'evidence' / 'arm54-final-20261123' / 'odoo-package-c578b8a'
-              / 'quadlet')
+    # The fixture link points at the committed tenant package and is copied with tests/backup by mutation harnesses.
+    FOLDER = Path(__file__).resolve().parent / 'fixtures' / 'odoo-package-c578b8a-quadlet'
     VALUES = {'DB_IMAGE': 'jcr-prod.woowtech.io/woow-paas-docker-local/paas-postgres:17.11-20260928.1549@sha256:7a47',
               'DB_BOOTSTRAP_USER': 'postgres', 'DB_BOOTSTRAP_SECRET': 'odoo18-postgres-super-password',
               'DB_VOLUME_NAME': 'odoo18-db-data-isolated', 'ODOO_IMAGE': 'localhost/woow-odoo-tenant-ha:20261101.1152-51856b0',
