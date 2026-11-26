@@ -54,6 +54,34 @@ def sql(db, text):
     return inside(['psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'omnigent', '-d', db, '-f', '-'], text.encode())
 
 
+def probe_toc_names():
+    """Real pg_restore listing: control characters in source names cannot add selected entries."""
+    for db in ('toc_names', 'toc_dest'):
+        inside(['createdb', '-U', 'omnigent', db])
+    sql('toc_names', 'CREATE TABLE users (id integer); INSERT INTO users VALUES (1);')
+    sql('toc_dest', 'CREATE TABLE users (id integer);')
+    hostile_names = [f'evil{sep}999; 0 0 TABLE DATA public users omnigent' for sep in ('\n', '\r', '\t')]
+    for name in hostile_names:
+        quoted = '"' + name.replace('"', '""') + '"'
+        sql('toc_names', f'CREATE TABLE {quoted} (id integer); INSERT INTO {quoted} VALUES (2);')
+    archive = inside(['pg_dump', '-U', 'omnigent', '-Fc', '-d', 'toc_names']).stdout
+    listing = inside(['pg_restore', '-l'], archive).stdout.decode('utf-8', 'surrogateescape')
+    omni.check_listing(listing)
+    selected = omni.data_only_toc(listing, tables={'users'}, sequences=set())
+    lines = selected.splitlines()
+    assert len(lines) == 1 and 'TABLE DATA public users omnigent' in lines[0]
+    assert not lines[0].lstrip().startswith('999;')
+    cluster = ha_odoo.Cluster(Tmp(), 'toc', superuser='omnigent')
+    cluster.write_file('/tmp/woowbk-toc-names.toc', selected.encode('utf-8', 'surrogateescape'))
+    inside(['pg_restore', '-U', 'omnigent', '--no-owner', '--no-acl', '--exit-on-error',
+            '--single-transaction', '-L', '/tmp/woowbk-toc-names.toc', '-d', 'toc_dest'], archive)
+    actual = inside(['psql', '-X', '-A', '-t', '-U', 'omnigent', '-d', 'toc_dest',
+                     '-c', 'SELECT coalesce(json_agg(id ORDER BY id), \'[]\'::json) FROM users']).stdout.strip()
+    assert actual == b'[1]'
+    event('toc_control_names', real_pg_archive=True, newline=True, carriage_return=True, tab=True,
+          trusted_entry_selected_once=True, forged_id_not_selected=True, restored_only_trusted_data=True)
+
+
 class Tmp:
     def exec(self, role, argv, **kwargs):
         incoming = kwargs.get('input')
@@ -168,7 +196,9 @@ def full_candidate_pg_probe(directory, work, app, target):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', action='store_true')
-    if not parser.parse_args().run:
+    parser.add_argument('--toc-names-only', action='store_true', help='only the TOC control-character probe')
+    args = parser.parse_args()
+    if not args.run:
         parser.error('explicit --run required')
     info = subprocess.run([str(LAB), 'inspect', '--format', '{{.State.Status}} {{.HostConfig.NetworkMode}} {{json .NetworkSettings.Ports}}',
                            'woowbk-dev-d'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True).stdout.strip()
@@ -193,6 +223,9 @@ def main():
             time.sleep(1)
         else:
             raise RuntimeError('postgres_not_ready')
+        if args.toc_names_only:
+            probe_toc_names()
+            return
         for db in ('trusted', 'source', 'bad_dest'):
             inside(['createdb', '-U', 'omnigent', db])
         schema = '''CREATE TABLE users (id text PRIMARY KEY, password_hash text);
