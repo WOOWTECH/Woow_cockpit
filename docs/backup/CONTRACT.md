@@ -1028,7 +1028,9 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `interrupted_message(job_type)`, `APPS` (from `haapps`), `ITEM_KEYS`.
 * Adapter (part B): `read_quadlets()` and `import_manifest(staging_dir, *, postgres, volumes, dirs)` -> `(app section,
   [Entry])`: images, secrets, config files and Quadlet files read live exactly like `backup()`, the data items given
-  (one per declared item), `verify_snapshot` empty, `catalog_entry` carried. `flows.Deps.sweep_temp`,
+  (one per declared item), `verify_snapshot` empty, `catalog_entry` carried. A PostgreSQL item is either a single-database
+  dump or the complete `_dump_instance` result (globals, roles, bootstrap user and all database dumps); its scope must
+  match the catalog, and an instance's id must match its item before any live secrets are read. `flows.Deps.sweep_temp`,
   `FlowContext.ha_key`, `FlowContext.phase(phase_id, *, percent, message)` / `JobReporter.phase(...)` (a progress that
   replaces the phase position's), `podman.default_runner(..., abort)` / `OwnerRunner.run|relay|dir_pack(..., abort)`,
   `habackup.iter_entries(..., checkpoint)`, `retention.converted_ids(paths)`, `retention.plan(..., converted)`,
@@ -2293,8 +2295,8 @@ secret and mounts); an entry of another shape is `incompatible`.
 3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list either ONE database item of
    scope `database`, or no database item and the data volume of the PostgreSQL container as one of the volumes (a cold backup: the container
    is found by its image name and its `/var/lib/postgresql*` mount, its account and database are its own `POSTGRES_USER`/`POSTGRES_DB`, which
-   must be set). More than one item or the scope `instance` stops n8n (`n8n.layout-unsupported`, `incompatible`: `adapter.import_manifest`
-   writes one dump per item and no globals, roles or databases). A database container without `ContainerName=` has the name systemd gives it.
+   must be set). More than one item or the scope `instance` stops n8n (`n8n.layout-unsupported`, `incompatible`: this n8n converter
+   emits one database, without a complete instance's globals and roles). A database container without `ContainerName=` has the name systemd gives it.
    n8n's data is the declared volume mounted at `/home/node/.n8n`. The queue's volumes are the declared ones that only containers whose image
    repository is named `valkey` or `redis` mount; every other declared volume and every declared host folder is this device's own and is
    carried exactly as it is (`hatarget.carry`; `n8n.extras-carried`, auto); a link that would leave a carried volume is left out and
@@ -2463,9 +2465,10 @@ PostgreSQL 15).
    plugins (they replace this device's and need re-pairing). HA's /media is never moved.
 3. `hermes-redis-data`: its top folder only, owned like the live one (the volume mounted at `/data`; none declared: none made);
    every `database` entry of this device's app entry: the live database's dump (`adapter._dump_database`, read while it runs:
-   nothing uses it); every other volume and host folder of the entry (a cold database's volume, a workspace) is carried as it is
-   (`hatarget.carry`, `hermes.extras-carried`); an entry that dumps a whole PostgreSQL instance stops only Hermes
-   (`hermes.layout-unsupported`: `adapter.import_manifest` takes one dump file per entry).
+   Hermes does not use it); every `instance` entry: the complete live instance (`adapter._dump_instance`) with its globals,
+   roles and all databases, packaged through the ordinary instance manifest and restore path. These PostgreSQL entries
+   carry this device's own data; HA Hermes uses SQLite. Database and instance entries may coexist. Every other volume and
+   host folder (a cold database's volume, a workspace) is carried as it is (`hatarget.carry`, `hermes.extras-carried`).
 
 **EMQX** (`woow-emqx` → `emqx`: volumes `woow_emqx_data`, `woow_emqx_log`). Revised 2026-11-25 (HAOS parity, lane EMQX-A; owner decisions
 D0-D5, S1, S2, H1, H3, H7): restoring HA's backup is what HAOS does, so HA's access settings come with it; what could hurt the customer is a
@@ -2839,7 +2842,7 @@ one single-database `postgres` item (`catalog-suggest` proposes it for a LiteLLM
 no `postgres` item, the cold mode: the database container's data volume is one of the entry's `volumes` and the converted
 backup carries the new cluster itself (cleanly shut down, `pg_controldata` says so) as that volume instead of a dump
 (L-03); every other volume and host folder of the entry is carried as it is (`litellm.extras-carried`, `auto`). The one
-shape it cannot fill is an entry that dumps the whole instance (`adapter.import_manifest` has no instance form), two
+shape it cannot fill is an entry that dumps the whole instance (this LiteLLM converter emits only one database), two
 database items, or none: `litellm.layout-unsupported` (`stop`, says what to choose). The proxy is the container whose Quadlet
 file mounts `litellm-salt-key` as `LITELLM_SALT_KEY`, whatever it is called (L-04: `litellm.target-missing` when there is
 none). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):

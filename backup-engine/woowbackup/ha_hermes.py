@@ -422,10 +422,10 @@ class Target:
                                          action='請到「應用軟體」確認這個應用的資料卷設定有包含 Hermes 存放資料的那個資料卷（掛在 /opt/data），再匯入。'),
                                    'incompatible', app=app.id)
         self.pgs = list(app.postgres)
-        if any(pg.get('scope', 'database') != 'database' for pg in self.pgs):
+        if any(pg.get('scope', 'database') not in ('database', 'instance') for pg in self.pgs):
             raise haissues.stopped(Issue('hermes.layout-unsupported', 'stop',
-                                         '這台 Hermes 的資料庫備份模式是「整個執行個體」，Hermes 匯入還不支援這個模式。',
-                                         action='請到「應用軟體」把這個應用的資料庫備份模式改成「單一資料庫」或「冷備份」，再匯入。'),
+                                         '這台 Hermes 的資料庫備份模式無法辨認，不知道如何保留原有資料。',
+                                         action='請到「應用軟體」確認資料庫備份模式為「單一資料庫」或「整個執行個體」，再匯入。'),
                                    'incompatible', app=app.id)
         self.data_volume = data_volume
         _file, redis = hacommon.mounted(quadlets, home, '/data')
@@ -669,8 +669,11 @@ def convert(work, app, test_mode, out_dir):
     if target.pgs:
         work.log('Hermes 未使用的 PostgreSQL 資料庫維持這台現有的內容')
     for pg in target.pgs:
-        dump = adapter._dump_database(pg, out_dir)
-        postgres[pg['id']] = {k: dump[k] for k in ('database', 'server_version', 'major', 'file')}
+        if pg.get('scope', 'database') == 'instance':
+            postgres[pg['id']] = adapter._dump_instance(pg, out_dir)
+        else:
+            dump = adapter._dump_database(pg, out_dir)
+            postgres[pg['id']] = {k: dump[k] for k in ('database', 'server_version', 'major', 'file')}
     for path in volumes.values():
         ha_odoo.check_volume_tar(path, ids)
     dirs = {}

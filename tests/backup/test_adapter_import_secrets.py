@@ -9,8 +9,8 @@ import os
 from woowbackup import flows
 from woowbackup.errors import BackupError
 
-from .test_adapter import AdapterCase, APP_KEY, DB_PASSWORD, extract_entries
-from .test_strengthen import DB_SPEC, StrengthCase
+from .test_adapter import AdapterCase, APP_KEY, DB_PASSWORD, VOLUME_TAR, extract_entries
+from .test_strengthen import DB_SPEC, GLOBALS, StrengthCase, StrengthOwner, dump_of
 
 
 class ImportSecretsTests(AdapterCase):
@@ -70,6 +70,69 @@ class ImportSecretsTests(AdapterCase):
                     self.adapter.import_manifest(staging, **self.items(path.name + '.dump'),
                                                  secrets={'woowbk-demo-app-key': path})
                 self.assertEqual(caught.exception.code, 'internal-error')
+
+
+class ImportInstanceTests(StrengthCase):
+    """H-03: an existing live instance remains a complete, restorable instance in a converted HA backup."""
+
+    instance = True
+
+    def converted(self):
+        (self.staging / 'postgres').mkdir()
+        dump = self.adapter._dump_instance(self.app.postgres[0], self.staging)
+        files = self.root / 'files.tar'
+        files.write_bytes(VOLUME_TAR)
+        manifest, entries = self.adapter.import_manifest(
+            self.staging, postgres={'main': dump}, volumes={'woowbk-demo-files': files})
+        return manifest, entries
+
+    def test_every_database_role_and_globals_file_is_carried(self):
+        manifest, entries = self.converted()
+        item = manifest['postgres'][0]
+        self.assertEqual((item['scope'], item['bootstrap_user']), ('instance', 'notes'))
+        self.assertEqual([db['name'] for db in item['databases']], ['nextcloud', 'notes', 'postgres', 'tmpl_custom'])
+        self.assertEqual([role['name'] for role in item['roles']], ['notes', 'oc_admin', 'readonly'])
+        contents = {entry.path: entry.source.read_bytes() for entry in entries}
+        self.assertEqual(contents[item['entry']], GLOBALS)
+        self.assertEqual(contents[item['databases'][0]['entry']], dump_of('nextcloud', b'nc-data'))
+        self.assertTrue(all(db['entry'] in contents for db in item['databases']))
+        self.assertNotIn('SCRAM', str(manifest), 'password hashes belong only to the encrypted entry')
+
+    def test_the_converted_instance_uses_the_existing_complete_restore(self):
+        manifest, entries = self.converted()
+        extract = self.root / 'extract-imported'
+        extract.mkdir()
+        extract_entries(entries, extract)
+        owner = StrengthOwner(instance=True)
+        owner.instance['nextcloud']['data'] = dump_of('nextcloud', b'changed')
+        adapter = self.make_adapter(owner)
+        adapter.ha_import = True
+        adapter.restore(manifest, extract, mode='inplace')
+        self.assertEqual(owner.instance['nextcloud']['data'], dump_of('nextcloud', b'nc-data'))
+        self.assertEqual(owner.instance['postgres']['data'], dump_of('postgres', b'maint'))
+        self.assertEqual(set(owner.instance), {'nextcloud', 'notes', 'postgres', 'tmpl_custom'})
+        self.assertIn('CREATE ROLE oc_admin;', owner.applied_globals[0])
+        self.assertNotIn('CREATE ROLE notes;', owner.applied_globals[0], 'the image creates the bootstrap role')
+
+    def test_a_scope_mismatch_is_refused_before_reading_live_secrets_or_writing_entries(self):
+        for catalog_scope, converted_scope in (('instance', 'database'), ('database', 'instance')):
+            with self.subTest(catalog_scope=catalog_scope):
+                self.app.postgres[0]['scope'] = catalog_scope
+                before = list(self.owner.argvs())
+                with self.assertRaises(BackupError) as caught:
+                    self.adapter.import_manifest(self.staging, postgres={'main': {'scope': converted_scope}},
+                                                 volumes={'woowbk-demo-files': self.root / 'unused'})
+                self.assertEqual(caught.exception.code, 'internal-error')
+                self.assertEqual(self.owner.argvs(), before)
+                self.assertFalse((self.staging / 'secrets').exists())
+
+    def test_an_instance_of_another_item_is_not_silently_relabelled(self):
+        with self.assertRaises(BackupError) as caught:
+            self.adapter.import_manifest(self.staging,
+                                         postgres={'main': {'scope': 'instance', 'id': 'another'}},
+                                         volumes={'woowbk-demo-files': self.root / 'unused'})
+        self.assertEqual(caught.exception.code, 'internal-error')
+        self.assertFalse((self.staging / 'secrets').exists())
 
 
 class ImportDigestTests(StrengthCase):

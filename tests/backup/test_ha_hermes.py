@@ -901,13 +901,64 @@ class LayoutTests(HermesCase):
         self.assertEqual(sorted(self.world.live_dumps), ['main', 'second'])
         self.assertEqual(sorted(self.world.manifests['hermes']['postgres']), ['main', 'second'])
 
-    def test_an_entry_that_dumps_a_whole_instance_stops_only_hermes(self):   # H-03: what the import cannot take at all
-        self.catalog['hermes'].postgres[0]['scope'] = 'instance'
+    def instance_dump(self, pg, staging):
+        folder = Path(staging) / 'postgres'
+        globals_file = folder / f'{pg["id"]}.globals.sql'
+        globals_file.write_bytes(b'CREATE ROLE hermes;\nALTER ROLE hermes WITH SUPERUSER LOGIN;\n')
+        databases = []
+        for index, name in enumerate(('hermes', 'other')):
+            path = folder / f'{pg["id"]}.db{index}.dump'
+            path.write_bytes(b'PGDMP-live-' + name.encode())
+            databases.append({'name': name, 'owner': 'hermes', 'template': False, 'extensions': [], 'file': path})
+        return {'id': pg['id'], 'scope': 'instance', 'database': 'postgres', 'server_version': '15.19', 'major': 15,
+                'bootstrap_user': 'hermes', 'roles': [{'name': 'hermes', 'superuser': True, 'login': True}],
+                'globals': globals_file, 'databases': databases}
+
+    def test_a_whole_instance_is_preserved_with_roles_and_every_database(self):   # H-03
+        self.catalog['hermes'].postgres[0].update(scope='instance', database='postgres')
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(fk.Adapter, '_dump_instance', create=True, side_effect=self.instance_dump) as dump:
+            result = self.checked(ha_id)
+            self.assertTrue(result['importable'])
+            dump.assert_not_called()
+            self.convert(ha_id, ['hermes'])
+            dump.assert_called_once()
+        item = self.world.manifests['hermes']['postgres']['main']
+        self.assertEqual(item['scope'], 'instance')
+        self.assertEqual([db['name'] for db in item['databases']], ['hermes', 'other'])
+        self.assertEqual(item['roles'], [{'name': 'hermes', 'superuser': True, 'login': True}])
+        self.assertEqual(self.world.live_dumps, [], 'an instance must never fall back to one database')
+
+    def test_an_instance_dump_failure_leaves_hermes_without_a_converted_backup(self):
+        self.catalog['hermes'].postgres[0].update(scope='instance', database='postgres')
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(fk.Adapter, '_dump_instance', create=True,
+                               side_effect=BackupError('job-failed', '無法匯出完整執行個體')):
+            with self.assertRaises(BackupError) as caught:
+                self.convert(ha_id, ['hermes'])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertEqual(self.storage.list_backups(), [])
+        self.assertNotIn('hermes', self.world.manifests)
+
+    def test_database_and_instance_entries_can_be_carried_together(self):
+        self.catalog['hermes'].postgres.append({'id': 'second', 'scope': 'instance', 'database': 'postgres',
+                                                'container': 'hermes-postgresql', 'user': 'hermes'})
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(fk.Adapter, '_dump_instance', create=True, side_effect=self.instance_dump):
+            self.convert(ha_id, ['hermes'])
+        items = self.world.manifests['hermes']['postgres']
+        self.assertEqual(self.world.live_dumps, ['main'])
+        self.assertNotIn('scope', items['main'])
+        self.assertEqual(items['second']['scope'], 'instance')
+        self.assertEqual([db['name'] for db in items['second']['databases']], ['hermes', 'other'])
+
+    def test_an_unknown_database_scope_stops_only_hermes(self):
+        self.catalog['hermes'].postgres[0]['scope'] = 'unknown'
         ha_id = self.upload_hermes(evil=False)
         result = self.checked(ha_id)
         self.assertFalse(result['importable'])
         line = self.issues(result, 'stop')['hermes.layout-unsupported']
-        self.assertIn('整個執行個體', line['message'])
+        self.assertIn('模式', line['message'])
         self.assertIn('單一資料庫', line['action'])
         with self.assertRaises(BackupError) as caught:
             self.convert(ha_id, ['hermes'])

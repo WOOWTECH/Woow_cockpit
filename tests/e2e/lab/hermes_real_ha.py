@@ -802,7 +802,7 @@ def step_check(ev, args):
     ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
 
 
-def step_import(ev, args, tag):
+def step_import(ev, args, tag, *, on_verified=None):
     if tag not in TAGS:
         raise Failed(f'unknown import tag {tag}')
     if drv.STATE.get(f'ha_{tag}') != STORE_IDS[tag] or 'digest_before' not in drv.STATE:
@@ -821,9 +821,13 @@ def step_import(ev, args, tag):
         continuity(ev, f'{label_text} after restore', 'ha')
         drv.verify_hermes(ev, args, 'x86', f'{label_text} after restore')
         engine_running(ev, f'{label_text} after restore')
+        if on_verified is not None:
+            on_verified('restored')
         restart_hermes(ev, f'{label_text}')
         continuity(ev, f'{label_text} after restart', 'ha')
         engine_running(ev, f'{label_text} after restart')
+        if on_verified is not None:
+            on_verified('restarted')
     finally:
         restore_with(ev, safety, f'rollback-{tag}')
         markers(ev, f'{label_text} after rollback')
@@ -833,6 +837,8 @@ def step_import(ev, args, tag):
         before = drv.STATE['digest_before']
         ev.check(f'{label_text} after rollback: Hermes state digest equals the one before any import',
                  after == before, {'differs': diff_digest(after, before)})
+        if on_verified is not None:
+            on_verified('rolled_back')
 
 
 def step_kit_baseline(ev, args):

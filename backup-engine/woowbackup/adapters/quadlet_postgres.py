@@ -2074,7 +2074,8 @@ class QuadletPostgresAdapter(Adapter):
         """The app section and entries of a backup whose data items were made elsewhere -- a Home Assistant import
         (haimport.py, CONTRACT section 9): images, secrets, config files and Quadlet files are read from the live app
         as the owner, without stopping anything, exactly like backup() reads them; the data items are `postgres`
-        {id: {database, server_version, major, file}}, `volumes` {name: file} and `dirs` {path: file}, exactly one
+        {id: {database, server_version, major, file}} or the full result of `_dump_instance` for an instance catalog item,
+        `volumes` {name: file} and `dirs` {path: file}, exactly one
         for every item the catalog declares. `secrets` {name: file}: a secret the conversion brings from HA instead
         of the live one (LiteLLM's salt key, which belongs to the database it encrypted); only a secret the catalog
         declares, one small regular file each. No http-json snapshot and no digests are recorded (nothing to compare
@@ -2088,6 +2089,12 @@ class QuadletPostgresAdapter(Adapter):
         wanted = ({p['id'] for p in app.postgres}, {v['name'] for v in app.volumes}, {d['path'] for d in app.data_dirs})
         if (set(postgres), set(volumes), set(dirs)) != wanted:
             raise BackupError('internal-error', f'轉換後的資料項目和應用「{app.name}」的設定不一致。', app=app.id)
+        for pg in app.postgres:
+            dump = postgres[pg['id']]
+            if not isinstance(dump, dict) or dump.get('scope', 'database') != pg.get('scope', 'database'):
+                raise BackupError('internal-error', f'轉換後的資料庫 {pg["id"]} 備份模式和應用設定不一致。', app=app.id)
+            if pg.get('scope') == 'instance' and dump.get('id') != pg['id']:
+                raise BackupError('internal-error', f'轉換後的資料庫執行個體識別碼和 {pg["id"]} 不一致。', app=app.id)
         if not set(replaced) <= {s['name'] for s in app.secrets}:
             raise BackupError('internal-error', f'轉換帶來的應用機密不是應用「{app.name}」設定的機密。', app=app.id)
         for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet'):
@@ -2128,9 +2135,12 @@ class QuadletPostgresAdapter(Adapter):
                 self.log(f'注意：這個應用的設定檔含有備份無法保存的內容（{problem}），這份備份不附上應用設定。')
         for pg in app.postgres:
             dump = postgres[pg['id']]
-            manifest['postgres'].append({'id': pg['id'], 'database': dump['database'],
-                                         'server_version': dump['server_version'], 'major': dump['major'],
-                                         'entry': entry('postgres', f'{pg["id"]}.dump', dump['file'])})
+            if pg.get('scope', 'database') == 'instance':
+                manifest['postgres'].append(self._instance_manifest(dump, entry))
+            else:
+                manifest['postgres'].append({'id': pg['id'], 'database': dump['database'],
+                                             'server_version': dump['server_version'], 'major': dump['major'],
+                                             'entry': entry('postgres', f'{pg["id"]}.dump', dump['file'])})
         for volume in app.volumes:
             manifest['volumes'].append({'name': volume['name'],
                                         'entry': entry('volumes', f'{volume["name"]}.tar', volumes[volume['name']])})

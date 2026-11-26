@@ -114,9 +114,13 @@ class Adapter:
             entries.append(Entry(path=f'apps/{self.app.id}/volumes/{name}.tar', source=Path(source), size=size,
                                  sha256=digest))
         for pg_id, dump in sorted((items.get('postgres') or {}).items()):
-            size, digest = file_digest(dump['file'])
-            entries.append(Entry(path=f'apps/{self.app.id}/postgres/{pg_id}.dump', source=Path(dump['file']),
-                                 size=size, sha256=digest))
+            sources = [(f'{pg_id}.dump', dump['file'])] if dump.get('scope') != 'instance' else [
+                (f'{pg_id}.globals.sql', dump['globals']),
+                *((f'{pg_id}.db{index}.dump', db['file']) for index, db in enumerate(dump['databases']))]
+            for name, source in sources:
+                size, digest = file_digest(source)
+                entries.append(Entry(path=f'apps/{self.app.id}/postgres/{name}', source=Path(source),
+                                     size=size, sha256=digest))
         return {'id': self.app.id, 'name': self.app.name, 'items': sorted(items)}, entries
 
     def _dump_database(self, pg, staging):

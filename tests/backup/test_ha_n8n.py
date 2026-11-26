@@ -885,7 +885,7 @@ class TargetTests(unittest.TestCase):
         self.stopped(without('x', 'n8n-postgres.container'))
 
     def test_the_whole_instance_cannot_be_made_here_and_says_so(self):
-        """N8-01, the part that stays: adapter.import_manifest writes one database dump, no globals, roles or databases."""
+        """N8-01 remains partial: the n8n converter emits one database, not a complete instance with globals and roles."""
         issue = self.stopped(None, n8n_app(postgres=[dict(PG, scope='instance')]))
         self.assertIn('整個資料庫執行個體', issue.message)
         self.stopped(None, n8n_app(postgres=[PG, dict(PG, id='second', container='other')]))

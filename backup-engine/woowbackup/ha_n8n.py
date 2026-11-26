@@ -24,7 +24,7 @@ the queue (Valkey / Redis) volumes are the only ones that are emptied, and a dat
 the owner of the image (N8-11, N8-12). The app settings may list one database item (the dump of one database goes back) or
 the data volume of the database itself, a cold backup (N8-01: the new cluster is made like this device's own, with the
 password of its own, and is the volume that goes back); the instance of a whole PostgreSQL is the one layout that is not
-made here (adapter.import_manifest writes no globals, roles or databases). The SQLite reader grows its time with the size of the file and, when it was killed
+made by this n8n converter (its output is one database, without instance globals and roles). The SQLite reader grows its time with the size of the file and, when it was killed
 or timed out, is run once more with more time and memory (N8-06, N8-07, N8-09); a database that is broken stops only n8n.
 No key in HA's backup is no gate either: the workflows and everything else move, the credentials cannot be opened and are
 entered again, which is ONE line the customer confirms (N8-15; a key of any shape that n8n takes is used as it is). A
@@ -773,8 +773,8 @@ class Target:
         self.app = app
         if len(app.postgres) > 1 or any(item.get('scope', 'database') != 'database' for item in app.postgres):
             if any(item.get('scope') == 'instance' for item in app.postgres):
-                # The converted backup holds one database dump (adapter.import_manifest); an instance's globals, roles and
-                # databases are made by the backup of the app itself. Not producible from here (DESIGN H, N8-01 part).
+                # This converter currently produces one database dump, not a complete instance with globals and roles.
+                # The adapter supports full instances, but this n8n conversion path does not yet produce one (N8-01 part).
                 raise _layout(app, '它備份的是整個資料庫執行個體，HA 匯入目前只能放進「單一資料庫」或「資料庫資料卷」的設定')
             raise _layout(app, '需要一個 PostgreSQL 資料庫項目（單一資料庫），或把資料庫的資料卷列在資料卷裡')
         self.cold = not app.postgres   # N8-01: the data of the database is a volume of the app (a cold backup)
