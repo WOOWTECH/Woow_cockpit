@@ -17,6 +17,24 @@ flow = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(flow)
 
 
+class ConfirmationGateTests(unittest.TestCase):
+    def test_a_notice_is_read_but_a_new_confirmation_stops_the_real_import(self):
+        flow.require_reviewed_check({'ok': True, 'importable': True, 'issues': [
+            {'id': 'omnigent.version-unknown', 'level': 'notice'}]})
+        with self.assertRaises(flow.Failed) as caught:
+            flow.require_reviewed_check({'ok': True, 'importable': True, 'issues': [
+                {'id': 'omnigent.skipped', 'level': 'confirm'}]})
+        self.assertIn('omnigent.skipped', str(caught.exception))
+
+    def test_refused_or_malformed_result_stops_the_real_import(self):
+        for result in ({}, {'ok': False, 'importable': True, 'issues': []},
+                       {'ok': True, 'importable': False, 'issues': []},
+                       {'ok': True, 'importable': True},
+                       {'ok': True, 'importable': True, 'issues': [{'id': 'odd'}]}):
+            with self.subTest(result=result), self.assertRaises(flow.Failed):
+                flow.require_reviewed_check(result)
+
+
 class LockTests(unittest.TestCase):
     def test_waits_for_the_waiting_file_then_queues_on_the_lock(self):
         with tempfile.TemporaryDirectory() as directory:
