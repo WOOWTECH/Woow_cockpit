@@ -5,6 +5,7 @@ provenance: the release builder must obtain its expected config ID from the pinn
 Large files stay outside the Cockpit payload/state/rollback journal and are copied/hashed in bounded chunks.
 """
 import contextlib
+import gzip
 import hashlib
 import json
 import os
@@ -15,6 +16,7 @@ import shutil
 import stat
 import tarfile
 import tempfile
+import zlib
 
 PINNED_REF = ('docker.io/library/postgres:16.15-alpine'
               '@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139')
@@ -138,11 +140,58 @@ def copy_hash(source, output=None, *, abort=None):
     return digest.hexdigest(), total
 
 
+def _verify_layers(stream, layers, positions, diff_ids, abort):
+    """Bind exported layer bytes to the independently pinned config's uncompressed rootfs digests.
+
+    A containers/storage Docker manifest can use different compression from its upstream OCI manifest. Matching
+    only config JSON is insufficient: verify every uncompressed layer without extracting it or buffering it whole.
+    """
+    expanded = 0
+    class Segment:
+        def __init__(self, position, size):
+            stream.seek(position)
+            self.remaining = size
+
+        def read(self, size=-1):
+            _tick(abort)
+            size = min(self.remaining, CHUNK, size if size >= 0 else CHUNK)
+            data = stream.read(size)
+            if len(data) != size:
+                raise BundleError('Truncated Docker image layer.')
+            self.remaining -= len(data)
+            return data
+
+    for name, expected in zip(layers, diff_ids):
+        position, size = positions[name]
+        stream.seek(position)
+        compressed = stream.read(2) == b'\x1f\x8b'
+        segment = Segment(position, size)
+        source = gzip.GzipFile(fileobj=segment, mode='rb') if compressed else segment
+        digest = hashlib.sha256()
+        try:
+            while True:
+                _tick(abort)
+                data = source.read(CHUNK)
+                if not data:
+                    break
+                expanded += len(data)
+                if expanded > MAX_ARCHIVE:
+                    raise BundleError('Expanded PG16 layers exceed limit.')
+                digest.update(data)
+        except (OSError, EOFError, zlib.error):
+            raise BundleError('Invalid compressed Docker image layer.') from None
+        finally:
+            if compressed:
+                source.close()
+        if 'sha256:' + digest.hexdigest() != expected:
+            raise BundleError('Docker image layer differs from the pinned config rootfs digest.')
+
+
 def validate_archive(stream, arch, image_id, *, abort=None):
     """Inspect bounded Docker-save metadata without extraction, layer buffering, or tar extension allocations.
 
     USTAR/GNU regular headers only; PAX, sparse files, links, devices, duplicate/absolute/traversing paths are refused.
-    Full artifact SHA256 binds layer contents; layer bytes are never interpreted here.
+    Full artifact SHA256 binds contents; layer bytes are streamed against config diff_ids without extraction.
     """
     if arch not in ('amd64', 'arm64') or not isinstance(image_id, str) or not image_id.startswith('sha256:') or not _hex(image_id[7:]):
         raise BundleError('Invalid PG16 architecture/config ID.')
@@ -150,7 +199,7 @@ def validate_archive(stream, arch, image_id, *, abort=None):
     end = stream.tell()
     stream.seek(0)
     config_name = image_id[7:] + '.json'
-    names, metadata, sizes = set(), {}, {}
+    names, metadata, sizes, positions = set(), {}, {}, {}
     while stream.tell() < end:
         _tick(abort)
         header = stream.read(512)
@@ -178,6 +227,8 @@ def validate_archive(stream, arch, image_id, *, abort=None):
         if info.isfile():
             sizes[name] = info.size
         start = stream.tell()
+        if info.isfile():
+            positions[name] = start, info.size
         next_header = start + ((info.size + 511) // 512) * 512
         if next_header > end:
             raise BundleError('Truncated Docker archive.')
@@ -212,6 +263,13 @@ def validate_archive(stream, arch, image_id, *, abort=None):
                 or not isinstance(repositories[repo], dict) or set(repositories[repo]) != {tag}
                 or repositories[repo][tag] != layers[-1].removesuffix('/layer.tar').removesuffix('.tar')):
             raise BundleError('Docker archive repositories differ from the release ref.')
+    rootfs = config.get('rootfs')
+    diff_ids = rootfs.get('diff_ids') if isinstance(rootfs, dict) else None
+    if (not isinstance(rootfs, dict) or rootfs.get('type') != 'layers' or not isinstance(diff_ids, list)
+            or len(diff_ids) != len(layers)
+            or not all(isinstance(d, str) and d.startswith('sha256:') and _hex(d[7:]) for d in diff_ids)):
+        raise BundleError('Invalid Docker config rootfs digest list.')
+    _verify_layers(stream, layers, positions, diff_ids, abort)
     stream.seek(0)
 
 

@@ -1,5 +1,6 @@
 """OD-23 release sidecar tests. Synthetic image archives only; never invokes Podman or pulls images."""
 import contextlib
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -22,15 +23,22 @@ SPEC.loader.exec_module(packager)
 packager.bundle = bundle
 
 
-def image_archive(path, *, arch='amd64', tag=bundle.TAG, extra=(), multi=False, config_name=None):
-    config = json.dumps({'architecture': arch, 'os': 'linux', 'rootfs': {'type': 'layers', 'diff_ids': []}}).encode()
+def image_archive(path, *, arch='amd64', tag=bundle.TAG, extra=(), multi=False, config_name=None,
+                  layer=b'layer payload', compressed=False, second_layer=None, reverse_layers=False, rootfs=None):
+    entries = [('layer/layer.tar', gzip.compress(layer) if compressed else layer)]
+    diff_ids = ['sha256:' + hashlib.sha256(b'layer payload').hexdigest()]
+    if second_layer is not None:
+        entries.append(('second/layer.tar', second_layer))
+        diff_ids.append('sha256:' + hashlib.sha256(second_layer).hexdigest())
+    config = json.dumps({'architecture': arch, 'os': 'linux',
+                         'rootfs': {'type': 'layers', 'diff_ids': diff_ids} if rootfs is None else rootfs}).encode()
     image_id = 'sha256:' + hashlib.sha256(config).hexdigest()
     name = config_name or image_id[7:] + '.json'
-    manifest = [{'Config': name, 'RepoTags': [tag], 'Layers': ['layer/layer.tar']}]
+    manifest = [{'Config': name, 'RepoTags': [tag], 'Layers': [n for n, _data in entries][::(-1 if reverse_layers else 1)]}]
     if multi:
         manifest *= 2
     with tarfile.open(path, 'w', format=tarfile.USTAR_FORMAT) as tar:
-        for member, data in [(name, config), ('layer/layer.tar', b'layer payload'),
+        for member, data in [(name, config), *entries,
                              ('manifest.json', json.dumps(manifest).encode()), *extra]:
             info = tarfile.TarInfo(member) if isinstance(member, str) else member
             info.size = len(data)
@@ -138,6 +146,52 @@ class ReleaseTests(BundleCase):
         with self.assertRaisesRegex(bundle.BundleError, 'size'):
             with bundle.open_bundle(self.output, pin):
                 pass
+
+    def test_correct_config_with_wrong_exported_layer_is_rejected(self):
+        image_archive(self.archive, layer=b'altered rootfs content')
+        with self.assertRaisesRegex(bundle.BundleError, 'rootfs digest'):
+            packager.package(self.archive, 'amd64', self.image_id, self.output)
+
+    def test_gzip_export_uses_the_uncompressed_config_diff_id(self):
+        image_archive(self.archive, compressed=True)
+        self.package()
+        with bundle.open_bundle(self.output, self.report['manifest_sha256']):
+            pass
+
+    def test_expanded_layer_budget_is_enforced(self):
+        image_archive(self.archive, compressed=True)
+        with self.archive.open('rb') as stream, mock.patch.object(bundle, 'MAX_ARCHIVE', 2):
+            with self.assertRaisesRegex(bundle.BundleError, 'Expanded'):
+                bundle.validate_archive(stream, 'amd64', self.image_id)
+
+    def test_rootfs_diff_ids_must_exist_have_correct_count_and_valid_digests(self):
+        for rootfs in ({}, {'type': 'layers'}, {'type': 'layers', 'diff_ids': []},
+                       {'type': 'layers', 'diff_ids': ['sha256:not-hex']},
+                       {'type': 'layers', 'diff_ids': ['sha256:' + '0' * 64]},
+                       {'type': 'layers', 'diff_ids': ['sha256:' + '0' * 64] * 2}):
+            image_id = image_archive(self.archive, rootfs=rootfs)
+            with self.subTest(rootfs=rootfs), self.assertRaises(bundle.BundleError):
+                packager.package(self.archive, 'amd64', image_id, self.output)
+
+    def test_each_layer_hash_must_match_config_order(self):
+        image_id = image_archive(self.archive, second_layer=b'second rootfs layer')
+        packager.package(self.archive, 'amd64', image_id, self.output)
+        image_archive(self.archive, second_layer=b'second rootfs layer', reverse_layers=True)
+        with self.assertRaisesRegex(bundle.BundleError, 'rootfs digest'):
+            packager.package(self.archive, 'amd64', image_id, self.base / 'wrong-order')
+
+    def test_layer_hashing_preserves_abort_and_rejects_invalid_gzip(self):
+        stop = BackupError('insufficient-space', 'stop')
+        original = bundle._verify_layers
+        def abort_layer(stream, layers, positions, diff_ids, abort):
+            return original(stream, layers, positions, diff_ids, lambda: stop)
+        with self.archive.open('rb') as stream, mock.patch.object(bundle, '_verify_layers', abort_layer):
+            with self.assertRaises(BackupError) as caught:
+                bundle.validate_archive(stream, 'amd64', self.image_id)
+        self.assertIs(caught.exception, stop)
+        image_archive(self.archive, layer=b'\x1f\x8bbad gzip data')
+        with self.assertRaisesRegex(bundle.BundleError, 'compressed Docker image layer'):
+            packager.package(self.archive, 'amd64', self.image_id, self.output)
 
     def test_wrong_config_id_arch_ref_multiimage_and_malformed_archive_rejected(self):
         for options in ({'tag': 'evil.invalid/postgres:16'}, {'multi': True}, {'arch': 'arm64'},
