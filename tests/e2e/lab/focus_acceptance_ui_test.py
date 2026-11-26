@@ -219,5 +219,67 @@ class RetainedHAOwnershipTests(unittest.TestCase):
                 ui.ha_record_owned(rows,self.ha_id,self.digest,old)
 
 
+class SelectedImageScopeTests(unittest.TestCase):
+    def bindings(self):
+        return {unit:{'source':'/home/appowner/.config/containers/systemd/'+unit.removesuffix('.service')+'.container',
+                      'container_name':name} for unit,name in ui.IMAGE_UNITS.items()}
+
+    def images(self):
+        return {name:'image-%d'%n for n,name in enumerate(ui.IMAGE_UNITS.values())}
+
+    def test_unrelated_crashloop_arrival_does_not_change_selected_image_map(self):
+        before=self.images(); during=dict(before,headscale='unrelated-image')
+        self.assertEqual(ui.project_images(before,self.bindings()),before)
+        self.assertEqual(ui.project_images(during,self.bindings()),before)
+        self.assertEqual(len(ui.project_images(during,self.bindings())),8)
+
+    def test_missing_any_selected_image_or_binding_is_refused(self):
+        for unit,name in ui.IMAGE_UNITS.items():
+            with self.subTest(unit=unit):
+                images=self.images();del images[name]
+                with self.assertRaises(ValueError):ui.project_images(images,self.bindings())
+                bindings=self.bindings();del bindings[unit]
+                with self.assertRaises(ValueError):ui.project_images(self.images(),bindings)
+
+    def test_changed_trusted_source_or_container_name_is_refused(self):
+        for field,value in (('source','/tmp/untrusted.container'),('container_name','headscale')):
+            with self.subTest(field=field):
+                bindings=self.bindings();bindings['emqx.service'][field]=value
+                with self.assertRaises(ValueError):ui.project_images(self.images(),bindings)
+
+
+class HealthTimerPhaseTests(unittest.TestCase):
+    def properties(self):
+        return {ui.HEALTH_TIMER:{'Unit':ui.HEALTH_PROBE,'UnitFileState':'enabled'},
+                ui.HEALTH_PROBE:{'Type':'oneshot','RemainAfterExit':'no'}}
+
+    def states(self, phase='waiting'):
+        return {ui.HEALTH_TIMER:['active',phase],'omnigent-server.service':['active','running']}
+
+    def test_observed_active_timer_phases_are_equal_without_changing_raw_snapshots(self):
+        waiting=self.states();running=self.states('running')
+        self.assertTrue(ui.units_equal(waiting,running,self.properties()))
+        self.assertEqual(running[ui.HEALTH_TIMER],['active','running'])
+        self.assertEqual(waiting[ui.HEALTH_TIMER],['active','waiting'])
+
+    def test_enablement_active_state_or_probe_metadata_changes_are_refused(self):
+        for key,value in (('UnitFileState','disabled'),('UnitFileState','masked'),('Unit','other.service')):
+            with self.subTest(key=key,value=value):
+                props=self.properties();props[ui.HEALTH_TIMER][key]=value
+                self.assertFalse(ui.units_equal(self.states(),self.states(),props))
+        props=self.properties();props[ui.HEALTH_PROBE]['RemainAfterExit']='yes'
+        self.assertFalse(ui.units_equal(self.states(),self.states(),props))
+        for state in (['inactive','dead'],['active','elapsed'],['failed','failed']):
+            current=self.states();current[ui.HEALTH_TIMER]=state
+            self.assertFalse(ui.units_equal(current,self.states(),self.properties()))
+
+    def test_every_other_unit_and_missing_health_timer_stay_exact(self):
+        current=self.states();current['omnigent-server.service']=['inactive','dead']
+        self.assertFalse(ui.units_equal(current,self.states(),self.properties()))
+        current=self.states();del current[ui.HEALTH_TIMER]
+        self.assertFalse(ui.units_equal(current,self.states(),self.properties()))
+        self.assertFalse(ui.units_equal(self.states(),self.states(),{}))
+
+
 if __name__ == '__main__':
     unittest.main()

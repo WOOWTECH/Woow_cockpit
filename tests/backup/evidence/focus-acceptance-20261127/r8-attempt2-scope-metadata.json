@@ -1,0 +1,82 @@
+{
+  "scope": "r8-attempt2-readonly-scope-metadata",
+  "trusted_quadlet_bindings": {
+    "emqx-entrance.service": {
+      "source": "/home/appowner/.config/containers/systemd/emqx-entrance.container",
+      "source_sha256": "9f649f6f6792acfb591aa2d24f72fca7b5fb0766c5023eeb805fdbac7d70db87",
+      "container_name": "woow-emqx-entrance"
+    },
+    "emqx.service": {
+      "source": "/home/appowner/.config/containers/systemd/emqx.container",
+      "source_sha256": "5ce82696878acb05c871d6382c8dd400c31bb6adb233654c5f3eb1255976d388",
+      "container_name": "woow-emqx"
+    },
+    "hermes-agent.service": {
+      "source": "/home/appowner/.config/containers/systemd/hermes-agent.container",
+      "source_sha256": "97e6d771d8175e7496e7d50e68440641c05dbae6760d46a9cdd93c7ad3e01765",
+      "container_name": "hermes-agent"
+    },
+    "hermes-postgres.service": {
+      "source": "/home/appowner/.config/containers/systemd/hermes-postgres.container",
+      "source_sha256": "13977198f92cab8485654256d1fde4b66abd52e7a01adf99b32f5e12c2990f50",
+      "container_name": "hermes-postgresql"
+    },
+    "hermes-redis.service": {
+      "source": "/home/appowner/.config/containers/systemd/hermes-redis.container",
+      "source_sha256": "b6dddd2b8ea0474021a1535636f2d2b3c6e8637bcf84294cee04b29879243c4f",
+      "container_name": "hermes-redis"
+    },
+    "omnigent-postgres.service": {
+      "source": "/home/appowner/.config/containers/systemd/omnigent-postgres.container",
+      "source_sha256": "bf288021491b85318ceb365998ce442e2f7882323433779c59f990b7fc0b5d25",
+      "container_name": "omnigent-postgres"
+    },
+    "omnigent-runner.service": {
+      "source": "/home/appowner/.config/containers/systemd/omnigent-runner.container",
+      "source_sha256": "a2b692797e7c02ffc19c652ed9aecda06aecab06c825eebf431794cecf1563ef",
+      "container_name": "omnigent-runner"
+    },
+    "omnigent-server.service": {
+      "source": "/home/appowner/.config/containers/systemd/omnigent-server.container",
+      "source_sha256": "295f382bd6da54cc452e8e31f7c5456119478defee9174a059c07514753db502",
+      "container_name": "omnigent-server"
+    }
+  },
+  "selected_names_equal_old_image_names": true,
+  "all_selected_images_currently_present": true,
+  "unrelated_running_names": [],
+  "selected_timer_metadata": {
+    "Unit": "omnigent-server-health.service",
+    "TimersMonotonic": "{ OnActiveUSec=2min ; next_elapse=3w 5d 23h 29min 33.148794s }",
+    "LastTriggerUSec": "Thu 2026-11-26 23:27:21 UTC",
+    "Id": "omnigent-server-health.timer",
+    "ActiveState": "active",
+    "SubState": "waiting",
+    "UnitFileState": "enabled"
+  },
+  "preflight_window_seconds": 40,
+  "bounded_lifecycle_counts": {
+    "headscale.service": {
+      "entries": 32,
+      "systemd_event_counts": {
+        "started": 2,
+        "stopped": 0,
+        "failed": 2,
+        "other": 28
+      }
+    },
+    "omnigent-server-health.service": {
+      "entries": 5,
+      "systemd_event_counts": {
+        "started": 0,
+        "stopped": 0,
+        "failed": 0,
+        "other": 5
+      }
+    }
+  },
+  "initial_mismatch_snapshot_saved": false,
+  "exact_initial_cause": "not-proved",
+  "old_guard_unchanged": true,
+  "commercial_acceptance": "not-complete"
+}

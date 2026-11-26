@@ -2,6 +2,8 @@
 
 Current status: original driver/transport reviewed and dev-d lease granted.
 Actual attempt1 remains50/53 FAIL; independent recovery-only action has passed.
+Reviewed attempt2 stopped at fresh-originals preflight,13/15, before any browser,
+upload/import or guard replacement. The new scope/phase diff below awaits review.
 The original proposal below is retained as historical scope. Its attempt1
 command is not a replay command; do not overwrite its evidence paths.
 
@@ -24,7 +26,52 @@ proof, not an acceptance pass. Dev-d mutex released for one R4 plain turn.
 Separate readiness-guard and retained-upload ownership changes will be proposed
 for review before any R8 replay, after that turn.
 
-## Replay proposal — committed diff and parent review required
+## Attempt3 proposal — scope/phase diff requires parent review
+
+Attempt2 is retained unchanged: exit1/36.1seconds,13/15. All resource/source/
+isolation/active-service checks passed; combined original snapshot equality did
+not. Its raw mismatch was not saved, so its exact initial cause is not proved.
+Later read-only comparison found all four maps equal. Bounded metadata showed
+two Headscale starts/failures in the preflight window, but that does not prove
+which field differed in the lost sample. A subsequent40second/35read sample
+observed exactly one selected health timer phase change: `active/waiting` versus
+`active/running`. All eight selected image configs stayed equal on every read.
+
+The concrete diff saves fresh catalog/unit/image/timer maps before assertions.
+It projects images to all eight exact installed Quadlet `ContainerName` bindings
+proved in `r8-attempt2-scope-metadata.json`. Runtime requires each exact unit's
+trusted regular SourcePath and expected ContainerName, plus every selected image.
+The old image map is projected explicitly in the new receipt without editing
+the old receipt: it contains exactly these eight selected names, so no selected
+entry or config is dropped. Unrelated images are recorded privately and ignored
+for R8 equality; no Headscale state change is performed.
+
+Only `omnigent-server-health.timer`'s observed `active/running` and
+`active/waiting` phases compare equal. Each read must prove it remains enabled,
+active, targets `omnigent-server-health.service`, and that target is still
+Type=oneshot/RemainAfterExit=no. Every other durable unit state, missing timer,
+disabled/masked/failed/inactive state, changed target/type or unknown metadata
+fails. The raw timer states and metadata remain in private evidence. Schedule
+timer state is still exact. No timer phase normalization is applied to others.
+
+Targeted guard **22/22**,0fail/error/skip/blocked/shim,
+`acceptance-r8-offline-06.log`; five embedded read-only probes and Python syntax
+pass. Browser/protocol files are unchanged from the accepted11/11 protocol gate.
+No new browser attempt has started. All old evidence and retained records remain
+protected by the exact same independent recovery receipt and ownership rules.
+
+Exact next command, only after parent reviews this committed diff:
+
+```sh
+HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock HEAVY_WAIT=600 /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/team/heavy.sh python3 -B -I tests/e2e/lab/services_a_capture.py --private=/tmp/parity-focus-20261127/acceptance-r8-attempt3.private.log tests/backup/evidence/focus-acceptance-20261127/r8-attempt3.json r8-real-cockpit-three-app -- python3 -B -I tests/e2e/lab/focus_acceptance_ui.py --run --source /tmp/parity-focus-r8-source-20261127 --recovery-proof /home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-recovery/20261127T070216/receipt.json --recovery-proof-sha256 2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824
+```
+
+Same dev-d lease/frozen1ad product, no redeploy/source/image/package changes,
+>=45minutes lease remaining,21GiB disk/1900MiB device headroom/1200MiB host RAM,
+20minute browser and20minute recovery bounds. Use new capture paths, preserve
+every failed attempt, retain new copies on uncertainty and do not repeat blindly.
+
+## Reviewed attempt2 command — executed, preconditions stopped
 
 One actual browser replay after the R4 plain turn releases dev-d. Product source
 remains frozen `1adf4df2b548bff1626e21d1d84e677f9622e4bc`. No source deployment,
@@ -37,9 +84,10 @@ From `/tmp/parity-focus-acceptance-20261127`:
 HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock HEAVY_WAIT=600 /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/team/heavy.sh python3 -B -I tests/e2e/lab/services_a_capture.py --private=/tmp/parity-focus-20261127/acceptance-r8-attempt2.private.log tests/backup/evidence/focus-acceptance-20261127/r8-attempt2.json r8-real-cockpit-three-app -- python3 -B -I tests/e2e/lab/focus_acceptance_ui.py --run --source /tmp/parity-focus-r8-source-20261127 --recovery-proof /home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-recovery/20261127T070216/receipt.json --recovery-proof-sha256 2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824
 ```
 
-The command is proposed for review and **has not run**. It requires the exact
+The attempt2 command above ran and stopped before arming; its evidence paths
+must never be reused. These prerequisites also apply to proposed attempt3: the exact
 existing R8 lease with at least45minutes left after heavy admission; the current
-expiry is00:15:06UTC. Main browser budget20minutes, each job<=600seconds and
+lease expiry was extended by the coordinator to00:49:03UTC. Main browser budget20minutes, each job<=600seconds and
 recovery20minutes. Fresh host disk>=21GiB (13GiB reserve plus8GiB bounded writes),
 host MemAvailable>=1200MiB, dev-d4GiB cap/headroom>=1900MiB. Reuse all original
 installed image configs and existing Chromium/Playwright; zero additional
@@ -79,7 +127,8 @@ Targeted offline gate: **16/16 Python tests**,0fail/error/skip/blocked/shim,
 `acceptance-r8-offline-05.log`; issue-key assertions **11/11** under globalheavy.
 Python default/embedded scanner and Node syntax pass. The real private receipt
 also validates locally at its reviewed SHA with old guard unchanged and no
-device probe. These are harness boundaries only; no second real attempt yet.
+device probe. Those were harness boundaries only; attempt2 later stopped before
+browser/upload/import as recorded above.
 
 ## Exact transport
 

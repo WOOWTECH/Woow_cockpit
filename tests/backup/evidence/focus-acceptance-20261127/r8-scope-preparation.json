@@ -1,0 +1,26 @@
+{
+  "scope": "r8-image-and-health-timer-preparation-only",
+  "next_real_attempt_started": false,
+  "product_source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "guarded_python_tests": 22,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "blocked_calls": 0,
+  "shim_hits": 0,
+  "guard_log_sha256": "ba2064c4e5701651af5a22199ca00eeba3ce4cfbd6727ce16a18168b0fcfbddc",
+  "embedded_readonly_probes_syntax_checked": 5,
+  "mandatory_selected_image_count": 8,
+  "selected_images_dropped_from_old_receipt": 0,
+  "timer_phase_equivalence": "enabled-active-health-timer-running-waiting-only",
+  "timer_enablement_target_type_required": true,
+  "other_unit_states_exact": true,
+  "initial_failed_sample_cause": "not-proved",
+  "old_cookie_coverage": "absent-not-retroactively-proved",
+  "old_failed_evidence_preserved": true,
+  "commercial_acceptance": "not-complete",
+  "files_sha256": {
+    "focus_acceptance_ui.py": "bfe7b94e7e1c5aaa4dcd226f029cf51020920d7ad2dc2505d551ccb24cf8fa11",
+    "focus_acceptance_ui_test.py": "b8981a46fe3ac479db7be1d9f1971b18ebc2b7c9a3e1ed7516b3b313ad68aef4"
+  }
+}

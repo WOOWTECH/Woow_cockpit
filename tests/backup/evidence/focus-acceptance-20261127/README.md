@@ -144,6 +144,32 @@ issue-key11/11 are offline checks; browser cookie capture/finally scan remains
 unproven until an actual reviewed replay. Exact bounded command and recovery
 are in the replay section of `snippets/focus-acceptance/r8-lease-proposal.md`.
 
+### Attempt2 preconditions stopped; scoped followup prepared
+
+`r8-attempt2.json` retains **13/15 FAIL**, driver `044264f8`, exit1/36.1seconds.
+Fresh resource floors, installed frozen source/page, isolation, active services
+and inactive schedule passed. The combined original-map comparison failed before
+state arming. No browser/upload/import or new archive; the old guard and failed
+receipt/summary are unchanged. Its new evidence has an exact old guard copy.
+
+`r8-attempt2-precondition-facts.json` records the later read-only comparison:
+all four maps equal, activejobs0. The failed sample was not saved, so its exact
+initial cause is not retrospectively claimed. `r8-attempt2-scope-metadata.json`
+binds all eight selected image names to their installed trusted Quadlets and
+records the health timer's enabled state and nonpersistent probe target. Headscale
+started/failed twice during the preflight window; its unrelated state was not
+changed. `r8-image-scope-sampling.json` records35 bounded read-only samples:
+all selected images equal, one health timer `active/running` versus recorded
+`active/waiting`, no initial failed-sample reconstruction.
+
+The prepared followup projects images only to all eight mandatory trusted
+ContainerNames, saves raw fresh maps before assertions, and compares only that
+health timer's two observed active phases as equal when enablement and target/
+probe metadata remain exact. Every other unit/image gate remains strict.
+Targeted Python22/22 passed; `r8-scope-preparation.json` is offline preparation.
+Attempt3 requires parent review and has not run; old cookie coverage is still
+absent and no commercial acceptance closure is claimed.
+
 ### Original preparation scope
 
 The new `focus_acceptance_ui.py`, `focus_acceptance_ui_page.mjs` and

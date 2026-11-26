@@ -36,6 +36,47 @@ STATE = LAB / 'run/focus_acceptance_ui.json'
 LEASE = Path('/tmp/parity-focus-20261127/lease-r8-dev-d.json')
 PLAYWRIGHT = Path('/home/woowtechopenclaw/Woow_cockpit/node_modules/playwright-core/index.mjs')
 CHROMIUM = Path.home() / '.cache/ms-playwright/chromium-1208/chrome-linux64/chrome'
+# Read-only installed SourcePath/ContainerName proof: r8-attempt2-scope-metadata.
+# Every selected app container is mandatory; unrelated services stay outside R8.
+IMAGE_UNITS = {'emqx-entrance.service':'woow-emqx-entrance', 'emqx.service':'woow-emqx',
+               'hermes-agent.service':'hermes-agent', 'hermes-postgres.service':'hermes-postgresql',
+               'hermes-redis.service':'hermes-redis', 'omnigent-postgres.service':'omnigent-postgres',
+               'omnigent-runner.service':'omnigent-runner', 'omnigent-server.service':'omnigent-server'}
+HEALTH_TIMER = 'omnigent-server-health.timer'
+HEALTH_PROBE = 'omnigent-server-health.service'
+
+
+def project_images(images, bindings):
+    """Select all eight containers from their exact trusted installed Quadlets."""
+    if set(bindings) != set(IMAGE_UNITS):
+        raise ValueError('selected container unit binding incomplete')
+    for unit, name in IMAGE_UNITS.items():
+        source = '/home/appowner/.config/containers/systemd/'+unit.removesuffix('.service')+'.container'
+        if bindings[unit].get('source') != source or bindings[unit].get('container_name') != name:
+            raise ValueError('selected trusted Quadlet container binding changed')
+        if name not in images or not images[name]:
+            raise ValueError('selected container image missing')
+    return {name:images[name] for name in IMAGE_UNITS.values()}
+
+
+def units_equal(current, reference, properties):
+    """Only the proven enabled health timer's active phases are equivalent.
+
+    Real read-only sampling observed active/running -> active/waiting. Its
+    triggered service is a nonpersistent oneshot. Enablement, ActiveState,
+    target/type metadata and every other durable unit state stay strict.
+    """
+    timer, probe = properties.get(HEALTH_TIMER, {}), properties.get(HEALTH_PROBE, {})
+    if (timer.get('Unit') != HEALTH_PROBE or timer.get('UnitFileState') != 'enabled'
+            or probe.get('Type') != 'oneshot' or probe.get('RemainAfterExit') != 'no'):
+        return False
+    left, right = dict(current), dict(reference)
+    for states in (left, right):
+        state = states.get(HEALTH_TIMER)
+        if not state or state[0] != 'active' or state[1] not in ('running', 'waiting'):
+            return False
+        states[HEALTH_TIMER] = ['active', 'waiting']
+    return left == right
 
 
 def sha(path):
@@ -276,6 +317,9 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
     before = {}
     before_backups = before_uploads = before_jobs = None
     original_catalog = original_units = original_images = original_timer = None
+    image_sample = 0
+    unit_sample = 0
+    unit_metadata = {}
     records = []
     derived = ev.dir/'full-ha-corrupt-emqx.tar'
     timer_changed = False
@@ -324,12 +368,13 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
         return root_json('import hashlib,json; from pathlib import Path; p=Path("/etc/woowtech-cockpit/backup/apps"); print(json.dumps({x.name:hashlib.sha256(x.read_bytes()).hexdigest() for x in p.glob("*.json")}))')
 
     def units():
+        nonlocal unit_sample, unit_metadata
         proc = h.owner('systemctl', '--user', 'list-units', '--all', '--output=json', '--no-pager', timeout=60)
         if proc.returncode:
             raise h.Failed('unit state probe failed')
         rows=json.loads(proc.stdout)
-        names=[x['unit'] for x in rows if x['unit'].startswith(('hermes-','omnigent-','emqx.','emqx-')) and x['unit'].endswith('.service')]
-        meta=h.owner('systemctl','--user','show','--property=Id,Type,RemainAfterExit','--',*names,timeout=60)
+        names=[x['unit'] for x in rows if x['unit'].startswith(('hermes-','omnigent-','emqx.','emqx-')) and x['unit'].endswith(('.service','.timer'))]
+        meta=h.owner('systemctl','--user','show','--property=Id,Type,RemainAfterExit,Unit,UnitFileState','--',*names,timeout=60)
         if meta.returncode:
             raise h.Failed('unit type probe failed')
         properties={}
@@ -337,13 +382,42 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
             fields=dict(x.split('=',1) for x in block.splitlines() if '=' in x)
             if fields.get('Id'):
                 properties[fields['Id']]=fields
-        return stable_units(rows,properties)
+        unit_metadata=properties
+        result=stable_units(rows,properties)
+        unit_sample+=1
+        ev.save('unit-scope-%02d.json'%unit_sample,{'states':result,'metadata':properties})
+        return result
 
     def images():
+        nonlocal image_sample
+        # Bind selection to systemd's actual SourcePath, then read only
+        # ContainerName and a hash from that exact installed regular Quadlet.
+        proc = h.owner('systemctl','--user','show','--property=Id,SourcePath','--',*IMAGE_UNITS,timeout=60)
+        if proc.returncode:
+            raise h.Failed('selected container source probe failed')
+        sources={}
+        for block in proc.stdout.decode().strip().split('\n\n'):
+            fields=dict(x.split('=',1) for x in block.splitlines() if '=' in x)
+            if fields.get('Id') in IMAGE_UNITS:
+                sources[fields['Id']]=fields.get('SourcePath')
+        bindings=root_json('''import configparser,hashlib,json,sys
+from pathlib import Path
+sources=json.load(sys.stdin)["sources"];out={}
+for unit,value in sources.items():
+ p=Path(value)
+ assert p.parent==Path("/home/appowner/.config/containers/systemd") and not p.is_symlink() and p.resolve()==p
+ data=p.read_bytes();c=configparser.ConfigParser(interpolation=None,strict=False);c.read_string(data.decode())
+ out[unit]={"source":str(p),"source_sha256":hashlib.sha256(data).hexdigest(),"container_name":c["Container"]["ContainerName"]}
+print(json.dumps(out))''',{'sources':sources})
         proc = h.owner('podman', 'ps', '--format', '{{.Names}} {{.ImageID}}', timeout=60)
         if proc.returncode:
             raise h.Failed('image config probe failed')
-        return dict(line.split() for line in proc.stdout.decode().splitlines())
+        raw=dict(line.split() for line in proc.stdout.decode().splitlines())
+        selected=project_images(raw,bindings)
+        image_sample+=1
+        ev.save('image-scope-%02d.json'%image_sample,{'bindings':bindings,'selected':selected,
+                'unrelated':{name:value for name,value in raw.items() if name not in selected}})
+        return selected
 
     def timer():
         proc = h.root('systemctl', 'show', TIMER, '--property=UnitFileState,ActiveState', timeout=60)
@@ -413,13 +487,31 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
         status = ok('status')
         require('before: no active backup job', not status.get('active_job'))
         original_catalog, original_units, original_images, original_timer = catalog(), units(), images(), timer()
-        require('before: app services already active and image configs present', len(original_images) >= 8 and original_units and all(v[0]=='active' for k,v in original_units.items() if k.endswith('.service')))
+        require('before: app services already active and all eight selected image configs present', len(original_images) == 8 and original_units and all(v[0]=='active' for k,v in original_units.items() if k.endswith('.service')))
+        require('before: selected health timer enabled active and bound to its nonpersistent probe',units_equal(original_units,original_units,unit_metadata))
         require('before: schedule inactive or failed', original_timer.get('ActiveState') in ('inactive','failed'))
+        fresh={'catalog':original_catalog,'units':original_units,'unit_metadata':unit_metadata,'images':original_images,'timer':original_timer}
         if previous:
+            # Explicit scope projection of the IMMUTABLE old map. Every selected
+            # name must exist in it; no selected image may be silently dropped.
+            old_images={name:previous['original_images'][name] for name in IMAGE_UNITS.values()}
+            projection={'selected_names':sorted(old_images),'old_map_sha256':hashlib.sha256(json.dumps(previous['original_images'],sort_keys=True).encode()).hexdigest(),
+                        'old_unrelated_names':sorted(set(previous['original_images'])-set(old_images)),
+                        'all_eight_selected_images_preserved':True}
+            receipt['previous_image_scope_projection']=projection
+            receipt['previous_timer_phase_projection']={'unit':HEALTH_TIMER,'required_unit_file_state':'enabled',
+                  'required_active_state':'active','equivalent_substates':['waiting','running'],
+                  'old_raw_state':previous['original_units'].get(HEALTH_TIMER),'new_raw_state':original_units.get(HEALTH_TIMER)}
+            fresh['previous_equal']={'catalog':original_catalog==previous['original_catalog'],
+                                     'units':units_equal(original_units,previous['original_units'],unit_metadata),
+                                     'images':original_images==old_images,'timer':original_timer==previous['original_timer']}
+            ev.save('fresh-originals.json',fresh)  # retain exact failed sample
             require('replay: original catalog units images and timer still match independent receipt',
-                    original_catalog == previous['original_catalog'] and original_units == previous['original_units']
-                    and original_images == previous['original_images'] and original_timer == previous['original_timer'])
-        receipt.update(original_catalog=original_catalog, original_units=original_units, original_images=original_images, original_timer=original_timer,
+                    original_catalog == previous['original_catalog'] and units_equal(original_units,previous['original_units'],unit_metadata)
+                    and original_images == old_images and original_timer == previous['original_timer'])
+        else:
+            ev.save('fresh-originals.json',fresh)
+        receipt.update(original_catalog=original_catalog, original_units=original_units, original_unit_metadata=unit_metadata, original_images=original_images, original_timer=original_timer,
                        source_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip())
         listing=ok('list')
         before_backups={x['id'] for x in listing.get('backups',[])}
@@ -550,7 +642,7 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
                     receipt['inflight']=None; save()
                 require('recovery: exact original '+app+' markers returned',markers(app)==before[app])
             require('recovery: excluded EMQX unchanged', 'emqx' in before and markers('emqx')==before['emqx'])
-            require('recovery: original app unit states and image configs returned',units()==original_units and images()==original_images)
+            require('recovery: original app unit states and image configs returned',units_equal(units(),original_units,unit_metadata) and images()==original_images)
             require('recovery: original full HA fixture hash retained',sha(FIXTURE)==FIXTURE_SHA)
             receipt['baseline_restored']=True
             save()
