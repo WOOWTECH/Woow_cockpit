@@ -47,9 +47,14 @@ class MutationToolTests(unittest.TestCase):
                 text = sources.setdefault(module, (engine / module).read_text(encoding='utf-8'))
                 self.assertEqual((count, text.count(old)), (1, 1), 'one entry disables one place')
                 self.assertNotEqual(old, new)
-        # what the lane verifier's 26 removals of 2026-11-24 found unguarded, by the verifier's ids
-        for ident in ('N01', 'N09', 'N10', 'N11', 'N12', 'N14', 'N16', 'N18', 'N19', 'N21', 'N28', 'N29', 'N30', 'N32',
-                      'N33', 'N34'):
+        # what the lane verifier's 26 removals of 2026-11-24 found unguarded, by the verifier's ids. Five of them are
+        # protections the HAOS parity rows took away on purpose (N01 the version gate: L-34, L-45; N11 the version of HA's
+        # cluster: L-30; N21 the shape of the entry: L-03; N28 the woow_platform schema: L-21; N29 this device's PostgreSQL
+        # major: L-20); the entries L03a..L03f, L21, L34, L30-style tests below stand for what each of them became.
+        for ident in ('N09', 'N10', 'N12', 'N14', 'N16', 'N18', 'N19', 'N30', 'N32', 'N33', 'N34'):
+            self.assertIn(ident, ids)
+        for ident in ('L03a', 'L03b', 'L03c', 'L03d', 'L03e', 'L04', 'L08', 'L10a', 'L13a', 'L14a', 'L14b', 'L14c', 'L21',
+                      'L34', 'L36', 'L38a', 'L38b', 'L40', 'L57', 'L58', 'F2a', 'F2b', 'F2c'):
             self.assertIn(ident, ids)
 
     def test_the_controls_change_a_comment_only_one_per_module(self):
