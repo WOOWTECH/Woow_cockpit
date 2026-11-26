@@ -1,0 +1,136 @@
+{
+  "lane": "CLEANUP-LC",
+  "rows": {
+    "LC-01": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-02": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-03": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-04": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-05": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-06": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-07": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-08": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-09": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-10": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-11": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer",
+        "tests/backup/test_ha_litellm.py::SaltBindingReaderTests.test_mismatch_malformed_rows_and_failures_never_match_or_leak"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-12": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-13": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer",
+        "tests/backup/test_ha_litellm.py::SaltBindingReaderTests.test_mismatch_malformed_rows_and_failures_never_match_or_leak"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-14": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-15": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer",
+        "tests/backup/test_ha_litellm.py::SaltBindingReaderTests.test_mismatch_malformed_rows_and_failures_never_match_or_leak"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    },
+    "LC-16": {
+      "status": "done",
+      "issues": {},
+      "tests": [
+        "tests/backup/test_ha_litellm.py::RegistryTests.test_litellm_is_a_product_importer"
+      ],
+      "note": "Removed with the unregistered candidate module; the registered product importer owns this path and its salt reader."
+    }
+  }
+}

@@ -1,4 +1,14 @@
-# LiteLLM HA member preflight candidate
+# Archived LiteLLM HA candidate research
+
+The unregistered `ha_litellm_candidate.py` and its candidate-only lab scripts were
+removed in the CLEANUP-LC lane after the product importer became active. The text
+below records the earlier experiments and their evidence; its candidate API and
+commands are historical, not current entry points. Current behavior and security
+checks are in `backup-engine/woowbackup/ha_litellm.py`,
+`tests/backup/test_ha_litellm.py`, and `docs/backup/CONTRACT.md` §9.
+The older `tests/e2e/lab/litellm_real_ha.py` harness also imports the deleted
+candidate and needs a separate REAL-lane update before it can run; the product
+flow driver is `tests/e2e/lab/litellm_full_flow.py`.
 
 This is an internal parser, not a registered importer or UI feature. It never permits
 conversion. `scan_member` walks a complete HA add-on member using the strict existing tar

@@ -31,8 +31,7 @@ LL = 'woowbackup/ha_litellm.py'
 QP = 'woowbackup/adapters/quadlet_postgres.py'
 HI = 'woowbackup/haimport.py'
 SG = 'woowbackup/suggest.py'
-TESTS = ('tests.backup.test_ha_litellm', 'tests.backup.test_adapter_import_secrets',
-         'tests.backup.test_ha_litellm_candidate')
+TESTS = ('tests.backup.test_ha_litellm', 'tests.backup.test_adapter_import_secrets')
 SUGGEST_TESTS = ('tests.backup.test_suggest',)
 
 # (id, protection, module, exact text, replacement, occurrences[, test modules (default TESTS)])

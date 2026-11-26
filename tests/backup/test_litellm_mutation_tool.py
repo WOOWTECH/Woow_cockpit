@@ -21,7 +21,7 @@ class MutationToolTests(unittest.TestCase):
         for entry in self.tool.MUTATIONS + self.tool.CONTROLS:
             modules.update(*entry[6:])
         self.assertEqual(modules, {'tests.backup.test_ha_litellm', 'tests.backup.test_adapter_import_secrets',
-                                   'tests.backup.test_ha_litellm_candidate', 'tests.backup.test_suggest'})
+                                   'tests.backup.test_suggest'})
 
     def test_the_summary_is_read_wherever_unittest_printed_it(self):
         line = '-' * 70
