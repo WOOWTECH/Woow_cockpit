@@ -79,7 +79,7 @@ def inventory():
 
 def describe():
     raw=call('inspect',current,'--format',
-        '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Image}},'
+        '{"id":{{json .ID}},"name":{{json .Name}},"image":{{json .Image}},'
         '"network":{{json .HostConfig.NetworkMode}},"ports":{{json .HostConfig.PortBindings}},'
         '"memory":{{.HostConfig.Memory}},"readonly":{{json .HostConfig.ReadonlyRootfs}},'
         '"labels":{{json .Config.Labels}},"mounts":{{json .Mounts}}}').stdout
@@ -420,7 +420,7 @@ try:
     from woowbackup import archive
     from woowbackup.errors import BackupError
     from woowbackup.podman import default_runner
-    image=json.loads(call('image','inspect',P['image'],'--format','{"id":{{json .Id}},"arch":{{json .Architecture}}}').stdout)
+    image=json.loads(call('image','inspect',P['image'],'--format','{"id":{{json .ID}},"arch":{{json .Architecture}}}').stdout)
     require('existing-pinned-image',image_identity(image['id'])==image_identity(P['image'])
         and image_identity(P['image']) is not None and image['arch']=='amd64')
     require('device-memory-headroom',int(pathlib.Path('/sys/fs/cgroup/memory.max').read_text())-

@@ -63,4 +63,6 @@ Harness correction after dev-c attempt01: historical owner.sh's --verify-isolati
 
 Attempt02 was cancelled in heavy queue (exit143) before Python admission/remote dispatch after parent identified Podman's bare image-ID format. No resources. The driver now compares exact64 lowercase hex digits after removing only an optional `sha256:` prefix, for BOTH image inspect Id and container inspect Image; amd64 remains mandatory. Wrong digits, truncation, extra whitespace, alternate algorithms and malformed values still refuse. Engine/product guards/pin unchanged. Next fresh output: `instances-generated-pg-c-03.json`.
 
+Before attempt03 dispatch, a read-only test of the exact image-inspect command exposed Podman's Go-template field `.ID` (not `.Id`). Fixed both owned image/container identity templates to `.ID`; exact image command now passes on dev-c, returns bare pinned64hex and amd64. No resources/native proof created by this read-only check. Attempt03 filename remains unused/fresh; lease needs this harness-only follow-up's exact commit.
+
 Preparation validation only: outer/remote Python AST parse and read-only default plan. Runtime not yet executed and no device mutation performed by this lane.
