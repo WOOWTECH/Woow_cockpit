@@ -117,10 +117,11 @@ class SafetyTests(unittest.TestCase):
         self.assertIn('after-import', sql['rollback_marker'])
         self.assertIn('to_json(count(*)=1)', sql['rollback_check'])
 
-    def test_failure_is_once_at_app_start_with_restart_policy_disabled(self):
+    def test_failure_uses_persistent_known_marker_predicate(self):
         text = case.failure_dropin(NAME)
         self.assertIn('Restart=no\nExecStartPre=', text)
-        self.assertIn('rm -f %h/.local/state/'+NAME+'.fail-once; exit 1;', text)
+        self.assertIn('/usr/bin/python3 %h/.local/state/'+NAME+'/predicate.py', text)
+        self.assertNotIn('rm -f',text)
         self.assertNotIn('postgres', text)
 
     def test_preflight_needs_exact_app_mode_and_every_check(self):

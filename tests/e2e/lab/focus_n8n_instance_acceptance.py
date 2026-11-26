@@ -136,12 +136,10 @@ def case_sql(database):
 
 def failure_dropin(database):
     ident(database)
-    marker = '%h/.local/state/' + database + '.fail-once'
-    # Never fail the PG startup: this case must pass the endpoint preflight and
-    # destructive selective import before the application start fails. Prevent
-    # Restart=always from swallowing the intentional failure before rollback.
-    return ('[Service]\nRestart=no\nExecStartPre=/bin/sh -c \'if test -f ' + marker +
-            '; then rm -f ' + marker + '; exit 1; fi\'\n')
+    # Persistent READ ONLY known-marker predicate; the full rollback restores
+    # the marker, so the very same hook then allows startup normally.
+    return ('[Service]\nRestart=no\nExecStartPre=/usr/bin/python3 %h/.local/state/' +
+            database + '/predicate.py\n')
 
 
 def preflight_ready(reply):
@@ -335,7 +333,7 @@ def main(argv=None):
         raise ValueError('source SHA changed')
     if subprocess.check_output(['git', '-C', str(source), 'status', '--porcelain'], text=True).strip():
         raise ValueError('commit the exact preparation source first')
-    found = json.loads((source/'snippets'/AREA/'found-metadata.json').read_text())
+    found = json.loads((REPO/'snippets'/AREA/'found-metadata.json').read_text())
     if found['catalog_sha256'] != FOUND_SHA:
         raise ValueError('reviewed catalog binding changed')
     result = packet(source, actual, found['entry'], args.case)
