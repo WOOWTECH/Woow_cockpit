@@ -1,0 +1,625 @@
+{
+  "window_start": "2026-11-26T21:39:00.848180+00:00",
+  "window_end": "2026-11-26T21:43:05.848180+00:00",
+  "events_available": true,
+  "event_count": 196,
+  "relevant_events": [
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:39:07.335703957Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:39:07.309528751Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:39:08.728292787Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:39:08.86911989Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:39:09.344967621Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:39:10.091248935Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:39:20.800017374Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:39:21.921307153Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:39:26.328941969Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:39:26.516743269Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:39:27.513420089Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:39:28.329109124Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:39:34.66658062Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:39:47.141753676Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:39:47.315988408Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:39:49.44839031Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:39:49.616819437Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:39:50.465367369Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:39:54.757389377Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:39:54.851782194Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:39:54.85316436Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:39:58.270437377Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:40:10.417326257Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:40:11.34537863Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:40:12.519957211Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:40:12.556035671Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:40:12.73974622Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:40:13.343918607Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:40:13.401813413Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:40:13.602804514Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:40:16.362249598Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:40:27.81152146Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:40:28.026511698Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:40:38.889796128Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:40:38.909380701Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:40:43.330770792Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:40:59.299649006Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:41:01.240424016Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:41:03.118783497Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:41:14.610247112Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:41:14.529660096Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:41:15.028599012Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:41:15.14944954Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:41:15.308115924Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:41:15.351907867Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:41:16.18468968Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:41:29.206029786Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:41:42.346388716Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:41:43.207975241Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:41:43.241974254Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:41:43.763288369Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:41:43.823978186Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:41:43.881070932Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:41:43.9884699Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:41:46.288526524Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:41:58.306686649Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:41:58.50875846Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:41:59.059428347Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:41:59.111551443Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:41:59.306643826Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:41:59.944427009Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:42:00.157113589Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:00.15763609Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:42:01.043294165Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:42:17.934919411Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:42:18.393584233Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b-data",
+      "type": "volume",
+      "status": "create",
+      "time": "2026-11-26T21:42:19.355029782Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:42:20.712165082Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:42:20.933400205Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:42:20.960384196Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:42:21.204091813Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:42:21.377636967Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:22.354913158Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:22.987121278Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:23.242693197Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:42:23.836927842Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:23.882921904Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:42:23.882449674Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:25.015679749Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:25.756454133Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:42:26.202686064Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:28.866976681Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:29.165008378Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:30.95838158Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:31.002977027Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:31.4523588Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:31.48200639Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec",
+      "time": "2026-11-26T21:42:31.659127452Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "exec_died",
+      "time": "2026-11-26T21:42:31.670974498Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:42:31.868396335Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:42:52.621967117Z"
+    },
+    {
+      "name": "woowbk-nc-fixed-2af6becda31b-data",
+      "type": "volume",
+      "status": "remove",
+      "time": "2026-11-26T21:42:53.221886451Z"
+    },
+    {
+      "name": "localhost/woow-headscale:0.29.4-r1",
+      "type": "image",
+      "status": "pull",
+      "time": "2026-11-26T21:42:53.218654564Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "create",
+      "time": "2026-11-26T21:42:53.430751918Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "init",
+      "time": "2026-11-26T21:42:56.98015544Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "start",
+      "time": "2026-11-26T21:42:57.418674593Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "died",
+      "time": "2026-11-26T21:42:58.042446991Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "health_status",
+      "time": "2026-11-26T21:42:58.225399271Z"
+    },
+    {
+      "name": "headscale",
+      "type": "container",
+      "status": "remove",
+      "time": "2026-11-26T21:43:03.418817716Z"
+    }
+  ],
+  "anonymous_volume_create_count": 0,
+  "anonymous_volume_names": [],
+  "interpretation": "First inventory comparison remains recorded as failed. Window events show independent Headscale lifecycle churn and zero anonymous volume creations. Only named probe objects were removed; no unknown IDs deleted.",
+  "summary": {
+    "headscale-or-headplane/container/create": 10,
+    "headscale-or-headplane/image/pull": 10,
+    "headscale-or-headplane/container/init": 10,
+    "headscale-or-headplane/container/start": 10,
+    "headscale-or-headplane/container/died": 10,
+    "headscale-or-headplane/container/remove": 10,
+    "headscale-or-headplane/container/health_status": 8,
+    "headscale-or-headplane/container/exec": 6,
+    "headscale-or-headplane/container/exec_died": 6,
+    "own-probe/volume/create": 1,
+    "own-probe/container/create": 1,
+    "own-probe/container/init": 1,
+    "own-probe/container/start": 1,
+    "own-probe/container/exec": 6,
+    "own-probe/container/exec_died": 6,
+    "own-probe/container/died": 1,
+    "own-probe/container/remove": 1,
+    "own-probe/volume/remove": 1
+  }
+}

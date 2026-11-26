@@ -1,0 +1,83 @@
+{
+  "rows": {
+    "NC-09": {
+      "lane": "NEXTCLOUD",
+      "app": "Nextcloud",
+      "act": "warn",
+      "status": "done",
+      "issues": {
+        "nextcloud.office-settings-unread": "notice",
+        "nextcloud.catalog-recovered": "notice"
+      },
+      "tests": [
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_office_settings_that_cannot_be_read_are_a_reminder",
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_the_cached_collabora_answers_that_cannot_be_read_are_a_reminder_too",
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_unreadable_role_and_extension_lists_are_recovered_and_still_verified",
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_a_failed_combined_catalog_query_recovers_without_losing_readable_office_settings",
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_catalogs_that_cannot_be_recovered_stop_before_reading_ha",
+        "tests/backup/test_ha_nextcloud.py::LiveTargetTests.test_catalog_recovery_does_not_swallow_cancellation"
+      ],
+      "note": "Combined/readable inventories recover independently from authoritative pg_authid/pg_extension with unchanged postchecks and Office recovery. Generated PG16 proof27/27 PASS at2d9555e4; focused17 regressions/preservation PASS. Unreadable underlying catalogs still stop with a concrete validation constraint; no empty/availability baseline. Original HA full-flow is a separate acceptance gate."
+    },
+    "NC-38": {
+      "lane": "NEXTCLOUD",
+      "app": "Nextcloud",
+      "act": "auto",
+      "status": "done",
+      "issues": {
+        "nextcloud.db-objects-skipped": "confirm",
+        "nextcloud.db-objects-known": "notice",
+        "nextcloud.db-objects": "stop"
+      },
+      "tests": [
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_functions_and_triggers_of_other_apps_not_confirmed_stop_only_this_app",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_functions_and_triggers_of_other_apps_confirmed_are_left_out_and_listed",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_functions_and_triggers_of_other_apps_one_more_name_asks_again",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_what_cannot_be_left_out_is_refused_unread",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_known_memories_objects_are_rebuilt_without_a_question",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_what_memories_makes_and_another_program_is_a_line_to_confirm",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_a_list_of_names_that_is_cut_or_a_name_that_only_looks_known_is_a_line_to_confirm",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_the_names_of_the_known_apps_are_found_only_in_the_whole_list",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_memories_objects_are_rebuilt_before_the_converted_cluster_is_exported",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_memories_row_loss_still_fails_after_rebuilding_the_pair",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_rebuilt_memories_uses_the_plain_loader_even_for_a_superuser_target",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_rebuilt_memories_requires_its_tables_and_exact_final_definition",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_known_names_in_the_wrong_object_kind_remain_unknown",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_one_more_unknown_name_requires_confirmation_while_known_objects_rebuild"
+      ],
+      "note": "Complete original identity inventory required. Known Memories function/trigger rebuilt from reviewed v11.1.4 fixed definitions by ordinary loader, exact body/owner/invoker/path/types/shape/rows verified; unknown exact names confirmed and omitted, changed names reconfirm. Generated PG16 proof27/27 PASS at2d9555e4; original HA full-flow separate."
+    },
+    "NC-45": {
+      "lane": "NEXTCLOUD",
+      "app": "Nextcloud",
+      "act": "auto",
+      "status": "done",
+      "issues": {
+        "nextcloud.db-objects-skipped": "confirm",
+        "nextcloud.db-objects-known": "notice"
+      },
+      "tests": [
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_the_dump_may_not_hold_more_than_was_confirmed",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_procedures_and_aggregates_are_programs_too",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_a_program_that_stays_in_the_new_cluster_stops_the_conversion",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_known_memories_objects_are_rebuilt_without_a_question",
+        "tests/backup/test_ha_nextcloud.py::ConvertTests.test_a_dump_with_kinds_nextcloud_never_creates_is_refused_before_the_restore",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_memories_objects_are_rebuilt_before_the_converted_cluster_is_exported",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_memories_row_loss_still_fails_after_rebuilding_the_pair",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_rebuilt_memories_uses_the_plain_loader_even_for_a_superuser_target",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_rebuilt_memories_requires_its_tables_and_exact_final_definition",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_known_names_in_the_wrong_object_kind_remain_unknown",
+        "tests/backup/test_ha_nextcloud.py::CheckTests.test_one_more_unknown_name_requires_confirmation_while_known_objects_rebuild"
+      ],
+      "note": "Second restore gate still excludes ALL archive programs and refuses other unsupported kinds. Known pair rebuilt only after original identity checks and hostile-object rejection; exact final pair plus residual shape/rows/roles/extensions/grants verified. New rebuilt_apps result and older mocked build fixtures covered. Generated PG16 proof27/27 PASS at2d9555e4; original HA full-flow separate."
+    }
+  },
+  "evidence": {
+    "source_commit": "2d9555e4c0c180c24ce470e37c6825a135119225",
+    "runtime": "snippets/focus-nextcloud/generated-pg16-proof.json",
+    "vendor": "snippets/focus-nextcloud/vendor.json",
+    "failed_attempt_preserved": "snippets/focus-nextcloud/generated-pg16-attempt1-failed.json",
+    "history_summary": "snippets/focus-nextcloud/attempt1-events.json",
+    "scope": "generated database; original HA full-flow/commercial acceptance not claimed"
+  }
+}
