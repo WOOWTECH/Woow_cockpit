@@ -9,7 +9,16 @@
   "containers_unchanged": true,
   "volumes_unchanged": true,
   "pnpm_prune_exit": 0,
-  "root_system_logs": "not yet changed: sudo requires authentication; owner has the reviewed root script",
+  "root_system_logs": "completed: owner ran the reviewed --apply script in an authenticated terminal; filesystem and journal verified afterward",
   "host_active_syslog": "retained; no truncation or deletion",
-  "original_ha_fixtures_and_backups": "retained"
+  "original_ha_fixtures_and_backups": "retained",
+  "root_system_logs_observation": {
+    "observed_at_local": "2026-11-27T05:25:08+08:00",
+    "rotated_syslog_original_exists": false,
+    "retained_gzip": "/var/log/syslog.1.manual-20261126.gz",
+    "retained_gzip_bytes": 1448355671,
+    "journal_disk_usage_report": "975.7M",
+    "host_available_bytes": 37152419840,
+    "attribution": "This is an observation, not a root-cleanup-only net gain; other processes write to this filesystem."
+  }
 }

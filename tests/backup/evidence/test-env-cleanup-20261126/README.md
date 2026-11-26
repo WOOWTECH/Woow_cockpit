@@ -14,12 +14,13 @@ Owner 已明確授權：這台服務目前都只是測試，可清掉不需要�
 
 `summary.json` 記錄總結；`result.json`、`old-test-images-result.json` 與 `superseded-test-images-result.json` 記錄各階段選取、移除與保留結果。原始盤點、指令輸出留在私人目錄 `~/.woowbk-lab/evidence/test-env-cleanup-20261126/`。
 
-## 系統日誌：等待 root 執行
+## 系統日誌：已執行並回收結果（2026-11-27）
 
-目前 `sudo -n` 要求密碼，因此尚未修改 `/var/log`。Owner 已收到可檢查的指令：
+Owner 在自己的已驗證終端執行了先前提供的 `sudo bash /tmp/parity-system-log-cleanup-20261126.sh --apply`。隨後從本工作階段核對：
 
-```sh
-sudo bash /tmp/parity-system-log-cleanup-20261126.sh --apply
-```
+- 原始輪替檔 `/var/log/syslog.1` 已移除，壓縮檔 `/var/log/syslog.1.manual-20261126.gz` 保留，大小 **1,448,355,671 bytes（約 1.35 GiB）**。
+- `journalctl --disk-usage` 回報 **975.7M**，先前約 2.0G。
+- 核對時主機可用 **37,152,419,840 bytes（約 34.60 GiB）**。有其他寫入程序，這不是只歸因於日誌清理的淨回收值。
+- 現用 `/var/log/syslog` 保留，沒有截短或刪除；沒有重跑 root 清理。
 
-本目錄的 `cleanup-system-logs.sh` 是同一份腳本，已通過 `bash -n`。它確認 `syslog.1` 無開啟者，壓縮後完整解壓比對並確認來源未變，才移除原始的輪替檔；封存 journal 按 7 天／1 GiB 上限清理。現用 syslog 不會被截短或刪除。執行後仍須回收實際結果，不能提前宣稱這部分已完成。
+本目錄的 `cleanup-system-logs.sh` 是已審閱腳本的副本：先確認輪替檔無開啟者及來源未變，壓縮後完整解壓比對通過才移除原檔，journal 按 7 天／1 GiB 清理。工作階段沒有取得 Owner 終端的完整執行輸出；以上結果來自執行後的檔案與 journal 觀察。壓縮檔保留來源時間戳，舊的檔案時間不代表尚未執行。
