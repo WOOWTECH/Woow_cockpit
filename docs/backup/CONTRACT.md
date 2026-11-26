@@ -2119,6 +2119,17 @@ way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps to
   still only in the copy.
 * **L-38 pin API.** `adapter.import_manifest(…, keep_safety=True)` writes `keep_safety: true` into the app section (optional; only `true`);
   the restore then writes its pre-restore backup with the kept-copy note, so it is pinned like a kept copy.
+* **Selective HA instance restore (N8-01/L-03, 2026-11-27).** An instance item may have optional `ha_database` only for
+  app `n8n` or `litellm`: a valid database name matching exactly one non-template database payload (LiteLLM requires `litellm`).
+  All globals, databases, roles and owners remain mandatory. Database-scope items reject the marker; old archives omit it.
+  HA inplace import retains the current data volume and role/password definitions, reads the app DB's current owner, replaces
+  only that DB and loads under that owner. Missing DB/owner or a different owner at readback stops/fails the import. Other DBs,
+  including later writes, additions/deletions, owners and changed role/password definitions, remain current. The archived globals
+  are not applied in this path. Current database-authentication secrets stay; LiteLLM's salt follows its imported encrypted rows.
+  The full current safety snapshot and its complete PostgreSQL/role digest still govern automatic rollback; a marked converted
+  payload cannot be an automatic rollback source. Fresh HA restore explicitly applies the complete conversion-time snapshot to a
+  newly initialized cluster, with the normal guard and warning. Ordinary and unmarked restores retain their full-instance path.
+  Converted payloads retain their existing app-conversion checks and health checks; source-device digests are not fabricated.
 * **pg-stdin follow-up F1.** The roles script of an instance restore is `BEGIN;` script `COMMIT;` and an end mark psql prints
   after it (`_run_sql`); a script that arrived short is `job-failed` instead of half applied.
 
@@ -2158,7 +2169,11 @@ secret and mounts); an entry of another shape is `incompatible`.
    * Images: the Odoo web image, the database image and the PostgreSQL 16 image that opens HA's cluster are downloaded when this device
      lacks them (`hatarget.ensure_image`, as the app's owner, one more try; a `localhost/` image that is gone cannot be: the text says so).
      PostgreSQL 16: `pgvector:0.8.6-pg16`, else `postgres:16.15-alpine` (both only when already here), else the pinned official image
-     (downloaded). When a database of HA uses `vector` and the image that read it cannot, the check downloads the pgvector image and reads
+     (already cached by its pin, a verified offline release sidecar, or downloaded). OD-23 sidecars are opt-in per architecture;
+     the root-trusted manifest and artifact SHA bind the pinned ref/config ID, and the verified descriptor is streamed into the
+     app owner's store before online fallback. A configured invalid sidecar stops only Odoo; no sidecar keeps the retry behavior.
+     Release/installer CLI, bounded archive checks, immutable generations and lifetime are specified in
+     [Offline PostgreSQL 16 sidecar](odoo-pg16-offline.md). When a database of HA uses `vector` and the image that read it cannot, the check downloads the pgvector image and reads
      HA's cluster again; the conversion fetches it for the next try (only the databases that use vector stop while it is not here).
    * `odoo.conf` (the configuration secret of the live Odoo) is read in a throwaway container of the live Odoo image (network none, read-only
      root, only the secret mounted, `python3 -I -`): of the file only `db_name` (first name of a list), `db_user` and `db_password` are
@@ -2292,11 +2307,12 @@ secret and mounts); an entry of another shape is `incompatible`.
    credentials), `version.different` (stop: add-on version and `n8n --version` both known and not equal), `version.target-unknown` (notice,
    N8-10: `n8n --version` of this device prints no x.y.z: nothing is compared), `n8n.native-code`, `n8n.community-packages` (notices). The
    image of this device is downloaded first when it is missing (`hatarget.ensure_image`, CM-05) -- but only while n8n has not stopped.
-3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list either ONE database item of
-   scope `database`, or no database item and the data volume of the PostgreSQL container as one of the volumes (a cold backup: the container
-   is found by its image name and its `/var/lib/postgresql*` mount, its account and database are its own `POSTGRES_USER`/`POSTGRES_DB`, which
-   must be set). More than one item or the scope `instance` stops n8n (`n8n.layout-unsupported`, `incompatible`: this n8n converter
-   emits one database, without a complete instance's globals and roles). A database container without `ContainerName=` has the name systemd gives it.
+3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list ONE database item of
+   scope `database` or `instance`, or no database item and the PostgreSQL data volume (cold mode). The container is found by its image
+   and `/var/lib/postgresql*` mount; cold mode uses its `POSTGRES_USER`/`POSTGRES_DB`. An instance's normalized maintenance database
+   `postgres` is separate from n8n's actual database: `DB_POSTGRESDB_DATABASE`, then `POSTGRES_DB`, then `n8n`. More than one item
+   or an unsupported layout stops only n8n. Instance conversion carries the whole device snapshot with only the app DB replaced; the
+   marked HA restore follows the selective-instance rule below. A database container without `ContainerName=` has the name systemd gives it.
    n8n's data is the declared volume mounted at `/home/node/.n8n`. The queue's volumes are the declared ones that only containers whose image
    repository is named `valkey` or `redis` mount; every other declared volume and every declared host folder is this device's own and is
    carried exactly as it is (`hatarget.carry`; `n8n.extras-carried`, auto); a link that would leave a carried volume is left out and
@@ -2847,8 +2863,9 @@ one single-database `postgres` item (`catalog-suggest` proposes it for a LiteLLM
 no `postgres` item, the cold mode: the database container's data volume is one of the entry's `volumes` and the converted
 backup carries the new cluster itself (cleanly shut down, `pg_controldata` says so) as that volume instead of a dump
 (L-03); every other volume and host folder of the entry is carried as it is (`litellm.extras-carried`, `auto`). The one
-shape it cannot fill is an entry that dumps the whole instance (this LiteLLM converter emits only one database), two
-database items, or none: `litellm.layout-unsupported` (`stop`, says what to choose). The proxy is the container whose Quadlet
+unsupported shapes are two database items or no usable database storage: `litellm.layout-unsupported` (`stop`, says what to choose).
+A scope `instance` entry carries the complete device snapshot with the converted `litellm` DB. Its normalized maintenance
+`postgres` is separate from the app DB; the marked HA restore follows the selective-instance rule below. The proxy is the container whose Quadlet
 file mounts `litellm-salt-key` as `LITELLM_SALT_KEY`, whatever it is called (L-04: `litellm.target-missing` when there is
 none). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):
 the converted backup records none, so the preflight warns (`digests-missing`) and the import reports `match: null`,
