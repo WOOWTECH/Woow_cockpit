@@ -1,0 +1,11 @@
+{
+  "lane": "nextcloud-r6",
+  "device": "woowbk-dev-e",
+  "source_commit": "REPLACE_WITH_REVIEWED_FULL_COMMIT",
+  "phases": ["image-recovery"],
+  "host_source_operations": ["inspect", "save"],
+  "not_before_utc": "1970-01-01T00:00:00Z",
+  "expires_utc": "1970-01-01T00:00:01Z",
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472
+}
