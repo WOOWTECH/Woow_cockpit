@@ -2,7 +2,9 @@
 import importlib.util
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
@@ -39,6 +41,50 @@ class ConfirmationGateTests(unittest.TestCase):
         for result in bad:
             with self.subTest(result=result), self.assertRaises(flow.Failed):
                 flow.require_reviewed_check(result)
+
+
+class StoppedLabUnitTests(unittest.TestCase):
+    class StopHere(Exception):
+        pass
+
+    def evidence(self):
+        ev = mock.Mock()
+        ev.check.side_effect = lambda _name, ok, _detail='': bool(ok)
+        return ev
+
+    def test_cleanly_stopped_unit_is_started_then_restored_to_stopped(self):
+        run = flow.Run(None, self.evidence())
+        run.headroom = mock.Mock(side_effect=[None, self.StopHere()])
+        with mock.patch.object(flow, 'isolation', return_value='true none {}'), \
+             mock.patch.object(flow, 'clean_tree', return_value=True), \
+             mock.patch.object(flow, 'sha256_file', return_value=flow.FIXTURE_SHA), \
+             mock.patch.object(flow, 'unit_state', side_effect=['inactive', 'active']), \
+             mock.patch.object(flow.drv, 'owner', return_value=SimpleNamespace(returncode=0)) as owner:
+            with self.assertRaises(self.StopHere):
+                run.setup()
+        owner.assert_called_once_with('systemctl', '--user', 'start', flow.UNIT, timeout=420)
+        self.assertEqual(run.unit_found, 'inactive')
+        self.assertTrue(run.started_unit)
+        self.assertEqual(run.headroom.call_count, 2)
+        with mock.patch.object(flow, 'unit_state', return_value='inactive'), \
+             mock.patch.object(flow.drv, 'owner', return_value=SimpleNamespace(returncode=0)) as owner, \
+             mock.patch.object(flow.drv, 'labelled', side_effect=self.StopHere):
+            with self.assertRaises(self.StopHere):
+                run.step_cleanup()
+        owner.assert_called_once_with('systemctl', '--user', 'stop', flow.UNIT, timeout=300)
+
+    def test_active_unit_is_used_without_starting_or_stopping_it(self):
+        run = flow.Run(None, self.evidence())
+        run.headroom = mock.Mock(side_effect=self.StopHere())
+        with mock.patch.object(flow, 'isolation', return_value='true none {}'), \
+             mock.patch.object(flow, 'clean_tree', return_value=True), \
+             mock.patch.object(flow, 'sha256_file', return_value=flow.FIXTURE_SHA), \
+             mock.patch.object(flow, 'unit_state', return_value='active'), \
+             mock.patch.object(flow.drv, 'owner') as owner:
+            with self.assertRaises(self.StopHere):
+                run.setup()
+        owner.assert_not_called()
+        self.assertFalse(run.started_unit)
 
 
 if __name__ == '__main__':

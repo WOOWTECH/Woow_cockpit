@@ -13,7 +13,8 @@ helper the page calls (one JSON request on stdin, one JSON reply), with the engi
 deploy-src.sh; dev-e's code-server, its secret and env file (deployed by lane batch2-lab) are used as they are, the
 catalog entry woow-code-server is this tree's tests/e2e/lab/catalog/woow-code-server.json (installed by batch2-lab).
 
-  setup      the schedule timer masked, deploy-src.sh e --src <this tree> --no-demo-catalog, installed engine == tree,
+  setup      a cleanly stopped lab code-server is started for this run and stopped again in cleanup; the schedule timer
+             masked, deploy-src.sh e --src <this tree> --no-demo-catalog, installed engine == tree,
              the woow-code-server catalog entry (one unit, three volumes, the workspace folder, health), a device key
   before     this run's device markers seeded when missing (a snippet in the IDE volume, a skill in the agents' volume, a
              file in the workspace) and a generated test login file in the agents' volume (only when the device has
@@ -642,6 +643,7 @@ class Run:
         self.uid = None
         self.timer_found = None
         self.unit_found = None
+        self.started_unit = False
 
     def budget(self, phase):
         if time.monotonic() - self.lock_started > HOLD_BUDGET:
@@ -698,9 +700,16 @@ class Run:
                         sha == FIXTURE_SHA, sha[:16]):
             raise Failed('fixture changed')
         self.unit_found = unit_state()
-        if not ev.check('preflight: dev-e\'s code-server is running (deployed by lane batch2-lab)',
-                        self.unit_found == 'active', self.unit_found):
-            raise Failed('code-server is not running on dev-e')
+        if self.unit_found == 'inactive':
+            self.headroom()
+            self.started_unit = True  # cleanup restores the original state even if start fails halfway
+            proc = drv.owner('systemctl', '--user', 'start', UNIT, timeout=420)
+            if not ev.check('setup: start dev-e\'s stopped code-server for this lab run',
+                            proc.returncode == 0 and unit_state() == 'active', f'rc {proc.returncode}'):
+                raise Failed('code-server could not start on dev-e')
+        elif not ev.check('preflight: dev-e\'s code-server is active or cleanly inactive',
+                          self.unit_found == 'active', self.unit_found):
+            raise Failed('code-server is not ready on dev-e')
         self.headroom()
         self.uid = device_uid()
         self.timer_found = drv.out(drv.root('systemctl', 'is-enabled', TIMER, timeout=60)).strip()
@@ -1011,7 +1020,13 @@ class Run:
 
     def step_cleanup(self):
         ev = self.ev
-        self.inject_off()
+        try:
+            self.inject_off()
+        finally:
+            if self.started_unit:
+                proc = drv.owner('systemctl', '--user', 'stop', UNIT, timeout=300)
+                ev.check('cleanup: code-server is stopped again (as found before this run)',
+                         proc.returncode == 0 and unit_state() == 'inactive', f'rc {proc.returncode}')
         objects = drv.labelled()
         ev.check('cleanup: no throwaway container, volume or network of a job left', not any(objects.values()), objects)
         listing = drv.device_python(drv.RUN_LIST, as_owner=False)
