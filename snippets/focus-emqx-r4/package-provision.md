@@ -41,6 +41,8 @@ A provision lease is distinct from the three queued generated-case leases. Requi
 }
 ```
 
+Concrete first proposal: case `noauth`, device `woowbk-r4-package-9d42f305c7a1`, volumes `woowbk-r4-package-9d42f305c7a1-home`, `woowbk-r4-package-9d42f305c7a1-varlib`, and `woowbk-r4-package-9d42f305c7a1-containers`. These names are reserved only by the future exact lease; no resources exist from this preparation, and the controller must prove all four absent before creation.
+
 Cases initially supported: plain, dead_row, noauth, one invocation per lease. Proposed smallest package turn is noauth after its separate package-profile producer succeeds: ~35min runtime hard budget +5min cleanup. Runtime duration has not been measured. Review the privileged/systemd outer lab model before any lease; it remains inside the existing rootless isolated lab store.
 
 ```sh
@@ -73,4 +75,4 @@ Finally, the controller proves exact label/base/network/mount ownership, removes
 
 Crash recovery: a new cleanup lease binds the same source/device and exact private `receipt_sha256`, with >=5min left; run the same reviewed command with `--run --cleanup --lease <cleanup-lease>` under globalheavy/shared mutex. No candidate/image arguments are needed. Label/receipt/prior-absence checks still apply. Cleanup never guesses a name or deletes an unproven resource.
 
-Initial offline boundary gate:11/11PASS; final12-case gate pending a heavy slot,0fail/error/skip/blocked/shim,run_native absent. This does not validate actual image save/load identity preservation, fresh device provisioning, generated Quadlets, candidate transfer or smoke runtime. Those remain next reviewed native prerequisites. Existing D0 real fullflow stays the fullflow evidence; H1 device-env-wins policy and remaining R4 cases are unchanged.
+Offline boundary gate:12/12PASS,0fail/error/skip/blocked/shim,run_native absent. This does not validate actual image save/load identity preservation, fresh device provisioning, generated Quadlets, candidate transfer or smoke runtime. Those remain next reviewed native prerequisites. Existing D0 real fullflow stays the fullflow evidence; H1 device-env-wins policy and remaining R4 cases are unchanged.
