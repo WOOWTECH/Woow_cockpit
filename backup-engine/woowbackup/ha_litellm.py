@@ -879,7 +879,6 @@ def hook_removals():
     table = {f'{section}.{key}': (section, ('key', key)) for section, key in MODULE_HOOKS}
     for section, label, _path in NESTED_HOOKS:
         table[f'{section}.{label}'] = (section, NESTED_REMOVAL[label])
-    table['litellm_settings.callbacks'] = ('litellm_settings', ('key', 'callbacks'))
     for key in CALLBACK_KEYS:
         table[f'litellm_settings.{key}'] = ('litellm_settings', ('key', key))
     return table

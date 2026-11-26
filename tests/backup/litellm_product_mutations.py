@@ -660,9 +660,8 @@ MUTATIONS = (
        "BackupError('job-failed', '無法完整讀取匯入後"),
      "    if False:\n        raise BackupError('job-failed', '無法完整讀取匯入後", 1),
     ('L14e', 'every label of the detection has a removal', LL,
-     ("    table['litellm_settings.callbacks'] = ('litellm_settings', "
-       "('key', 'callbacks'))\n"),
-     '', 1),
+     '    for key in CALLBACK_KEYS:\n',
+     '    for key in CALLBACK_KEYS[1:]:\n', 1),
     ('L21', 'the schemas HA has beyond LiteLLM are named in a line to confirm', LL,
      '    if odd:   # L-21',
      '    if False:   # L-21', 1),

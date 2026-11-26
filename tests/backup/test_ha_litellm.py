@@ -778,6 +778,16 @@ class StoredSettingsTests(LiteLLMCase):
         self.assertFalse([r for r in self.world.restores if r[0] == 'll-db' and '/dev/null' in r[1]],
                          'stopped before the converted database was written')
 
+    def test_an_unreadable_new_cluster_stops_before_it_is_packed(self):
+        # The HA read succeeds. The second read, after the rows have entered our own cluster, must fail closed.
+        self.both_sides(self.CLEAN, None)
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertIn('匯入後資料庫裡的 LiteLLM 設定', caught.exception.message)
+        self.assertEqual(self.asked, ['hapg', 'll-db'])
+        self.assertEqual(self.storage.list_backups(), [])
+
     def test_hooks_only_the_new_cluster_sees_need_another_confirmation(self):
         # Review SR-8: a crafted data directory controls HA's catalog; an edited built-in =(text,text) operator hid
         # post_call_rules and custom_auth from the HA-side query while COPY moved them. The same query in the new
@@ -803,6 +813,10 @@ class StoredSettingsTests(LiteLLMCase):
         # L-13: read again once; what stays unreadable is no reason to stop: the table is not moved, the customer is told.
         self.world.ha_columns = COLUMNS + self.CONFIG
         self.world.live_columns = COLUMNS + self.CONFIG
+        config_relation = ['public', 'LiteLLM_Config', 'r', 'p', False, False, '', False]
+        for found in (self.world.ha_signature, self.world.live_signature):
+            found['relations'].append(config_relation)
+            found['columns'].extend(row + ['', ''] for row in self.CONFIG)
         self.world.counts['public.LiteLLM_Config'] = 3
         for code in ('limit-exceeded', 'job-failed'):
             self.raising(code)
@@ -850,6 +864,7 @@ class StoredSettingsTests(LiteLLMCase):
                   | {f'litellm_settings.{key}' for key in ha_litellm.CALLBACK_KEYS} | {'litellm_settings.callbacks'})
         removals = ha_litellm.hook_removals()
         self.assertEqual(set(removals), labels)
+        self.assertEqual(removals['litellm_settings.callbacks'], ('litellm_settings', ('key', 'callbacks')))
         sql = ha_litellm.removal_sql(sorted(labels))
         self.assertEqual(sql.count('UPDATE public."LiteLLM_Config"'), len(labels))
         self.assertIn("SET param_value = param_value #- '{litellm_jwtauth,custom_validate}'::text[] WHERE param_name = "
@@ -1167,6 +1182,19 @@ class ConvertTests(LiteLLMCase):
         many = ha_litellm.Schema([['public', f't{i}', 'id', 'text', True, '', ''] for i in range(401)],
                                  dict(signature(), sequences=[], relations=[['public', f't{i}', 'r'] for i in range(401)]), [])
         ha_litellm.require_names(many)
+
+    def test_an_invalid_sequence_name_stops_before_any_ha_rows_are_read(self):
+        # A malformed catalog answer must be rejected at the pre-read gate. Later SQL quoting also refuses the name,
+        # but by then rows from other tables would already have been read.
+        bad = 'bad\x00sequence'
+        found = signature()
+        found['sequences'][0][1] = bad
+        found['relations'][-2][1] = bad
+        self.world.ha_signature = self.world.live_signature = found
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(self.world.copies_out, [], 'the malformed name is checked before any HA row is read')
 
     def keep_supported(self):
         """haimport hands `keep_safety` on (the one-line snippet haimport.py.patch): what the integrator applies."""
@@ -1661,6 +1689,14 @@ class OtherRefusalTests(LiteLLMCase):
                 # L-08: a start only helps a database that has no finished migration yet, not one whose answer is unusable
                 self.assertEqual(len(self.started), 3 if bad in (None, []) else 0, self.started)
         self.assertFalse(self.world.copies_out)
+
+    def test_r05_migrations_that_become_unreadable_between_two_reads_stop(self):
+        # The first read in _prepare succeeds; live_schema must refuse if the second read no longer answers.
+        with mock.patch.object(ha_litellm, 'live_migrations', side_effect=[list(MIGRATIONS), None]):
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+        self.assertFalse(result['importable'], result['issues'])
+        self.assertTrue(any('無法讀取這台 LiteLLM 的資料庫結構版本' in issue['message']
+                            for issue in result['issues']), result['issues'])
 
     def test_r05b_a_database_that_never_ran_gets_the_proxys_first_start(self):
         # L-08: no table (the proxy never ran) or no finished migration yet: the proxy is started once, waited for until
