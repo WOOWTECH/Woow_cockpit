@@ -1,0 +1,158 @@
+{
+  "base_commit": "a154751429ab5cfeb1dad75860b11946b2eaef01",
+  "cases": [
+    {
+      "confirms": [],
+      "decision": "D1",
+      "expected": "candidate-and-restart",
+      "id": "plain",
+      "native_status": "not-run",
+      "notices": [
+        "emqx.plain-passwords",
+        "emqx.clear-rows"
+      ],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [],
+      "decision": "D1",
+      "expected": "candidate-and-restart",
+      "id": "dead_row",
+      "native_status": "not-run",
+      "notices": [
+        "emqx.clear-rows"
+      ],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.no-authentication"
+      ],
+      "decision": "D5/S2",
+      "expected": "candidate-and-restart",
+      "id": "noauth",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.external-authn",
+        "emqx.external-authz"
+      ],
+      "decision": "D4/S1",
+      "expected": "candidate-and-restart",
+      "id": "http_dummy",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.file-secret"
+      ],
+      "decision": "D4/S1",
+      "expected": "candidate-and-restart",
+      "id": "file_dummy",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.jq-rule"
+      ],
+      "decision": "D4/S1",
+      "expected": "candidate-and-restart",
+      "id": "jq_constant",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.jq-rule"
+      ],
+      "decision": "D4/S1",
+      "expected": "candidate-and-restart",
+      "id": "env_dummy",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [],
+      "decision": "D2/H3",
+      "expected": "candidate-and-restart",
+      "id": "admin_public",
+      "native_status": "not-run",
+      "notices": [
+        "emqx.default-dashboard"
+      ],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [],
+      "decision": "D3",
+      "expected": "candidate-and-restart",
+      "id": "changed_acl",
+      "native_status": "not-run",
+      "notices": [
+        "emqx.acl-replaced"
+      ],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [
+        "emqx.device-psk"
+      ],
+      "decision": "E-43/R4",
+      "expected": "candidate-and-restart",
+      "id": "psk",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [],
+      "decision": "E-67/D0",
+      "expected": "incompatible-before-packaging",
+      "id": "lost_auth_setting",
+      "native_status": "not-run",
+      "notices": [],
+      "package_smoke_status": "not-applicable-refusal",
+      "smoke": "requires-separate-owned-package-device"
+    }
+  ],
+  "explicit_remaining_gaps": [
+    {
+      "id": "device_env_precedence_H1",
+      "policy": "device environment wins",
+      "status": "required-native-acceptance-pending-separate-case"
+    },
+    {
+      "id": "ha_addon_env_vars",
+      "new_feature_authorized": false,
+      "status": "intentional-current-policy-not-moved"
+    },
+    {
+      "id": "exact_package_per_case",
+      "status": "executor-prepared-provisioning-and-candidate-transfer-pending"
+    },
+    {
+      "id": "actual_package_upgrade",
+      "status": "not-executed-existing-H2-smoke-decision-evidence-preserved"
+    }
+  ],
+  "new_native_runs": 0
+}
