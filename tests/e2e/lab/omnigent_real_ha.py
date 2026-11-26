@@ -691,7 +691,7 @@ def run(arch, *, extra_objects=False):
                 params['ha_backup_id'] = record['id']
                 checked = haimport.run_ha_check(context(), params)['ha_check']['apps'][0]
                 lines = [line for line in checked['issues'] if line['level'] == 'confirm']
-                require(checked['importable'] and any(line['id'] == 'omnigent.skipped' for line in lines),
+                require(checked['importable'] and lines and all(line['id'] == 'omnigent.skipped' for line in lines),
                         'extra_objects_not_confirmable')
                 backups_before = deps.storage.list_backups()
                 try:
