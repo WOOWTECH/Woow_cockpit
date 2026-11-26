@@ -261,8 +261,9 @@ CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
             listing = inside(['pg_restore', '-l'], data_path.read_bytes()).stdout.decode('utf-8', 'surrogateescape')
             kinds = omni.toc_kinds(listing)
             assert {'EVENT TRIGGER', 'FOREIGN DATA WRAPPER'} <= set(kinds)
-            selected = omni.data_only_toc(listing, tables={'users', 'scheduled_tasks', 'task_child', 'alembic_version'},
-                                          sequences={'scheduled_tasks_id_seq'})
+            trusted_tables = {'users', 'scheduled_tasks', 'task_child', 'alembic_version'}
+            trusted_sequences = {'scheduled_tasks_id_seq'}
+            selected = omni.data_only_toc(listing, tables=trusted_tables, sequences=trusted_sequences)
             assert 'EVENT TRIGGER' not in selected and 'FOREIGN DATA WRAPPER' not in selected
             event('superuser_toc', real_pg_archive=True, event_trigger=True, foreign_data_wrapper=True,
                   selected_only_data=True)
@@ -287,7 +288,8 @@ CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
 
             from unittest import mock
             with mock.patch.object(omni, 'require_sequence_sets', inspect_sequence_script):
-                pg = omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=columns)
+                pg = omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=columns,
+                                               tables=trusted_tables, sequences=trusted_sequences)
             assert omni.carry_accounts_restricted(pg, [{'id': 'admin', 'password_hash': 'synthetic'}]) == ['admin']
             ha_odoo.Cluster(tmp, 'omni-db', superuser=omni.RESTORE_ROLE).script(omni.PAUSE_SQL, 'omnigent')
             omni.finish_trusted_data(pg)
@@ -316,7 +318,8 @@ CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
             altered = omni.schema_columns(source)
             omni.DATABASE = 'bad_dest'
             try:
-                omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=altered)
+                omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=altered,
+                                          tables=trusted_tables, sequences=trusted_sequences)
             except BackupError as exc:
                 assert exc.code == 'incompatible' and '欄位結構不同' in exc.message
             else:
