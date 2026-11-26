@@ -419,10 +419,10 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   "instance"}`) and `database` (`{"id","container","unit","database","user","data_volume"}`). The selected variant is
   `cold`, except for an installed entry that exports its database: then its mode is kept (`installed-mode`), because
   changing the mode makes the existing backups unrestorable under the new entry; and except for an id in
-  `suggest.PREFERRED_MODES` (`litellm`: `database`) that is not installed: the mode its Home Assistant import needs
-  (§9 "LiteLLM"), when that variant can be installed (info note `import-mode`; the cold label then drops 「（預設）」).
-  An installed entry of such an id in another mode keeps it; a warn note `import-mode` says what to choose for an
-  import. Where that mode does not exist (the data in a host directory) the note says the import is not possible.
+  `suggest.PREFERRED_MODES` (`litellm`, `n8n`, `hermes`: `database`) that is not installed: the default for the package
+  when that variant can be installed (info note `import-mode`; the cold label then drops 「（預設）」).
+  Supported installed cold/instance entries keep their mode without being told to switch for HA import. Where no usable
+  PostgreSQL export variant exists (the data in a host directory), the existing unsupported-layout warning remains.
 * `volumes`: named volumes the containers mount (`Volume=x.volume:` resolved through `VolumeName=`, default
   `systemd-<stem>`), except volumes mounted only below `/run`, `/var/run`, `/tmp`, `/var/tmp`, `/dev/shm` (skipped: sockets,
   PID files) and, in export modes, the database's data volume.
@@ -485,7 +485,7 @@ Which mode a draft proposes (the general guidance is the "PostgreSQL modes" tabl
 
 The draft for an app that is already installed in an export mode keeps that mode, because switching modes makes its
 existing backups unrestorable under the new entry (`compat` says so before installing). LiteLLM, n8n and Hermes are the ids
-whose new draft is single-database (`suggest.PREFERRED_MODES`): the only mode their Home Assistant imports fill.
+whose new draft is single-database (`suggest.PREFERRED_MODES`). Their HA imports also fill supported cold and complete-instance layouts; the default does not require migrating an installed entry.
 
 ### Installing and removing entries (`catalog-install`, `catalog-remove`)
 
@@ -2137,6 +2137,11 @@ way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps to
   the data dump loads under the ordinary DB owner with ownership/ACL/comment/security-label commands suppressed. Current
   access is restored and read back for moved objects; omitted LiteLLM schemas are not recreated. Fresh marked HA restore
   uses captured access facts and requires reconversion if they are absent. Ordinary/unmarked full restore stays unchanged.
+  Marked inplace preflight validates the real app endpoint against the declared local PG backend and separately checks
+  retained next-start inputs. Only verified password changes may differ; DB/host/user/opaque changes require reconversion
+  before DROP. Borrowed stopped services finish cleanup before restore's safety handover. An explicit one-use handover
+  receipt also covers an empty stopped-unit list, avoiding a second app start after safety capture. Unknown new data-object
+  access refuses before DROP; same-name ordinary/partitioned kind changes fail after load and use full safety rollback.
 * **pg-stdin follow-up F1.** The roles script of an instance restore is `BEGIN;` script `COMMIT;` and an end mark psql prints
   after it (`_run_sql`); a script that arrived short is `job-failed` instead of half applied.
 
