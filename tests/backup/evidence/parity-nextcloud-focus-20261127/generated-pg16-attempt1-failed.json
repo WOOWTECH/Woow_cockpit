@@ -1,0 +1,20 @@
+{
+  "acceptance": "generated database proof; original Nextcloud full flow pending",
+  "checks": {
+    "bounded-isolation": true,
+    "completed": false,
+    "existing-container-volume-inventory-unchanged": false,
+    "existing-image": true,
+    "new-container-name": true,
+    "new-volume-name": true,
+    "outer-isolation-preserved": true,
+    "own-probe-gone": true
+  },
+  "failure_type": "RuntimeError",
+  "image": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "source_commit": "f7dd26305aed94d8be13b3b1126fa1427d6f1797",
+  "source_hashes": {
+    "backup-engine/woowbackup/ha_nextcloud.py": "b888cbff8a47e01791b277916394e90b13b3ddc673c2d893368ddf3c06cbcf56",
+    "backup-engine/woowbackup/ha_nextcloud_memories.py": "4d47ac4d5a272f7ba89153834ea6c1c3ffc045a0e8877b837a2d78a65ab6d5b6"
+  }
+}

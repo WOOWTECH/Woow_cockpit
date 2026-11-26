@@ -2800,18 +2800,23 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
    `nextcloud.db-objects-skipped` names them (`函式 <schema>.<name>`, `觸發程序 <table>.<name>`, from `OBJECTS_SQL`, names only) and the
    tables of HA are read as before; any other kind (operator, type, rule, policy, event trigger, view or other relation kind, CHECK constraint,
    generated column, inheritance, other custom objects, tablespace, a default that is neither a constant nor `nextval()`) stops Nextcloud
-   (`nextcloud.db-objects`) and HA's tables are not read at all. What a KNOWN app makes (`KNOWN_OBJECTS`: Memories, `public.memories_fcu_fun` and
-   `oc_filecache.memories_fcu_trg`; vendor source pulsejet/memories lib/Db/FilecacheTriggers.php, lib/Migration/Repair.php, lib/Db/TimelineQueryDays.php,
-   read 2026-11-25) is the only thing that is no line to confirm: when the names are exactly these (the list is whole: `known_objects` compares it with the
-   count of the shape) the line is the notice `nextcloud.db-objects-known`, because without them Memories runs in its compatibility mode
-   (`memories.db.triggers.fcu` is false by default and HA's value is not carried) and its own repair step (`occ maintenance:repair` runs the
-   post-migration steps of the enabled apps) makes them again. The conversion returns `left_out_apps` and `left_out_others`; the reminders after the
-   import give `podman exec -u www-data <app container> php occ maintenance:repair` for the first and tell the customer to update or reinstall an app
-   that is not normal for the second. NOT built, on purpose: carrying the known objects over as HA had them (DESIGN NC-38 "照搬"): code out of a
-   backup is never restored, a known name or not (rows NC-38 and NC-45 stay `part`). An extension HA's database uses that this device's database image offers (`pg_available_extensions`
+   (`nextcloud.db-objects`) and HA's tables are not read at all. Known Memories identities select reviewed fixed definitions, rebuilt after the ordinary hostile-object gate.
+   The original inventory must be complete and contain distinct exact identities; unknown names require confirmation and
+   changed unknown names reconfirm. `ha_nextcloud_memories` uses definitions reviewed against vendor release v11.1.4,
+   commit `3ec040e55d2cfc8bd0e339c6338946d1513d15ae`, not archive program text. The plain loader creates the pair; target
+   superuser ownership is handed over afterward. Exact body, owner, trusted language, invoker rights, search path, trigger
+   conditions, integer table types, row counts (including oc_memories) and residual shape are checked. The notice is
+   `nextcloud.db-objects-known`; converted `rebuilt_apps` replaces the old manual-repair reminder. Only after success does
+   config.php set the system flag `memories.db.triggers.fcu`; it is not an oc_appconfig value. Existing data/role/password,
+   extension/grant/storage/Office comparisons remain. Unknown omitted programs still produce `left_out_others` reminders.
+   An extension HA's database uses that this device's database image offers (`pg_available_extensions`
    of the live database) is enabled before the data goes in (`nextcloud.extension-enabled` auto), one it does not offer stops
    (`nextcloud.extension-missing`); other schemas than `public` are one line to confirm (`nextcloud.schemas-skipped`, the dump is then
    `pg_dump -n public`). Counts, per-user file lists, Warnings: as before.
+   NC-09: a failed combined query recovers required role/installed-extension lists independently from pg_authid and
+   pg_extension, retaining readable Office settings and the same final equality checks (`nextcloud.catalog-recovered`,
+   notice). pg_available_extensions is availability information, never the installed baseline. Fundamentally unreadable
+   authoritative catalogs stop before reading HA data with an explicit reason; unknown values are not empty baselines.
 4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's `dbuser` role with the
    LIVE attributes and password verifier (stdin, masked) and the grants Nextcloud's installer gives it. A role that is not in the live database,
    or has no usable verifier, is made from `dbuser` and `dbpassword` of config.php with a SCRAM-SHA-256 verifier computed here (the password
