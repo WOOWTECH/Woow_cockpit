@@ -536,25 +536,37 @@ def run(arch):
         require(created, 'ha_store_publish_failed')
         event('ha_store_published', product_publish=True, sha256_matches_fixture=True)
 
-        real_prepare = ha_omnigent._prepare
+        real_version = ha_omnigent.target_version
+        real_alembic = ha_omnigent.live_alembic
+        real_trusted_schema = ha_omnigent.trusted_schema
         quiesced = {}
 
-        def prepare_then_quiesce(work, app_):
-            result = real_prepare(work, app_)
-            target, version, alembic, _addon, blocker = result
-            quiesced['live_version'] = version
-            quiesced['live_alembic'] = alembic
-            # DDL quiescence: the only schema writer (the server) stops before any capture; PostgreSQL stays up.
+        def observe_version(work, app_, url):
+            value = real_version(work, app_, url)
+            quiesced['live_version'] = value
+            return value
+
+        def observe_alembic(work, app_, target):
+            value = real_alembic(work, app_, target)
+            if not quiesced.get('server_stopped'):
+                quiesced['live_alembic'] = value
+            return value
+
+        def stop_before_schema(work, app_, target, path, alembic):
+            # The current conversion calls trusted_schema directly. Stop its only DDL writer immediately before the
+            # product captures the trusted schema; PostgreSQL remains up for the product's own stability checks.
             r.systemctl('stop', '--', UNITS[1], timeout=120)
             require(r.podman('container', 'exists', SERVER, check=False).returncode == 1 or
                     b'running' not in r.podman('container', 'inspect', SERVER, '--format', '{{.State.Status}}',
                                                check=False).stdout, 'server_still_running')
             quiesced['server_stopped'] = True
-            return result
+            return real_trusted_schema(work, app_, target, path, alembic)
 
         params = {'ha_backup_id': record['id'], 'apps': ['omnigent'], 'test_mode': False, 'encrypt': True}
         with mock.patch.object(quadlet_postgres, 'loopback_get', lab.live_get), \
-                mock.patch.object(ha_omnigent, '_prepare', prepare_then_quiesce), \
+                mock.patch.object(ha_omnigent, 'target_version', observe_version), \
+                mock.patch.object(ha_omnigent, 'live_alembic', observe_alembic), \
+                mock.patch.object(ha_omnigent, 'trusted_schema', stop_before_schema), \
                 mock.patch.object(tempctr, 'TempObjects', LabTemp):
             converted = haimport._run_omnigent_candidate(context(), params, schema_ddl_quiesced=True)
         require(quiesced.get('server_stopped') and quiesced.get('live_version') == '0.21.0'

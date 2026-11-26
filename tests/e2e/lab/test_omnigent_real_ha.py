@@ -56,9 +56,9 @@ class TargetDiscoveryTest(unittest.TestCase):
         self.assertEqual(target.own_users, [real.TARGET_ADMIN])
         self.assertEqual(target.info_url, 'http://127.0.0.1:8000/v1/info')
         self.assertEqual(target.db_secrets, [])
-        # every Quadlet secret is registered in the catalog (the candidate refuses otherwise)
+        # Every Quadlet secret is registered in the catalog; the current import reports missing ones.
         work.quadlets = lambda _app: files
-        ha_omnigent.require_registered_secrets(work, app)
+        self.assertEqual(ha_omnigent.unregistered_secrets(work, app), [])
 
     def test_server_keeps_its_log_and_runner_is_placeholder(self):
         texts = real.quadlets()
