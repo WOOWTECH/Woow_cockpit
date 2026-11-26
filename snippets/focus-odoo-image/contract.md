@@ -58,7 +58,10 @@ Only root can write the selected pin, manifest, archive, or ancestors. Symlinks 
 
 Odoo import keeps existing local image priority. Otherwise it chooses this machine's architecture, verifies the complete installed root trust chain, pin/manifest/artifact SHA, config ID, ref, OS and architecture, and passes the already-open verified file descriptor as stdin to the existing app-owner runner's `podman load`. It inspects loaded ID/OS/architecture, returns the config ID for subsequent `--pull=never` temporary containers, and does not rely on Docker save/load retaining RepoDigests. No root/global-store load or owner-writable archive path is used. A configured but invalid sidecar fails closed for Odoo; no sidecar retains existing pinned pull + retry. Job cancellation/storage failure propagates.
 
-Suggested coordinator docs/registry update: OD-23 now has opt-in installer/release packaging and owner-load implementation, focused synthetic proofs, and a pending real isolated-store artifact/load proof. Link focused test names from `tests/backup/test_pg16_bundle.py` and `tests/test_manage.py::OdooPg16BundleContract`. Do not mark actual artifact delivery proven by unit tests.
+Final coordinator docs/registry update: the actual isolated-store package/install/load/version/reuse proof and host
+artifact retention passed. See README.md, r5-result.json (full name in README), retained-release.json and exact test
+refs in ha_parity_rows.json. Parent independently rehashed both retained manifest/archive and closed OD-23 at
+main3e3e9315. Actual artifact is Linux/amd64; synthetic ARM64 support is separate from a real ARM artifact proof.
 ## Podman Docker directory export (actual exporter findings)
 
 Use `docker-dir` for this Podman source. Docker-save adds forbidden legacy links; OCI-save rewrites config bytes
