@@ -15,6 +15,7 @@ their counts, and up to ten sample paths. Exit 0 when nothing is out of range, 3
 argument."""
 import json
 import os
+import subprocess
 import sys
 import tarfile
 from collections import Counter
@@ -25,18 +26,36 @@ class Tally:
         self.max_id, self.layers, self.entries = max_id, 0, 0
         self.owners, self.tops, self.sample = Counter(), Counter(), []
 
-    def layer(self, fileobj):
+    def layer(self, fileobj, *, zstd=False):
         self.layers += 1
-        with tarfile.open(fileobj=fileobj, mode='r|*') as tar:
-            for member in tar:
-                self.entries += 1
-                if member.uid <= self.max_id and member.gid <= self.max_id:
-                    continue
-                name = member.name.lstrip('./').rstrip('/')
-                self.owners[f'{member.uid}:{member.gid}'] += 1
-                self.tops['/' + '/'.join(name.split('/')[:2])] += 1
-                if len(self.sample) < 10:
-                    self.sample.append('/' + name)
+        decoder = None
+        source = fileobj
+        if zstd:
+            decoder = subprocess.Popen(['zstd', '-qdc'], stdin=fileobj, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE)
+            source = decoder.stdout
+        try:
+            with tarfile.open(fileobj=source, mode='r|*') as tar:
+                for member in tar:
+                    self.entries += 1
+                    if member.uid <= self.max_id and member.gid <= self.max_id:
+                        continue
+                    name = member.name.lstrip('./').rstrip('/')
+                    self.owners[f'{member.uid}:{member.gid}'] += 1
+                    self.tops['/' + '/'.join(name.split('/')[:2])] += 1
+                    if len(self.sample) < 10:
+                        self.sample.append('/' + name)
+            if decoder is not None:
+                while source.read(1024 * 1024):  # tar stops at its end marker; check the entire zstd stream
+                    pass
+                if decoder.wait() != 0:
+                    raise ValueError('zstd layer is damaged')
+        finally:
+            if decoder is not None:
+                source.close()
+                if decoder.poll() is None:
+                    decoder.kill()
+                    decoder.wait()
 
     def result(self):
         return {'layers': self.layers, 'entries': self.entries, 'max_id': self.max_id,
@@ -48,8 +67,14 @@ def scan_dir(directory, tally):
     with open(os.path.join(directory, 'manifest.json'), encoding='utf-8') as handle:
         manifest = json.load(handle)
     for layer in manifest['layers']:
-        with open(os.path.join(directory, layer['digest'].split(':', 1)[1]), 'rb') as handle:
-            tally.layer(handle)
+        # Pass the same file descriptor to zstd; an ordinary buffered read(4) can leave its OS offset at EOF.
+        with open(os.path.join(directory, layer['digest'].split(':', 1)[1]), 'rb', buffering=0) as handle:
+            magic = handle.read(4)
+            handle.seek(0)
+            is_zstd = magic == b'\x28\xb5\x2f\xfd'
+            if layer.get('mediaType', '').endswith('+zstd') != is_zstd and layer.get('mediaType'):
+                raise ValueError('layer compression does not match its manifest')
+            tally.layer(handle, zstd=is_zstd)
 
 
 def scan_archive(stream, tally):

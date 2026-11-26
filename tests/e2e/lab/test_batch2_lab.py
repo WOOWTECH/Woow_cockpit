@@ -405,6 +405,26 @@ class ImageIdRangeTest(unittest.TestCase):
             rc, out, _ = self.run_scan([d, '65534'])
             self.assertEqual((rc, json.loads(out)['out_of_range']), (0, 0))
 
+    def test_oci_dir_with_zstd_layers_and_a_damaged_stream(self):
+        import hashlib, json
+        with tempfile.TemporaryDirectory() as d:
+            layers = []
+            for entries in self.LAYERS:
+                plain = _layer(entries)
+                compressed = subprocess.run(['zstd', '-q', '-c'], input=plain, capture_output=True, check=True).stdout
+                digest = hashlib.sha256(compressed).hexdigest()
+                Path(d, digest).write_bytes(compressed)
+                layers.append({'digest': 'sha256:' + digest,
+                               'mediaType': 'application/vnd.oci.image.layer.v1.tar+zstd'})
+            Path(d, 'manifest.json').write_text(json.dumps({'layers': layers}))
+            self.check(*self.run_scan([d, '55000'])[:2])
+            rc, out, _ = self.run_scan([d, '65534'])
+            self.assertEqual((rc, json.loads(out)['out_of_range']), (0, 0))
+            last = Path(d, layers[-1]['digest'].split(':', 1)[1])
+            last.write_bytes(last.read_bytes()[:-5])
+            rc, _, _ = self.run_scan([d, '65534'])
+            self.assertNotEqual(rc, 0)
+
     def test_docker_archive_on_stdin(self):
         import io, tarfile
         buf = io.BytesIO()
