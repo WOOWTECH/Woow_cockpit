@@ -1,0 +1,27 @@
+{
+  "all_private_payloads_removed": true,
+  "cleanup_recorded_utc": "2026-11-26T22:12:59.862739+00:00",
+  "debug_containers_absent": true,
+  "lease_release_meaning": "worker finished all leased work; shared mutex fd closed; coordinator lease record unchanged",
+  "lease_released": true,
+  "mutation_lock_released": true,
+  "ok": true,
+  "owned_resources": {
+    "j20261126T215246Z-ee0ddf2e": {
+      "containers": 0,
+      "networks": 0,
+      "volumes": 0
+    },
+    "j20261126T215436Z-83de64fe": {
+      "containers": 0,
+      "networks": 0,
+      "volumes": 0
+    },
+    "j20261126T215925Z-ba807121": {
+      "containers": 0,
+      "networks": 0,
+      "volumes": 0
+    }
+  },
+  "scope": "only-exact-failed-private-payload-removed"
+}

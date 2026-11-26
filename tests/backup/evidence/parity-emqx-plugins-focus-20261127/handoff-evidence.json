@@ -1,0 +1,70 @@
+{
+  "guarded_validation": [
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-plugins-targeted-2.guardlog",
+      "sha256": "ae5961bf287d929780832c580df2ff4f919abe9ea4438bfe7b0142856f1c0cbe",
+      "shim_hits": 0,
+      "skips": 0,
+      "tests": 262
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-plugins-final-4.guardlog",
+      "sha256": "4d2e74cb3e062e4270ae50b9ebe3ef9b1abb3bf6f6dbfa4763512a13d5678b88",
+      "shim_hits": 0,
+      "skips": 0,
+      "tests": 143
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-plugin-startup-override-1.guardlog",
+      "sha256": "17b462712b3e511841fae67c60a6cfb6e2bd84408c1189c39169b6e1c68d53fc",
+      "shim_hits": 0,
+      "skips": 0,
+      "tests": 147
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-plugin-probe-offline-4.guardlog",
+      "sha256": "031c1ff9e2af9c9464475b4c720183f5145a6bc58f37a8932be0bc4f9bf585d7",
+      "shim_hits": 0,
+      "skips": 0,
+      "tests": 3
+    }
+  ],
+  "invariants": {
+    "catalog": "never selected or written; adapter and Quadlet constructed only in memory; no before/after catalog digest collected",
+    "durable_volume_inventory": "equal before/after runtime03",
+    "image_inventory": "equal before/after runtime03",
+    "installed_importer_source_hashes": "equal before/after runtime03",
+    "lease": "worker released; coordinator JSON not edited",
+    "mutation_lock": "released",
+    "owned_resources": "zero independently checked across all three attempts",
+    "private_payloads": "all removed",
+    "unrelated_container_churn_observed": false
+  },
+  "native_checks": 33,
+  "product_commits": {
+    "73ada04a": "73ada04a40ca73128ca71b238fc25fed2d6f58ba",
+    "d787b6a1": "d787b6a12ee68ec57749a5a6664a4f3359927bdf"
+  },
+  "runtime_source_commit": "a82a086f382ea08be46e857e41004165527da680",
+  "scope": "generated E-44 delta alongside unchanged existing real EMQX full-flow evidence; not all R4 or ten-service acceptance",
+  "source_sha256": {
+    "backup-engine/woowbackup/ha_emqx.py": "7e1972934f65729b81039897b7f413eef3a7eafbdbcc962b5623852c77b4679b",
+    "backup-engine/woowbackup/ha_emqx_settings.py": "1aa6e6eacc4029272b7508c644adc23d8baf46697970d436297c0e558b7d7d2d",
+    "snippets/focus-emqx-plugins/compile_fixture.escript": "3c0bda65f20610895396b0b9615da523838579907ff7a997b6772c5a91d75219",
+    "snippets/focus-emqx-plugins/probe.py": "b381dccc738aecf73f501d037848cc52f364cebf3e36d97e33f2e67c53c42e9c",
+    "snippets/focus-emqx-plugins/runtime_probe.py": "f5c9662cfe2c1358401810be07df12cf283c4e5a3bba1668aec49992b6f8c39b",
+    "snippets/focus-emqx-plugins/woow_e44_fixture.erl": "9ca258fa1fe4f46f693166e303e2aef3164fc4fb14ad94dc0101f40daabaa5f0"
+  }
+}

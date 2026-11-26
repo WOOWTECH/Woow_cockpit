@@ -2562,6 +2562,7 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
    extracted directory, installation archive, data/config directory and running app; unreadable metadata is not absence.
    Available plugin configuration fingerprints and runtime states must survive, or only EMQX stops. HA plugin code and
    enable records are excluded at source boot and the validated export boundary. All operational roots remain compared.
+   Records supplied by startup files or EMQX_PLUGINS / EMQX_PLUGINS__STATES cannot be persistently removed by a runtime config update; such cleanup stops this app with a concrete request to remove the override first.
    `emqx.plugin-records-remove` (confirm): 「這台 EMQX 有 N 個啟用中的外掛記錄（列在下面），但這台與暫用的 EMQX 都找不到其程式、安裝包、外掛資料或執行中的程式。匯入會移除這些啟用記錄，以後補上程式也不會自動啟用；需要時請重新安裝並啟用。匯入前的自動備份保留原記錄。」
    `emqx.plugin-records-unused` (notice): 「這台 EMQX 有 N 個已停用、且這台與暫用的 EMQX 都沒有程式或資料的外掛記錄（列在下面），匯入會移除這些記錄。」
    H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
