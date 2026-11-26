@@ -673,6 +673,12 @@ input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
 .ha-result { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 6px 16px 14px; display: grid; gap: 6px; min-inline-size: 0; }
 .ha-result .ha-summary { margin-block-start: 8px; }
 .ha-after { margin-block-start: 18px; }
+.ha-kept { margin-block-start: 18px; display: grid; gap: 8px; min-inline-size: 0; }
+.ha-kept .subheading, .ha-kept p { margin: 0; }
+.ha-kept .ha-group-list { margin-block-start: 4px; }
+.ha-kept-item .button-group { margin-block-start: 4px; }
+.ha-group-notes { margin: 0; font-size: 14px; min-inline-size: 0; overflow-wrap: anywhere; }
+.ha-check-starts { margin: 0; overflow-wrap: anywhere; }
 .ha-job-group { margin-block-start: 6px; }
 :root.pf-v6-theme-dark .ha-issue-stop, :root.pf-v6-theme-dark .ha-group-row.needs-person { border-color: #ff8a96; }
 :root.pf-v6-theme-dark :is(.ha-issue-confirm, .ha-issue-general, .ha-confirm) { border-color: var(--text-primary); }
