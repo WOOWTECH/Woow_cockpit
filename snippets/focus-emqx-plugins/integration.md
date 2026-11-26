@@ -33,7 +33,7 @@ Replace references to `OwnLinesTests.test_plugins_are_a_notice_and_nothing_is_cl
 
 Issues: `emqx.device-plugins: notice`, `emqx.plugin-records-remove: confirm`, `emqx.plugin-records-unused: notice`.
 
-Keep native acceptance pending until a leased isolated broker validates the inventory expression and persistence across restart. Unit coverage alone does not prove runtime vendor acceptance. No lab lease or real mutation has occurred in this worker.
+The coordinator has already integrated the initial policy/messages/test references. Add the startup-override guard `d787b6a1` and native evidence from this lane before closing E-44 implementation: exact-image attempt 3 at source `a82a086f` passed 33/33 checks (`runtime-attempt3-pass.json`), including genuine available plugin/config/order retained, enabled-missing exact confirmation, no-ack refusal, ack cleanup/restart persistence, real vendor import/count/config/admin postchecks and negative admin validation. `runtime-cleanup.json` records zero owned resources, private payload removal and mutation-lock release. See `runtime-plan.md` for exact command/budget, retained failures and measurement limits. The generated delta supplements existing real EMQX full-flow evidence; it does not complete all R4 or ten-service acceptance. No own shared-row edits were made.
 
 ### Additional startup-override refusal
 
