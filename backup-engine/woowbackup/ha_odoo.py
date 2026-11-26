@@ -1725,7 +1725,7 @@ def bundled_pg16(work, app):
 def pick_pg16(work, app):
     """The PostgreSQL 16 image that opens HA's cluster: the first one on the device of PG16_IMAGES, else the pinned
     shipped verified bundle, else the pinned official image downloaded as the app's owner (OD-23)."""
-    for ref in PG16_IMAGES:
+    for ref in (*PG16_IMAGES, PG16_PINNED):
         if hatarget.image_present(work, app, ref):
             return ref
     bundled = bundled_pg16(work, app)

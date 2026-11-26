@@ -325,6 +325,12 @@ class RuntimeTests(BundleCase):
         shipped.assert_not_called()
         self.assertEqual(self.calls, [])
 
+    def test_existing_pinned_pull_also_takes_priority_without_bundle_io(self):
+        with mock.patch.object(ha_odoo.hatarget, 'image_present', side_effect=lambda _w, _a, ref: ref == ha_odoo.PG16_PINNED), \
+                mock.patch.object(bundle, 'installed_bundle') as shipped:
+            self.assertEqual(ha_odoo.pick_pg16(self.work, self.app), ha_odoo.PG16_PINNED)
+        shipped.assert_not_called()
+
     def test_podman_inspect_accepts_full_hex_without_sha256_prefix(self):
         self.install()
         real = self.podman
