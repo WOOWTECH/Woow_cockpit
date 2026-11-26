@@ -1,12 +1,39 @@
-"""Version-reviewed roots through the internal candidate, using fixture transport."""
+"""Roots the engine used to review by lists (alarm, slow_subs, trace, crl_cache, telemetry, delayed, overload_protection, and
+every root it had never heard of) through the internal candidate, using fixture transport. HAOS parity (lane EMQX-B, rows E-32,
+E-33, E-34, E-50): an unlisted field, a field of an unusual shape or a root of a kind the engine has no list for stops nothing;
+the candidate starts with this device's configuration as it is and the settings come back unchanged (the comparison after
+the import proves it), and every setting is scanned for the files it names (ha_emqx.file_scan): one in the data volume is
+carried wherever it is, one in the image or on a mount needs nothing, one nobody can place is only said."""
 import copy
+import io
+import random
+import tarfile
 import unittest
+from woowbackup import ha_emqx, ha_emqx_settings
 from woowbackup.errors import BackupError
 from . import test_ha_emqx_candidate_flow as flow
 
+
+class FilesTransport(flow.Transport):
+    """The generated transport whose export of this device's data volume also holds `extra_files` ({name: bytes})."""
+    extra_files = {}
+
+    def relay(self, args, stdout, **kwargs):
+        assert args == ['volume', 'export', 'fixture-data']
+        self.events.append('export')
+        files = {'configs/cluster.hocon': b'custom target configuration', 'authz/custom.acl': b'{deny, all}.',
+                 'certs/lab.pem': b'fixture-only'}
+        files.update(self.extra_files)
+        with tarfile.open(fileobj=stdout, mode='w|') as archive:
+            for name, data in files.items():
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+
+
 class FilelessRootsTests(unittest.TestCase):
-    def invoke(self, transport):
-        return flow.CandidateFlowTests.invoke(self, transport)
+    def invoke(self, transport, notes=None):
+        return flow.CandidateFlowTests.invoke(self, transport, notes=notes)
 
     def test_reviewed_roots_survive_import_and_restore(self):
         class ChangedRoot(flow.Transport):
@@ -28,22 +55,28 @@ class FilelessRootsTests(unittest.TestCase):
             self.assertEqual(transport.running_config[root], roots[root])
         self.assertIn('ha', transport.running_config['rule_engine']['rules'])
 
-    def test_unknown_field_refused_before_export(self):
-        transport = flow.Transport()
-        transport.config['alarm'] = {'path': '/outside/file'}
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('export', transport.events)
-
-    def test_nested_reference_and_unsupported_action_refused(self):
-        for root, value in [('trace', {'payload_encode': {'file': '/outside'}}),
-                            ('alarm', {'actions': ['shell']})]:
+    def test_an_unlisted_field_or_shape_is_no_reason_to_stop(self):
+        """E-33, E-34: the old lists of fields (alarm, slow_subs, trace, crl_cache, telemetry, delayed, overload_protection)
+        refused a field they did not know or a value of another shape; the settings are this device's own, they come back
+        exactly as they were and the comparison after the import says whether they did."""
+        cases = {'alarm': {'path': '/outside/file', 'actions': ['shell']},
+                 'trace': {'payload_encode': {'file': '/outside', 'nested': [1, {'x': None}]}},
+                 'slow_subs': {'enable': False, 'something_new': {'a': [1, 2, 3]}},
+                 'telemetry': {'enable': False, 'file': '/outside/unreviewed'},
+                 'delayed': {'enable': True, 'max_delayed_messages': [1]},
+                 'overload_protection': {'enable': False, 'backoff_new_conn': 'maybe', 'extra': True},
+                 'crl_cache': {'refresh_interval': '15m', 'capacity': 100, 'url': 'http://crl.example/'}}
+        for root, value in cases.items():
             with self.subTest(root=root):
                 transport = flow.Transport()
                 transport.config[root] = value
-                with self.assertRaises(BackupError):
-                    self.invoke(transport)
-                self.assertNotIn('export', transport.events)
+                transport.running_config = copy.deepcopy(transport.config)
+                notes = {}
+                self.assertEqual(len(self.invoke(transport, notes=notes)), 4)
+                self.assertIn('export', transport.events)
+                self.assertIn('import', transport.events)
+                self.assertEqual(transport.running_config[root], value, 'this device\'s setting is back as it was')
+                self.assertEqual(notes['unreached'], [], 'nothing it names is a file nobody can place')
 
     def test_additional_default_roots_are_restored(self):
         class ChangedDefault(flow.Transport):
@@ -62,11 +95,127 @@ class FilelessRootsTests(unittest.TestCase):
         for key, value in roots.items():
             self.assertEqual(transport.running_config[key], value)
 
-    def test_new_roots_reject_unreviewed_reference_fields(self):
+    def test_a_root_the_engine_never_heard_of_goes_through_and_its_file_in_the_data_volume_is_carried(self):
+        """E-32, E-50: no list of roots any more; whatever root names a file in the data volume gets it into the candidate."""
+        transport = FilesTransport()
+        transport.extra_files = {'certs/otel/ca.pem': b'ca', 'extra/keys/client.key': b'key'}
+        transport.config['opentelemetry'] = {'exporter': {'endpoint': 'http://collector:4317',
+                                                           'ssl_options': {'cacertfile': '/opt/emqx/data/certs/otel/ca.pem'}}}
+        transport.config['future_root'] = {'deep': [{'keyfile': 'data/extra/keys/client.key'}]}
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.invoke(transport, notes=notes)
+        self.assertEqual(transport.seed['certs/otel/ca.pem'], b'ca')
+        self.assertEqual(transport.seed['extra/keys/client.key'], b'key', 'a place the old lists never allowed')
+        for root in ('opentelemetry', 'future_root'):
+            self.assertEqual(transport.running_config[root], transport.config[root])
+        self.assertEqual((notes['missing'], notes['unreached']), ([], []))
+
+    def test_a_file_in_the_image_or_on_a_mount_is_the_candidates_too_and_said_nowhere(self):
+        """E-50: found automatically; nothing to carry, nothing to say."""
+        transport = FilesTransport()
+        transport.config['alarm'] = {'actions': ['log'], 'cacertfile': '/etc/ssl/certs/ca-certificates.crt',
+                                     'init_file': '${EMQX_ETC_DIR}/psk.txt', 'filename': '/opt/emqx/etc/acl.conf'}
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.invoke(transport, notes=notes)
+        self.assertEqual(notes['unreached'], [])
+        self.assertNotIn('etc/ssl/certs/ca-certificates.crt', transport.seed)
+        self.assertEqual(set(transport.seed), {'configs/cluster.hocon', 'authz/custom.acl', 'certs/lab.pem'})
+
+    def test_a_file_nobody_can_place_is_named_and_the_import_goes_on(self):
+        """E-50: an environment variable the broker would not resolve, a `..`, a place that exists only while a broker runs: the
+        setting is named in the notes (setting names, never a path), nothing is refused."""
+        transport = FilesTransport()
+        transport.config['alarm'] = {'actions': ['log'], 'cacertfile': '${NOT_SET_ANYWHERE}/ca.pem',
+                                     'keyfile': '/opt/emqx/data/../outside/key.pem', 'certfile': '/proc/self/environ',
+                                     'init_file': '/tmp/runtime.txt'}
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.assertEqual(len(self.invoke(transport, notes=notes)), 4)
+        self.assertEqual(notes['unreached'], ['alarm.cacertfile', 'alarm.certfile', 'alarm.init_file', 'alarm.keyfile'])
+        self.assertIn('import', transport.events)
+        self.assertNotIn('/proc', ' '.join(notes['unreached']), 'names of settings, not the paths')
+
+    def test_a_file_the_volume_lacks_is_said_not_refused(self):
+        """E-50 with E-55: a data-volume file the settings name that is not in the volume is this device's own hole."""
+        transport = FilesTransport()
+        transport.config['alarm'] = {'actions': ['log'], 'certfile': '/opt/emqx/data/certs/never-uploaded.pem'}
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.assertEqual(len(self.invoke(transport, notes=notes)), 4)
+        self.assertEqual(notes['missing'], ['certs/never-uploaded.pem'])
+
+    def test_what_stays_a_stop_stops_only_this_app_before_anything_is_exported(self):
+        """The scan's own limit (nesting deeper than 32 levels) and a configuration that is no authorization stay stops."""
+        deep = value = {}
+        for _ in range(40):
+            value['x'] = {}
+            value = value['x']
+        transport = flow.Transport()
+        transport.config['alarm'] = {'actions': ['log'], 'nested': deep}
+        transport.running_config = copy.deepcopy(transport.config)
+        with self.assertRaises(BackupError) as caught:
+            self.invoke(transport)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertNotIn('export', transport.events)
+        self.assertNotIn('start', transport.events)
+
+    def test_new_roots_accept_unreviewed_fields(self):
         for root in ('telemetry', 'delayed', 'overload_protection'):
             with self.subTest(root=root):
                 transport = flow.Transport()
                 transport.config[root] = {'file': '/outside/unreviewed'}
-                with self.assertRaises(BackupError):
-                    self.invoke(transport)
-                self.assertNotIn('export', transport.events)
+                transport.running_config = copy.deepcopy(transport.config)
+                self.invoke(transport)
+                self.assertIn('export', transport.events)
+                self.assertEqual(transport.running_config[root], {'file': '/outside/unreviewed'})
+
+
+class ScanNeverCrashesTests(unittest.TestCase):
+    """E-32, E-50: whatever shape a root has, the scan and the names of this device's own settings answer (the configuration is
+    what the broker said, but one odd value must never end the whole job with an internal error). Fixed seed, fixed count."""
+    KEYS = ['certfile', 'keyfile', 'cacertfile', 'dhfile', 'bootstrap_file', 'init_file', 'path', 'file', 'filename', 'config_files',
+            'crash_dump_file', 'type', 'enable', 'name', 'url', 'data_dir', 'x', 'authentication', 'sources', 'log', 'node', 'rules',
+            'topic', 'servers', 'states', 'install_dir', 'connectors', 'actions', 'gateway', 'rule_engine', 'rewrite',
+            'topic_metrics', 'auto_subscribe', 'exhook', 'psk_authentication', 'plugins', 'durable_sessions', 'listeners']
+    STRS = ['', '/opt/emqx/data/a/b', 'data/x', '${EMQX_ETC_DIR}/y', '$NOPE/z', '/proc/1', '/tmp/q', '..', '/a/../b', 'file://data/s',
+            'file:///opt/emqx/data/t', '-----BEGIN CERTIFICATE-----\nAAA', 'a\x00b', 'x' * 5000, '/var/log/emqx/e.log',
+            '/opt/emqx/etc/acl.conf', 'mnesia/x', '/opt/emqx/data/mnesia/y', 'data/../../etc', '\u202e/x', 'ä/文件']
+
+    def value(self, rnd, depth):
+        chance = rnd.random()
+        if depth > 7 or chance < 0.35:
+            kind = rnd.random()
+            if kind < 0.5:
+                return rnd.choice(self.STRS)
+            if kind < 0.6:
+                return [ord(char) for char in rnd.choice(self.STRS)[:30]]
+            if kind < 0.7:
+                return rnd.randint(-5, 70000)
+            if kind < 0.8:
+                return rnd.choice([True, False, None])
+            return [rnd.randint(0, 300) for _ in range(rnd.randint(0, 5))]
+        if chance < 0.7:
+            return {(rnd.choice(self.KEYS) if rnd.random() < 0.8 else rnd.choice(self.STRS)): self.value(rnd, depth + 1)
+                    for _ in range(rnd.randint(0, 5))}
+        return [self.value(rnd, depth + 1) for _ in range(rnd.randint(0, 4))]
+
+    def test_odd_values_everywhere_never_crash_the_scan_or_the_names(self):
+        rnd = random.Random(20261125)
+        for _ in range(1200):
+            config = {rnd.choice(self.KEYS): self.value(rnd, 1) for _ in range(rnd.randint(1, 7))}
+            found = ha_emqx.file_scan(config, mounts=[('/h/a', '/opt/emqx/etc/acl.conf', 'ro')],
+                                      secrets=['s,type=mount,target=/x/y'])
+            self.assertEqual(set(found), {'data', 'outputs', 'not_carried'})
+            self.assertTrue(all(ha_emqx.snapshot_name_ok(name) for name in found['data']))
+            self.assertTrue(all(path.startswith('/') and '..' not in path.split('/') for path in found['outputs']))
+            self.assertTrue(all(isinstance(name, str) and len(name) <= 120 for name in found['not_carried']))
+            own = ha_emqx_settings.own_items(config, rnd.choice([config, {'connectors': {'http': {'q': 1}}}, None]))
+            self.assertEqual(set(own), {'integrations', 'routing', 'psk', 'plugins', 'durable', 'replaced', 'mixed'})
+            extra, give_way, bad = ha_emqx.scratch_plan(found['outputs'], '/opt/emqx/log', [('/h/l', '/var/log/emqx', 'ro')])
+            self.assertTrue(set(give_way) <= set(extra) and not set(extra) & set(bad))
+
+
+if __name__ == '__main__':
+    unittest.main()

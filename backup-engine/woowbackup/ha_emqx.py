@@ -21,8 +21,12 @@ EMQX's own data export and import move the data, node-name independent, in two t
    other settings) and the table sets (TABLE_SETS: MQTT users, ACL rules, banned, Dashboard users, API keys, PSK, retained
    messages).
 2. This device's broker (the candidate). First this device's running broker is read (target_static; a stopped one is
-   started for the read and put back): its effective RAW configuration, EMQX_ETC_DIR, the override state. Its cluster.hocon
-   and the data-volume files it names are snapshotted. The candidate: the live environment and secret mounts, the live
+   started for the read and put back): its effective RAW configuration, EMQX_ETC_DIR, the override state. No setting is judged
+   against a list of roots or fields (HAOS parity, lane EMQX-B): file_scan looks at EVERY setting for the files it names, its
+   cluster.hocon and the data-volume files it names, wherever in the volume they lie, are snapshotted, files on this device's
+   mounts or in the image are the candidate's as they are this device's, and what this device already has of its own that
+   HA's import is mixed with (rules, connectors, rewrite, PSK, plugins, durable sessions) is named in the confirmation
+   (ha_emqx_settings.own_items). The candidate: the live environment and secret mounts, the live
    base.hocon/acl.conf read-only, the snapshot in an otherwise empty data volume, `emqx ctl data import`; then HA's
    authentication and authorization roots are made exactly HA's (D0: identities, `no_match`, `deny_action`; the ACL file
    HA's import wrote replaces this device's: a notice, nothing written back), this device's bootstrap file stays attached to
@@ -89,6 +93,15 @@ ISSUES = {
     'emqx.target-file-missing': 'notice',     # E-55: a file this device's settings name is not there
     'emqx.sys-ticker': 'notice',              # E-13: the system messages of the throwaway broker could not be paused
     'emqx.receipt-unreadable': 'notice',      # E-84: the administrator tables' receipt could not be read
+    'emqx.data-dir-moved': 'stop',            # E-36: this device's data directory is not the image's: HA's data would land elsewhere
+    'emqx.output-dir-unusable': 'stop',       # E-35: a log or crash-dump place the candidate cannot be given safely
+    'emqx.dirs-follow-device': 'auto',        # E-23, E-24, E-35: this device's own etc / log directories are the candidate's too
+    'emqx.files-not-carried': 'notice',       # E-29, E-30, E-32, E-50: files the settings name that the candidate cannot carry
+    'emqx.device-integrations': 'confirm',    # E-41: this device's own rules, connectors, actions, sources, bridges, gateways
+    'emqx.device-routing': 'confirm',         # E-42: ... topic rewrite, topic metrics, auto-subscribe, ExHook servers
+    'emqx.device-psk': 'confirm',             # E-43: ... PSK authentication
+    'emqx.device-plugins': 'notice',          # E-44: ... plugins (they live in the container, not in the data)
+    'emqx.durable-sessions': 'confirm',       # E-47: the messages queued for offline devices are not in HA's export
 }
 STATE = 'data/emqx'
 DATA = 'data/emqx/data'
@@ -114,8 +127,19 @@ REQUIRED_TABLES = ('emqx_authn_mnesia', 'emqx_acl', 'emqx_banned', 'emqx_admin',
 # This device's broker: the image's etc dir (vendor rel/emqx_vars:16 + rebar.config.erl:407: "$BASE_RUNNER_ROOT_DIR/etc"
 # in the tgz/docker build, exported by bin/emqx:269-273), proven in the running broker before its template is resolved.
 ETC_DIR = '/opt/emqx/etc'
-ACL_TEMPLATE = '${EMQX_ETC_DIR}/acl.conf'
 ETC_EXPR = 'io:format("WOOWETC:~s:END", [os:getenv("EMQX_ETC_DIR", "")]).'
+# The broker's working directory: bin/emqx does `cd "$BASE_RUNNER_ROOT_DIR"` before it starts anything ("so relative paths like
+# etc/ and data/ still work", vendor bin/emqx:1099-1101), so a relative path in a setting (`data/authz/acl.conf`, which the
+# Dashboard writes for an ACL it edited, emqx_authz_file.erl:120-121) is relative to it.
+BASE_DIR = '/opt/emqx'
+DATA_PREFIX = DATA_TARGET + '/'
+# Places that exist only while a broker runs, or that podman gives a read-only container as a private tmpfs.
+RUNTIME_DIRS = ('/proc', '/sys', '/dev', '/run', '/tmp', '/var/tmp')
+WRITABLE_DIRS = ('/tmp', '/var/tmp', '/run', '/dev/shm')
+# Where the candidate may be given a scratch directory for what EMQX writes (logs, crash dumps), strictly below one of these;
+# never anything of /opt/emqx itself besides its log and data volumes (bin, lib, erts-*, releases, etc, plugins ... are the
+# image's own files and a mount would hide them).
+SCRATCH_ROOTS = ('/var', '/mnt', '/srv', '/home', '/root', '/data', '/log', '/logs', '/opt')
 SOURCE_NAMES = {'file': 'ACL 檔案', 'built_in_database': '內建資料庫', 'http': 'HTTP', 'redis': 'Redis', 'mysql': 'MySQL',
                 'postgresql': 'PostgreSQL', 'mongodb': 'MongoDB', 'ldap': 'LDAP', 'client_info': '用戶端資訊'}
 # The EMQX_* settings that decide who may connect and what a client may do: this device's own win over HA's after the next
@@ -511,6 +535,28 @@ class Target:
         self.access_env = sorted(names)
         return env, files
 
+    def file_env(self, name):
+        """E-23: the value of the setting `name` in this device's `EnvironmentFile=` files (the last file that sets it wins; the
+        Quadlet's own `Environment=` is looked at first by the caller, as podman gives it the stronger place), None when none
+        sets it or the value is not a plain one. Only tells where this device's log folder is: podman itself reads the files for
+        the candidate (candidate_env). A file that is not under the owner's home or cannot be read is skipped."""
+        pattern = re.compile(r'\s*' + re.escape(name) + r'=(?:"([^"\\$`]{0,1000})"|\'([^\'$]{0,1000})\'|([^\s"\'\\$`#]{0,1000}))\s*\Z')
+        found = None
+        for value in self.env_files:
+            path = value.lstrip('-')
+            rel = path[3:] if path.startswith('%h/') else None
+            if rel is None or not re.fullmatch(r'[A-Za-z0-9._/-]{1,200}', rel) or '..' in rel.split('/'):
+                continue
+            try:
+                data = self._runner.read_file(rel, max_bytes=256 * 1024)
+            except BackupError:
+                continue
+            for raw in data.split(b'\n'):
+                match = pattern.match(raw.decode('utf-8', 'replace').rstrip('\r'))
+                if match:
+                    found = next(group for group in match.groups() if group is not None)
+        return found
+
 
 # ====================================================================== the brokers
 
@@ -897,8 +943,7 @@ def target_config_snapshot(volume_tar, snapshot_path, required, *, limit=MAX_HOC
     if not names or 'configs/cluster.hocon' not in names:
         raise BackupError('incompatible', '缺少目標 EMQX 設定快照所需的檔案清單。')
     for name in names:
-        if (not isinstance(name, str) or ha_odoo._norm(name) != name or
-                not name.startswith(('configs/', 'authz/', 'certs/'))):
+        if not snapshot_name_ok(name):
             raise BackupError('incompatible', '目標 EMQX 設定參照了不允許的路徑。')
     found, total = set(), 0
     out = hacommon.FileTar(snapshot_path)
@@ -947,45 +992,231 @@ def ascii_path(value):
     return None
 
 
-def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None, etc_dir=None):
-    """The files of this device's own authorization sources the candidate needs to start (an already-decoded effective
-    authorization object). Host paths are never read here. Exact existing read-only file mounts may satisfy an external
-    reference.
+def _text_path(value):
+    """`value` as text when it is a path a setting holds: a string, or the list of printable ASCII codes EMQX makes of a path
+    it wrote itself (ascii_path); else None."""
+    if isinstance(value, str):
+        return value
+    if (isinstance(value, list) and value and len(value) <= 4096
+            and all(type(char) is int and 32 <= char < 127 for char in value)):
+        return ''.join(map(chr, value))
+    return None
 
-    HAOS parity (D0): HA's authorization replaces this device's after the import, so this device's sources are no longer
-    judged -- not their types (E-26, E-27: only a list that cannot be read at all stops), not the fields of a built-in
-    database source (E-31) -- they only name files. A source other than `file` has none of its own (its TLS files are found
-    by configuration_references' walk). A file source's path may be the list of character codes EMQX makes (E-28).
-    The vendor's own template `${EMQX_ETC_DIR}/acl.conf` (EMQX 5.8.9 resolves it with
-    naive_env_interpolation: emqx_authz_file.erl:116-117, emqx_schema.erl:3466-3503) is
-    accepted only when the caller proved `etc_dir` == ETC_DIR in the running broker (target_etc_dir); it must then be
-    the same unique read-only mount as the plain path.
-    """
+
+PATH_ENV = re.compile(r'\$(?:\{([A-Za-z_][A-Za-z0-9_]{0,63})\}|([A-Za-z_][A-Za-z0-9_]{0,63}))(?:/(.*))?', re.S)
+PATH_BAD = re.compile(r'[\x00-\x1f\x7f\\]')
+
+
+def resolve_path(value, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None):
+    """The absolute path a file setting of this device means to its broker, normalised lexically (nothing is followed or
+    read), or None when it cannot be told: not text, control characters, a `..`, a `$NAME` this device's broker would not be
+    able to resolve. The broker resolves a leading `$NAME/` or `${NAME}/` from its environment (emqx_schema.erl:3466-3503:
+    `etc_dir` is the broker's EMQX_ETC_DIR, `log_dir` its EMQX_LOG_DIR, `env` the rest of its Quadlet's EMQX_* settings), a
+    `file://` secret takes the path after it, and a relative path is relative to /opt/emqx (BASE_DIR)."""
+    text = _text_path(value)
+    if text is None or not text or len(text) > 4096 or PATH_BAD.search(text):
+        return None
+    if text.startswith('file://'):
+        text = text[len('file://'):]
+    if text.startswith('$'):
+        match = PATH_ENV.fullmatch(text)
+        if match is None:
+            return None
+        name = match.group(1) or match.group(2)
+        base = {'EMQX_ETC_DIR': etc_dir, 'EMQX_LOG_DIR': log_dir}.get(name) or (env or {}).get(name)
+        if not isinstance(base, str) or not base.startswith('/') or '$' in base or PATH_BAD.search(base):
+            return None
+        text = base.rstrip('/') + '/' + (match.group(3) or '')
+    if not text.startswith('/'):
+        text = BASE_DIR + '/' + text
+    parts = [part for part in text.split('/') if part not in ('', '.')]
+    if not parts or '..' in parts:
+        return None
+    return '/' + '/'.join(parts)
+
+
+def snapshot_name_ok(name):
+    """A data-volume file a setting names that may be carried: a normalised relative name that is not the database
+    (`mnesia/`) and not what the converted volume leaves out anyway (DROPPED: generated configs, backups, traces)."""
+    return (isinstance(name, str) and ha_odoo._norm(name) == name and name.split('/', 1)[0] != 'mnesia'
+            and DROPPED.fullmatch(name) is None)
+
+
+def mount_targets(mounts, secrets=()):
+    """The places of the candidate's filesystem that are this device's own mounts (host files and folders, mounted secrets):
+    the candidate gets them exactly as this device has them."""
+    targets = set()
+    for item in mounts or ():
+        if len(item) == 3 and isinstance(item[1], str) and item[1].startswith('/'):
+            targets.add(item[1].rstrip('/') or '/')
+    for spec in secrets or ():
+        target = tempctr.secret_mount_path(spec)
+        if target:
+            targets.add(target)
+    return targets
+
+
+def _under(path, roots):
+    return any(path == root or path.startswith(root.rstrip('/') + '/') for root in roots)
+
+
+def _file_key(key):
+    """Whether a setting of this name holds a file: the ones EMQX names so (`certfile`, `keyfile`, `cacertfile`, `dhfile`,
+    `bootstrap_file`, `init_file`, `crash_dump_file`, `config_files`, `filename`) and anything else that ends in `file` or
+    `files`. `path` is judged by what it sits in (file_scan)."""
+    name = key.lower() if isinstance(key, str) else ''
+    return name == 'filename' or name.endswith(('file', 'files'))
+
+
+def file_scan(config, *, etc_dir=ETC_DIR, log_dir=LOG_TARGET, env=None, mounts=(), secrets=()):
+    """HAOS parity (E-23, E-24, E-29, E-30, E-32, E-35, E-36, E-50): EVERY setting of this device, whatever its root, is looked
+    at for the files it names, instead of reviewed lists of roots and fields. A setting names a file when its name says so
+    (_file_key; `path` of an authorization source of type `file`; the log handlers' and the crash dump's output paths -- the
+    value may then be relative, `data/authz/acl.conf`, the form the Dashboard writes) or its value is an absolute path into
+    the data directory (`/opt/emqx/data/…`) or a `file://` secret. Where the file is decides what the candidate needs
+    (resolve_path):
+
+    * in the data volume: it is carried, so the snapshot takes it (`data`: relative names);
+    * on one of this device's mounts (a host file or folder, a secret) or anywhere else in the image: the candidate has it
+      the way this device has it; nothing to carry;
+    * where it exists only while a broker runs (/proc, /tmp ...), below the data volume's database, or at a place that cannot
+      be told (an environment variable this device's broker would not resolve, a `..`): it cannot be carried, the setting
+      is named (`not_carried`: setting names, never a path or a value) and the import goes on;
+    * output paths (log files, the crash dump) are never read: `outputs` (absolute) tells where EMQX writes.
+
+    The bootstrap files of the authenticators are bootstrap_references' (E-48, E-49). Returns {'data', 'outputs',
+    'not_carried'} (sets). Nesting deeper than 32 levels stops the app, as ever."""
+    found = {'data': set(), 'outputs': set(), 'not_carried': set()}
+    targets = mount_targets(mounts, secrets)
+    authentication = config.get('authentication')
+    entries = authentication if isinstance(authentication, list) else []
+
+    def visit(value, path, parent, depth):
+        if depth > 32:
+            raise BackupError('incompatible', 'EMQX 設定巢狀層級超過限制。')
+        text = _text_path(value)
+        if text is not None:
+            leaf(text, path, parent)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                visit(item, path + (str(key)[:60],), value, depth + 1)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, path, parent, depth + 1)
+
+    def leaf(text, path, parent):
+        key = path[-1] if path else ''
+        if not text.strip():
+            return   # a file setting left empty (`bootstrap_file = ""`, `init_file = ""`) names nothing
+        if '\n' in text or text.lstrip().startswith('-----BEGIN'):
+            return   # the content of a certificate or key given in the setting itself: nothing to carry
+        if key == 'bootstrap_file' and any(parent is entry for entry in entries):
+            return   # an authenticator's own bootstrap file: bootstrap_references (E-48, E-49)
+        output = (path[:2] == ('log', 'file') and key == 'path') or (path[:1] == ('node',) and key == 'crash_dump_file')
+        named = _file_key(key)
+        if key == 'path' and not output:
+            named = isinstance(parent, dict) and parent.get('type') == 'file'
+        if not (output or named or text.startswith((DATA_PREFIX, 'file://'))):
+            return   # (a relative `data/…` is a path only where the setting says it names a file: `data/#` can be a topic)
+        resolved = resolve_path(text, etc_dir=etc_dir, log_dir=log_dir, env=env)
+        name = '.'.join(path)[:120]
+        if output:
+            if resolved is not None and not (isinstance(parent, dict) and parent.get('enable') is False):
+                found['outputs'].add(resolved)   # (a log handler that is switched off writes nowhere)
+        elif resolved is None:
+            found['not_carried'].add(name)
+        elif resolved.startswith(DATA_PREFIX):
+            relative = resolved[len(DATA_PREFIX):]
+            if snapshot_name_ok(relative):
+                found['data'].add(relative)
+            else:
+                found['not_carried'].add(name)
+        elif _under(resolved, targets):
+            return
+        elif _under(resolved, RUNTIME_DIRS):
+            found['not_carried'].add(name)
+
+    for root, value in config.items():
+        visit(value, (str(root)[:60],), config, 1)
+    return found
+
+
+def scratch_plan(outputs, log_dir, mounts=()):
+    """E-23, E-35: where the candidate has to be able to write besides its data and log volumes -- the folders of the log files
+    and the crash dump (`outputs`, absolute paths) and EMQX_LOG_DIR (`log_dir`) -- when this device keeps them elsewhere (the
+    bin/emqx script and the log handlers do not start without a writable log folder). The candidate's own log volume is
+    mounted there as scratch space: logs are not carried (what the converted backup holds of the log volume is only its top
+    folder). Returns (folders to give it, mount targets of this device's that give way to such a folder -- the device's real
+    folder is never mounted into the candidate for writing --, folders it cannot be given). A folder below a mount of this
+    device's, anywhere in /opt/emqx (the image's own files) or in a place that is not one of SCRATCH_ROOTS cannot be given."""
+    folders = {path.rsplit('/', 1)[0] or '/' for path in outputs}
+    if log_dir is not None:
+        folders.add(log_dir)
+    mount_at = [item[1].rstrip('/') for item in mounts or () if len(item) == 3 and isinstance(item[1], str)]
+    extra, give_way, bad = [], [], []
+    for folder in sorted(folders):
+        if _under(folder, (LOG_TARGET, DATA_TARGET, *WRITABLE_DIRS)):
+            continue
+        if folder in mount_at:
+            extra.append(folder)
+            give_way.append(folder)
+        elif _under(folder, mount_at):
+            bad.append(folder)
+        elif (not any(folder.startswith(root + '/') for root in SCRATCH_ROOTS) or _under(folder, (BASE_DIR,))
+              or folder.count('/') < 2 or tempctr.TARGET_RE.fullmatch(folder) is None):
+            bad.append(folder)
+        else:
+            extra.append(folder)
+    return extra, give_way, bad
+
+
+DATA_DIR_MOVED = ('EMQX 不能搬過來：這台 EMQX 的資料目錄（node.data_dir）不在 /opt/emqx/data，HA 的資料會放到錯的位置，已停止；'
+                  '這台沒有任何改變。')
+DATA_DIR_ACTION = '請先把這台 EMQX 的資料目錄改回 /opt/emqx/data（環境變數 EMQX_NODE__DATA_DIR），再匯入 EMQX；其他應用不受影響。'
+
+
+def check_data_dir(config):
+    """E-36: the one node setting that still stops the app -- a data directory that is not this image's, where HA's data
+    would land in the wrong place. Every other node setting (extra applications, configuration files, shard transports, the
+    etc directory) is this device's own and comes back as it is."""
+    node = config.get('node')
+    if isinstance(node, dict) and 'data_dir' in node and not ha_emqx_settings.is_data_dir(node['data_dir']):
+        raise haissues.stopped(haissues.Issue('emqx.data-dir-moved', 'stop', DATA_DIR_MOVED, action=DATA_DIR_ACTION),
+                               'incompatible')
+
+
+def check_sources(authorization):
+    """This device's effective authorization is what the broker answered: a dictionary whose `sources` is a list of dictionaries,
+    a file source with a path that is text. What is none of that is not a setting to carry but an answer that cannot be
+    read: only this app stops (E-25's rule, and the one thing of the old authorization checks that stays)."""
     if not isinstance(authorization, dict) or not isinstance(authorization.get('sources'), list):
         raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
-    references = {'configs/cluster.hocon'} if include_cluster else set()
     for source in authorization['sources']:
         if not isinstance(source, dict):
             raise BackupError('incompatible', '無法取得目標 EMQX 的有效授權來源。')
-        if source.get('type') != 'file':
-            continue
-        path = ascii_path(source.get('path'))
-        if not path or '\x00' in path:
-            raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑無效。')
-        if path == ACL_TEMPLATE and etc_dir == ETC_DIR:
-            path = ETC_DIR + '/acl.conf'   # resolved exactly as the broker does, then the same mount rule
-        prefix = DATA_TARGET + '/'
-        if path.startswith(prefix):
-            relative = path[len(prefix):]
-            if ha_odoo._norm(relative) != relative or not relative.startswith(('authz/', 'configs/', 'certs/')):
-                raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑不受支援。')
-            references.add(relative)
-        else:
-            matches = [m for m in mounts if len(m) == 3 and m[1] == path and m[2] == 'ro']
-            if (not path.startswith('/') or ha_odoo._norm(path[1:]) != path[1:] or len(matches) != 1
-                    or not isinstance(matches[0][0], str) or not matches[0][0].startswith('/')):
-                raise BackupError('incompatible', '目標 EMQX 的 ACL 未對應至唯一的唯讀掛載。')
-    return references
+        if source.get('type') == 'file':
+            path = ascii_path(source.get('path'))
+            if not path or '\x00' in path:
+                raise BackupError('incompatible', '目標 EMQX 的 ACL 路徑無效。')
+
+
+def authorization_file_references(authorization, mounts, *, include_cluster=True, observe=None, etc_dir=None, log_dir=None,
+                                  secrets=(), found=None):
+    """The data-volume files this device's own authorization sources (an already-decoded effective authorization object) and
+    every other setting inside it name, as relative names, with `configs/cluster.hocon` when `include_cluster`. HAOS parity
+    (D0): HA's authorization replaces this device's after the import, so this device's sources are not judged -- not their
+    types (E-26, E-27), not their fields (E-31), and, with the generic scan (file_scan), not where their files are either
+    (E-29, E-30): a file in the data volume is carried wherever in it it lies, one on a mount or in the image is the
+    candidate's the way it is this device's, one that cannot be told is only named (`found['not_carried']`). A path may be the
+    list of character codes EMQX makes of it (E-28) and may start with the vendor's `${EMQX_ETC_DIR}`. What stays refused is
+    what is no authorization at all: sources that are no list, a file source without a path or with a path that is no text.
+    Host paths are never read here."""
+    check_sources(authorization)
+    scan = file_scan({'authorization': authorization}, etc_dir=ETC_DIR if etc_dir is None else etc_dir,
+                     log_dir=LOG_TARGET if log_dir is None else log_dir, mounts=mounts, secrets=secrets)
+    if found is not None:
+        found.update(scan)
+    return scan['data'] | ({'configs/cluster.hocon'} if include_cluster else set())
 
 
 def snapshot_target_volume(work, app, volume, staging, required, *, absent=(), missing=None):
@@ -1020,8 +1251,7 @@ def import_target_snapshot(tmp, snapshot_path, ids):
             with ha_odoo._live_tar(snapshot_path, '目標 EMQX 設定快照') as source:
                 for member in source:
                     name = ha_odoo._norm(member.name)
-                    if (not name or not member.isfile() or name != member.name or
-                            not name.startswith(('configs/', 'authz/', 'certs/'))):
+                    if not name or not member.isfile() or name != member.name or not snapshot_name_ok(name):
                         raise BackupError('incompatible', 'EMQX 設定快照含有不支援的項目。')
                     parts = name.split('/')
                     for depth in range(1, len(parts)):
@@ -1189,43 +1419,6 @@ def _bootstrap_path(authenticator, path, mounts, secrets):
     return path
 
 
-# EMQX v5.8.9: emqx_schema fields(alarm/trace), emqx_slow_subs_schema fields(slow_subs).
-# These roots have no file dependencies. Reject additional fields rather than assuming that
-# a future schema version shares that property.
-FILELESS_ROOT_FIELDS = {
-    'alarm': {'actions', 'size_limit', 'validity_period'},
-    'slow_subs': {'enable', 'threshold', 'expire_interval', 'top_k_num', 'stats_type'},
-    'trace': {'payload_encode'},
-    'crl_cache': {'refresh_interval', 'http_timeout', 'capacity'},
-    'telemetry': {'enable'},
-    'delayed': {'enable', 'max_delayed_messages'},
-    'overload_protection': {'enable', 'backoff_delay', 'backoff_gc', 'backoff_hibernation', 'backoff_new_conn'},
-}
-
-
-def validate_fileless_roots(config):
-    for root, fields in FILELESS_ROOT_FIELDS.items():
-        if root not in config:
-            continue
-        value = config[root]
-        if not isinstance(value, dict) or set(value) - fields:
-            raise BackupError('incompatible', 'EMQX 設定超出已核對版本的欄位範圍。')
-        for key, item in value.items():
-            if root == 'alarm' and key == 'actions':
-                if not isinstance(item, list) or any(action not in ('log', 'publish') for action in item):
-                    raise BackupError('incompatible', 'EMQX alarm actions 格式不受支援。')
-            elif type(item) not in (str, int, bool):
-                raise BackupError('incompatible', 'EMQX 無檔案設定欄位格式不受支援。')
-
-
-SUPPORTED_CONFIGURATION_ROOTS = frozenset({
-    'authorization', 'authentication', 'listeners', 'dashboard', 'mqtt', 'zones',
-    'flapping_detect', 'force_shutdown', 'force_gc', 'conn_congestion', 'stats',
-    'sys_topics', 'broker', 'retainer', *FILELESS_ROOT_FIELDS, *ha_emqx_settings.ROOTS,
-    *ha_emqx_settings.PASSIVE_ROOTS, *ha_emqx_settings.MONITOR_ROOTS,
-})
-
-
 # Exact files named by emqx_schema:cert_file/2 in 5.8.9. Other substitutions are rejected.
 IMAGE_TLS_FILES = {prefix + name: '/opt/emqx/etc/certs/' + name
                    for prefix in ('${EMQX_ETC_DIR}/certs/', '/opt/emqx/etc/certs/')
@@ -1268,49 +1461,24 @@ def tls_fingerprints(execute, paths):
 
 
 def configuration_references(config, mounts, secrets=(), *, include_cluster=True, observe=None, etc_dir=None,
-                             lost=None):
-    """Resolve file ACL and explicit TLS file fields in supported configuration roots.
-
-    Unknown roots are rejected until their schema/file dependencies have been reviewed.
-    This intentionally restrictive candidate is not a universal EMQX schema parser.
-    """
-    validate_fileless_roots(config)
+                             lost=None, log_dir=None, env=None, found=None):
+    """The data-volume files this device's configuration names, as relative names (with `configs/cluster.hocon` when
+    `include_cluster`). HAOS parity: no root and no field is judged against a reviewed list any more (E-32 unknown roots,
+    E-33 and E-34 unlisted fields, E-37 rpc, E-39 log handlers, E-40 a bootstrap field that is no text, E-45 Prometheus,
+    E-46 the system monitor, E-41..E-44 and E-47 what this device has of its own: ha_emqx_settings.own_items says those); the
+    candidate starts with exactly this device's configuration and every setting is scanned for the files it names (file_scan:
+    E-23, E-24, E-29, E-30, E-35, E-36, E-50). What still stops the app: a data directory that is not the image's (E-36), a
+    clustered broker (E-38, not this lane's), a nesting deeper than 32 levels, and the bootstrap rules of bootstrap_references
+    (without `lost`). `found` (a dict) gets the scan's `data`, `outputs` and `not_carried`."""
+    check_data_dir(config)
     ha_emqx_settings.validate(config, mounts)
-    ha_emqx_settings.validate_passive(config)
-    ha_emqx_settings.validate_monitoring(config)
-    if set(config) - SUPPORTED_CONFIGURATION_ROOTS:
-        raise BackupError('incompatible', 'EMQX 含有尚未完成檔案參照審查的設定類型。')
+    check_sources(config.get('authorization'))
     bootstrap_references(config, mounts, secrets, lost=lost)
-    required = authorization_file_references(config['authorization'], mounts, include_cluster=False, observe=observe,
-                                             etc_dir=etc_dir)
-    for key in ('banned', 'api_key'):
-        bootstrap_path = config.get(key, {}).get('bootstrap_file')
-        if bootstrap_path:
-            required.update(authorization_file_references(
-                {'sources': [{'type': 'file', 'path': bootstrap_path}]}, mounts, include_cluster=False))
-    def visit(value, depth=0):
-        if depth > 32:
-            raise BackupError('incompatible', 'EMQX 設定巢狀層級超過限制。')
-        if isinstance(value, dict):
-            for key, item in value.items():
-                if key in ('certfile', 'keyfile', 'cacertfile', 'dhfile') and item:
-                    if isinstance(item, str) and item in IMAGE_TLS_FILES:
-                        continue
-                    required.update(authorization_file_references(
-                        {'sources': [{'type': 'file', 'path': item}]}, mounts, include_cluster=False))
-                elif key == 'bootstrap_file':
-                    if not any(value is entry for entry in config.get('authentication', [])):
-                        raise BackupError('incompatible', 'EMQX bootstrap 出現在不支援的設定位置。')
-                elif key in ('filename', 'file', 'path'):
-                    # ACL paths are already resolved, but resolving again keeps this walk uniform.
-                    if key != 'path' or value.get('type') != 'file':
-                        raise BackupError('incompatible', 'EMQX 含有尚未支援的檔案參照。')
-                visit(item, depth + 1)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item, depth + 1)
-    visit({key: value for key, value in config.items() if key not in ('node', 'cluster', 'log', 'banned', 'api_key')})
-    return required | ({'configs/cluster.hocon'} if include_cluster else set())
+    scan = file_scan(config, etc_dir=ETC_DIR if etc_dir is None else etc_dir, log_dir=LOG_TARGET if log_dir is None else log_dir,
+                     env=env, mounts=mounts, secrets=secrets)
+    if found is not None:
+        found.update(scan)
+    return scan['data'] | ({'configs/cluster.hocon'} if include_cluster else set())
 
 
 OVERRIDE_STATE_EXPR = ('D=file:read_link_info("/opt/emqx/data/configs"), '
@@ -1333,14 +1501,22 @@ def target_override_state(execute):
 
 
 def target_etc_dir(execute):
-    """EMQX_ETC_DIR of a running broker (fixed eval, nothing interpolated). Only ETC_DIR is supported: the vendor
-    resolves `${EMQX_ETC_DIR}` with os:getenv (emqx_schema.erl:3466-3503)."""
+    """EMQX_ETC_DIR of a running broker (fixed eval, nothing interpolated). E-24: whatever directory the broker says is the one
+    the vendor's `${EMQX_ETC_DIR}` means (emqx_schema.erl:3466-3503 resolves it with os:getenv); the candidate starts with the
+    same environment, so it is the candidate's too, and this device's ACL file is looked for there. Only an answer that is no
+    plain absolute directory is no answer. An empty one (the variable is not set: the vendor script exports it, so the image
+    does not do this) is the image's ETC_DIR."""
     result = execute(['emqx', 'eval', ETC_EXPR])
     raw = (result.stdout or b'').strip()
-    if result.returncode == 0 and raw in (b'WOOWETC:' + ETC_DIR.encode() + b':ENDok', b'WOOWETC:' + ETC_DIR.encode() + b':END'):
-        return ETC_DIR
-    if result.returncode == 0 and raw.startswith(b'WOOWETC:') and len(raw) <= 4096:
-        raise BackupError('incompatible', 'EMQX 不能搬過來：這台 EMQX 的設定目錄（EMQX_ETC_DIR）不是 /opt/emqx/etc，尚未支援。')
+    match = (re.fullmatch(rb'WOOWETC:([^\x00-\x1f\x7f]{0,1024}):END(?:ok)?', raw)
+             if result.returncode == 0 and len(raw) <= 4096 else None)
+    if match is not None:
+        text = match.group(1).decode('utf-8', 'replace')
+        if not text:
+            return ETC_DIR
+        resolved = resolve_path(text, etc_dir=None, log_dir=None) if text.startswith('/') and '$' not in text else None
+        if resolved is not None and resolved == (text.rstrip('/') or '/'):
+            return resolved
     raise BackupError('incompatible', '無法安全取得 EMQX 有效設定，已停止。')
 
 
@@ -1363,16 +1539,27 @@ def ensure_target_running(work, app, target):
         hatarget.ensure_running(work, app, target.container, ready=broker_ready)
 
 
-def target_static(work, app, target, execute, *, observe=None, lost=None):
+def device_log_dir(target):
+    """The folder this device's `${EMQX_LOG_DIR}` is: its Quadlet's EMQX_LOG_DIR, else the image's LOG_TARGET (E-23); None
+    when that setting is no plain absolute folder."""
+    env = getattr(target, 'env', None)
+    value = env.get('EMQX_LOG_DIR') if isinstance(env, dict) else None
+    if not value and callable(getattr(target, 'file_env', None)):
+        value = target.file_env('EMQX_LOG_DIR')   # podman gives `Environment=` the stronger place; an EnvironmentFile= may hold it
+    if not value:
+        return LOG_TARGET
+    return resolve_path(value, etc_dir=None, log_dir=None) if isinstance(value, str) and value.startswith('/') else None
+
+
+def target_static(work, app, target, execute, *, observe=None, lost=None, notes=None):
     """The read-only part of this device's preflight, shared by the check and the conversion: the effective RAW
-    configuration, its file references and the override state. HAOS parity (D0): this device's authorization sources
-    are no longer judged (E-26, E-27, E-31); HA's replace them. Every refusal names what is not supported; nothing is
-    changed. `lost`: see bootstrap_references."""
+    configuration, its file references and the override state. HAOS parity (D0): this device's authorization sources are no
+    longer judged (E-26, E-27, E-31); HA's replace them. Nor are its etc and log directories (E-23, E-24: the candidate has
+    the same environment, and the vendor's `${EMQX_ETC_DIR}` is looked up where this device's broker says it is) or the
+    places its files are in (file_scan). `lost`: see bootstrap_references. `notes` (a dict) gets `etc_dir`, `log_dir` and the
+    scan's findings (`scan`)."""
     def stage(name):
         if observe is not None:observe(name)
-    if (target.env.get('EMQX_LOG_DIR', LOG_TARGET) != LOG_TARGET or
-            target.env.get('EMQX_ETC_DIR', ETC_DIR) != ETC_DIR):
-        raise BackupError('incompatible', 'EMQX 自訂日誌目錄尚未支援。')
     stage('target_config')
     try:
         original=read_effective_config(execute)
@@ -1381,10 +1568,14 @@ def target_static(work, app, target, execute, *, observe=None, lost=None):
             raise BackupError('incompatible', NOT_RUNNING) from None
         raise
     etc=target_etc_dir(execute)
+    log_dir=device_log_dir(target)
     stage('target_references')
+    scan={}
     explicit=configuration_references(original,target.files,target.secrets,include_cluster=False,observe=observe,
-                                      etc_dir=etc, lost=lost)
+                                      etc_dir=etc,lost=lost,log_dir=log_dir,env=getattr(target,'env',None),found=scan)
     state=target_override_state(execute)
+    if notes is not None:
+        notes.update(etc_dir=etc,log_dir=log_dir,scan=scan)
     return original,explicit,state
 
 
@@ -1402,7 +1593,11 @@ def capture_target_seed(work, app, target, staging, *, notes=None):
     without it as this device's own broker has); effective configuration/state are re-read before candidate boot, and
     when they changed meanwhile the whole read is made again (E-58, up to CAPTURE_ATTEMPTS times: `notes['rereads']`).
     Only a configuration that keeps changing stops the app (`emqx.config-changing`). `notes['lost']`: the reasons a
-    bootstrap file of this device could not be followed (E-48, E-49).
+    bootstrap file of this device could not be followed (E-48, E-49). HAOS parity: the files are those of the generic scan
+    of every setting (file_scan); `notes` also gets `etc_dir` and `log_dir` (this device's, E-23, E-24), `unreached` (the
+    settings whose files cannot be carried, E-29, E-30, E-50), `scratch` and `scratch_drop` (the folders the candidate is
+    given for what EMQX writes, E-35) and `dirs` (the names of this device's own non-default folders). A place for the
+    log or the crash dump that the candidate cannot be given stops only this app (`emqx.output-dir-unusable`).
     """
     observe=getattr(work,'_emqx_build_stage',None)
     def stage(name):
@@ -1413,8 +1608,13 @@ def capture_target_seed(work, app, target, staging, *, notes=None):
     for attempt in range(1, CAPTURE_ATTEMPTS + 1):
         if callable(getattr(work, 'checkpoint', None)):
             work.checkpoint()
-        lost, missing = [], []
-        original,explicit,state=target_static(work,app,target,execute,observe=observe,lost=lost)
+        lost, missing, seen = [], [], {}
+        original,explicit,state=target_static(work,app,target,execute,observe=observe,lost=lost,notes=seen)
+        scan=seen.get('scan') or {}
+        extra,give_way,bad=scratch_plan(scan.get('outputs', ()),seen.get('log_dir'),target.files)
+        if bad:
+            raise haissues.stopped(haissues.Issue('emqx.output-dir-unusable', 'stop', OUTPUT_DIR_UNUSABLE, sorted(bad),
+                                                  action=OUTPUT_DIR_ACTION), 'incompatible')
         absent=({'configs/cluster.hocon'} if state in ('absent','parent-absent')
                 and 'configs/cluster.hocon' not in explicit else set())
         required=explicit | {'configs/cluster.hocon'}
@@ -1427,7 +1627,11 @@ def capture_target_seed(work, app, target, staging, *, notes=None):
         stage('target_consistency')
         if target_override_state(execute)==state and read_effective_config(execute)==original:
             if notes is not None:
-                notes.update(lost=lost, missing=missing, rereads=attempt - 1)
+                dirs=sorted({path for path in (seen.get('etc_dir'),seen.get('log_dir'),*extra) if path
+                             and path not in (ETC_DIR,LOG_TARGET)})
+                notes.update(lost=lost, missing=missing, rereads=attempt - 1, etc_dir=seen.get('etc_dir', ETC_DIR),
+                             log_dir=seen.get('log_dir', LOG_TARGET), unreached=sorted(scan.get('not_carried', ())),
+                             scratch=extra, scratch_drop=give_way, dirs=dirs)
             return original,snapshot,fingerprints
         os.unlink(snapshot)
         if attempt < CAPTURE_ATTEMPTS:
@@ -1874,15 +2078,23 @@ def check_snapshot_files(read_candidate, digests):
     return replaced
 
 
-def check_candidate_bootstrap(tmp, target, config, *, lost=None):
+def check_candidate_bootstrap(tmp, target, config, *, lost=None, etc_dir=ETC_DIR, log_dir=LOG_TARGET):
     """The candidate can read this device's bootstrap files. E-61: with `lost` (a list) one it cannot read is not refused:
-    its path is appended and the caller says this device's pre-created accounts may have to be made again."""
+    its path is appended and the caller says this device's pre-created accounts may have to be made again. The banned list's
+    and the API keys' bootstrap files are found by the same resolver as every other file of a setting (resolve_path); one
+    whose place cannot be told is looked at like one the candidate cannot read."""
     paths = bootstrap_references(config, target.files, target.secrets, lost=[] if lost is not None else None)
     for key in ('banned', 'api_key'):
-        path = config.get(key, {}).get('bootstrap_file')
-        if path:
-            authorization_file_references({'sources': [{'type': 'file', 'path': path}]}, target.files)
-            paths.add(path)
+        value = config.get(key)
+        path = value.get('bootstrap_file') if isinstance(value, dict) else None
+        if isinstance(path, str) and path:
+            resolved = resolve_path(path, etc_dir=etc_dir, log_dir=log_dir, env=getattr(target, 'env', None))
+            if resolved is None:
+                if lost is None:
+                    raise BackupError('incompatible', 'EMQX 候選無法讀取 bootstrap 掛載，已停止。')
+                lost.append(path[:200])
+                continue
+            paths.add(resolved)
     for path in sorted(paths):
         checked = tmp.exec('emqx-new', ['test', '-f', path, '-a', '-r', path],
                            timeout=30, max_output=1024, check=False)
@@ -1953,10 +2165,14 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             work.log(f'這台 EMQX 的 EnvironmentFile（{path}）不在擁有者的家目錄下或讀不到，暫用的 EMQX 沒有用它；設定的差異會列出。')
     if target_vm is not None:   # Target.env holds EMQX_* settings only: this is the candidate's one Erlang flag
         env = dict(env, ERL_AFLAGS=f'+S {target_vm[0]}:{target_vm[1]}')   # --env wins over an env file's value
+    # E-23, E-35: a folder this device writes its logs or crash dump to besides /opt/emqx/log gets the candidate's own log volume
+    # (scratch: logs are not carried); this device's real folder, when it is one of its mounts, is not mounted for the candidate.
+    scratch = [(tmp.name('emqx-new-log'), folder, None) for folder in notes.get('scratch') or ()]
+    mounts = [item for item in target.files if item[1] not in set(notes.get('scratch_drop') or ())]
     tmp.run('emqx-new', target.image, [], detach=True, read_only_root=True, env=env, env_files=env_files,
             secrets=target.secrets,
             volumes=[(tmp.name('emqx-new'), DATA_TARGET, None), (tmp.name('emqx-new-log'), LOG_TARGET, None),
-                     (tmp.name('emqx-in'), WORK, None)] + target.files)
+                     (tmp.name('emqx-in'), WORK, None)] + scratch + mounts)
     wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)
     ticker_pid = quiesce_system_ticker(tmp, 'emqx-new')
     read_candidate = lambda command: tmp.exec('emqx-new', command, timeout=120,
@@ -1966,8 +2182,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
     if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
         raise BackupError('incompatible', 'EMQX 候選憑證與目標不一致，已停止。')
     if target_config is not None:
-        if target_etc_dir(read_candidate) != ETC_DIR:
-            raise BackupError('incompatible', 'EMQX 候選啟動後設定與目標不一致，已停止。')
+        if target_etc_dir(read_candidate) != notes.get('etc_dir', ETC_DIR):   # E-24: this device's own etc directory
+            raise BackupError('incompatible', ETC_DIFFERS)
         want = target_boot if target_boot is not None else target_config
         got = boot_form(read_candidate) if target_boot is not None else read_effective_config(read_candidate)
         differ = sorted(root for root in set(want) | set(got) if want.get(root) != got.get(root))
@@ -1992,7 +2208,8 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                         baseline[root] = source[root]
                     else:
                         baseline.pop(root, None)
-        check_candidate_bootstrap(tmp, target, target_config, lost=notes.setdefault('lost', []))   # E-61
+        check_candidate_bootstrap(tmp, target, target_config, lost=notes.setdefault('lost', []),   # E-61
+                                  etc_dir=notes.get('etc_dir', ETC_DIR), log_dir=notes.get('log_dir', LOG_TARGET))
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
     strict = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     authn = read_authn(tmp, 'emqx-new')
@@ -2018,7 +2235,11 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             notes['acl_replaced'] = check_snapshot_files(read_candidate, snapshot_digests)
         final = read_effective_config(read_candidate)
         notes['security'] = security_items(final)
-        check_candidate_bootstrap(tmp, target, final, lost=notes.setdefault('lost', []))
+        # E-41, E-42, E-43, E-44, E-47: what this device had of its own (its boot form: both sides have their defaults filled)
+        # and what the import did with it
+        notes['device_items'] = ha_emqx_settings.own_items(target_boot if target_boot is not None else target_config, final)
+        check_candidate_bootstrap(tmp, target, final, lost=notes.setdefault('lost', []),
+                                  etc_dir=notes.get('etc_dir', ETC_DIR), log_dir=notes.get('log_dir', LOG_TARGET))
     else:
         # Legacy internal test path only; public convert remains blocked.
         snippet = f'authorization {{\n  no_match = {strict[0]}\n  deny_action = {strict[1]}\n  sources = []\n}}\n'.encode()
@@ -2577,8 +2798,32 @@ FILES_MISSING = '這台 EMQX 的設定提到的檔案不在資料卷裡（{names
 TICKER_LOOSE = '暫用的 EMQX 的系統訊息沒辦法暫停，保留訊息的筆數可能差幾筆；核對時已容許這個差異，其他資料不受影響。'
 RECEIPT_UNREADABLE = '讀不到這台 EMQX 內建資料庫的核對值，這次略過還原後的帳號與 ACL 規則核對；筆數在轉換時已核對過。'
 BOOTSTRAP_LOST = ('這台預先建立的 MQTT 帳號（{names}）可能要在匯入後重新建立或重設密碼：{why}。' + RESET_HOW)
+ETC_DIFFERS = ('EMQX 不能搬過來：這台 EMQX 執行中的設定目錄（EMQX_ETC_DIR）和用它的設定啟動的暫用 EMQX 不同，多半是改過設定還沒重新啟動；'
+               '為避免匯入後設定跑掉，已停止，這台沒有任何改變。請先重新啟動這台 EMQX，再重新檢查與匯入。')
+DIRS_FOLLOW = ('這台 EMQX 的日誌或設定目錄不是預設的位置；暫用的 EMQX 用同樣的目錄（日誌放在暫用空間，不會搬），不影響匯入。')
+FILES_NOT_CARRIED = ('這台 EMQX 的設定提到 {count} 個暫用的 EMQX 帶不過去的檔案（下列設定項目）：它們放在只有執行時才有的位置、'
+                     '找不到的環境變數底下或不會搬的資料夾。匯入不會搬動它們，匯入後請確認它們還在原處。')
+DEVICE_INTEGRATIONS = ('這台的 EMQX 已經有自己的規則、連接器、動作、來源、橋接或閘道（共 {count} 項，列在下面）。匯入會把 HA 的加進來：'
+                       '同名的以 HA 的為準{replaced}，其他的留在原處、和 HA 的一起運作（HA 的規則也可能觸發這台的連接器）。'
+                       '匯入前的自動備份裡還有這台原本的設定。')
+DEVICE_ROUTING = ('這台的 EMQX 已經有自己的主題改寫、主題統計、自動訂閱或 ExHook 伺服器（共 {count} 項，列在下面）。匯入後它們和 HA 的並存，'
+                  '同名的以 HA 的為準{replaced}，會和 HA 的一起改寫主題或把訊息送出去。匯入前的自動備份裡還有這台原本的設定。')
+DEVICE_PSK = ('這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，'
+              '用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。')
+DEVICE_PLUGINS = ('這台的 EMQX 裝了外掛（共 {count} 個，列在下面）：外掛程式放在容器裡、不在資料卷裡，這次匯入不會搬動或改動它們，'
+                  '設定裡的外掛記錄照舊保留。匯入後如果外掛沒有啟動，請到這台 EMQX 管理頁重新安裝。')
+DURABLE_SESSIONS = ('這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：'
+                    '這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。')
+OUTPUT_DIR_UNUSABLE = ('EMQX 不能搬過來：這台 EMQX 把日誌或當機記錄寫在暫用的 EMQX 無法安全提供的位置（下列資料夾），已停止；'
+                       '這台沒有任何改變。')
+OUTPUT_DIR_ACTION = ('請先把這台 EMQX 的日誌與當機記錄路徑（log.file.*.path、node.crash_dump_file、EMQX_LOG_DIR）改回 /opt/emqx/log 底下，'
+                     '再匯入 EMQX；其他應用不受影響。')
 EXPOSURE_TEXT = {'local': '這台的 MQTT 埠目前只有本機能連。', 'network': '這台的 MQTT 埠目前整個區網都能連。',
                  'closed': '這台的 MQTT 埠目前沒有對外開放（只有同一個容器網路的服務能連）。'}
+
+
+def _replaced_text(count):
+    return f'（其中 {count} 個已經換成 HA 的）' if count else ''
 
 
 def _names_text(names):
@@ -2621,6 +2866,10 @@ def candidate_lines(sink, target, readings, notes, device):
     E-60, E-61, E-68, E-69, E-84 and H1."""
     if notes.get('rereads'):
         sink.auto('emqx.config-reread', '這台 EMQX 的設定在讀取時被改動，已重新讀取後再轉換。')
+    if notes.get('dirs'):   # E-23, E-24, E-35: the candidate has this device's own folders
+        sink.auto('emqx.dirs-follow-device', DIRS_FOLLOW, notes['dirs'])
+    if notes.get('unreached'):   # E-29, E-30, E-32, E-50: files the settings name that the candidate cannot carry
+        sink.notice('emqx.files-not-carried', FILES_NOT_CARRIED.format(count=len(notes['unreached'])), notes['unreached'])
     if notes.get('access_env'):
         sink.notice('emqx.env-wins', ENV_WINS.format(count=len(notes['access_env']), names=_names_text(notes['access_env'])),
                     notes['access_env'])
@@ -2648,6 +2897,22 @@ def candidate_lines(sink, target, readings, notes, device):
     if security.get('exhook'):
         sink.confirm('emqx.exhook', CREDENTIAL_RECEIVER.format(what='啟用的 ExHook 伺服器', names=_names_text(security['exhook'])),
                      security['exhook'])
+    own = notes.get('device_items') or {}   # E-41, E-42, E-43, E-44, E-47: this device's own, next to HA's
+    replaced = own.get('replaced') or {}
+    mixed = own.get('mixed') or {}   # rules, connectors, rewrite ...: asked only when HA's import brought some of its own
+    if own.get('integrations') and mixed.get('integrations', True):
+        sink.confirm('emqx.device-integrations', DEVICE_INTEGRATIONS.format(
+            count=len(own['integrations']), replaced=_replaced_text(replaced.get('integrations'))),
+            haissues.Names(own['integrations']))
+    if own.get('routing') and mixed.get('routing', True):
+        sink.confirm('emqx.device-routing', DEVICE_ROUTING.format(
+            count=len(own['routing']), replaced=_replaced_text(replaced.get('routing'))), haissues.Names(own['routing']))
+    if own.get('psk'):
+        sink.confirm('emqx.device-psk', DEVICE_PSK, haissues.Names(own['psk']))
+    if own.get('durable'):
+        sink.confirm('emqx.durable-sessions', DURABLE_SESSIONS, haissues.Names(own['durable']))
+    if own.get('plugins'):
+        sink.notice('emqx.device-plugins', DEVICE_PLUGINS.format(count=len(own['plugins'])), haissues.Names(own['plugins']))
     if notes.get('anonymous') and notes.get('device_authenticated'):
         where = EXPOSURE_TEXT[exposure(target, MQTT_PORTS)]
         if target.tunnels:
