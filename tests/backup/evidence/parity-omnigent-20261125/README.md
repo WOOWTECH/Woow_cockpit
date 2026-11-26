@@ -40,7 +40,7 @@ Removing it would weaken a protection for no customer benefit: left as it is, te
 
 ## Security re-review (DESIGN H-b/H-c: O-15 and the rows that relax a refusal), by the lane itself
 
-Not an independent review. The independent verifier and the real run (R7) are still to do; O-15 stays `part` until then.
+The separate source review is recorded in [independent-review-20261126.md](independent-review-20261126.md). The real run (R7), including a real PostgreSQL TOC probe, is still to do; O-15 stays `part` until then.
 
 Threat model (unchanged): the HA backup is attacker data; HA's PostgreSQL is hostile code, not only hostile data (security review
 2026-11-23: HA's answers can lie, code can run inside the throwaway container, whose boundary -- no network, read-only root, data
