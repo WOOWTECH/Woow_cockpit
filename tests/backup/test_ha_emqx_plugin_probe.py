@@ -36,6 +36,7 @@ class DisposableDriverTests(unittest.TestCase):
         self.assertEqual(module.PLAN['image'], 'sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b')
         self.assertEqual(module.PLAN['lock'], '/tmp/woowbk-dev-d-mutation.lock')
         self.assertEqual(module.PLAN['published_ports'], 0)
+        self.assertIn('dir=pathlib.Path.home()', module.BOOTSTRAP)
 
     def test_every_fixture_run_disables_image_volumes_and_matches_swap_to_memory(self):
         # Compile only Runner: importing the child entry point would alter process resource/alarm state.

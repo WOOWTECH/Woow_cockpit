@@ -28,7 +28,7 @@ PLAN = {'device': 'woowbk-dev-d', 'case': 'E-44-disposable-plugins', 'image': IM
 BOOTSTRAP = '''import io, pathlib, subprocess, sys, tarfile, tempfile
 payload=sys.stdin.buffer.read(16777217)
 assert len(payload)<=16777216
-root=pathlib.Path(tempfile.mkdtemp(prefix="woowbk-e44-"))
+root=pathlib.Path(tempfile.mkdtemp(prefix="woowbk-e44-",dir=pathlib.Path.home()))
 with tarfile.open(fileobj=io.BytesIO(payload)) as src:
     for m in src:
         p=pathlib.PurePosixPath(m.name)
