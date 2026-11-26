@@ -186,16 +186,31 @@ def run():
                                  'created_upload': r.created_store, 'original_service': original_unit,
                                  'original_timer': r.timer_found, 'baseline_restored': safe})
 
+    original_wait = d.wait_job
+
+    def bounded_wait(job_id, *, ev, timeout=600):
+        nonlocal inflight
+        inflight = job_id
+        receipt()
+        remaining = max(1, int(BUDGET - (time.monotonic() - started)))
+        job = original_wait(job_id, ev=ev, timeout=min(timeout, 600, remaining))
+        inflight = None
+        d.created_backup((job.get('result') or {}).get('backup_id'))
+        receipt()
+        return job
+
+    d.wait_job = bounded_wait  # bound the reused source check/conversion, not product behavior
+
     def restore(backup, keys=None):
         nonlocal inflight
         req = {'backup_id': backup, 'apps': [APP], 'confirm': True, 'request_id': d.request_id('focus-d10')}
         if keys is not None:
             req['acknowledged'] = {APP: keys}
+        restore_since = int(time.time()) - 1
         reply = d.ok('restore-start', req, ev=ev, timeout=300)
         inflight = reply['job_id']
         receipt()
         stopped = set()
-        restore_since = int(time.time()) - 1
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             reply = d.ok('job-status', {'job_id': inflight}, ev=ev, timeout=60)
@@ -247,7 +262,10 @@ def run():
         job, _ = d.convert(r.store_id, [APP], False, ev=ev, key=args.secrets['HA_BACKUP_KEY'], tag='focus-d10-convert')
         r.converted = (job.get('result') or {}).get('backup_id')
         d.created_backup(r.converted)
-        check('convert: real original HA produced an encrypted converted backup', job['state'] == 'succeeded' and bool(r.converted))
+        meta = next((x for x in d.ok('list', ev=ev)['backups'] if x['id'] == r.converted), {})
+        check('convert: real original HA produced an encrypted converted backup',
+              job['state'] == 'succeeded' and bool(r.converted) and bool(meta.get('key_id'))
+              and (meta.get('from_ha') or {}).get('ha_backup_id') == r.store_id)
         receipt()
         for i, name in enumerate(names):
             rel = '.config/containers/systemd/' + name + '.container'
@@ -292,10 +310,13 @@ def run():
         try:
             if inflight:
                 # Never race a job or discard its recovery artifacts.
-                job = d.wait_job(inflight, ev=ev, timeout=600)
+                job = original_wait(inflight, ev=ev, timeout=600)
                 inflight = None
                 r.safety = r.safety or (job.get('result') or {}).get('safety_backup_id')
                 d.created_backup(r.safety)
+                if not r.converted:
+                    r.converted = (job.get('result') or {}).get('backup_id')
+                    d.created_backup(r.converted)
             for name in owned:
                 owner('systemctl', '--user', 'stop', name + '.service')
                 owner('rm', '-f', '/home/appowner/.config/containers/systemd/' + name + '.container')
