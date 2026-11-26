@@ -34,3 +34,7 @@ Replace references to `OwnLinesTests.test_plugins_are_a_notice_and_nothing_is_cl
 Issues: `emqx.device-plugins: notice`, `emqx.plugin-records-remove: confirm`, `emqx.plugin-records-unused: notice`.
 
 Keep native acceptance pending until a leased isolated broker validates the inventory expression and persistence across restart. Unit coverage alone does not prove runtime vendor acceptance. No lab lease or real mutation has occurred in this worker.
+
+### Additional startup-override refusal
+
+When high-priority startup configuration defines plugins.states, or EMQX_PLUGINS / EMQX_PLUGINS__STATES is set, a missing record cannot safely be cleared persistently. Stop this EMQX import and ask the customer to remove that specific override before retrying. No environment value is shown. The new guarded operational test is `OwnLinesTests.test_startup_overrides_that_would_resurrect_a_record_stop_cleanup`.

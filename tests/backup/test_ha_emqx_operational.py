@@ -637,7 +637,7 @@ class EnvironmentFileTests(unittest.TestCase):
         self.assertEqual(ha_emqx.device_log_dir(target), '/var/log/quadlet', 'the Quadlet\'s own setting is the stronger one')
 
 
-EMPTY_PLUGIN = {'binary': False, 'data': False, 'config': None, 'running': False}
+EMPTY_PLUGIN = {'binary': False, 'data': False, 'config': None, 'running': False, 'override': False}
 
 
 def plugin_reply(facts):
@@ -682,6 +682,7 @@ class PluginInventoryTests(unittest.TestCase):
     def test_bad_or_partial_inventory_is_not_absence(self):
         docs = [{}, [], {'other-1.0': EMPTY_PLUGIN}, {'device-1.0': {}},
                 {'device-1.0': dict(EMPTY_PLUGIN, binary=0)},
+                {'device-1.0': dict(EMPTY_PLUGIN, override=0)},
                 {'device-1.0': dict(EMPTY_PLUGIN, config='secret')},
                 {'device-1.0': dict(EMPTY_PLUGIN, config='A' * 64)},
                 {'device-1.0': dict(EMPTY_PLUGIN, extra=True)}]
@@ -853,6 +854,18 @@ class OwnLinesTests(base.EmqxCase):
         self.assertEqual(levels(result['issues'])['emqx.plugin-records-unused'], 'notice')
         self.assertNotIn('emqx.plugin-records-remove', levels(result['issues']))
         self.assertEqual(self.world.current_config['plugins'], {'states': [], 'install_dir': 'plugins', 'check_interval': '5s'})
+
+    def test_startup_overrides_that_would_resurrect_a_record_stop_cleanup(self):
+        for role in ('woow-emqx', 'emqx-new'):
+            with self.subTest(role=role):
+                self.world.again()
+                self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': True})
+                self.world.plugin_facts[role]['gone-1.0']['override'] = True
+                with self.assertRaises(BackupError) as caught:
+                    self.internal_candidate(self.upload_emqx(state='stopped'))
+                self.assertIn('重新啟動時恢復', caught.exception.message)
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertNotIn('woow_emqx_data', self.world.imported)
 
     def test_long_distinct_plugin_identities_are_not_collapsed_or_said_to_be_retained(self):
         name = 'plugin_' + 'a' * 70 + '-1.0'

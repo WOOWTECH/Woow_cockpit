@@ -1690,6 +1690,10 @@ def preserved_settings(config):
 # not absence. v5.8.9 emqx_plugins.erl:859-872,1561-1593: install_dir/<name-vsn>, <name-vsn>.tar.gz and
 # data/plugins/<app>/config.hocon. Include hidden/disabled plugins and already running apps even if their files vanished.
 PLUGIN_INVENTORY_EXPR = (
+    '{ok,Static}=hocon:files(emqx_config:config_files(),#{format => map,include_dirs => emqx_config:include_dirs()}), '
+    'StaticPlugins=maps:get(<<"plugins">>,Static,#{}), '
+    'Override=(is_map(StaticPlugins) andalso maps:is_key(<<"states">>,StaticPlugins)) orelse '
+    'lists:any(fun(K) -> os:getenv(K)=/=false end,["EMQX_PLUGINS","EMQX_PLUGINS__STATES"]), '
     'Exists=fun(P) -> case file:read_link_info(P) of {ok,_} -> true; {error,enoent} -> false; '
     '_ -> error(plugin_metadata) end end, '
     'Digest=fun(P) -> case file:read_file_info(P) of {error,enoent} -> null; '
@@ -1703,7 +1707,7 @@ PLUGIN_INVENTORY_EXPR = (
     'Dir=filename:join(emqx_plugins:install_dir(),N), '
     'Data=filename:join([emqx:data_dir(),"plugins",App]), '
     '{N,#{binary => Exists(Dir) orelse Exists(<<Dir/binary,".tar.gz">>), data => Exists(Data), '
-    'config => Digest(filename:join(Data,"config.hocon")), running => lists:member(App,Apps)}} '
+    'config => Digest(filename:join(Data,"config.hocon")), running => lists:member(App,Apps), override => Override}} '
     'end || #{name_vsn := N0} <- emqx:get_config([plugins,states],[])], '
     'io:format("WOOWPLUG:~s:END~n",[base64:encode(emqx_utils_json:encode(maps:from_list(Rows)))]).'
 ).replace('MAX_BYTES', str(MAX_HOCON))
@@ -1726,8 +1730,8 @@ def plugin_inventory(execute, config):
         if not isinstance(facts, dict) or set(facts) != set(states):
             raise ValueError()
         for row in facts.values():
-            if (not isinstance(row, dict) or set(row) != {'binary', 'data', 'config', 'running'}
-                    or any(type(row[key]) is not bool for key in ('binary', 'data', 'running'))
+            if (not isinstance(row, dict) or set(row) != {'binary', 'data', 'config', 'running', 'override'}
+                    or any(type(row[key]) is not bool for key in ('binary', 'data', 'running', 'override'))
                     or not (row['config'] is None or isinstance(row['config'], str)
                             and re.fullmatch('[0-9A-Fa-f]{64}', row['config']))
                     or row['config'] is not None and not row['data']):

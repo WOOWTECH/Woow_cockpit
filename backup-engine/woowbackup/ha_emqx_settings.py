@@ -70,6 +70,10 @@ def clean_plugin_records(config, device, candidate):
                     f'這台 EMQX 的外掛（{name}）程式、設定或執行狀態無法在暫用的 EMQX 保留，已停止；'
                     '請先把外掛程式與設定放在可保留的映像或掛載中，再重新檢查。')
         elif not present(candidate[name]):
+            if device[name]['override'] or candidate[name]['override']:
+                raise BackupError('incompatible',
+                    f'EMQX 外掛（{name}）的記錄由高優先序設定檔或 EMQX_PLUGINS／EMQX_PLUGINS__STATES 環境變數覆寫，'
+                    '清除後會在重新啟動時恢復，已停止；請先移除 plugins.states 的對應覆寫，再重新檢查。')
             removed.append(state)
     if not removed:
         return config, []

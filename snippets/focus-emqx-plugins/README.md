@@ -40,3 +40,7 @@ H2 package upgrade repo remains untouched; no push, package install, image pull 
 - Shared guide/contract/registry edits are supplied in `integration.md`; docs unit checks explicitly include this pending snippet, so passing units do not claim those shared docs were already merged.
 
 Native acceptance is pending a coordinator-issued lab lease. Required isolated cases: execute the fixed read-only inventory expression on v5.8.9; enabled/default-enabled and disabled missing states; a bundled/mounted plugin retained; device material/config absent or different in the candidate rejected; persisted cleaned states after candidate restart; unchanged other operational roots, HA admin/ACL/key table checks and safety rollback. Use existing isolated lab tools and sanitized evidence wrappers. No worker approval or elapsed time substitutes for that lease.
+
+## Startup override followup
+
+Vendor `emqx_config.erl` (`vendor-source.json`) loads base.hocon and cluster.hocon before config_files(), then overlays environment (do_parse_hocon 440-450, overlay_v1 364-366). A runtime conf update cannot promise persistence if a higher-priority startup file or EMQX_PLUGINS / EMQX_PLUGINS__STATES resets the old list. The fixed inventory now reads only the presence of such an override and refuses cleanup for that plugin; no environment value is exposed. Available plugin settings remain preserved even when intentionally overridden. Native restart proof remains mandatory.
