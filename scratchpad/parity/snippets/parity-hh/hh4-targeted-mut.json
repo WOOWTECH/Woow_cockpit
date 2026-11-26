@@ -1,0 +1,68 @@
+{
+  "base_head": "9da33013f98baa0ac435b447d70305eb58ce25af",
+  "definition": "tests/backup/evidence/parity-f1-20261125/f1_mutations.py",
+  "baseline": {
+    "returncode": 0,
+    "tests_run": 3,
+    "failures": [],
+    "seconds": 3.5
+  },
+  "rows": [
+    {
+      "id": "S31",
+      "what": "a cancel ends the job",
+      "module": "woowbackup/haissues.py",
+      "test": "tests.backup.test_ha_hermes.CheckTests.test_a_cancel_during_the_hermes_check_ends_the_job",
+      "applied": true,
+      "caught": true,
+      "returncode": 1,
+      "tests_run": 1,
+      "failures": [
+        "test_a_cancel_during_the_hermes_check_ends_the_job (tests.backup.test_ha_hermes.CheckTests.test_a_cancel_during_the_hermes_check_ends_the_job)"
+      ],
+      "seconds": 1.72
+    },
+    {
+      "id": "S33",
+      "what": "an unexpected error's text stays in the journal",
+      "module": "woowbackup/haissues.py",
+      "test": "tests.backup.test_ha_hermes.CheckTests.test_an_unexpected_hermes_check_error_keeps_its_detail_in_the_journal",
+      "applied": true,
+      "caught": true,
+      "returncode": 1,
+      "tests_run": 1,
+      "failures": [
+        "test_an_unexpected_hermes_check_error_keeps_its_detail_in_the_journal (tests.backup.test_ha_hermes.CheckTests.test_an_unexpected_hermes_check_error_keeps_its_detail_in_the_journal)"
+      ],
+      "seconds": 4.44
+    },
+    {
+      "id": "S35",
+      "what": "an unknown add-on version is no gate (CM-01)",
+      "module": "woowbackup/haissues.py",
+      "test": "tests.backup.test_ha_hermes.VersionTests.test_unknown_version_and_skipped_link_need_only_the_links_confirmation",
+      "applied": true,
+      "caught": true,
+      "returncode": 1,
+      "tests_run": 1,
+      "failures": [
+        "test_unknown_version_and_skipped_link_need_only_the_links_confirmation (tests.backup.test_ha_hermes.VersionTests.test_unknown_version_and_skipped_link_need_only_the_links_confirmation)"
+      ],
+      "seconds": 1.71
+    },
+    {
+      "id": "S41",
+      "what": "missing confirmations are found",
+      "module": "woowbackup/haissues.py",
+      "test": "tests.backup.test_ha_hermes.VersionTests.test_unknown_version_and_skipped_link_need_only_the_links_confirmation",
+      "applied": true,
+      "caught": true,
+      "returncode": 1,
+      "tests_run": 1,
+      "failures": [
+        "test_unknown_version_and_skipped_link_need_only_the_links_confirmation (tests.backup.test_ha_hermes.VersionTests.test_unknown_version_and_skipped_link_need_only_the_links_confirmation)"
+      ],
+      "seconds": 4.67
+    }
+  ]
+}

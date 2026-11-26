@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, hacommon, hasecuretar, haimport, haissues, ha_hermes, ha_odoo, jobs, nested
+from woowbackup import habackup, hacommon, flows, hasecuretar, haimport, haissues, ha_hermes, ha_odoo, jobs, nested
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -193,6 +193,23 @@ class CheckTests(HermesCase):
             self.assertIn(words, joined)
         self.assertFalse(self.world.runs, 'no container is needed for Hermes')
 
+    def test_a_cancel_during_the_hermes_check_ends_the_job(self):
+        ha_id = self.upload_hermes(evil=False)
+        with mock.patch.object(ha_hermes, 'check', side_effect=flows.Cancelled()), self.assertRaises(flows.Cancelled):
+            self.checked(ha_id)
+        self.assertEqual(self.world.manifests, {})
+
+    def test_an_unexpected_hermes_check_error_keeps_its_detail_in_the_journal(self):
+        ha_id = self.upload_hermes(evil=False)
+        marker = 'hh-internal-diagnostic-marker'
+        with mock.patch.object(ha_hermes, 'check', side_effect=RuntimeError(marker)), \
+                mock.patch('sys.stderr', new_callable=io.StringIO) as journal:
+            result = self.checked(ha_id)
+        self.assertFalse(result['importable'])
+        self.assertEqual(self.issues(result, 'stop')['failure.internal-error']['message'], haissues.UNEXPECTED)
+        self.assertNotIn(marker, str(result))
+        self.assertIn(marker, journal.getvalue())
+
     def test_a_link_that_leaves_the_data_is_one_line_to_confirm(self):
         result = self.checked(self.upload_hermes())
         self.assertEqual((result['importable'], result['ok']), (True, False))
@@ -245,6 +262,28 @@ class VersionTests(HermesCase):
         self.assertNotIn('version.different', self.issues(result))
         self.convert(ha_id, ['hermes'])
         self.assertEqual(self.volume('hermes-data')['state.db'][1], sqlite_bytes(), 'the data moved')
+
+    def test_unknown_version_and_skipped_link_need_only_the_links_confirmation(self):
+        ha_id = self.upload_hermes(version='0.1.15', image_version='0.1.15')
+        found = []
+        judge = ha_hermes.judge
+
+        def capture(sink, *args, **kwargs):
+            answer = judge(sink, *args, **kwargs)
+            found.extend(sink.found)
+            return answer
+
+        with mock.patch.object(ha_hermes, 'judge', side_effect=capture):
+            result = self.checked(ha_id)
+        self.assertEqual((result['importable'], result['ok']), (True, False))
+        self.assertIn('version.addon-unknown', self.issues(result, 'notice'))
+        pending = haissues.missing('hermes', found, [])
+        self.assertEqual([issue.id for issue in pending], ['files.skipped'])
+        keys = self.confirmations(result)
+        self.assertEqual(keys, [pending[0].key('hermes')])
+        self.assertEqual(haissues.missing('hermes', found, keys), [])
+        self.convert(ha_id, ['hermes'], acknowledged={'hermes': keys})
+        self.assertIn('state.db', self.volume('hermes-data'))
 
     def test_a_version_of_this_device_that_cannot_be_read_is_a_notice_and_the_data_moves(self):   # H-07
         self.world.base = None
