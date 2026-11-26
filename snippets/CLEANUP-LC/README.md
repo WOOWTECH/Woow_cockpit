@@ -22,10 +22,16 @@ The full `tests/backup --b1` suite was not started: host load was about 9–12 o
 four CPUs during this run. No Podman, systemctl, deployment, or production action
 was run.
 
-## REAL-lane follow-up
+## REAL harness follow-up
 
-The old `tests/e2e/lab/litellm_real_ha.py` harness (outside this lane's file list)
-still imports the retired candidate module. Its offline test currently errors at
-import. The REAL lane should either move that historical harness to the product
-API or retire the harness and its test. The active product flow driver is
-`tests/e2e/lab/litellm_full_flow.py`; no lab or live database run was attempted here.
+The owner authorized a follow-up on this branch for the historical
+`tests/e2e/lab/litellm_real_ha.py` harness. It now uses the registered product
+`ha_litellm.scan_member` and `read_source_salt_binding` APIs. A bounded second
+member pass keeps all four HA source secrets covered by its credential ledger.
+The control-file, version, salt, row, rollback, and output assertions remain.
+The active product flow driver is `tests/e2e/lab/litellm_full_flow.py`; the
+real-backup dev-d run was not repeated in this follow-up.
+
+Targeted guarded check, with `nice -n 15 ionice -c3`:
+`test_litellm_real_ha test_litellm_full_flow test_litellm_negative_flow` —
+42 tests, 0 failures/errors/skips, 0 blocked host calls or shim hits.
