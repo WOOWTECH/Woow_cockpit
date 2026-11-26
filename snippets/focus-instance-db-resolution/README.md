@@ -1,5 +1,7 @@
 # P1: resolve n8n's application database before instance conversion
 
+Current parent-requested stopped-main lifecycle and four-field endpoint API: see [FOLLOWUP.md](FOLLOWUP.md). Historical two-field source freeze/test counts below are bound to their original commits; the follow-up preserves that read-only public projection.
+
 ## Change
 
 `Target` now selects the n8n database using the live n8n application's actual configuration. An instance catalog's `database=postgres` remains the maintenance database, and its user remains the trusted cluster bootstrap role. Server `POSTGRES_DB` never supplies an application database default. n8n's defaults are database `n8n`, user `postgres`.

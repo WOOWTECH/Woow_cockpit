@@ -18,10 +18,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_n8n, ha_odoo, habackup, haissues, jobs
+from woowbackup import ha_n8n, ha_odoo, habackup, haissues, hatarget, jobs, tempctr
 from woowbackup.errors import BackupError
+from woowbackup.flows import Cancelled
 from woowbackup.haissues import Sink
-from woowbackup.podman import Result
+from woowbackup.podman import CommandError, Result
 
 from . import hab1fakes as fk
 from . import hafixtures as hx
@@ -840,6 +841,8 @@ class ConnectionRunner:
         self.calls = []
 
     def podman(self, *args, **kwargs):
+        if args[:4] == ('container', 'inspect', '--format', '{{.State.Running}}'):
+            return Result(0, b'true', b'')
         if not shutil.which('node'):
             raise unittest.SkipTest('node is needed to execute the fixed selected-field reader')
         assert args == ('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', 'n8n', 'node', '-e', ha_n8n.CONNECTION_PROBE)
@@ -884,6 +887,36 @@ class ConnectionTests(unittest.TestCase):
     def connection(self, env=None, **kwargs):
         return ha_n8n.read_target_connection(ConnectionRunner(env, **kwargs), 'n8n')
 
+    def endpoint(self, env=None, **kwargs):
+        return ha_n8n.read_app_endpoint(ConnectionRunner(env, **kwargs), QUADLETS)
+
+    def test_endpoint_defaults_and_exact_two_field_projection(self):
+        self.assertEqual(self.endpoint(), {'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': 5432})
+        self.assertEqual(set(self.connection()), {'database', 'user'})
+
+    def test_endpoint_uses_vendor_direct_file_precedence_dotenv_and_process_title(self):
+        env = {'DB_POSTGRESDB_HOST': 'n8n-postgres', 'DB_POSTGRESDB_PORT': '6543',
+               'DB_POSTGRESDB_HOST_FILE': 'missing', 'DB_POSTGRESDB_PORT_FILE': 'missing'}
+        self.assertEqual((self.endpoint(env)['host'], self.endpoint(env)['port']), ('n8n-postgres', 6543))
+        endpoint = self.endpoint({'DB_POSTGRESDB_HOST_FILE': 'host', 'DB_POSTGRESDB_PORT_FILE': 'port'},
+                                 files={'host': b'  "n8n-postgres"\n', 'port': b' 6543\n'}, command=b'n8n start\0')
+        self.assertEqual((endpoint['host'], endpoint['port']), ('n8n-postgres', 6543))
+        endpoint = self.endpoint(files={'.env': b'DB_POSTGRESDB_HOST=n8n-postgres\nDB_POSTGRESDB_PORT=6543\n'})
+        self.assertEqual((endpoint['host'], endpoint['port']), ('n8n-postgres', 6543))
+        self.assertEqual(self.endpoint({'DB_POSTGRESDB_HOST': '::1'})['host'], '::1')
+
+    def test_endpoint_rejects_unsafe_hosts_ports_and_incomplete_output(self):
+        for env in ({'DB_POSTGRESDB_HOST': '/var/run/postgresql'}, {'DB_POSTGRESDB_HOST': 'host name'},
+                    {'DB_POSTGRESDB_HOST': 'x' * 254}, {'DB_POSTGRESDB_PORT': '0'},
+                    {'DB_POSTGRESDB_PORT': '65536'}, {'DB_POSTGRESDB_PORT': '12.5'}):
+            with self.subTest(keys=sorted(env)), self.assertRaises(BackupError):
+                self.endpoint(env)
+        for port in (True, '5432', 0, 65536):
+            body = json.dumps({'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': port}).encode()
+            runner = types.SimpleNamespace(podman=lambda *a, **k: Result(0, body, b'private'))
+            with self.subTest(port_type=type(port).__name__), self.assertRaises(BackupError):
+                ha_n8n._read_target_endpoint(runner, 'n8n')
+
     def test_default_is_n8n_and_postgres_independently_of_server_bootstrap(self):
         self.assertEqual(self.connection({'POSTGRES_DB': 'unrelated', 'POSTGRES_USER': 'bootstrap'}),
                          {'database': 'n8n', 'user': 'postgres'})
@@ -896,6 +929,8 @@ class ConnectionTests(unittest.TestCase):
         database = (VENDOR_CONFIG / 'database.config.ts').read_text()
         self.assertRegex(database, r"@Env\('DB_POSTGRESDB_DATABASE'\)\s+database: string = 'n8n';")
         self.assertRegex(database, r"@Env\('DB_POSTGRESDB_USER'\)\s+user: string = 'postgres';")
+        self.assertRegex(database, r"@Env\('DB_POSTGRESDB_HOST'\)\s+host: string = 'localhost';")
+        self.assertRegex(database, r"@Env\('DB_POSTGRESDB_PORT'\)\s+port: number = 5432;")
 
     def test_direct_values_win_over_file_values_in_actual_vendor_config(self):
         self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'app_role',
@@ -936,6 +971,8 @@ class ConnectionTests(unittest.TestCase):
             'n8n-webhook.container': QUADLETS['n8n.container'] + b'Exec=webhook\n',
             'n8n.container': QUADLETS['n8n.container'] + b'Volume=/etc/localtime:/etc/localtime:ro\n'})
         self.assertEqual(ha_n8n.read_app_connection(runner, with_workers)['database'], 'automation')
+        self.assertEqual(ha_n8n.main_container(runner, with_workers), 'n8n')
+        self.assertEqual(ha_n8n.read_app_endpoint(runner, with_workers)['database'], 'automation')
         for quadlets in ({}, dict(QUADLETS, **{'other.container': QUADLETS['n8n.container']})):
             with self.subTest(files=sorted(quadlets)), self.assertRaises(BackupError):
                 ha_n8n.read_app_connection(runner, quadlets)
@@ -1283,6 +1320,36 @@ class Adapter(fk.Adapter):
         return super().import_manifest(staging_dir, **items)
 
 
+class N8nOwner(fk.Owner):
+    def systemctl(self, *args, **kwargs):
+        self.calls.append(('systemctl', *args))
+        mapping = {name.removesuffix('.container') + '.service': ha_n8n.quadlet_container_name(self.world.quadlets['n8n'], name)
+                   for name in self.world.quadlets['n8n'] if name.endswith('.container')}
+        if args[0] == 'show':
+            rows = []
+            for unit in args[args.index('--') + 1:]:
+                container = mapping[unit]
+                deps = ' '.join(name + '.service' for name in sorted(self.world.service_dependencies.get(container, ())))
+                rows.append(f'Id={unit}\nLoadState=loaded\nActiveState={"inactive" if container in self.world.down else "active"}'
+                            f'\nRequires={deps}\nWants=\nBindsTo=')
+            return Result(0, ('\n\n'.join(rows) + '\n').encode(), b'')
+        container = mapping[args[-1]]
+        if args[0] == 'start':
+            def start(name):
+                for dep in self.world.service_dependencies.get(name, ()):
+                    start(dep)
+                self.world.down.discard(name)
+            start(container)
+            if container in self.world.start_errors:
+                raise self.world.start_errors[container]
+        elif args[0] == 'stop':
+            assert 'abort' not in kwargs, 'cleanup must work after cancellation'
+            self.world.down.add(container)
+        else:
+            raise AssertionError(args[0])
+        return Result(0, b'', b'')
+
+
 class World(fk.World):
     """What the fake podman answers for n8n: its version, the throwaway PostgreSQL's tables, this device's own volumes."""
 
@@ -1291,6 +1358,9 @@ class World(fk.World):
 
     def __init__(self):
         super().__init__()
+        self.owner = N8nOwner(self)
+        self.down, self.start_errors, self.service_dependencies = set(), {}, {}
+        self.connection_error, self.probe_unready = None, False
         self.quadlets = {'n8n': dict(QUADLETS)}
         self.connection_env = {}
         self.version = b'2.43.6\n'
@@ -1306,6 +1376,8 @@ class World(fk.World):
         self.controldata_state = 'shut down'       # what `pg_controldata` says of the new cluster (a cold backup)
 
     def podman(self, args, data, stdout):
+        if args[:4] == ['container', 'inspect', '--format', '{{.State.Running}}']:
+            return fk.Result(0, b'false' if args[-1] in self.down else b'true', b'')
         if args[:2] == ['image', 'inspect'] and self.present is not None and args[-1] not in self.present:
             return fk.Result(125, b'', b'Error: no such image')
         if args[0] == 'pull':
@@ -1335,6 +1407,10 @@ class World(fk.World):
 
     def exec(self, role, command, data, stdout):
         if command == ['node', '-e', ha_n8n.CONNECTION_PROBE]:
+            if self.connection_error is not None:
+                raise self.connection_error
+            if 'n8n' in self.down or self.probe_unready:
+                return fk.Result(125, b'', b'not ready')
             return ConnectionRunner(self.connection_env).podman('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', 'n8n', *command,
                                                                timeout=30, max_output=1024, check=False)
         if command[0] == 'pg_dump':
@@ -1409,6 +1485,111 @@ class N8nCase(fk.ConversionCase):
 
     def data_tar(self, name='n8n_n8n_data'):
         return {entry: (info, data) for entry, (info, data) in self.volume(name).items()}
+
+
+class StoppedTargetTests(N8nCase):
+    """Real ensure_running + TempObjects cleanup, including dependency starts before a failing/cancelled main start."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog['n8n'].postgres = [dict(PG, scope='instance', database='postgres')]
+        self.world.service_dependencies = {'n8n': {'n8n-postgres', 'n8n-valkey'}}
+        self.world.down = {'n8n', 'n8n-postgres'}
+        self.initial = set(self.world.down)
+
+    def service_calls(self, verb):
+        return [call[-1] for call in self.world.owner.calls if call[:2] == ('systemctl', verb)]
+
+    def test_check_temporarily_starts_main_and_database_and_restores_exact_running_set(self):
+        row = self.check(self.upload_n8n(), ['n8n'])[0]
+        self.assertTrue(row['importable'])
+        self.assertEqual(self.world.down, self.initial)
+        self.assertEqual(self.service_calls('start'), ['n8n-postgres.service', 'n8n.service'])
+        self.assertEqual(set(self.service_calls('stop')), {'n8n.service', 'n8n-postgres.service'})
+        self.assertNotIn('n8n-valkey.service', self.service_calls('stop'))
+
+    def test_scoped_restore_hook_puts_back_before_the_restore_can_restart_services(self):
+        app = self.catalog['n8n']
+        tmp = tempctr.TempObjects(self.world.owner, 'j20261118T120000Z-0123abcd')
+        work = types.SimpleNamespace(runner=lambda _app: self.world.owner,
+                                     quadlets=lambda _app: self.world.quadlets['n8n'], temp=lambda _app: tmp)
+        with tmp:
+            endpoint = ha_n8n.prepare_app_endpoint(work, app)
+            self.assertEqual(endpoint, {'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': 5432})
+            self.assertEqual(self.world.down, set())
+            self.assertTrue(tmp._puts_back)
+        self.assertEqual(self.world.down, self.initial)
+        self.world.owner.systemctl('start', '--', 'n8n.service')
+        tmp.cleanup()
+        self.assertEqual(self.world.down, set(), 'preflight cleanup cannot later stop the restored application')
+
+    def test_read_only_api_does_not_start_a_stopped_main(self):
+        with self.assertRaises(BackupError):
+            ha_n8n.read_app_endpoint(self.world.owner, self.world.quadlets['n8n'])
+        self.assertEqual(self.service_calls('start'), [])
+        self.assertEqual(self.world.down, self.initial)
+
+    def test_already_running_main_and_dependencies_are_never_stopped(self):
+        self.world.down = set()
+        self.assertTrue(self.check(self.upload_n8n(), ['n8n'])[0]['importable'])
+        self.assertEqual((self.service_calls('start'), self.service_calls('stop')), ([], []))
+
+    def test_partial_main_start_failure_restores_main_and_previously_stopped_dependencies(self):
+        self.world.start_errors['n8n'] = CommandError('start failed', returncode=1, stderr=b'fixture failure')
+        row = self.check(self.upload_n8n(), ['n8n'])[0]
+        self.assertFalse(row['importable'])
+        self.assertEqual(self.issue(row, 'target.service-failed')['level'], 'stop')
+        self.assertEqual(self.world.down, self.initial)
+        self.assertIn('n8n.service', self.service_calls('stop'), 'intent registered before the failed start')
+
+    def test_cancel_during_partial_start_restores_main_and_dependencies_without_watchdog(self):
+        cancel = Cancelled()
+        self.world.start_errors['n8n'] = cancel
+        with self.assertRaises(Cancelled) as caught:
+            self.check(self.upload_n8n(), ['n8n'])
+        self.assertIs(caught.exception, cancel)
+        self.assertEqual(self.world.down, self.initial)
+
+    def test_cancel_during_connection_read_restores_started_services(self):
+        cancel = Cancelled()
+        self.world.connection_error = cancel
+        with self.assertRaises(Cancelled) as caught:
+            self.check(self.upload_n8n(), ['n8n'])
+        self.assertIs(caught.exception, cancel)
+        self.assertEqual(self.world.down, self.initial)
+
+    def test_partial_dependency_start_failure_is_restored_before_main_ever_starts(self):
+        self.world.start_errors['n8n-postgres'] = CommandError('start failed', returncode=1, stderr=b'fixture failure')
+        row = self.check(self.upload_n8n(), ['n8n'])[0]
+        self.assertFalse(row['importable'])
+        self.assertEqual(self.world.down, self.initial)
+        self.assertNotIn('n8n.service', self.service_calls('start'))
+        self.assertIn('n8n-postgres.service', self.service_calls('stop'))
+
+    def test_untracked_dependency_or_cycle_stops_before_starting_any_services(self):
+        for graph in ({'n8n': {'foreign-service'}}, {'n8n': {'n8n-postgres'}, 'n8n-postgres': {'n8n'}}):
+            self.world.service_dependencies = graph
+            with self.subTest(graph=graph):
+                row = self.check(self.upload_n8n(), ['n8n'])[0]
+                self.assertFalse(row['importable'])
+                self.assertEqual(self.issue(row, 'n8n.layout-unsupported')['level'], 'stop')
+                self.assertEqual(self.service_calls('start'), [])
+                self.assertEqual(self.world.down, self.initial)
+
+    def test_readiness_failure_restores_started_services(self):
+        self.world.probe_unready = True
+        with mock.patch.object(hatarget, 'wait_until', side_effect=lambda condition, **_kwargs: condition()):
+            row = self.check(self.upload_n8n(), ['n8n'])[0]
+        self.assertFalse(row['importable'])
+        self.assertEqual(self.issue(row, 'target.service-failed')['level'], 'stop')
+        self.assertEqual(self.world.down, self.initial)
+
+    def test_conversion_failure_after_the_live_read_restores_stopped_services(self):
+        self.world.version = b'2.44.0\n'
+        error = self.convert_stopped(self.upload_n8n())
+        self.assertEqual(error.code, 'incompatible')
+        self.assertEqual(self.world.down, self.initial)
+        self.assertEqual(self.world.manifests, {})
 
 
 class CheckFlowTests(N8nCase):

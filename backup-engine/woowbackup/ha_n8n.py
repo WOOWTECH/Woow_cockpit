@@ -43,6 +43,7 @@ unpublishes every workflow; `pg_dump -Fc` becomes the archive's database `main`.
 """
 import contextlib
 import io
+import ipaddress
 import json
 import os
 import pwd
@@ -759,9 +760,9 @@ def _container_names(quadlets):
     return found
 
 
-# Only these two non-secret settings cross the container boundary. Read the existing container's effective environment:
+# Only four non-secret connection fields cross the container boundary. Read the effective application environment:
 # Podman has already applied image defaults, EnvironmentFile, Environment and env secrets in its own precedence order.
-# Read through the installed vendor's Config/Env decorators, on a class with ONLY these two string fields. This keeps
+# Read through the installed vendor's Config/Env decorators, on a class with ONLY these selected fields. This keeps
 # direct/_FILE precedence and whitespace handling identical to that release without loading the full DatabaseConfig
 # (which would also read passwords). Never infer an application setting from the database server.
 CONNECTION_PROBE = r"""
@@ -799,7 +800,7 @@ try {
     if (candidates.length !== 1) throw new Error('ambiguous n8n process');
     const {pid, script} = candidates[0];
     const env = Object.create(null);
-    const keys = ['DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER'];
+    const keys = ['DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER', 'DB_POSTGRESDB_HOST', 'DB_POSTGRESDB_PORT'];
     const selected = [...keys, ...keys.map(k => k + '_FILE'), 'N8N_CONFIG_FILES', 'NODE_OPTIONS', 'E2E_TESTS'];
     for (const item of read('/proc/' + pid + '/environ', 256 * 1024).split('\0')) {
         const equals = item.indexOf('=');
@@ -839,23 +840,27 @@ try {
     const configRequire = createRequire(vendorRequire.resolve('@n8n/config'));
     const {Config, Env} = configRequire('./decorators');
     const {Container} = configRequire('@n8n/di');
-    class Connection { constructor() { this.database = 'n8n'; this.user = 'postgres'; } }
-    for (const [field, key] of [['database', keys[0]], ['user', keys[1]]]) {
-        Reflect.defineMetadata('design:type', String, Connection.prototype, field);
+    class Connection {
+        constructor() { this.database = 'n8n'; this.user = 'postgres'; this.host = 'localhost'; this.port = 5432; }
+    }
+    for (const [field, key] of [['database', keys[0]], ['user', keys[1]], ['host', keys[2]], ['port', keys[3]]]) {
+        Reflect.defineMetadata('design:type', field === 'port' ? Number : String, Connection.prototype, field);
         Env(key)(Connection.prototype, field);
     }
     Config(Connection);
-    const {database, user} = Container.get(Connection);
+    const {database, user, host, port} = Container.get(Connection);
     if (![database, user].every(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(v)))
         throw new Error('invalid identifier');
     if (database === 'template0' || database === 'template1') throw new Error('template database');
-    process.stdout.write(JSON.stringify({database, user}));
+    if (typeof host !== 'string' || !host || host.length > 253 || /[\s\x00-\x1f\x7f]/.test(host) ||
+        !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('invalid endpoint');
+    process.stdout.write(JSON.stringify({database, user, host, port}));
 } catch (_) { process.exitCode = 2; }
 """
 
 
-def read_target_connection(runner, container):
-    """Validated {'database', 'user'} of the live n8n, for conversion and the HA instance adapter.
+def _read_target_endpoint(runner, container):
+    """Validated selected fields of live n8n; never read the full DatabaseConfig/password.
 
     Fixed selected fields only, through the existing owner runner. Unreadable/stopped containers or _FILE inputs stop
     this app; no fallback to a server's POSTGRES_DB or catalog bootstrap user. No raw diagnostics escape this reader.
@@ -866,31 +871,125 @@ def read_target_connection(runner, container):
         if result.returncode != 0:
             raise ValueError('connection probe failed')
         connection = json.loads(result.stdout or b'')
-        if (not isinstance(connection, dict) or set(connection) != {'database', 'user'}
+        if (not isinstance(connection, dict) or set(connection) != {'database', 'user', 'host', 'port'}
                 or any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', value)
-                       for value in connection.values())
+                       for value in (connection.get('database'), connection.get('user')))
                 or connection['database'] in ('template0', 'template1')):
             raise ValueError('invalid connection')
+        host, port = connection['host'], connection['port']
+        if not isinstance(host, str) or not 0 < len(host) <= 253 or type(port) is not int or not 1 <= port <= 65535:
+            raise ValueError('invalid endpoint')
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if not re.fullmatch(r'[A-Za-z0-9_](?:[A-Za-z0-9_.-]{0,251}[A-Za-z0-9_.-])?', host):
+                raise ValueError('invalid endpoint') from None
     except (BackupError, ValueError, TypeError) as error:
         if isinstance(error, BackupError) and haissues.is_job_wide(error):
             raise
-        raise _layout(None, '無法讀取這台 n8n 實際使用的資料庫名稱和帳號，請確認 n8n 正在執行且資料庫環境設定和設定檔可讀取') from None
+        raise _layout(None, '無法讀取這台 n8n 實際使用的資料庫連線，請確認 n8n 正在執行且資料庫環境設定和設定檔可讀取') from None
     return connection
 
 
-def read_app_connection(runner, quadlets):
-    """Current connection for HA restore preflight; select exactly one main n8n by its fixed data mount.
-
-    Call while the app is still running, before stopping services/DROP. A marked archive whose database differs from
-    this result must stop and request reconversion. This reads current app state, never an archived configuration.
-    """
+def main_container(runner, quadlets):
+    """Unique main container name (read only); worker/webhook share its mount but use different commands."""
     main = [name for name in quadlets if name.endswith('.container')
             and (tempctr._container_values(quadlets[name], 'Exec') or [''])[-1].strip() in ('', 'start')
             and any(target == '/home/node/.n8n' for _source, target, _options
                     in quadlet_mounts(quadlets, name, runner.home, skipped=[]))]
     if len(main) != 1:
         raise _layout(None, '無法唯一確認這台 n8n 的主要容器')
-    return read_target_connection(runner, quadlet_container_name(quadlets, main[0]))
+    return quadlet_container_name(quadlets, main[0])
+
+
+def read_target_connection(runner, container):
+    """Read only; preserve the exact two-field API."""
+    endpoint = _read_target_endpoint(runner, container)
+    return {key: endpoint[key] for key in ('database', 'user')}
+
+
+def read_app_endpoint(runner, quadlets):
+    """Read-only {'database', 'user', 'host', 'port'} from the same vendor config and unique main selection."""
+    return _read_target_endpoint(runner, main_container(runner, quadlets))
+
+
+def read_app_connection(runner, quadlets):
+    """Read only; current connection before services stop/DROP, preserving the exact two-field API."""
+    return read_target_connection(runner, main_container(runner, quadlets))
+
+
+def prepare_app_endpoint(work, app, *, quadlets=None):
+    """Temporarily start a stopped main and its service dependencies, with the job's existing TempObjects lifecycle.
+
+    The read-only APIs above never start services. Restore preflight may use this hook with a scoped temp lifecycle,
+    cleaning it up BEFORE normal restore stops/restarts services (also on preflight failure/cancellation).
+    """
+    from .adapters.quadlet_postgres import quadlet_unit
+    quadlets = work.quadlets(app) if quadlets is None else quadlets
+    runner = work.runner(app)
+    container = main_container(runner, quadlets)
+    stopped = not hatarget._running(runner, container)
+    plan = [(container, None, False)]
+    if stopped:
+        # systemctl start of the main also pulls in Requires/Wants/BindsTo. Read the actual unit graph (including
+        # overrides), ensure container prerequisites first, and register stop intent BEFORE each start. The shared
+        # ensure_running registers only AFTER a successful start, so by itself it cannot cover a partial/cancelled start.
+        if not callable(getattr(work, 'temp', None)):
+            raise _layout(app, '暫時啟動 n8n 需要可在作業結束時恢復原狀的生命週期')
+        temp = work.temp(app)
+        units = {quadlet_unit(name): name for name in quadlets if name.endswith('.container')}
+        aux = {quadlet_unit(name) for name in quadlets if not name.endswith('.container')}
+        result = runner.systemctl('show', '--property=Id,LoadState,ActiveState,Requires,Wants,BindsTo', '--', *units,
+                                  timeout=60, max_output=64 * 1024)
+        blocks = (result.stdout or b'').decode('utf-8').strip().split('\n\n')
+        states = [dict(line.split('=', 1) for line in block.splitlines() if '=' in line) for block in blocks]
+        if len(states) != len(units) or any(row.get('Id') != unit for row, unit in zip(states, units)):
+            raise _layout(app, '無法確認暫時啟動 n8n 會連帶啟動的服務')
+        states = dict(zip(units, states))
+        main = next(unit for unit, name in units.items() if quadlet_container_name(quadlets, name) == container)
+        order, visiting = [], set()
+
+        def visit(unit):
+            if unit in visiting:
+                raise _layout(app, 'n8n 的服務依賴有循環，無法暫時啟動並恢復原狀')
+            if unit in order:
+                return
+            row = states[unit]
+            if row.get('LoadState') != 'loaded' or row.get('ActiveState') not in ('active', 'inactive', 'failed'):
+                raise _layout(app, 'n8n 的服務狀態尚未穩定，無法暫時啟動並恢復原狀')
+            visiting.add(unit)
+            for dep in sorted(set(' '.join(row.get(key, '') for key in ('Requires', 'Wants', 'BindsTo')).split())):
+                if dep in units:
+                    visit(dep)
+                elif dep.endswith('.service') and dep not in aux:
+                    raise _layout(app, 'n8n 依賴未列在這個應用裡的服務，無法暫時啟動並恢復原狀')
+            visiting.remove(unit)
+            order.append(unit)
+
+        visit(main)
+        plan = [(quadlet_container_name(quadlets, units[unit]), unit, states[unit]['ActiveState'] != 'active')
+                for unit in order]
+    endpoint = {}
+
+    def ready(current_runner, current_container):
+        try:
+            endpoint.update(_read_target_endpoint(current_runner, current_container))
+            return True
+        except BackupError as error:
+            if not stopped or haissues.is_job_wide(error):
+                raise
+            return False  # a newly started n8n needs time to reach its actual CLI/config process
+
+    for current, unit, was_stopped in plan:
+        if was_stopped:
+            def stop_again(current=current, unit=unit):
+                runner.systemctl('stop', '--', unit, timeout=hatarget.STOP_TIMEOUT, max_output=64 * 1024)
+                temp.services.pop(current, None)
+            temp.put_back_later(f'n8n 讀取前的服務 {current}', stop_again)
+        database = any(pg['container'] == current for pg in app.postgres)
+        hatarget.ensure_running(work, app, current, ready=ready if current == container else 'postgres' if database else 'running',
+                                size=hatarget.size_hint(getattr(work, 'ha', None)))
+    return endpoint
 
 
 class Target:
@@ -956,7 +1055,8 @@ class Target:
         self.pg_env = env
         if self.instance:
             # An instance catalog normalizes its maintenance database to postgres; that is not n8n's database.
-            self.connection = read_app_connection(work.runner(app), quadlets)
+            endpoint = prepare_app_endpoint(work, app, quadlets=quadlets)
+            self.connection = {key: endpoint[key] for key in ('database', 'user')}
             self.pg = dict(self.pg, database=self.connection['database'])
         self.pg_target = next((t for _n, t in sum(mounts.values(), []) if t.startswith('/var/lib/postgresql')),
                               '/var/lib/postgresql/data')
