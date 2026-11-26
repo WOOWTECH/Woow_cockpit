@@ -515,6 +515,13 @@ class HaInstanceMarkerTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(BackupError) as caught:
                 archive.validate_manifest(value)
             self.assertEqual(caught.exception.code, 'invalid-manifest')
+        for app_id in ('hermes', APP):
+            value = self.manifest(app_id)
+            older = copy.deepcopy(value)
+            del older['apps'][0]['postgres'][-1]['ha_database']
+            archive.validate_manifest(older)  # the same foreign-app archive is valid without the marker
+            with self.subTest(app_id=app_id), self.assertRaises(BackupError):
+                archive.validate_manifest(value)
         value = self.manifest('litellm')
         item(value).update(ha_database='notes')
         item(value)['databases'][0]['name'] = 'notes'
