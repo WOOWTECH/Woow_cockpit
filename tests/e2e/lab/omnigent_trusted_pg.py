@@ -306,7 +306,8 @@ CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
             assert inside(['test', '!', '-e', '/tmp/woowbk-pwned'], accept=True).returncode == 0
             event('malicious_check', rejected=True, marker_absent=True, data_and_sequence_valid=True,
                   carried_account_valid=True, loader_removed=True, superuser_objects_absent=True)
-            full_candidate_pg_probe(directory, work, app, target)
+            # The old fixture-only full_candidate_pg_probe used the removed omni.verdict seam. The current product's
+            # complete real-backup candidate, install and rollback ran separately in omnigent_real_ha.py on this tip.
             # The revision remains equal: only the source columns are changed.
             for db in ('trusted', 'source'):
                 revision = inside(['psql', '-X', '-A', '-t', '-U', 'omnigent', '-d', db,
