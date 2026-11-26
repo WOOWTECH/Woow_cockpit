@@ -48,7 +48,7 @@ def bundle():
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w') as out:
         files = [(p, str(p.relative_to(ROOT / 'backup-engine'))) for p in sorted((ROOT / 'backup-engine/woowbackup').glob('*.py'))]
-        files += [(HERE / name, name) for name in ('runtime_probe.py', 'woow_e44_fixture.erl')]
+        files += [(HERE / name, name) for name in ('runtime_probe.py', 'woow_e44_fixture.erl', 'compile_fixture.escript')]
         for path, name in files:
             data = path.read_bytes()
             entry = tarfile.TarInfo(name)

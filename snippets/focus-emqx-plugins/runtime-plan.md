@@ -30,7 +30,7 @@ Native proof gates:
 3. Refuse an empty acknowledgement list at the product issue boundary. Prove disposable device records unchanged, remove only the first candidate, then rebuild a fresh candidate with the exact acknowledged key.
 4. Prove only the missing record was removed and the available plugin's full settings/order and ping survive.
 5. Restart that candidate; require the clean state list, working plugin and exact configuration-root/table receipts. Call the unmocked product `verify_restored`; deliberately alter the expected admin receipt in memory and require its normal refusal. No broker data is altered by the negative receipt test.
-6. Product TempObjects cleanup, no owned resources left, all non-fixture container states, volumes, images and installed importer source hashes unchanged.
+6. Product TempObjects cleanup, no owned resources left, all non-fixture durable volumes, images and installed importer source hashes unchanged. Container churn is recorded as an observation because Headscale independently recreates containers; every mutating target must belong to the invocation job.
 
 This is a generated native E-44 delta fixture. Existing actual EMQX full-flow evidence remains untouched and remains the separate proof for original HA MQTT/Dashboard/ACL/rules/action/import/restart/safety rollback. Do not relabel this fixture as that original full flow. Shared E-44 row remains part until appropriate native evidence completes.
 

@@ -30,6 +30,7 @@ class DisposableDriverTests(unittest.TestCase):
             self.assertTrue(all(m.isfile() and not m.name.startswith('/') and '..' not in m.name.split('/') for m in members))
             self.assertIn('runtime_probe.py', archive.getnames())
             self.assertIn('woow_e44_fixture.erl', archive.getnames())
+            self.assertIn('compile_fixture.escript', archive.getnames())
             self.assertEqual(archive.extractfile('woowbackup/ha_emqx.py').read(),
                              (ROOT / 'backup-engine/woowbackup/ha_emqx.py').read_bytes())
         self.assertLessEqual(len(payload), 16 * 1024 * 1024)
@@ -44,12 +45,12 @@ class DisposableDriverTests(unittest.TestCase):
         runner = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == 'Runner')
         program = compile(ast.fix_missing_locations(ast.Module(body=[runner], type_ignores=[])), '<e44-runner>', 'exec')
         run = mock.Mock(return_value=SimpleNamespace(returncode=0, stdout=b'ok', stderr=b''))
-        scope = {'Path': Path, 'os': os, 'ROOT': HERE, 'LIMIT': 256 * 1024 * 1024,
+        scope = {'Path': Path, 'os': os, 'JOB': 'offline-job', 'ROOT': HERE, 'LIMIT': 256 * 1024 * 1024,
                  'shutil': SimpleNamespace(disk_usage=lambda _: SimpleNamespace(free=20 * 1024**3)),
                  'subprocess': SimpleNamespace(run=run, PIPE=-1)}
         exec(program, scope)
         for memory in ('256m', '768m'):
-            scope['Runner']().podman('run', '--memory', memory, '--pull=never', 'sha256:fixed')
+            scope['Runner']().podman('run', '--name', 'woowbk-offline-job-fixture', '--memory', memory, '--pull=never', 'sha256:fixed')
             argv = run.call_args.args[0]
             self.assertEqual(argv[:3], ['podman', '--runtime=crun', 'run'])
             self.assertIn('--image-volume=ignore', argv)
@@ -60,17 +61,19 @@ class DisposableDriverTests(unittest.TestCase):
         source = ast.parse((HERE / 'runtime_probe.py').read_text())
         runner = next(node for node in source.body if isinstance(node, ast.ClassDef) and node.name == 'Runner')
         run = mock.Mock(side_effect=AssertionError('low disk must not execute'))
-        scope = {'Path': Path, 'os': os, 'ROOT': HERE, 'LIMIT': 256 * 1024 * 1024,
+        scope = {'Path': Path, 'os': os, 'JOB': 'offline-job', 'ROOT': HERE, 'LIMIT': 256 * 1024 * 1024,
                  'shutil': SimpleNamespace(disk_usage=lambda _: SimpleNamespace(free=12 * 1024**3)),
                  'subprocess': SimpleNamespace(run=run, PIPE=-1)}
         exec(compile(ast.fix_missing_locations(ast.Module(body=[runner], type_ignores=[])), '<e44-runner>', 'exec'), scope)
         with self.assertRaisesRegex(RuntimeError, 'disk_floor'):
-            scope['Runner']().podman('run', '--memory', '768m', 'sha256:fixed')
+            scope['Runner']().podman('run', '--name', 'woowbk-offline-job-fixture', '--memory', '768m', 'sha256:fixed')
         run.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, 'foreign_container_mutation_refused'):
+            scope['Runner']().podman('stop', 'existing-app')
         run.side_effect = None
         run.return_value = SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
-        scope['Runner']().podman('rm', '--force', 'owned-job-container')
-        self.assertEqual(run.call_args.args[0][-3:], ['rm', '--force', 'owned-job-container'])
+        scope['Runner']().podman('rm', '--force', 'woowbk-offline-job-fixture')
+        self.assertEqual(run.call_args.args[0][-3:], ['rm', '--force', 'woowbk-offline-job-fixture'])
 
 
 if __name__ == '__main__':
