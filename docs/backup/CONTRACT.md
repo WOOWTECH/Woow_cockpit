@@ -2125,7 +2125,7 @@ way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps to
   HA inplace import retains the current data volume and role/password definitions, reads the app DB's current owner, replaces
   only that DB and loads under that owner. Missing DB/owner or a different owner at readback stops/fails the import. Other DBs,
   including later writes, additions/deletions, owners and changed role/password definitions, remain current. The archived globals
-  are not applied in this path. Current database-authentication secrets stay; LiteLLM's salt follows its imported encrypted rows.
+  are not applied in this path. Current database-authentication secrets and declared configuration-file bytes stay; LiteLLM's salt follows its imported encrypted rows.
   The full current safety snapshot and its complete PostgreSQL/role digest still govern automatic rollback; a marked converted
   payload cannot be an automatic rollback source. Fresh HA restore explicitly applies the complete conversion-time snapshot to a
   newly initialized cluster, with the normal guard and warning. Ordinary and unmarked restores retain their full-instance path.
