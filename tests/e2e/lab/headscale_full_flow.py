@@ -145,7 +145,7 @@ Failed = drv.Failed
 
 def require_reviewed_check(result):
     """An older real-flow script must not import a refused or newly conditional result."""
-    if result.get('ok') is not True or result.get('blockers'):
+    if result.get('ok') is not True or result.get('importable') is not True or result.get('blockers'):
         raise Failed('the check did not mark Headscale importable without blockers')
     issues = result.get('issues')
     if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
