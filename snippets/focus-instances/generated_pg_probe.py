@@ -115,6 +115,7 @@ def cleanup():
     require('volume-absent-'+str(len(owned)),not reserved_volume or
             call('volume','exists',volume,check=False).returncode==1)
     reserved_container=reserved_volume=False
+    journal()
 
 def start(name):
     global current,volume,reserved_container,reserved_volume
@@ -202,8 +203,11 @@ def snapshot(adapter,pg,folder,exclude=None):
     names=[r[0] for r in rows if r[0]!=exclude]
     rows=[r for r in rows if r[0]!=exclude]
     roles=json_query(adapter,pg,"SELECT json_agg(json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,"
-        "rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text,coalesce(md5(rolpassword),''),rolconfig) "
+        "rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text,coalesce(md5(rolpassword),'')) "
         "ORDER BY rolname) FROM pg_authid")
+    settings=json_query(adapter,pg,"SELECT coalesce(json_agg(json_build_array(r.rolname,d.datname,s.setconfig) "
+        "ORDER BY r.rolname,d.datname),'[]'::json) FROM pg_db_role_setting s LEFT JOIN pg_roles r ON r.oid=s.setrole "
+        "LEFT JOIN pg_database d ON d.oid=s.setdatabase")
     members=json_query(adapter,pg,"SELECT coalesce(json_agg(json_build_array(r.rolname,m.rolname,g.rolname,"
         "a.admin_option,a.inherit_option,a.set_option) ORDER BY r.rolname,m.rolname,g.rolname),'[]'::json) "
         "FROM pg_auth_members a JOIN pg_roles r ON r.oid=a.roleid JOIN pg_roles m ON m.oid=a.member "
@@ -222,7 +226,7 @@ def snapshot(adapter,pg,folder,exclude=None):
         "JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE "
         "n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_(toast|temp)' "
         "AND a.attnum>0 AND NOT a.attisdropped AND c.relkind IN ('r','p')",n) for n in names}
-    return {'catalog':rows,'roles':roles,'members':members,'owners':owners,'schemas':schemas,
+    return {'catalog':rows,'roles':roles,'role_settings':settings,'members':members,'owners':owners,'schemas':schemas,
             'columns':columns,'digest':digest['digest']}
 
 def hash_state(value):
@@ -444,6 +448,7 @@ finally:
     after_inventory=inventory()
     checks['durable-volumes-unchanged']=before_inventory['volumes']==after_inventory['volumes']
     checks['catalog-and-quadlet-files-unchanged']=before_inventory['files']==after_inventory['files']
+    private_journal=(root/'owned-resources.json').read_text() if (root/'owned-resources.json').exists() else '{}'
     if checks.get('cleanup') is not False:
         shutil.rmtree(root)
     else:
@@ -453,7 +458,7 @@ print(json.dumps({'checks':checks,'failure_type':failure,'failure_step':phase if
     'image':P['image'],'device':P['device'],'run_id':P['run_id'],'private_run_root':str(root) if root.exists() else None,
     'acceptance':'generated-PG adapter proof; original n8n/LiteLLM acceptance is complementary',
     'container_churn_count':len(set(before_inventory['containers'])^set(after_inventory['containers'])),
-    '_private_stderr':stderr_tail},sort_keys=True))
+    '_private_stderr':stderr_tail,'_private_owned_journal':private_journal},sort_keys=True))
 '''
 
 
@@ -535,9 +540,11 @@ def main():
             raise RuntimeError('isolated generated proof runner failed; raw output withheld')
         evidence = json.loads(result.stdout)
         private = evidence.pop('_private_stderr', '')
+        journal = evidence.pop('_private_owned_journal', '{}')
         evidence['checks']['outer-isolation-preserved'] = verify_isolation(args.device)
         for path, data in ((args.out, json.dumps(evidence, indent=2, sort_keys=True)+'\n'),
-                           (args.out.with_suffix('.private.log'), private)):
+                           (args.out.with_suffix('.private.log'), private),
+                           (args.out.with_suffix('.owned.json'), journal+'\n')):
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             with os.fdopen(fd, 'w') as handle:
                 handle.write(data)
