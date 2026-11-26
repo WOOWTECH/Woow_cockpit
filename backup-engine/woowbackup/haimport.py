@@ -49,7 +49,7 @@ from .haissues import Issue
 
 # catalog id -> add-on slug (after the repository prefix), from the one registry of importers (haapps.IMPORTERS)
 APPS = {importer.app_id: importer.slug for importer in haapps.IMPORTERS}
-ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')  # what a module's convert hands to adapter.import_manifest
+ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets', 'keep_safety')  # what a module's convert hands to adapter.import_manifest
 # A module's readback for the restore (CONTRACT section 5 `import_check`, section 9): {kind: app id}. The converted
 # backup's app section carries it; the restore compares it after the units started (verify_import) and rolls back
 # on a difference; another kind or app refuses the restore in its preflight (import_check_problem).

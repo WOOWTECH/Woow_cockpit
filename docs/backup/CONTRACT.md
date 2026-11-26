@@ -2778,15 +2778,27 @@ html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied wi
 
 **LiteLLM** (`woow-litellm` → `litellm`: one `postgres` item `main`, container `litellm-postgres`, database and user
 `litellm`; the proxy container `litellm` reads secret `litellm-salt-key` as `LITELLM_SALT_KEY`; owner decision 2026-11-23).
-The entry must be exactly one single-database `postgres` item, no volume and no host directory: any other mode (cold,
-instance) is a blocker that says what to choose and where (`ha_litellm.TARGET_SHAPE`); `catalog-suggest` proposes that
-entry for a LiteLLM that is not installed (§4). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):
+Revised 2026-11-25 (HAOS parity, lane LITELLM; every finding is a `HaIssue`, ids in `ha_litellm.ISSUES`): the entry is
+one single-database `postgres` item (`catalog-suggest` proposes it for a LiteLLM that is not installed, §4) or, when it has
+no `postgres` item, the cold mode: the database container's data volume is one of the entry's `volumes` and the converted
+backup carries the new cluster itself (cleanly shut down, `pg_controldata` says so) as that volume instead of a dump
+(L-03); every other volume and host folder of the entry is carried as it is (`litellm.extras-carried`, `auto`). The one
+shape it cannot fill is an entry that dumps the whole instance (`adapter.import_manifest` has no instance form), two
+database items, or none: `litellm.layout-unsupported` (`stop`, says what to choose). The proxy is the container whose Quadlet
+file mounts `litellm-salt-key` as `LITELLM_SALT_KEY`, whatever it is called (L-04: `litellm.target-missing` when there is
+none). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):
 the converted backup records none, so the preflight warns (`digests-missing`) and the import reports `match: null`,
 while the safety backup records it and both rollbacks compare it before the app starts.
-1. Versions: add-on 0.1.15 → LiteLLM 1.104.0 must equal the running proxy's `importlib.metadata.version("litellm")`
-   (`podman exec litellm`, read only); HA's `data/woow/state.json` `litellm_version`, when present, must say the same;
-   HA's finished Prisma migrations must be exactly the live database's. HA's PostgreSQL is 18 (`PG_VERSION`), this
-   device's 17: the only importer that moves data to an older major, and only as rows (3).
+1. Versions (L-31..L-34, L-45: no version number is a gate): the add-on version is mapped to LiteLLM's by a table
+   (0.1.15 → 1.104.0) that only informs (`version.addon-unknown`, `notice`); this device's version is read in the
+   running proxy (`podman exec <proxy>`, read only), else from its image in a throwaway container, and when it cannot
+   be read that is `version.target-unknown` (`notice`); both known and different is `litellm.version-differs`
+   (`notice`); HA's `state.json` `litellm_version` is shown, never compared. What decides is the data: HA's finished
+   Prisma migrations must be exactly the live database's (`litellm.migrations-differ`, `stop`), then the data shape (3).
+   A database with no finished migration yet (the proxy never ran) gets the proxy's first start, waited for and put back
+   (L-08; `litellm.target-migrations` when it stays unreadable). HA's PostgreSQL is 18 (`PG_VERSION`, read by its first
+   64 bytes, L-57), this device's may be any major (L-20, L-53: the new cluster's own answer is the version): the only
+   importer that moves data to an older major, and only as rows (3).
 2. One pass: `data/postgres/**` through `ha_odoo.PgSink` (configuration replaced, recovery/pid files dropped; a symlink
    such as a tablespace refuses), `data/secrets/salt_key` (one small regular file, `^[A-Za-z0-9_-]{16,256}$` after
    strip, masked at once), `data/woow/state.json`; never `options.json`, the master key, the UI or database password
@@ -2799,9 +2811,13 @@ while the safety backup records it and both rollbacks compare it before the app 
    no preload library, no event trigger (review SR-1..SR-3); `public._prisma_migrations` is read only as an ordinary
    table; `backup_label` and `tablespace_map` never reach the volume and refuse (a cold backup has neither; SR-4). The salt
    must be the one HA's database is bound to (`woow_platform.settings` and the `woow.meta` fingerprint, read by a role
-   without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database: only `public`,
-   `woow_platform` and `woow` (with `meta` only), no object only a superuser creates, no large object, UTF8; its data
-   shape (columns, sequences, types of `public` and `woow_platform`) must equal the live database's. Every session
+   without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database must be UTF8
+   (`litellm.encoding`, `stop`) and its data shape (columns, sequences, types of `public` and `woow_platform`) must equal
+   the live database's (`litellm.schema-differs`, `stop`, names the tables; also what is missing, L-21). What it has
+   beyond is never moved and is named: other schemas (`litellm.schemas-skipped`, `confirm`, L-21), objects only a
+   superuser creates (`litellm.superuser-objects`, `confirm`, L-23: they only ever exist inside the throwaway cluster, no
+   statement of the conversion creates or calls one in the new cluster), large objects (`litellm.large-objects`,
+   `notice`, L-24); HA's own `woow` schema is never read beyond the salt fingerprint (L-22). Every session
    that reads the columns or the schema signature -- HA's cluster, the live database, the schema snapshot and the new
    cluster -- pins `search_path = pg_catalog` in the query itself (`PIN_SEARCH_PATH`), so type names and expressions
    render alike on every side (an enum column is `public."JobStatus"` everywhere; without the pin HA's pg_catalog-only
@@ -2810,8 +2826,13 @@ while the safety backup records it and both rollbacks compare it before the app 
    columns line, `pg_dump --schema-only`; the live signature before == after == the snapshot's columns, else
    `incompatible` and nothing changed); a NEW cluster from the live `litellm-postgres` image, environment and secret
    mount gets its pre-data section; every trusted table's rows are copied as `COPY "<schema>"."<table>" (<trusted
-   columns>) TO STDOUT` in HA's cluster and `... FROM STDIN` in the new one by `woowbk_restore` (INSERT and sequence
-   values only), each trusted sequence value is set by it, then the post-data section (HA's rows must satisfy this
+   columns>) TO STDOUT` in HA's cluster and as one script per table in the new one by `woowbk_restore` (INSERT and
+   sequence values only): `BEGIN; COPY ... FROM STDIN;` the rows `\.` `COMMIT;` and an end mark psql prints only after it
+   has read and run all of it, which must end psql's output (pg-stdin follow-up F2: a tail that did not arrive, a cut
+   last field included, never commits and stops this app); names are quoted whatever they hold and there is no limit on
+   their number (L-10..L-12); a snapshot of this device's schema that came out wrong is taken again, three tries
+   (L-36, L-37, L-39, L-54, L-55); extension versions of the new cluster that differ from this device's are named
+   (`litellm.extension-versions`, `auto`, L-40); each trusted sequence value is set by it, then the post-data section (HA's rows must satisfy this
    device's constraints). The new cluster's signature equals the live one after the post-data section and after the
    last write, it holds only its bootstrap superuser (no role or database setting, ALTER SYSTEM value or large object),
    every table's count and the migrations equal HA's, and the salt row it got equals the salt that moves. Its
@@ -2828,17 +2849,25 @@ while the safety backup records it and both rollbacks compare it before the app 
    HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
    stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
    the check warns and a note names the stored environment variable names and callback names (never a value; review
-   SR-5). Stored settings LiteLLM imports and calls as code refuse (SR-6; LiteLLM's `get_instance_fn` imports any
-   dotted path): `post_call_rules`, the `general_settings` `custom_*` hooks, a callback whose name has a dot, a string
+   SR-5). Stored settings LiteLLM imports and calls as code are NOT moved (L-13, L-14, L-47, L-49; SR-6; LiteLLM's
+   `get_instance_fn` imports any dotted path): one line to confirm names them (`litellm.hooks-removed`, `confirm`), the new
+   cluster's own query names them again and the confirmed names must be the same (else `confirmation-required`), each
+   is taken out of the new cluster's `LiteLLM_Config` by its whole key or path (never a part of its value) and the same query
+   must then find none (else `job-failed`, nothing packed); the settings are: `post_call_rules`, the `general_settings` `custom_*` hooks, a callback whose name has a dot, a string
    `callbacks` value, `custom_provider_map[].custom_handler`, a dotted guardrail callback or type (`guardrails` v1 and
    v2 shapes), a dotted `pass_through_endpoints[].target` that is not `scheme://…`, `litellm_jwtauth.custom_validate`,
    `router_settings.plugins` and a `key_management_settings.custom_secret_manager` (the vendor's own DB-overlay list
    plus the router plugins and the custom secret manager file it misses); a dotted callback is found by the query
-   itself, however many plain names come before it. The check's blocker names them (labels only) and the conversion
-   stops before reading HA's rows or capturing this device's schema. An answer that cannot be read completely (over the output limit, a timeout, not an object) refuses too
-   (fail closed). Because HA's data directory controls its throwaway cluster's catalog, the conversion asks the same
-   question again in the new cluster after HA's rows are loaded (this device's image and schema, HA's data only as
-   rows) and refuses there before the converted dump is written; the import note names what that answer found (SR-8).
+   itself, however many plain names come before it. The line names them (labels only) and the conversion
+   stops before reading HA's rows or capturing this device's schema unless it was confirmed. An answer that cannot be read
+   completely (over the output limit, a timeout, not an object) is asked twice; what stays unreadable is not moved:
+   `LiteLLM_Config` stays empty in the new cluster and `litellm.config-unreadable` (`confirm`) says so. Because HA's data
+   directory controls its throwaway cluster's catalog, the conversion asks the same question again in the new cluster after
+   HA's rows are loaded (this device's image and schema, HA's data only as rows); the import note names what that answer
+   found (SR-8). Other schemas in THIS device's database (L-38, owner decision S4) are one line to confirm
+   (`litellm.other-schemas`, found by the check) and the converted backup's app section carries `keep_safety: true`
+   (`adapter.import_manifest(..., keep_safety=True)`; needs `haimport.ITEM_KEYS` to hand it on, else the app stops with
+   `litellm.keep-unsupported`): the restore writes its pre-restore backup as a kept copy (kept.py).
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and

@@ -1287,9 +1287,13 @@ class LiteLLMPackageTests(unittest.TestCase):
         for mode in ('cold', 'instance'):
             item = variant(app, mode)
             self.assertTrue(item['valid'], item['problem'])
+            if mode == 'cold':   # HAOS parity L-03: the cold entry is filled with the new cluster as its data volume
+                target = self.import_target(item['entry'])
+                self.assertEqual((target.mode, target.db_volume), ('cold', 'litellm-pgdata'))
+                continue
             with self.subTest(mode=mode), self.assertRaises(BackupError) as caught:
                 self.import_target(item['entry'])
-            self.assertEqual(caught.exception.message, ha_litellm.TARGET_SHAPE)
+            self.assertEqual(caught.exception.message, ha_litellm.LAYOUT_INSTANCE)
         self.assertEqual([v['id'] for v in app['variants'] if '（預設）' in v['label']], [], 'cold is not the default here')
 
     def test_an_installed_entry_keeps_its_mode_and_is_told_what_to_choose(self):
