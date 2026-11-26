@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Opt-in host-side dev-d synthetic PostgreSQL probe. Never uses live volumes or secrets.
+"""Opt-in dev-d synthetic PostgreSQL probe, including O-15's extra superuser-only objects.
+Never uses live volumes or secrets. The archive is generated in real PostgreSQL, not from an HA backup.
 
 Run: python3 tests/e2e/lab/omnigent_trusted_pg.py --run
 Outputs only fixed stage names, booleans and the image ID; never SQL/data/stderr.
@@ -205,6 +206,11 @@ INSERT INTO scheduled_tasks(state) VALUES (1); INSERT INTO task_child VALUES (9,
 INSERT INTO alembic_version VALUES ('same_revision');
 ALTER TABLE users ADD CONSTRAINT evil CHECK (id <> 'admin' OR
  lo_export(lo_from_bytea(0,decode('70776e6564','hex')), '/tmp/woowbk-pwned') > 0) NOT VALID;""")
+        sql('source', """CREATE FUNCTION public.woowbk_extra_event_fn() RETURNS event_trigger
+ LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;
+CREATE EVENT TRIGGER woowbk_extra_event ON ddl_command_start
+ EXECUTE FUNCTION public.woowbk_extra_event_fn();
+CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
         tmp = Tmp()
         class Runner:
             def podman(self, *args, **kwargs):
@@ -251,6 +257,14 @@ ALTER TABLE users ADD CONSTRAINT evil CHECK (id <> 'admin' OR
             assert not worker.is_alive() and attempts and attempts[0] != 0 and held == target_columns
             event('snapshot_lock', concurrent_alembic_ddl_blocked=True, dump_completed=True)
             data_path.write_bytes(inside(['pg_dump', '-U', 'omnigent', '-Fc', '-d', 'source']).stdout)
+            listing = inside(['pg_restore', '-l'], data_path.read_bytes()).stdout.decode('utf-8', 'surrogateescape')
+            kinds = omni.toc_kinds(listing)
+            assert {'EVENT TRIGGER', 'FOREIGN DATA WRAPPER'} <= set(kinds)
+            selected = omni.data_only_toc(listing, tables={'users', 'scheduled_tasks', 'task_child', 'alembic_version'},
+                                          sequences={'scheduled_tasks_id_seq'})
+            assert 'EVENT TRIGGER' not in selected and 'FOREIGN DATA WRAPPER' not in selected
+            event('superuser_toc', real_pg_archive=True, event_trigger=True, foreign_data_wrapper=True,
+                  selected_only_data=True)
             # Cluster uses DATABASE for queries; point it at source while collecting the signature.
             omni.DATABASE = 'source'
             columns = omni.schema_columns(source)
@@ -266,11 +280,13 @@ ALTER TABLE users ADD CONSTRAINT evil CHECK (id <> 'admin' OR
                                    "(SELECT count(*) FROM task_child), "
                                    "(SELECT count(*) FROM pg_constraint WHERE conname='evil'), "
                                    "(SELECT count(*) FROM pg_roles WHERE rolname='woowbk_restore'), "
-                                   "nextval(pg_get_serial_sequence('scheduled_tasks','id')))", 'omnigent')
-            assert output == [2, 1, 0, 1, 0, 0, 2]
+                                   "nextval(pg_get_serial_sequence('scheduled_tasks','id')), "
+                                   "(SELECT count(*) FROM pg_event_trigger WHERE evtname='woowbk_extra_event'), "
+                                   "(SELECT count(*) FROM pg_foreign_data_wrapper WHERE fdwname='woowbk_extra_fdw'))", 'omnigent')
+            assert output == [2, 1, 0, 1, 0, 0, 2, 0, 0]
             assert inside(['test', '!', '-e', '/tmp/woowbk-pwned'], accept=True).returncode == 0
             event('malicious_check', rejected=True, marker_absent=True, data_and_sequence_valid=True,
-                  carried_account_valid=True, loader_removed=True)
+                  carried_account_valid=True, loader_removed=True, superuser_objects_absent=True)
             full_candidate_pg_probe(directory, work, app, target)
             # The revision remains equal: only the source columns are changed.
             for db in ('trusted', 'source'):
