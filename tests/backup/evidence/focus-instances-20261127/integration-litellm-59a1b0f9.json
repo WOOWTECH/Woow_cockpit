@@ -1,0 +1,17 @@
+{
+  "kind": "guarded-product-delta-regression",
+  "source_commit": "59a1b0f95132ea51c899f590eea7e3b02c5dba43",
+  "modules": ["tests.backup.test_ha_instance_access", "tests.backup.test_ha_litellm"],
+  "tests": 145,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "elapsed_seconds": 20.095,
+  "blocked": [],
+  "shim_hits": [],
+  "run_native": "absent",
+  "raw_guardlog": "/tmp/parity-focus-20261127/main-litellm-companions-regression-01.guardlog",
+  "raw_guardlog_sha256": "ed52d82dfa8cfd9066904649f028cd16bc13c33e84ee766a56335208f578c3ee",
+  "source_check": "passed: 52 engine sources and existing asset/catalog/unit checks",
+  "limits": "Targeted regression after d09's full 3568-test gate; no new original-service runtime acceptance or full-suite claim."
+}
