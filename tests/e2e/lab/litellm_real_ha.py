@@ -4,20 +4,20 @@
   python3 -I tests/e2e/lab/litellm_real_ha.py --run --outer-isolation-confirmed
 
 What is real: the owner-made HA backup of the showcase's woow-litellm 0.1.15 add-on (PG 18.6, encrypted), opened and
-decrypted by the product reader (habackup/hasecuretar), checked by the product preflight (ha_litellm_candidate
-.scan_member), its cluster streamed by the INTERNAL candidate (ha_litellm_candidate.cluster_member) through the product
-PgSink into a throwaway PostgreSQL 18 (HA's configuration replaced, every library/command setting overridden), the
-product salt/database binding reader, a pg_dump of HA's database restored into the package's PostgreSQL 17 image the
+decrypted by the product reader (habackup/hasecuretar), checked and streamed by the registered product importer
+(ha_litellm.scan_member) through the product PgSink into a throwaway PostgreSQL 18 (HA's configuration replaced,
+every library/command setting overridden), the product salt/database binding reader, a pg_dump of HA's database
+restored into the package's PostgreSQL 17 image the
 way the package's restore.sh does (drop, create, load), the HA salt moved (the target keeps its own master key, UI
 password and database password), the package's own entrypoint (/opt/woow/start.sh: db_prepare salt gate, Prisma
 migrate, UI session revocation) and the real app API: the HA-issued virtual key, its model list, the stored models,
 users, teams, decryption of every stored provider value, a key issued by the restored app, restart, wrong-salt
 refusal, rollback to the target's own data, cleanup.
 
-What it is NOT: the public import (ha_litellm_candidate.convert still refuses; litellm is not in haimport.APPS), the
-package's systemd/Quadlet units (throwaway containers stand in for them), the product UID 65534 (dev-d maps 0..55000
-only, so the app runs as 1000:0 like the earlier rehearsal), ChatGPT subscription restore (WOOW_CHATGPT_ENABLED=false
-here) or provider calls (no network). commercial_acceptance stays "not-complete".
+Limits: this drives the product source reader directly, without invoking the public import transaction. Throwaway
+containers stand in for the package's systemd/Quadlet units; dev-d maps only 0..55000, so the app runs as 1000:0
+like the earlier rehearsal. ChatGPT subscription restore uses WOOW_CHATGPT_ENABLED=false here; provider calls have no
+network. commercial_acceptance stays "not-complete".
 
 Secrets: read through ha_import_b1_e2e.Secrets or from the backup in memory, passed to containers on stdin (the
 target database password as a Podman secret created from stdin), registered in a credential_ledger.Ledger whose
@@ -46,7 +46,7 @@ for _path in (str(REPO / 'backup-engine'), str(HERE)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
-from woowbackup import habackup, haimport, hasecuretar, hastore, ha_litellm_candidate as candidate, ha_odoo, tempctr  # noqa: E402
+from woowbackup import habackup, haapps, haimport, hasecuretar, hastore, ha_litellm, ha_odoo, tempctr  # noqa: E402
 from woowbackup.errors import BackupError  # noqa: E402
 from woowbackup.podman import OutputLimitExceeded, Result, default_runner  # noqa: E402
 from credential_ledger import CoverageError, Ledger  # noqa: E402
@@ -77,6 +77,7 @@ SECRET_NAME = re.compile(r'PWD|PASS|KEY|TOKEN|SECRET|CRED|AUTH|SIG', re.I)
 SOURCES = ('lab.ha_backup_key', 'lab.test_virtual_key', 'ha.salt_key', 'ha.master_key', 'ha.pg_password',
            'ha.ui_password', 'target.master_key', 'target.ui_password', 'target.pg_password', 'target.salt_key',
            'target.database_url', 'target.seed_credential', 'issued.virtual_key')
+HA_SECRET_NAMES = ('master_key', 'salt_key', 'pg_password', 'ui_password')
 
 # Full structural inventory (from the rehearsal litellm_actual_candidate.py at f0f8cb9): PG18 duplicates attnotnull in
 # pg_constraint (type n), PG17 does not, so NOT NULL stays in the column inventory only.
@@ -109,9 +110,6 @@ TABLES = ("SELECT coalesce(json_agg(json_build_array(schemaname,tablename) ORDER
 SEQUENCES = ("SELECT coalesce(json_agg(json_build_array(schemaname,sequencename,start_value,min_value,max_value,"
              "increment_by,cycle,cache_size,last_value) ORDER BY schemaname,sequencename),'[]'::json) "
              "FROM pg_sequences WHERE schemaname IN ('public','woow_platform','woow')")
-READER_SQL = ("CREATE ROLE woowbk_litellm_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;\n"
-              "GRANT USAGE ON SCHEMA woow, woow_platform TO woowbk_litellm_reader;\n"
-              "GRANT SELECT ON woow.meta, woow_platform.settings TO woowbk_litellm_reader;\n")
 RECREATE = ('DROP DATABASE IF EXISTS litellm WITH (FORCE)', 'CREATE DATABASE litellm OWNER litellm')
 
 EVENTS = []
@@ -557,6 +555,44 @@ def fixture_sha256():
     return digest.hexdigest()
 
 
+class ControlEvidence:
+    """Observe the PG control file while the product reader validates the whole member."""
+
+    def __init__(self):
+        self.present = False
+
+    def add(self, rel, entry, data):
+        if rel == 'global/pg_control' and entry.kind == 'file' and entry.size > 0:
+            self.present = True
+
+
+def register_ha_secrets(stream, source_salt):
+    """Keep the historical REAL-lane ledger evidence for all four HA secret files.
+
+    The product importer needs only the salt. This separate bounded pass never emits
+    any value and checks that its salt is the one the product reader just validated.
+    """
+    paths = {f'data/secrets/{name}': name for name in HA_SECRET_NAMES}
+    report = habackup.Report()
+    select = habackup.Select(include=tuple(paths), symlinks=(), hardlinks=False,
+                             max_bytes=len(paths) * ha_litellm.MAX_SALT_FILE)
+    values = {}
+    for entry in habackup.iter_entries(stream, select, report, addon=True):
+        require(entry.name in paths and entry.kind == 'file' and entry.size <= ha_litellm.MAX_SALT_FILE,
+                'ha_secret_file_invalid')
+        name = paths[entry.name]
+        require(name not in values, 'ha_secret_file_duplicate')
+        values[name] = entry.read_all(ha_litellm.MAX_SALT_FILE).strip()
+    require(report.complete and report.addon is not None and report.addon.slug == ha_litellm.SLUG,
+            'ha_secret_member_invalid')
+    require(set(values) == set(HA_SECRET_NAMES) and all(values.values()), 'ha_secret_files_missing')
+    require(values['salt_key'] == source_salt and ha_litellm.SALT_RE.fullmatch(values['salt_key']),
+            'ha_secret_salt_changed')
+    for name in HA_SECRET_NAMES:
+        LEDGER.register('ha.' + name, values[name])
+    return len(values)
+
+
 def run(args):
     global LEDGER
     started = time.monotonic()
@@ -569,28 +605,26 @@ def run(args):
     LEDGER.register('lab.ha_backup_key', backup_key)
     LEDGER.register('lab.test_virtual_key', test_vkey)
 
-    # The public import stays blocked: only the internal candidate reader is used below.
-    try:
-        candidate.convert(None, type('App', (), {'id': 'litellm'})(), False, None)
-    except BackupError as error:
-        require(error.code == 'incompatible' and error.message == candidate.GUARD, 'public_guard_changed')
-    else:
-        raise Failed('public_guard_missing')
-    require('litellm' not in haimport.APPS, 'litellm_registered_publicly')
-    emit('public_guard', convert_refuses=True, not_registered=True)
+    require(haimport.APPS.get(ha_litellm.APP_ID) == ha_litellm.SLUG
+            and haapps.get(ha_litellm.APP_ID).load() is ha_litellm, 'product_importer_not_registered')
+    emit('product_importer', registered=True)
 
     keys = hasecuretar.Keys(backup_key)
     with habackup.open_backup(FIXTURE) as ha:
-        found = [m for m in ha.layout.members if m.role == 'addon' and hastore.addon_suffix(m.slug) == candidate.SLUG]
+        found = [m for m in ha.layout.members if m.role == 'addon' and hastore.addon_suffix(m.slug) == ha_litellm.SLUG]
         require(len(found) == 1, 'addon_member_count')
         member = found[0]
+        control = ControlEvidence()
         with ha.open_member(member.name, keys) as stream:
-            source = candidate.scan_member(stream)
-        require((source.addon_version, source.product_version, source.pg_major) == ('0.1.15', '1.104.0', 18),
+            source = ha_litellm.scan_member(stream, habackup.Report(), pg=control)
+        require(source.addon is not None and
+                (source.addon.slug, source.addon.version, source.state_version, source.pg_version) ==
+                (ha_litellm.SLUG, '0.1.15', '1.104.0', '18'),
                 'source_versions')
-        require(source.control_present and source.salt_valid, 'source_files')
-        emit('source_scan', addon_version=source.addon_version, product_version=source.product_version,
-             pg_major=source.pg_major, control_present=True, salt_file_valid=True, member_encrypted=member.encrypted)
+        require(control.present and source.salt_valid and source.salt() is not None, 'source_files')
+        emit('source_scan', addon_version=source.addon.version, product_version=source.state_version,
+             pg_major=int(source.pg_version), control_present=control.present, salt_file_valid=source.salt_valid,
+             member_encrypted=member.encrypted)
         if not args.run:
             emit('offline_ok', note='no_lab_operation')
             return 0
@@ -636,18 +670,21 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             def produce(out):
                 sink = ha_odoo.PgSink(out, uid, gid)
                 with ha.open_member(member.name, keys) as stream:
-                    holder['src'] = candidate.cluster_member(stream, sink)
+                    holder['src'] = ha_litellm.scan_member(stream, habackup.Report(), pg=sink)
                 sink.close()
+                with ha.open_member(member.name, keys) as stream:
+                    holder['ha_private_files'] = register_ha_secrets(stream, holder['src'].salt())
 
             tmp.volume('hapg')
             tmp.volume_import('hapg', produce)
             src = holder['src']
-            for name in candidate.SECRET_NAMES:
-                LEDGER.register('ha.' + name, src.secrets.value(name))
-            ha_salt = src.secrets.value('salt_key').decode('ascii')
+            require(src.addon is not None and src.addon.slug == ha_litellm.SLUG and
+                    src.addon.version == '0.1.15' and src.salt_valid,
+                    'source_cluster_identity')
+            ha_salt = src.salt().decode('ascii')
             require(src.pg_version == '18', 'source_cluster_major')
             emit('source_cluster_streamed', pg_files=src.pg_files, pg_mib=src.pg_bytes // 2 ** 20,
-                 ha_private_files=len(src.secrets.names()))
+                 ha_private_files=holder['ha_private_files'])
             tmp.memory = '256m'
             tmp.run('hapg', PG18_IMAGE, ha_server_args(), detach=True, read_only_root=True,
                     env={'PGDATA': HA_PGDATA}, volumes=[(tmp.name('hapg'), HA_PGDATA, 'rw,noexec,nosuid,nodev')])
@@ -655,9 +692,9 @@ def lab_run(args, ha, member, keys, runner, test_vkey, started, lock_started):
             hapg.wait_ready(timeout=300)
             require(hapg.query_json("SELECT to_json(current_setting('server_version_num')::int/10000)", 'litellm')
                     == 18, 'source_server_major')
-            hapg.script(READER_SQL, 'litellm')
-            binding = candidate.read_source_salt_binding(hapg, ha_salt.encode('ascii'))
-            negative = candidate.read_source_salt_binding(hapg, target_salt.encode('ascii'))
+            hapg.script(ha_litellm.READER_SQL, 'litellm')
+            binding = ha_litellm.read_source_salt_binding(hapg, ha_salt.encode('ascii'))
+            negative = ha_litellm.read_source_salt_binding(hapg, target_salt.encode('ascii'))
             emit('source_salt_binding', ha_salt=binding, other_salt=negative)
             soft('source_salt_binding_match', binding == 'match')
             soft('source_salt_binding_discriminates', negative == 'mismatch')

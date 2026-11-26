@@ -23,7 +23,7 @@ ENGINE_MODULES = ('__init__', 'errors', 'paths', 'archive', 'keys', 'storage', '
                   'flows', 'jobs', 'cli', 'schedule', 'hasecuretar', 'habackup', 'hastore', 'tempctr', 'ha_odoo',
                   'ha_n8n', 'haimport', 'haapps', 'haissues', 'hachain', 'kept', 'hacommon', 'hasqlite', 'ha_omnigent', 'ha_hermes', 'ha_emqx',
                   'ha_emqx_settings',
-                  'ha_headscale', 'ha_opendesign', 'ha_codeserver', 'ha_nextcloud', 'ha_litellm', 'ha_litellm_candidate',
+                  'ha_headscale', 'ha_opendesign', 'ha_codeserver', 'ha_nextcloud', 'ha_litellm',
                   'adapters/__init__', 'adapters/base', 'adapters/quadlet_postgres', 'hatarget')
 # 排程備份 (docs/backup/CONTRACT.md section 8): the static timer and its tick service, exactly these settings. Unit files
 # are parsed here and in the unit tests; `systemd-analyze verify` is never run (it touched a live manager's sockets).

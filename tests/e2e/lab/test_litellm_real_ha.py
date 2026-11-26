@@ -10,9 +10,29 @@ from types import SimpleNamespace
 import litellm_real_capture as capture
 import litellm_real_ha as harness
 from credential_ledger import CoverageError, Ledger
-from woowbackup import ha_odoo
+from tests.backup import hafixtures as hx
+from woowbackup import habackup, ha_litellm, ha_odoo
 
 PACKAGE_CONFIG = Path.home() / 'Woow_podman_litellm/config/config.yaml'
+SYNTHETIC_SALT = b'synthetic_salt_12345'
+
+
+def ha_member(salt=SYNTHETIC_SALT, omit=None):
+    addon = {'user': {'version': '0.1.15', 'image': 'ghcr.io/woowtech/woow-ha-litellm-amd64'},
+             'system': {'slug': ha_litellm.SLUG, 'name': 'Woow LiteLLM'}, 'version': '0.1.15'}
+    entries = [{'name': '.', 'type': 'dir'}, {'name': './addon.json', 'data': json.dumps(addon).encode()},
+               {'name': 'data', 'type': 'dir'}, {'name': 'data/secrets', 'type': 'dir'},
+               {'name': 'data/secrets/master_key', 'data': b'synthetic-master'},
+               {'name': 'data/secrets/salt_key', 'data': salt + b'\n'},
+               {'name': 'data/secrets/pg_password', 'data': b'synthetic-pg-password'},
+               {'name': 'data/secrets/ui_password', 'data': b'synthetic-ui-password'},
+               {'name': 'data/woow', 'type': 'dir'},
+               {'name': 'data/woow/state.json', 'data': b'{"litellm_version":"1.104.0"}'},
+               {'name': 'data/postgres', 'type': 'dir'},
+               {'name': 'data/postgres/PG_VERSION', 'data': b'18\n'},
+               {'name': 'data/postgres/global', 'type': 'dir'},
+               {'name': 'data/postgres/global/pg_control', 'data': b'synthetic-control'}]
+    return hx.tar_bytes([entry for entry in entries if entry['name'] != omit])
 
 
 class FakeTmp:
@@ -33,9 +53,31 @@ class HarnessTests(unittest.TestCase):
         for source in harness.SOURCES:
             if source.startswith('ha.'):
                 self.assertIn("LEDGER.register('ha.' + name", text)
-                self.assertIn(source.split('.', 1)[1], harness.candidate.SECRET_NAMES)
+                self.assertIn(source.split('.', 1)[1], harness.HA_SECRET_NAMES)
             else:
                 self.assertRegex(text, r"(LEDGER\.register\(|\(')" + re.escape(source) + "'", source)
+
+    def test_product_reader_and_ha_secret_evidence(self):
+        member = ha_member()
+        control = harness.ControlEvidence()
+        source = ha_litellm.scan_member(io.BytesIO(member), habackup.Report(), pg=control)
+        self.assertEqual((source.addon.slug, source.addon.version, source.state_version, source.pg_version),
+                         (ha_litellm.SLUG, '0.1.15', '1.104.0', '18'))
+        self.assertTrue(control.present)
+        self.assertTrue(source.salt_valid)
+        self.assertEqual(source.salt(), SYNTHETIC_SALT)
+        self.assertEqual(harness.register_ha_secrets(io.BytesIO(member), source.salt()), 4)
+        self.assertTrue(all(harness.LEDGER.registered('ha.' + name) for name in harness.HA_SECRET_NAMES))
+
+    def test_secret_evidence_refuses_a_changed_salt_without_registration(self):
+        with self.assertRaisesRegex(harness.Failed, 'ha_secret_salt_changed'):
+            harness.register_ha_secrets(io.BytesIO(ha_member(b'another_synthetic_salt_12345')), SYNTHETIC_SALT)
+        self.assertFalse(any(harness.LEDGER.registered('ha.' + name) for name in harness.HA_SECRET_NAMES))
+
+    def test_secret_evidence_refuses_a_missing_file_without_registration(self):
+        with self.assertRaisesRegex(harness.Failed, 'ha_secret_files_missing'):
+            harness.register_ha_secrets(io.BytesIO(ha_member(omit='data/secrets/ui_password')), SYNTHETIC_SALT)
+        self.assertFalse(any(harness.LEDGER.registered('ha.' + name) for name in harness.HA_SECRET_NAMES))
 
     def test_scan_fails_while_any_declared_source_is_missing(self):
         for index, value in enumerate(harness.SOURCES[:-1]):

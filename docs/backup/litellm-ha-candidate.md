@@ -1,4 +1,15 @@
-# LiteLLM HA member preflight candidate
+# Archived LiteLLM HA candidate research
+
+The unregistered `ha_litellm_candidate.py` and its candidate-only lab scripts were
+removed in the CLEANUP-LC lane after the product importer became active. The text
+below records the earlier experiments and their evidence; its candidate API and
+commands are historical, not current entry points. Current behavior and security
+checks are in `backup-engine/woowbackup/ha_litellm.py`,
+`tests/backup/test_ha_litellm.py`, and `docs/backup/CONTRACT.md` §9.
+The historical `tests/e2e/lab/litellm_real_ha.py` harness now uses the product
+source reader and salt binding API. Its offline test imports and runs; the real
+backup and dev-d container flow have not been repeated after that adaptation.
+The product flow driver is `tests/e2e/lab/litellm_full_flow.py`.
 
 This is an internal parser, not a registered importer or UI feature. It never permits
 conversion. `scan_member` walks a complete HA add-on member using the strict existing tar
@@ -193,3 +204,10 @@ with at most three fresh containers and records the attempts (rollback needed tw
 This is lab evidence for the internal candidate, not commercial acceptance: the public
 importer, the package's Quadlet units, product UID 65534, provider calls and ChatGPT token
 refresh remain untested.
+
+The 2026-11-26 CLEANUP-LC adapter preserves this harness's control-file check,
+four-secret credential ledger, restricted salt/database binding probes, and row and
+rollback assertions. Its current implementation streams the HA cluster through
+`ha_litellm.scan_member` and reads the four HA secret files in a separate bounded pass.
+The 24/24 result above belongs to the earlier candidate run; it is not evidence of a
+new product-reader lab run.
