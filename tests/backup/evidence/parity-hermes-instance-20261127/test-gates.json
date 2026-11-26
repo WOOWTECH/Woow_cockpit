@@ -1,0 +1,44 @@
+{
+ "neighbors": {
+  "tests": 361,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 3,
+  "blocked": 0,
+  "shim_hits": 0,
+  "private_masked_log": "/tmp/parity-hermes-instance-neighbors-20261126.log",
+  "sha256": "f3d960a571a4daf816d671cc2383c987026a26955c831d90ca2274b0cca1f260"
+ },
+ "full_before_test_corrections": {
+  "tests": 3367,
+  "failures": 2,
+  "errors": 2,
+  "skipped": 2,
+  "blocked": 0,
+  "shim_hits": 0,
+  "private_masked_log": "/tmp/parity-hermes-instance-full-20261126.log",
+  "sha256": "9d7cbc60987792489b6081308f5a3e04458f113d1316c0e72c8928f460d9d525"
+ },
+ "corrected_affected_modules": {
+  "tests": 241,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "blocked": 0,
+  "shim_hits": 0,
+  "private_masked_log": "/tmp/parity-hermes-instance-gate-fixes-20261127.log",
+  "sha256": "05df08c24ad8d578a3173e84f481cb743e79dcb64b0ea1fa6cc021985830ee64"
+ },
+ "harness_offline": {
+  "tests": 39,
+  "failures": 0,
+  "errors": 0,
+  "devices_used": false
+ },
+ "full_suite_failures": [
+  "test_suggest.ReferenceHostTests.test_the_default_drafts_are_the_entries_the_imports_fill (old Hermes refusal expectation; failure + context error)",
+  "test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode (old plaintext revision expectation)",
+  "test_kept.KeptCopyListAndDeleteTests.test_deleting_one_copy_leaves_the_pointer_of_another_converted_backup (fixture clock exceeded 24h stale threshold)"
+ ],
+ "full_suite_note": "Four records in three stale tests were corrected in 3d433130 without product changes. All affected modules passed (241 tests). The full suite was not repeated after these test-only corrections."
+}
