@@ -2495,5 +2495,84 @@ for name in "${names[@]}"; do [[ -f $STATE/installed/$name ]] || printf 'install
         self.assertIn('沒有安裝任何套件', result.stderr)
 
 
+
+class OdooPg16BundleContract(HostFixture):
+    """Opt-in sidecars stay outside Cockpit's in-memory payload, installed state, and rollback journals."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.backup.test_pg16_bundle import image_archive, packager
+        for name, data in ENGINE_SOURCE.items():
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(data)
+        module_path = 'backup-engine/woowbackup/pg16_bundle.py'
+        (self.source / module_path).write_bytes((REPO / module_path).read_bytes())
+        self.bundle_module = manage.pg16_bundle_module()
+        self.bundle_module.ROOT_UID = os.getuid()
+        self.bundle_module.TRUST_ANCHOR = self.root
+        self.root.chmod(0o755)
+        for directory in self.root.rglob('*'):
+            if directory.is_dir():
+                directory.chmod(0o755)
+        self.enterContext(patch.object(manage, 'pg16_bundle_module', return_value=self.bundle_module))
+        self.export = Path(self.temp.name) / 'export.tar'
+        image_id = image_archive(self.export)
+        self.release = Path(self.temp.name) / 'release'
+        self.report = packager.package(self.export, 'amd64', image_id, self.release)
+        self.options = ['--odoo-pg16-bundle', str(self.release), '--odoo-pg16-manifest-sha256',
+                        self.report['manifest_sha256']]
+
+    def cli(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with (patch.object(sys, 'argv', ['manage.py', '--root', str(self.root), *args]),
+              contextlib.redirect_stdout(out), contextlib.redirect_stderr(err)):
+            code = manage.main()
+        return code, json.loads(out.getvalue()) if out.getvalue() else None, err.getvalue()
+
+    def test_plan_is_read_only_and_install_streams_sidecar_outside_state_and_rollback(self):
+        before = self.snapshot()
+        code, plan, _notes = self.cli('plan', *self.options)
+        self.assertEqual(code, 0)
+        self.assertEqual(plan['odoo_pg16_bundle']['status'], 'verified-for-staging')
+        self.assertEqual(self.snapshot(), before)
+        code, result, _notes = self.cli('install', *self.options)
+        self.assertEqual(code, 0)
+        self.assertEqual(result['odoo_pg16_bundle']['status'], 'staged')
+        generation = Path(result['odoo_pg16_bundle']['path'])
+        archive = generation / self.bundle_module.ARCHIVE
+        self.assertEqual(archive.read_bytes(), self.export.read_bytes())
+        state = (self.root / manage.STATE).read_text()
+        journal = (self.root / manage.BACKUPS / result['backup_id'] / 'transaction.json').read_text()
+        self.assertNotIn('postgres16.docker.tar', state + journal)
+        self.assertNotIn('/images/odoo-pg16/', state + journal)
+        self.assertEqual(self.cli('install', *self.options)[1]['status'], 'already-current')
+        self.assertEqual(manage.verify(self.root)['status'], 'verified')
+        manage.rollback(self.root, result['backup_id'])
+        self.assertTrue(archive.is_file(), 'optional image provisioning persists independently of UI rollback')
+
+    def test_ordinary_offline_update_does_not_open_load_pull_or_remove_bundles(self):
+        self.assertEqual(self.cli('install', *self.options)[0], 0)
+        sidecar = self.root / self.bundle_module.INSTALL_REL
+        before = {str(p): p.read_bytes() for p in sidecar.rglob('*') if p.is_file()}
+        (self.source / 'branding/branding.css').write_text('new offline update')
+        with patch.object(manage, 'pg16_bundle_module', side_effect=AssertionError('bundle opt-in absent')):
+            self.assertEqual(self.cli('install')[0], 0)
+            self.assertEqual(self.cli('install', '--no-backup')[0], 0)
+        self.assertEqual({str(p): p.read_bytes() for p in sidecar.rglob('*') if p.is_file()}, before)
+
+    def test_bad_bundle_and_unpaired_flags_fail_before_any_installer_change(self):
+        before = self.snapshot()
+        for args in (self.options[:-2], self.options[2:], [*self.options, '--no-backup'],
+                     [*self.options[:-1], '0' * 64]):
+            with self.subTest(args=args):
+                code, _result, _notes = self.cli('install', *args)
+                self.assertEqual(code, 1)
+                self.assertEqual(self.snapshot(), before)
+        (self.release / 'postgres16.docker.tar').write_bytes(b'tampered')
+        self.assertEqual(self.cli('install', *self.options)[0], 1)
+        self.assertEqual(self.snapshot(), before)
+
+
 if __name__ == '__main__':
     unittest.main()

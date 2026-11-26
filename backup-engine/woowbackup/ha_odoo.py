@@ -40,7 +40,7 @@ import secrets
 import tarfile
 import time
 
-from . import habackup, haissues, hatarget, nested, podman, tempctr, util
+from . import habackup, haissues, hatarget, nested, pg16_bundle, podman, tempctr, util
 from .errors import BackupError
 from .haissues import Issue
 
@@ -1683,17 +1683,54 @@ def check_dir_tar(path, ids):
 
 # ====================================================================== the job steps (haimport.Work drives them)
 
-PG16_PINNED = ('docker.io/library/postgres:16.15-alpine'
-               '@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139')
+PG16_PINNED = pg16_bundle.PINNED_REF
+
+
+def bundled_pg16(work, app):
+    """A release-verified image, streamed into this app owner's store before an online pull (OD-23).
+
+    Use the verified config ID: Docker save/load does not necessarily preserve the registry RepoDigest. Archive
+    paths never go to the owner, only the already-open, verified root-owned descriptor. No arbitrary tags are loaded.
+    """
+    try:
+        with pg16_bundle.installed_bundle(abort=hatarget._abort_of(work)) as bundle:
+            if bundle is None:
+                return None
+            record, _raw, archive = bundle
+            runner = work.runner(app)
+            image_id = record['image_id']
+
+            def present():
+                result = runner.podman('image', 'inspect', '--format', '{{.Id}} {{.Architecture}} {{.Os}}', image_id,
+                                       timeout=60, max_output=64 * 1024, check=False)
+                fields = result.stdout.decode('ascii', 'replace').split()
+                if len(fields) == 3 and not fields[0].startswith('sha256:'):
+                    fields[0] = 'sha256:' + fields[0]
+                return result.returncode == 0 and fields == [image_id, record['architecture'], 'linux']
+
+            if not present():
+                hatarget._watch_storage(work, app)
+                work.log('載入發行版本附帶且已驗證的 PostgreSQL 16 映像。')
+                runner.podman('load', input=archive, timeout=hatarget.PULL_TIMEOUT, max_output=64 * 1024,
+                              **hatarget._long(work))
+                if not present():
+                    raise pg16_bundle.BundleError('Loaded PG16 image does not match its trusted config ID/architecture.')
+            return image_id
+    except (pg16_bundle.BundleError, OSError) as error:
+        raise hatarget._stop(app, 'target.image-missing',
+                             '發行版本附帶的 PostgreSQL 16 映像未通過驗證，無法載入；請重新安裝已驗證的離線映像套件。',
+                             [PG16_PINNED], code='incompatible') from error
 
 
 def pick_pg16(work, app):
     """The PostgreSQL 16 image that opens HA's cluster: the first one on the device of PG16_IMAGES, else the pinned
-    official image, downloaded as the app's owner (`hatarget.ensure_image`: a second try, then only this app stops, with
-    the reason: OD-23)."""
+    shipped verified bundle, else the pinned official image downloaded as the app's owner (OD-23)."""
     for ref in PG16_IMAGES:
         if hatarget.image_present(work, app, ref):
             return ref
+    bundled = bundled_pg16(work, app)
+    if bundled:
+        return bundled
     work.log('這台沒有 PostgreSQL 16 映像，下載固定版本的 postgres:16.15-alpine')
     hatarget.ensure_image(work, app, PG16_PINNED)
     return PG16_PINNED

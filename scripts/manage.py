@@ -151,6 +151,17 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def pg16_bundle_module():
+    # Lazy: source distributions without the optional engine can still update Cockpit offline.
+    path = SOURCE / 'backup-engine/woowbackup/pg16_bundle.py'
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('--odoo-pg16-bundle needs backup-engine/woowbackup/pg16_bundle.py in the source tree.')
+    spec = importlib.util.spec_from_file_location('pg16_bundle', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def safe_path(root, relative):
     rel = Path(relative)
     if rel.is_absolute() or '..' in rel.parts or not rel.parts:
@@ -1219,6 +1230,10 @@ def main():
                          help='Do not manage the backup & restore package (page, engine, helper, catalog directory); existing files are kept.')
         sub.add_argument('--backup-demo-catalog', action='store_true',
                          help='LAB ONLY: also install the woowbk-demo trusted catalog entry and its Quadlet templates.')
+        sub.add_argument('--odoo-pg16-bundle', type=Path,
+                         help='Opt-in release directory with manifest.json and postgres16.docker.tar (no image pull/load).')
+        sub.add_argument('--odoo-pg16-manifest-sha256',
+                         help='Manifest SHA256 from authenticated release metadata, required with --odoo-pg16-bundle.')
     subs.add_parser('verify')
     subs.add_parser('status', help='Installed version and whether the host tools of the engine work; changes nothing.')
     sub = subs.add_parser('rollback')
@@ -1229,6 +1244,10 @@ def main():
         parser.error('Live installation/rollback requires sudo.')
     try:
         if args.command in ('plan', 'install'):
+            if bool(args.odoo_pg16_bundle) != bool(args.odoo_pg16_manifest_sha256):
+                raise ValueError('--odoo-pg16-bundle and --odoo-pg16-manifest-sha256 must be supplied together.')
+            if args.odoo_pg16_bundle and args.no_backup:
+                raise ValueError('--odoo-pg16-bundle needs the backup engine; drop --no-backup.')
             brand = selected_brand(root, args.brand)
 
             def planned(notices):
@@ -1237,6 +1256,17 @@ def main():
 
             notices = []
             desired, state = planned(notices)
+            bundle_plan = None
+            if args.odoo_pg16_bundle:
+                if BACKUP_HELPER not in state['files']:
+                    raise ValueError('--odoo-pg16-bundle needs the backup engine in the source tree.')
+                pg16_bundle = pg16_bundle_module()
+                # Validate the entire sidecar before apt, systemctl, or any Cockpit writes.
+                with pg16_bundle.open_bundle(args.odoo_pg16_bundle, args.odoo_pg16_manifest_sha256) as (record, _, _archive):
+                    if root == Path('/') and record['architecture'] != pg16_bundle.architecture():
+                        raise ValueError('PG16 release bundle architecture does not match this device.')
+                    bundle_plan = {'architecture': record['architecture'], 'image_id': record['image_id'],
+                                   'manifest_sha256': args.odoo_pg16_manifest_sha256, 'archive_size': record['archive_size']}
             if args.backup_demo_catalog:
                 notices.append(f'--backup-demo-catalog adds the lab fixture "{DEMO_APP}" to the trusted backup catalog; '
                                'never use it on customer devices.')
@@ -1273,7 +1303,12 @@ def main():
                           'systemctl': timer_plan(names, state, before) if systemd else []}
             else:
                 result = install_with_tools(root, desired, state, lambda: planned([]))
+                if bundle_plan is not None:
+                    result['odoo_pg16_bundle'] = pg16_bundle.install_bundle(
+                        args.odoo_pg16_bundle, args.odoo_pg16_manifest_sha256, root)
                 print('After installation, sign out/in and force-refresh the browser. No Cockpit service restart was requested.', file=sys.stderr)
+            if bundle_plan is not None and args.command == 'plan':
+                result['odoo_pg16_bundle'] = {**bundle_plan, 'status': 'verified-for-staging'}
             result['brand'] = state['brand']
         elif args.command == 'rollback':
             if root != Path('/'):
