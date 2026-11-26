@@ -196,8 +196,7 @@ MUTATIONS = (
        'MAX_SECRET_BYTES:\n'),
      '        if not stat.S_ISREG(st.st_mode) or not 0 < st.st_size:\n', 1),
     ('A03', 'the conversion hands its secrets to import_manifest', HI,
-     "ITEM_KEYS = ('volumes', 'postgres', 'dirs', 'secrets')",
-     "ITEM_KEYS = ('volumes', 'postgres', 'dirs')", 1),
+     "'secrets'", "'unused_secrets'", 1),
     ('M34', ("every session in HA's cluster sends the pinned client options "
        '(SR-1/SR-2)'), LL,
      ("    cluster = ha_odoo.Cluster(HaSessions(tmp, 'hapg'), 'hapg', "
