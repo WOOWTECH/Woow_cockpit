@@ -37,7 +37,7 @@ def inventory():
     return [sorted(call(*args).stdout.splitlines()) for args in (
       ('ps','-aq','--no-trunc'),('ps','-q','--no-trunc'),('volume','ls','--format','{{.Name}}'))]
 def sql(text,user='probe_super',as_json=True):
-    r=call('exec','--env','PGOPTIONS=-c search_path=pg_catalog -c statement_timeout=10000',name,
+    r=call('exec','-i','--env','PGOPTIONS=-c search_path=pg_catalog -c statement_timeout=10000',name,
       'psql','-X','-A','-t','-q','-v','ON_ERROR_STOP=1','-h','/tmp','-U',user,'-d','postgres','-f','-',
       input=text.encode())
     return json.loads(r.stdout.strip()) if as_json else None
@@ -50,6 +50,7 @@ try:
     made_volume=True
     made_container=True  # reserve cleanup intent before run: a partial failure can still leave this owned name behind
     call('run','-d','--pull=never','--name',name,'--label','woowbk.probe=nextcloud-fixed-sql',
+      '--image-volume=ignore',
       '--network=none','--read-only','--user','70:70','--cap-drop=ALL','--security-opt=no-new-privileges',
       '--memory=384m','--memory-swap=384m','--cpus=0.5','--pids-limit=96','--shm-size=32m',
       '--tmpfs','/tmp:rw,size=32m,mode=1777','-v',volume+':/var/lib/postgresql/data:U,noexec,nosuid,nodev',
@@ -122,7 +123,7 @@ else:
     checks['completed']=True
     failure=None
 finally:
-    if made_container: call('rm','-f','-t','10',name,timeout=60,check=False)
+    if made_container: call('rm','-f','--volumes','-t','10',name,timeout=60,check=False)
     if made_volume: call('volume','rm',volume,timeout=60,check=False)
     checks['own-probe-gone']=(not made_container or call('container','exists',name,check=False).returncode==1) and (
       not made_volume or call('volume','exists',volume,check=False).returncode==1)
