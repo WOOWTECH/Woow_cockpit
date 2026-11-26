@@ -19,7 +19,7 @@ CREATE_SQL = ("CREATE OR REPLACE FUNCTION public.memories_fcu_fun() RETURNS trig
               + "$woowbk$;\nCREATE TRIGGER memories_fcu_trg AFTER UPDATE ON public.oc_filecache\n"
                 "FOR EACH ROW EXECUTE FUNCTION public.memories_fcu_fun();\n")
 # Catalogs only. Four integer columns on two ordinary tables, so the fixed UPDATE cannot dispatch to backup-defined types.
-TABLES_SQL = """SELECT count(*) = 4 FROM pg_attribute a
+TABLES_SQL = """SELECT to_json(count(*) = 4) FROM pg_attribute a
 JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relname IN ('oc_filecache', 'oc_memories') AND c.relkind = 'r'
 AND a.attname IN ('fileid', 'parent') AND NOT a.attisdropped AND a.attnum > 0
@@ -41,10 +41,10 @@ AND NOT p.prosecdef AND NOT p.proleakproof AND NOT p.proisstrict AND p.provolati
 AND p.prosupport = 0 AND p.probin IS NULL AND p.proacl IS NULL
 AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = {sql_literal(role)})
 AND p.proconfig = ARRAY['search_path=pg_catalog'] AND p.prosrc = {sql_literal(chr(10) + BODY)})
-SELECT (SELECT count(*) FROM f) = 1 AND (SELECT count(*) FROM pg_trigger t
+SELECT to_json((SELECT count(*) FROM f) = 1 AND (SELECT count(*) FROM pg_trigger t
 JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public' AND c.relname = 'oc_filecache' AND t.tgname = 'memories_fcu_trg'
 AND t.tgfoid IN (SELECT oid FROM f) AND t.tgtype = 17 AND t.tgenabled = 'O' AND NOT t.tgisinternal
 AND t.tgnargs = 0 AND octet_length(t.tgargs) = 0 AND t.tgattr = ''::int2vector AND t.tgqual IS NULL
 AND t.tgconstraint = 0 AND t.tgconstrrelid = 0 AND t.tgconstrindid = 0 AND t.tgparentid = 0
-AND NOT t.tgdeferrable AND NOT t.tginitdeferred AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL) = 1"""
+AND NOT t.tgdeferrable AND NOT t.tginitdeferred AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL) = 1)"""

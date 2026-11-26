@@ -21,24 +21,41 @@ OWNER = ROOT / 'tests/e2e/lab/owner.sh'
 ROLE = 'woowbk_nc_probe_loader'
 
 REMOTE = r'''
-import hashlib,json,secrets,subprocess,time
+import hashlib,json,secrets,subprocess,time,pathlib,re
 checks={}
+phase='inventory'
+command_class=None
+private_stderr=''
+sqlstate=None
 name='woowbk-nc-fixed-'+secrets.token_hex(6)
 volume=name+'-data'
 made_container=made_volume=False
 def call(*args,input=None,timeout=30,check=True):
+    global command_class,private_stderr,sqlstate
     r=subprocess.run(['podman',*args],input=input,capture_output=True,timeout=timeout)
-    if check and r.returncode: raise RuntimeError('probe subprocess failed')
+    if check and r.returncode:
+        command_class='psql' if 'psql' in args else args[0]
+        private_stderr=r.stderr.decode('utf-8','replace')[-4096:]
+        match=re.search(r'(?:ERROR|FATAL):\s+([0-9A-Z]{5}):',private_stderr)
+        sqlstate=match.group(1) if match else None
+        raise RuntimeError('probe subprocess failed')
     return r
 def check(name,ok):
     checks[name]=bool(ok)
     if not ok: raise AssertionError(name)
 def inventory():
-    return [sorted(call(*args).stdout.splitlines()) for args in (
-      ('ps','-aq','--no-trunc'),('ps','-q','--no-trunc'),('volume','ls','--format','{{.Name}}'))]
-def sql(text,user='probe_super',as_json=True):
+    files={}
+    for root in (pathlib.Path('/etc/woowtech-cockpit/backup/apps'),pathlib.Path.home()/'.config/containers/systemd'):
+        if root.exists():
+            for p in root.rglob('*'):
+                if p.is_file(): files[str(p)]=hashlib.sha256(p.read_bytes()).hexdigest()
+    return {'containers':sorted(call('ps','-a','--no-trunc','--format','{{.ID}} {{.Names}} {{.State}}').stdout.splitlines()),
+      'volumes':sorted(call('volume','ls','--format','{{.Name}}').stdout.splitlines()),'catalog_units':files}
+def sql(text,user='probe_super',as_json=True,label='catalog-query'):
+    global phase
+    phase=label
     r=call('exec','-i','--env','PGOPTIONS=-c search_path=pg_catalog -c statement_timeout=10000',name,
-      'psql','-X','-A','-t','-q','-v','ON_ERROR_STOP=1','-h','/tmp','-U',user,'-d','postgres','-f','-',
+      'psql','-X','-A','-t','-q','-v','ON_ERROR_STOP=1','-v','VERBOSITY=verbose','-h','/tmp','-U',user,'-d','postgres','-f','-',
       input=text.encode())
     return json.loads(r.stdout.strip()) if as_json else None
 before=inventory()
@@ -69,18 +86,19 @@ try:
     check('bounded-isolation',limits['network']=='none' and not limits['ports']
       and 0<limits['memory']<=384*1024*1024 and limits['readonly'])
     sql('CREATE ROLE '+P['role']+' LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; '
-      'GRANT CONNECT ON DATABASE postgres TO '+P['role']+'; GRANT CREATE ON SCHEMA public TO '+P['role']+';',as_json=False)
+      'GRANT CONNECT ON DATABASE postgres TO '+P['role']+'; GRANT CREATE ON SCHEMA public TO '+P['role']+';',
+      as_json=False,label='setup-loader')
     sql('CREATE TABLE public.oc_filecache(fileid bigint PRIMARY KEY,parent bigint); '
       'CREATE TABLE public.oc_memories(fileid bigint PRIMARY KEY,parent bigint); '
       'INSERT INTO public.oc_filecache VALUES(1,10),(2,20); INSERT INTO public.oc_memories VALUES(1,10),(2,20);',
-      user=P['role'],as_json=False)
-    check('ordinary-integer-tables',sql(P['tables']) is True)
+      user=P['role'],as_json=False,label='setup-tables')
+    check('ordinary-integer-tables',sql(P['tables'],label='integer-table-guard') is True)
     initial=sql(P['shape'])
     check('no-archive-programs',initial['functions']==0 and initial['triggers']==0)
-    sql(P['create'],user=P['role'],as_json=False)
+    sql(P['create'],user=P['role'],as_json=False,label='create-fixed-pair')
     check('exact-body-owner-invoker-searchpath-trigger',sql(P['verify']) is True)
-    check('loader-privileges',sql("SELECT NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication "
-      "AND NOT rolbypassrls FROM pg_roles WHERE rolname='"+P['role']+"'") is True)
+    check('loader-privileges',sql("SELECT to_json(NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication "
+      "AND NOT rolbypassrls) FROM pg_roles WHERE rolname='"+P['role']+"'") is True)
     sql('UPDATE public.oc_filecache SET parent=22 WHERE fileid=1;',user=P['role'],as_json=False)
     check('trigger-updates-only-matching-parent',sql('SELECT json_agg(json_build_array(fileid,parent) ORDER BY fileid) '
       'FROM public.oc_memories',user=P['role'])==[[1,22],[2,20]])
@@ -127,8 +145,14 @@ finally:
     if made_volume: call('volume','rm',volume,timeout=60,check=False)
     checks['own-probe-gone']=(not made_container or call('container','exists',name,check=False).returncode==1) and (
       not made_volume or call('volume','exists',volume,check=False).returncode==1)
-    checks['existing-container-volume-inventory-unchanged']=inventory()==before
+    after=inventory()
+    checks['durable-volume-inventory-unchanged']=after['volumes']==before['volumes']
+    checks['catalog-and-unit-files-unchanged']=after['catalog_units']==before['catalog_units']
 print(json.dumps({'checks':checks,'failure_type':failure,'image':P['image'],'source_commit':P['commit'],
+  'failure_step':phase if failure else None,'command_class':command_class,'sqlstate':sqlstate,'_private_stderr':private_stderr,
+  'observations':{'container_inventory_equal':after['containers']==before['containers'],
+    'container_records_changed':len(set(after['containers'])^set(before['containers'])),
+    'container_churn_is_observed_separately':'existing Headscale may restart independently; no app action issued'},
   'source_hashes':P['source_hashes'],'acceptance':'generated database proof; original Nextcloud full flow pending'},sort_keys=True))
 '''
 
@@ -161,6 +185,8 @@ def main():
         if result.returncode:
             raise RuntimeError('isolated probe runner failed; raw output withheld')
         evidence = json.loads(result.stdout)
+        private = evidence.pop('_private_stderr', '')
+        args.out.with_suffix('.private.log').write_text(private)
         isolation = subprocess.run([str(OWNER), 'd', '--verify-isolation'], capture_output=True, timeout=30)
         evidence['checks']['outer-isolation-preserved'] = isolation.returncode == 0
         args.out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
