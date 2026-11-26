@@ -27,7 +27,7 @@ CASE = 'instances-generated-pg'
 DEVICES = ('c', 'd')
 
 REMOTE = r'''
-import base64,hashlib,json,os,pathlib,secrets,shutil,signal,subprocess,sys,tempfile,time
+import base64,hashlib,json,os,pathlib,re,secrets,shutil,signal,subprocess,sys,tempfile,time
 from types import SimpleNamespace
 
 checks={}
@@ -46,6 +46,11 @@ cleanup_deadline=None
 def require(label, ok):
     checks[label]=bool(ok)
     if not ok: raise RuntimeError(label)
+
+def image_identity(value):
+    if not isinstance(value,str): return None
+    raw=value[7:] if value.startswith('sha256:') else value
+    return raw if re.fullmatch(r'[0-9a-f]{64}',raw) else None
 
 def call(*args,input=None,stdout=None,timeout=60,check=True):
     global stderr_tail
@@ -83,7 +88,8 @@ def describe():
     require('own-mounts-'+str(len(owned)),
         [m['Name'] for m in info['mounts'] if m['Type']=='volume']==[volume])
     require('bounded-'+str(len(owned)),info['network']=='none' and not info['ports']
-        and info['memory']==384*1024*1024 and info['readonly'] and info['image']==P['image'])
+        and info['memory']==384*1024*1024 and info['readonly']
+        and image_identity(info['image'])==image_identity(P['image']) and image_identity(P['image']) is not None)
     owned.append({'id':info['id'],'name':current,'volume':volume,
                   'mounts':[{k:m[k] for k in ('Type','Name','Destination') if k in m} for m in info['mounts']]})
     journal()
@@ -415,7 +421,8 @@ try:
     from woowbackup.errors import BackupError
     from woowbackup.podman import default_runner
     image=json.loads(call('image','inspect',P['image'],'--format','{"id":{{json .Id}},"arch":{{json .Architecture}}}').stdout)
-    require('existing-pinned-image',image['id']==P['image'] and image['arch']=='amd64')
+    require('existing-pinned-image',image_identity(image['id'])==image_identity(P['image'])
+        and image_identity(P['image']) is not None and image['arch']=='amd64')
     require('device-memory-headroom',int(pathlib.Path('/sys/fs/cgroup/memory.max').read_text())-
         int(pathlib.Path('/sys/fs/cgroup/memory.current').read_text())>=512*1024*1024)
     def interrupted(_signum,_frame): raise RuntimeError('proof interrupted')

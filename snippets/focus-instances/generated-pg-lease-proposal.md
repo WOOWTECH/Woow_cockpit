@@ -61,4 +61,6 @@ The driver rejects an active EMQX priority marker and mismatched/expired lease. 
 
 Harness correction after dev-c attempt01: historical owner.sh's --verify-isolation option rejects c before dispatch (d/e whitelist), so that attempt created no resources. The standalone driver now obtains the exact same fixed isolation fields through lib.sh's existing isolated LAB_HOME/bin/labpodman, requiring literal `true none {}` both before and after. No owner.sh/lib.sh/hardware payload edits and no weaker isolation rule. The failed01 result/private diagnostic are preserved; the next leased output must be `instances-generated-pg-c-02.json`.
 
+Attempt02 was cancelled in heavy queue (exit143) before Python admission/remote dispatch after parent identified Podman's bare image-ID format. No resources. The driver now compares exact64 lowercase hex digits after removing only an optional `sha256:` prefix, for BOTH image inspect Id and container inspect Image; amd64 remains mandatory. Wrong digits, truncation, extra whitespace, alternate algorithms and malformed values still refuse. Engine/product guards/pin unchanged. Next fresh output: `instances-generated-pg-c-03.json`.
+
 Preparation validation only: outer/remote Python AST parse and read-only default plan. Runtime not yet executed and no device mutation performed by this lane.
