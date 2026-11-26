@@ -75,3 +75,14 @@ remain live throughout the case; finally close their stdin and wait. No producti
 After successful version/reuse/source-unchanged/empty-store checks, the driver removes only its2 exact new VFS store
 leaves (checked owner0700/no nested mounts/symlink-safe rmtree), retaining release/staged archives and manifests.
 All first/r2/r3 failed artifacts remain preserved. Reserve/headroom/expiry/wholecase mutex remain identical.
+
+## Final runtime correction (r5; proc anchor superseded)
+
+The rootless namespace transition could not use another process's /proc cwd. A bounded metadata probe PASSED with
+`unshare --mount --propagation private`, binding the same leased root onto the existing empty /mnt solely in that
+private mount namespace. New store run/tmp paths are short /mnt/<owned-leaf>/run and /tmp. XDG_RUNTIME_DIR also
+points to that exact NEW owned run leaf, keeping the original store's rootless pause/mount namespace unchanged.
+No new filesystem root, source runtime setting, network, authentication, or persistent device mount change. All data
+physically stays under the reviewed /var/lib proof root; inode/device equality and same-filesystem reserve enforced.
+The store's scoped system migrate stops its private pause process after empty container/volume checks, then exact
+owned leaves are removed. New r5 root only; preserve original/r2/r3/r4 protected failed artifacts.

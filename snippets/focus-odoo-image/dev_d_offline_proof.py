@@ -12,9 +12,7 @@ import os
 from pathlib import Path
 import pwd
 import secrets
-import select
 import shutil
-import subprocess
 import tarfile
 import types
 
@@ -22,7 +20,6 @@ EXPECTED = 'sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741
 SOURCE_TAG = 'docker.io/library/postgres:16.15-alpine3.24'
 RESERVE = 13 * 1024**3
 PHASE = 'preflight'
-ANCHORS = []
 ERROR_RUNROOT = b'Error: the specified runroot is longer than 50 characters'
 
 
@@ -137,6 +134,8 @@ def main():
     root = args.proof_root
     assert os.geteuid() == 0 and root.parent == Path('/var/lib') and root.name.startswith('woowbk-odoo-pg16-proof-')
     assert root.is_dir() and not root.is_symlink() and root.stat().st_uid == 0 and root.stat().st_mode & 0o777 == 0o755
+    alias = Path('/mnt')
+    assert (alias.stat().st_dev, alias.stat().st_ino) == (root.stat().st_dev, root.stat().st_ino)
     assert shutil.disk_usage(root).free >= RESERVE + 4 * 1024**3
     free_start = shutil.disk_usage(root).free
     memory_headroom_start = (int(Path('/sys/fs/cgroup/memory.max').read_text())
@@ -192,23 +191,16 @@ def main():
         for name in ('graph', 'run', 'tmp'):
             (owned / name).mkdir(mode=0o700)
             os.chown(owned / name, account.pw_uid, account.pw_gid)
-        # Podman caps its runtime path at50 characters. A live owner process anchors a short proc cwd path to
-        # this SAME exact owned leaf, without filesystem aliases, additional roots, or source-runtime changes.
-        anchor = subprocess.Popen(podman.OwnerRunner('appowner').prefix() + [podman.PYTHON, '-I', '-c',
-            'import os,sys; os.chdir(sys.argv[1]); print(os.getpid(),flush=True); sys.stdin.buffer.read()', str(owned)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            cwd='/', env=dict(podman.ROOT_ENV), close_fds=True)
-        ANCHORS.append(anchor)
-        assert select.select([anchor.stdout], [], [], 10)[0]
-        pid_text = anchor.stdout.readline(32).strip()
-        assert pid_text.isdigit()
-        proc = Path('/proc') / pid_text.decode()
-        assert proc.stat().st_uid == account.pw_uid and (proc / 'cwd').resolve() == owned
-        runtime = str(proc / 'cwd')
+        # Private mount view aliases the SAME backing directory at /mnt. A private XDG runtime keeps the
+        # new store out of the original store's pause/mount namespace; no source runtime/auth setting changes.
+        runtime = str(alias / leaf)
         assert len(runtime + '/tmp') <= 50
         flags = ['--root', str(owned / 'graph'), '--runroot', runtime + '/run', '--storage-driver', 'vfs',
                  '--events-backend', 'file', '--tmpdir', runtime + '/tmp', '--cgroup-manager', 'cgroupfs']
         class IsolatedOwner(podman.OwnerRunner):
+            def prefix(self):
+                return ['XDG_RUNTIME_DIR=' + runtime + '/run' if value.startswith('XDG_RUNTIME_DIR=') else value
+                        for value in super().prefix()]
             def podman(self, *argv, **options):
                 return self.run([podman.PODMAN, *flags, *argv], **options)
         return IsolatedOwner('appowner', runner=execute)
@@ -284,12 +276,15 @@ def main():
               'version': version.stdout.decode().strip(), 'anonymous_volumes': 0,
               'containers_remaining': 0, 'free_bytes_after': shutil.disk_usage(root).free,
               'free_bytes_start': free_start, 'device_headroom_bytes_start': memory_headroom_start,
+              'private_mount_alias_points_to_same_lease_root': True, 'isolated_runtime_within_owned_store': True,
               'reserve_bytes': RESERVE, 'commercial_acceptance': 'not-complete'}
-    # Both stores are exclusively new, VFS, contain no containers/volumes, and have completed the proof. Remove
-    # only these redundant exact leaves while their runtime anchors are still live; keep all release/staged files.
+    # Both stores are exclusively new, VFS, contain no containers/volumes, and have completed the proof. Stop only
+    # their private rootless pause processes, then remove the exact leaves; keep all release/staged files.
     PHASE = 'owned-store-cleanup'
     assert preparation.podman('ps', '-a', '--format', '{{.Names}}', timeout=60).stdout.strip() == b''
     assert preparation.podman('volume', 'ls', '--format', '{{.Name}}', timeout=60).stdout.strip() == b''
+    for isolated in (owner, preparation):
+        isolated.podman('system', 'migrate', timeout=120, max_output=65536)
     assert shutil.rmtree.avoids_symlink_attacks
     for leaf in ('preparation-store', 'owner-store'):
         path = root / leaf
@@ -311,11 +306,3 @@ if __name__ == '__main__':
         print(json.dumps({'status': 'failed', 'phase': PHASE, 'error_type': type(error).__name__,
                           'reason': failure_reason(error), 'pulls': 0}))
         raise SystemExit(1)
-    finally:
-        for anchor in ANCHORS:
-            anchor.stdin.close()
-            try:
-                anchor.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                anchor.terminate()
-                anchor.wait(timeout=10)

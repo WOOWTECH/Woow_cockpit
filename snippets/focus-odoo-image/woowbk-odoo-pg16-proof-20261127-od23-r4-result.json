@@ -1,0 +1,10 @@
+{
+  "status": "failed",
+  "phase": "preparation-load",
+  "error_type": "CommandError",
+  "reason": "owner-command-unclassified",
+  "pulls": 0,
+  "proof_root": "/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r4",
+  "host_ram_available_mib_start": 4161,
+  "source_commit": "c036ef028285a9f6dbb671a67ed1709fa08f289a"
+}

@@ -48,7 +48,7 @@ def main():
         files = {str(p.relative_to(REPO)): base64.b64encode(p.read_bytes()).decode() for p in paths}
         # Only small trusted code/registry metadata goes through this JSON. All image bytes remain streamed on device.
         payload = r'''
-import base64, json, os, pathlib, shutil, sys
+import base64, json, os, pathlib, shutil, subprocess, sys
 root = pathlib.Path(PROOF_ROOT)
 assert os.geteuid() == 0 and root.parent == pathlib.Path('/var/lib')
 assert root.name.startswith('woowbk-odoo-pg16-proof-') and not root.exists() and not root.is_symlink()
@@ -58,6 +58,12 @@ limit = pathlib.Path('/sys/fs/cgroup/memory.max').read_text().strip()
 assert limit != 'max' and int(limit) - current >= 512 * 1024**2
 os.umask(0o022)
 root.mkdir(mode=0o755)
+alias = pathlib.Path('/mnt')
+assert alias.is_dir() and not alias.is_symlink() and alias.stat().st_uid == 0
+assert not alias.stat().st_mode & 0o022 and not any(alias.iterdir())
+subprocess.run(['/usr/bin/mount', '--bind', str(root), str(alias)], check=True,
+               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+assert (alias.stat().st_dev, alias.stat().st_ino) == (root.stat().st_dev, root.stat().st_ino)
 code = root / 'code'
 for relative, value in FILES.items():
     path = code / relative
@@ -68,7 +74,8 @@ script = code / 'snippets/focus-odoo-image/dev_d_offline_proof.py'
 sys.argv = [str(script), '--proof-root', str(root), '--code-root', str(code)]
 exec(compile(script.read_text(), str(script), 'exec'), {'__name__': '__main__', '__file__': str(script)})
 '''.replace('PROOF_ROOT', repr(str(root))).replace('FILES', repr(files))
-        result = subprocess.run([str(LAB), 'exec', '-i', 'woowbk-dev-d', 'python3', '-I', '-'],
+        result = subprocess.run([str(LAB), 'exec', '-i', 'woowbk-dev-d', 'unshare', '--mount',
+                                 '--propagation', 'private', 'python3', '-I', '-'],
                                 input=payload.encode(), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=3600)
         try:
             report = json.loads(result.stdout)
