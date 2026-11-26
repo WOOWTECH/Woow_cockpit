@@ -31,7 +31,7 @@ The new output directory contains `manifest.json` and `postgres16.docker.tar`. T
 }
 ```
 
-Publish the printed `manifest_sha256` in authenticated release metadata separately from the artifact. A checksum shipped alongside a mutable manifest is insufficient. No giant image files belong in Git. Packaging and installation copy/hash at most 1 MiB per read. Artifact ceiling: 2 GiB; JSON ceiling: 1 MiB each; outer archive entries: 4096. Outer archives cannot contain multiple images, unrelated image files/tags, duplicate or unsafe paths, links, devices, sparse members, GNU long names, or PAX extensions. Layer contents are bound by the complete trusted artifact SHA, not extracted by the helper.
+Publish the printed `manifest_sha256` in authenticated release metadata separately from the artifact. A checksum shipped alongside a mutable manifest is insufficient. No giant image files belong in Git. Packaging and installation copy/hash at most 1 MiB per read. Artifact ceiling: 2 GiB; JSON ceiling: 1 MiB each; outer archive entries: 4096. Outer archives cannot contain multiple images, unrelated image files/tags, duplicate or unsafe paths, links, devices, sparse members, GNU long names, or PAX extensions. Layer contents are bound by the complete trusted artifact SHA and by the pinned config rootfs.diff_ids: each layer is streamed in manifest order, decompressed only when gzip, and its uncompressed SHA256 must match. No layer is extracted. Expanded data is capped at2GiB total and the job abort callback is checked during layer reads.
 
 ```
 sudo python3 scripts/manage.py plan \

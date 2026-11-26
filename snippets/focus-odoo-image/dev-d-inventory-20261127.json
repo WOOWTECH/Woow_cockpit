@@ -1,0 +1,34 @@
+{
+  "device": "dev-d",
+  "pinned_manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
+  "pulls": 0,
+  "read_only": true,
+  "same_pinned_config": true,
+  "same_pinned_layers": false,
+  "source_image": {
+    "architecture": "amd64",
+    "id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+    "os": "linux",
+    "repo_digests": [
+      "docker.io/library/postgres@sha256:8d16e6f18cc33ffb153211c40b45056a3589d49c245530469843b368d6786069"
+    ],
+    "repo_tags": [
+      "docker.io/library/postgres:16.15-alpine3.24"
+    ],
+    "size": 297135980
+  },
+  "store_mutations": 0,
+  "stored_config_sha256_verified": true,
+  "stored_manifest_in_observed_repodigests": true,
+  "stored_manifest_media_type": "application/vnd.docker.distribution.manifest.v2+json",
+  "stored_manifest_sha256": "sha256:8d16e6f18cc33ffb153211c40b45056a3589d49c245530469843b368d6786069",
+  "stored_uncompressed_layers_match_pinned_config_diff_ids": false,
+  "status": "pinned-config-verified-export-layer-check-pending",
+  "index_digest": "sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139",
+  "pinned_amd64_manifest": "sha256:ac838714b7d794185a866e5a6b479b954e7d8a070568aa0acac6fe07c3070bf5",
+  "host_free_bytes": 26185064448,
+  "reserve_bytes": 13958643712,
+  "eligible_for_leased_export": true,
+  "exported_layer_bytes_not_yet_verified": true,
+  "coordinator_resolution": "Official index->amd64 manifest config hash matches; ordered exported layer diff_id verification required before any image load. Registry encoding need not be preserved."
+}

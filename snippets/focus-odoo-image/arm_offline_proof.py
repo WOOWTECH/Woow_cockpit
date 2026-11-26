@@ -118,10 +118,12 @@ def main():
     # Uses production selection, verification and owner-load path; all tagged images are absent in this new store.
     selected = ha_odoo.pick_pg16(work, app)
     assert selected == expected and calls.count('load') == 1
-    version = runner.podman('run', '--rm', '--pull=never', '--network=none', '--memory=128m', selected,
+    version = runner.podman('run', '--rm', '--pull=never', '--network=none', '--image-volume=ignore', '--memory=128m', selected,
                             'postgres', '--version', timeout=120, max_output=65536)
     assert b'PostgreSQL) 16.15' in version.stdout
-    assert ha_odoo.pick_pg16(work, app) == selected and calls.count('load') == 1
+    reused = ha_odoo.pick_pg16(work, app)
+    reused_id = runner.podman('image', 'inspect', '--format', '{{.Id}}', reused, timeout=60).stdout.decode().strip()
+    assert reused_id.removeprefix('sha256:') == selected[7:] and calls.count('load') == 1
     archive = Path(installed['path']) / bundle.ARCHIVE
     with archive.open('rb') as stream:
         sha256, size = bundle.copy_hash(stream)
