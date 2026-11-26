@@ -271,7 +271,23 @@ CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;""")
             columns = omni.schema_columns(source)
             omni.DATABASE = original_db
             assert columns == target_columns
-            pg = omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=columns)
+            original_sequence_check = omni.require_sequence_sets
+
+            def inspect_sequence_script(script, count, sequences):
+                try:
+                    return original_sequence_check(script, count, sequences)
+                except BackupError:
+                    unexpected = [line for line in script.splitlines()
+                                  if not (omni.SCRIPT_SKIP_RE.fullmatch(line) or omni.SETVAL_RE.fullmatch(line)
+                                          or line in omni.SCRIPT_HEADER or omni.SCRIPT_HEADER_RE.fullmatch(line))]
+                    event('sequence_script_shape', selected=count, unexpected_lines=len(unexpected),
+                          unexpected_prefixes=[line.strip().split(' ', 1)[0][:24] for line in unexpected[:5]],
+                          unexpected_lengths=[len(line) for line in unexpected[:5]])
+                    raise
+
+            from unittest import mock
+            with mock.patch.object(omni, 'require_sequence_sets', inspect_sequence_script):
+                pg = omni.restore_trusted_data(work, tmp, schema_path, data_path, 'omnigent', source_columns=columns)
             assert omni.carry_accounts_restricted(pg, [{'id': 'admin', 'password_hash': 'synthetic'}]) == ['admin']
             ha_odoo.Cluster(tmp, 'omni-db', superuser=omni.RESTORE_ROLE).script(omni.PAUSE_SQL, 'omnigent')
             omni.finish_trusted_data(pg)
