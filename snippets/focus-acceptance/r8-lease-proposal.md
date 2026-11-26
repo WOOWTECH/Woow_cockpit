@@ -1,8 +1,28 @@
 # R8 proposed bounded real Cockpit case — review before dev-d lease
 
-Status: preparation only. D10 dev-e lease grants no dev-d permission. Do not run
-this command until the concrete driver/transport is reviewed and a dev-d lease
-covers setup, import and recovery. No R8 device preparation has run.
+Current status: original driver/transport reviewed and dev-d lease granted.
+Actual attempt1 remains50/53 FAIL; independent recovery-only action has passed.
+The original proposal below is retained as historical scope. Its attempt1
+command is not a replay command; do not overwrite its evidence paths.
+
+## Independent recovery handoff, 2026-11-27 07:02 Taipei
+
+Reviewed recovery-only driver `90eba761`, exit0/22.5seconds, all21 fixed checks
+passed. Exact original markers, durable units, images, schedule, catalog and
+fixture match; active jobs0. Own Omnigent catalog entry removed at its exact
+recorded SHA. Six archives and the old HA upload/host copy remain. The old guard,
+receipt, failed summary and captures are unchanged. No guard override or retry.
+
+Private receipt:
+`/home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-recovery/20261127T070216/receipt.json`
+SHA256 `2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824`.
+Public `tests/backup/evidence/focus-acceptance-20261127/r8-independent-recovery.json`
+SHA256 `edb0fd01fe188080bb65a202a896d1d47a62c88988117d141bfdbc32e6868be0`.
+Current scan640 records/11 archive JSON sidecars/0 hits. Old browser cookie
+coverage is absent and is not retrospectively claimed. This is data recovery
+proof, not an acceptance pass. Dev-d mutex released for one R4 plain turn.
+Separate readiness-guard and retained-upload ownership changes will be proposed
+for review before any R8 replay, after that turn.
 
 ## Exact transport
 

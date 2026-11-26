@@ -102,14 +102,48 @@ derived-extra full flow are existing evidence, not reruns by this lane. R1's
 current chain record remains70/72 with two stale separate-unit assumptions;
 the independent same-unit memory check passed at29.3MiB. R1 is not blanket closed.
 
-## R8 prepared, not executed
+## R8 actual attempt1 failed; independent data recovery verified
+
+`r8-attempt1.json` preserves **50/53 FAIL**, exit1 in706.8seconds, driver
+`c79700cc`, frozen product source `1adf4df2`. The actual Cockpit page uploaded the
+derived real fixture, selected three apps, excluded corrupt EMQX and imported
+Hermes plus Omnigent with one general acknowledgement and one import click.
+The four actual jobs succeeded in one systemd chain. Exact original data,
+durable units and image configs returned through ordinary baseline recovery.
+
+The browser harness incorrectly required a positive count of issue-specific
+acknowledgement keys; this real check required zero. That assertion prevented
+the old browser cookie scan. The later scanner also required an obsolete
+aggregate index instead of the actual archive JSON sidecars. These are retained
+failed checks, and **old cookie coverage remains absent**. Prepared observer and
+browser-finally fixes have offline checks only; no replay has run.
+
+Coordinator-reviewed recovery-only script `90eba761` then ran under globalheavy
+and the dev-d mutex: **exit0 in22.5seconds**, with all21 fixed checks passing.
+`r8-recovery-only-capture.json` records the command result;
+`r8-independent-recovery.json` records independent original marker/unit/image/
+timer/catalog/fixture equality, no active job and unchanged failed evidence.
+Only the recorded own catalog entry was removed, using its exact SHA.
+All six old archives, the old HA upload and derived host copy remain. The scan
+covered640 records, including11 actual archive index sidecars, with zero hits.
+This proves data recovery and does not turn attempt1 into an acceptance pass.
+
+Immutable private receipt:
+`~/.woowbk-lab/evidence/focus-acceptance-ui-recovery/20261127T070216/receipt.json`,
+SHA256 `2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824`.
+Public receipt SHA256
+`edb0fd01fe188080bb65a202a896d1d47a62c88988117d141bfdbc32e6868be0`.
+The old guard was not overridden or rewritten. The mutex is released for the
+coordinator's one R4 plain turn; R8 readiness and replay need separate review.
+
+### Original preparation scope
 
 The new `focus_acceptance_ui.py`, `focus_acceptance_ui_page.mjs` and
-`focus_acceptance_ui_relay.py` are a single real Cockpit case, with a separate
-dev-d lease and driver review still required. Exact command, transport, resource
+`focus_acceptance_ui_relay.py` are a single real Cockpit case. The original
+proposal received a separate dev-d lease and review. Transport, resource
 needs and recovery are in `snippets/focus-acceptance/r8-lease-proposal.md`.
-`r8-preparation.json` records offline preparation only. No R8 listener/browser,
-catalog change, upload or import has run.
+`r8-preparation.json` remains offline preparation only; the later actual attempt
+and independent recovery above are separate evidence.
 
 The page uploads the derived real full HA fixture, checks three selected apps,
 shows corrupt EMQX blocked, and imports the other two with one acknowledgement.

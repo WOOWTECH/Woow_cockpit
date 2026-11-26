@@ -1,0 +1,32 @@
+{
+ "source_commit": "90eba761c6b14e767fbb3ccd2ba76131865f44b3",
+ "scope": "r8-independent-recovery-only",
+ "exit": 0,
+ "elapsed_seconds": 22.5,
+ "stdout_sha256": "bac4a75a2431545c52ec98603a397645f71539378beddf287fb9e6b378a3f180",
+ "fixed_status": [
+  "recovery only: no active backup job: PASS",
+  "recovery only: exact original emqx markers: PASS",
+  "recovery only: exact original omnigent markers: PASS",
+  "recovery only: exact original hermes markers: PASS",
+  "recovery only: original durable unit and timer states: PASS",
+  "recovery only: exact original image configs: PASS",
+  "recovery only: exact original schedule state: PASS",
+  "recovery only: original HA fixture hash: PASS",
+  "recovery only: all six old case archives retained: PASS",
+  "recovery only: old HA upload retained with original derived hash: PASS",
+  "recovery only: old derived host copy retained: PASS",
+  "recovery only: registered and new probe values zero hits: PASS",
+  "recovery only: catalog differs only by recorded own entry: PASS",
+  "recovery only: own catalog removal exact SHA: PASS",
+  "recovery only: exact original catalog hashes: PASS",
+  "recovery only: no active job after catalog recovery: PASS",
+  "recovery only: old guard receipt summary and captures unchanged: PASS",
+  "recovery only: archive inventory unchanged: PASS",
+  "recovery only: HA inventory unchanged: PASS",
+  "recovery only: immutable independent receipt written: PASS",
+  "recovery only: mutex released for parent: PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
