@@ -1,0 +1,200 @@
+{
+  "catalog_sha256": "3dfebaa0879d5622514276e2b834bff482f3db53618af0caaa46c5c660e968c4",
+  "catalog_uid": 0,
+  "catalog_mode": 420,
+  "entry": {
+    "schema": 1,
+    "id": "n8n",
+    "name": "n8n 工作流程",
+    "description": "n8n 佇列模式：主服務、worker、webhook、task runner、Valkey 與 PostgreSQL 16",
+    "owner": "appowner",
+    "adapter": "quadlet-postgres",
+    "quadlet": {
+      "files": [
+        "n8n.network",
+        "n8n-data.volume",
+        "n8n-postgres-data.volume",
+        "n8n-valkey-data.volume",
+        "n8n-postgres.container",
+        "n8n-valkey.container",
+        "n8n.container",
+        "n8n-worker.container",
+        "n8n-webhook.container",
+        "n8n-runners.container",
+        "n8n-worker-runners.container"
+      ]
+    },
+    "units": [
+      "n8n-postgres.service",
+      "n8n-valkey.service",
+      "n8n.service",
+      "n8n-worker.service",
+      "n8n-webhook.service",
+      "n8n-runners.service",
+      "n8n-worker-runners.service"
+    ],
+    "writer_units": [
+      "n8n-valkey.service",
+      "n8n.service",
+      "n8n-worker.service",
+      "n8n-webhook.service"
+    ],
+    "postgres": [
+      {
+        "id": "main",
+        "container": "n8n-postgres",
+        "unit": "n8n-postgres.service",
+        "database": "n8n",
+        "user": "n8n",
+        "data_volume": "n8n_postgres_data"
+      }
+    ],
+    "volumes": [
+      {
+        "name": "n8n_n8n_data",
+        "label": "n8n 設定與加密金鑰"
+      },
+      {
+        "name": "n8n_valkey_data",
+        "label": "佇列資料（Valkey）"
+      }
+    ],
+    "secrets": [
+      {
+        "name": "n8n-db-password"
+      },
+      {
+        "name": "n8n-runners-auth-token"
+      },
+      {
+        "name": "n8n-valkey-password"
+      }
+    ],
+    "config_files": [
+      {
+        "path": ".config/n8n/n8n.env",
+        "mode": "0600"
+      },
+      {
+        "path": ".config/n8n/n8n-task-runners.json",
+        "mode": "0644"
+      },
+      {
+        "path": ".config/n8n/start-valkey.sh",
+        "mode": "0644"
+      }
+    ],
+    "health": [
+      {
+        "type": "http",
+        "url": "http://127.0.0.1:15678/healthz/readiness",
+        "expect_status": 200,
+        "timeout_seconds": 300
+      },
+      {
+        "type": "http",
+        "url": "http://127.0.0.1:15679/healthz",
+        "expect_status": 200,
+        "timeout_seconds": 300
+      }
+    ],
+    "verify": []
+  },
+  "quadlets": {
+    "n8n.container": {
+      "sha256": "cfb6ffebaec448ed552d8389e900cdcf8704a6afe3dcad5b94b152cd366e3511",
+      "db_selection_lines": [
+        "EnvironmentFile=%h/.config/n8n/n8n.env",
+        "Environment=DB_POSTGRESDB_DATABASE=n8n"
+      ]
+    },
+    "n8n-worker.container": {
+      "sha256": "d71902c0f7a308b0287f3f5bb25568c4b077126727a73f03ad03ed27a48b1966",
+      "db_selection_lines": [
+        "EnvironmentFile=%h/.config/n8n/n8n.env",
+        "Environment=DB_POSTGRESDB_DATABASE=n8n"
+      ]
+    },
+    "n8n-webhook.container": {
+      "sha256": "38434c1101fcadf078dbebaf4fdc948f52ae5c1224dc5ab97ec03b514cb84403",
+      "db_selection_lines": [
+        "EnvironmentFile=%h/.config/n8n/n8n.env",
+        "Environment=DB_POSTGRESDB_DATABASE=n8n"
+      ]
+    },
+    "n8n-postgres.container": {
+      "sha256": "fcac5494f2962763f59ab345a673e539118131ef932c1e4c5657358150a5ce84",
+      "db_selection_lines": []
+    }
+  },
+  "observed_utc": "2026-11-26T23:10:57.796488+00:00",
+  "device": "woowbk-dev-c",
+  "outer_isolation": "true none {}",
+  "no_running_inner_containers": true,
+  "units": {
+    "n8n-postgres.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n-valkey.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n-worker.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n-webhook.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n-runners.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n-worker-runners.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "n8n.target": {
+      "ActiveState": "active",
+      "SubState": "active",
+      "UnitFileState": "enabled"
+    }
+  },
+  "schedule_timer": {
+    "ActiveState": "active",
+    "SubState": "waiting",
+    "UnitFileState": "enabled"
+  },
+  "images": {
+    "docker.io/n8nio/n8n:2.43.6": {
+      "present": false,
+      "id": null
+    },
+    "docker.io/n8nio/runners:2.43.6": {
+      "present": false,
+      "id": null
+    },
+    "docker.io/library/postgres:16.15-alpine": {
+      "present": true,
+      "id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873"
+    },
+    "docker.io/valkey/valkey:8.1.11-alpine": {
+      "present": true,
+      "id": "650ff8153447d257696648bc63a77522cf6e760145be45ce65a408a918229915"
+    }
+  },
+  "database_opened": false
+}
