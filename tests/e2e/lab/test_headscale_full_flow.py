@@ -56,6 +56,23 @@ def key(prefix='privkey'):
     return f'{prefix}:{secrets.token_hex(32)}'
 
 
+class ConfirmationGateTests(unittest.TestCase):
+    def test_the_old_lab_script_never_confirms_a_new_product_line_implicitly(self):
+        hsff.require_no_unreviewed_confirmation({'issues': [{'id': 'headscale.api-keys-not-moved', 'level': 'notice'}]})
+        with self.assertRaises(hsff.Failed) as caught:
+            hsff.require_no_unreviewed_confirmation({'issues': [
+                {'id': 'headscale.api-keys-not-moved', 'level': 'notice'},
+                {'id': 'headscale.policy-replaced', 'level': 'confirm'},
+            ]})
+        self.assertIn('headscale.policy-replaced', str(caught.exception))
+
+    def test_a_missing_or_damaged_issue_list_is_not_treated_as_no_confirmation(self):
+        for result in ({}, {'issues': None}, {'issues': [{}, None]},
+                       {'issues': [{'level': 'confirm'}]}):
+            with self.subTest(result=result), self.assertRaises(hsff.Failed):
+                hsff.require_no_unreviewed_confirmation(result)
+
+
 class LabConfigTest(unittest.TestCase):
     def test_only_the_derp_block_changes(self):
         out = hsff.lab_config(DEV_D_CONFIG)

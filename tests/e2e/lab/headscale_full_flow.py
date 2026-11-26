@@ -141,6 +141,18 @@ def _load_guard():
 drv = _load_driver()
 guard = _load_guard()
 Failed = drv.Failed
+
+
+def require_no_unreviewed_confirmation(result):
+    """An older real-flow script must not approve new product confirmation lines by accident."""
+    issues = result.get('issues')
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise Failed('the check did not return a usable issue list')
+    ids = [issue.get('id') for issue in issues if issue.get('level') == 'confirm']
+    if ids:
+        if any(not isinstance(issue_id, str) for issue_id in ids):
+            raise Failed('a confirmation line has no usable id')
+        raise Failed(f'check has confirmation lines that this lab case has not reviewed: {sorted(set(ids))}')
 drv.state_path = lambda: LAB / 'run' / 'headscale_full_flow.json'   # never the b1 driver's own state file
 
 
@@ -868,8 +880,10 @@ class Run:
                  result.get('arch') == drv.ARCH[self.arch] and result.get('version') == '0.1.3'
                  and result.get('target_version') == '0.29.4', {k: result.get(k) for k in ('arch', 'version', 'target_version')})
         drv.compare_check(ev, f'check {tag}/headscale', 'headscale', result, self.arch, True, tag)
-        ev.check(f'check {tag}/headscale: the only warning is that HA\'s API key does not move',
-                 len(result.get('warnings') or []) == 1 and 'API 金鑰不會搬過來' in result['warnings'][0], result.get('warnings'))
+        ev.check(f'check {tag}/headscale: HA\'s API key does not move',
+                 any('API 金鑰不會搬過來' in line for line in result.get('warnings') or []),
+                 result.get('warnings'))
+        require_no_unreviewed_confirmation(result)
         leftovers = drv.labelled()
         ev.check('check: no throwaway container, volume or network left', not any(leftovers.values()), leftovers)
 
