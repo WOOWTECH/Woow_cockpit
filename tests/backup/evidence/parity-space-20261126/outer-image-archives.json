@@ -33,7 +33,19 @@
       "format": "docker-archive",
       "original_config_and_all_layers_verified": true,
       "removed": true
+    },
+    {
+      "image_id": "094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+      "tags": [
+        "docker.io/library/postgres:17.11-alpine3.23"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/outer-image-cache/094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7.docker.tar.gz",
+      "archive_sha256": "b2d4c11e9e47d365497c8892d56157c9aa45a60698f02e38c7f247d0501f90bc",
+      "archive_bytes": 123198909,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
     }
   ],
-  "after_free": 24923193344
+  "after_free": 21414617088
 }

@@ -1,6 +1,6 @@
 # Space inventory, 2026-11-26
 
-This inventory is read-only except the separately recorded, verified archival of this task's stopped dev-c image cache. Values are GiB (2^30 bytes). They are potential candidates, not a promise that all reported space can be freed.
+Candidate discovery is read-only. The separately recorded changes archive this task's inactive source snapshots and unused lab images before removing their source copies, and rotate the completed OpenDesign lab after its baseline check. Values are GiB (2^30 bytes). They are potential candidates, not a promise that all reported space can be freed.
 
 | Candidate | Measured size / estimate | Conditions before cleanup |
 | --- | ---: | --- |
@@ -32,3 +32,11 @@ Raw size inventories are `/tmp/parity-space-top-20261126.txt`, `/tmp/parity-spac
 The image-copy script now checks save and load separately. It reserves a whole image plus 13 GiB before saving, measures the compressed directory, then rereads free space before loading. The load check reserves one unpacked image plus one additional compressed copy; the original copy already occupies disk. The 12 GiB floor, extra 1 GiB preflight reserve and 12.25 GiB watchdog remain. Four boundary tests passed (save refusal, measured-size acceptance, larger transfer/other writer refusal with cleanup, exact-boundary acceptance). The complete batch-2 script suite passed 39 tests.
 
 Two further unused outer lab images (an old Nextcloud image and the Podman build image) were archived with exact config/layer verification and removed without force; no container referenced them and the volume inventory stayed unchanged. Archive indexes are included alongside this file. Free space after these steps and the Omnigent cleanup was 25.73 GiB, compared with about 22.13 GiB at the beginning of this pass; other writers make the difference approximate. Historical size estimates in the candidate table predate these two removals.
+
+## OpenDesign environment restored
+
+Using the measured-copy budget, the exact OpenDesign image `5bf5f9b959b3` (6367 MiB) and nginx `1ae82dcc4a34` (66 MiB) were copied into isolated dev-e. The main transfer was 2359 MiB compressed, took 831 seconds and reached a minimum host available space of 15596 MiB. Transfer directories were removed. The subsequent guarded wake completed in 307 seconds: all four units and their health checks passed, the health URL returned 200, and no failed user unit remained. Available host space was 15071 MiB after startup. See `opendesign-images.txt` and `opendesign-wake.txt`. These prove restoration of the lab environment; the HA import acceptance run is recorded separately.
+
+Additional completed verifier/lane work folders and unused outer PostgreSQL images were also archived after checking for active use, verifying the saved data and retaining exact image configs and layer hashes. Their indexes are `verifier-archives.json`, `additional-task-archives.json`, `completed-lane-archives.json` and `outer-image-archives.json`. The archives themselves remain private, outside Git; the indexes contain their locations and hashes. No root/system log, host image or host volume was removed.
+
+At 21:42 Asia/Taipei, after OpenDesign's 85/85 real checks, its separate 7/7 baseline verification and lab rotation, and the completed Omnigent O-15 flow, `/` had 28,755,521,536 available bytes (26.78 GiB). The beginning-of-pass reading was about 22.13 GiB, for an approximate net gain of 4.65 GiB despite concurrent writers. The remaining system-log and package-cache sizes were rechecked: rotated syslog 3.13 GiB, journals 1.97 GiB, pnpm store 0.95 GiB, npx 0.30 GiB, and the two `/var/tmp` caches 0.44 GiB combined. The outer lab cache estimate in the table is historical, before the archived removals, and must not be treated as space still fully available to reclaim. The ten-service final acceptance remains incomplete.

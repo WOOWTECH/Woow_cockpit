@@ -1,0 +1,6 @@
+lab: == phase images:opendesign
+lab: image localhost/woow-open-design:4.2.1: every entry's owner is inside appowner's nested range (0-55000)
+lab: image localhost/woow-open-design:4.2.1 loaded in 831s, ID 5bf5f9b959b3 (same as the host); 6367 MiB, compressed copy 2359 MiB, lowest host free 15596 MiB
+lab: image docker.io/library/nginx:1.30.4-alpine: every entry's owner is inside appowner's nested range (0-55000)
+lab: image docker.io/library/nginx:1.30.4-alpine loaded in 14s, ID 1ae82dcc4a34 (same as the host); 66 MiB, compressed copy 28 MiB, lowest host free 20189 MiB
+lab: host disk after the images: 19 GiB free

@@ -1,0 +1,198 @@
+{
+  "source_commit": "3dad5e061e3998d8731f4e447ea7b832bc606ed5",
+  "source_kind": "real HA backup repacked with inert extra PostgreSQL objects; original fixture unchanged",
+  "private_log_sha256": "f3bdc2bfa77d409ae3657ec8e6cd604be9573ac965068267ab1e4a65862299b3",
+  "events": [
+    {
+      "changed_paths": 0,
+      "clean_tree": true,
+      "stage": "source"
+    },
+    {
+      "held": true,
+      "stage": "dev_d_lock",
+      "waited_seconds": 0
+    },
+    {
+      "network": "none",
+      "published_ports": 0,
+      "running": true,
+      "stage": "isolation",
+      "verified": true,
+      "when": "before"
+    },
+    {
+      "arch": "x86",
+      "fixture_sha256_matches_record": true,
+      "stage": "real_source"
+    },
+    {
+      "replaced_by_product_trusted_schema": true,
+      "stage": "public_guard"
+    },
+    {
+      "independently_initialised": true,
+      "quadlet_units": 3,
+      "stage": "target_deployed",
+      "target_admin_login": true
+    },
+    {
+      "product_publish": true,
+      "sha256_matches_fixture": true,
+      "stage": "ha_store_published"
+    },
+    {
+      "derived_sha256": "2b640ffa36a6d40f4b84a1ed9b735f22ae1fa0170e83563612d85e79dd2f0b83",
+      "event_function_has_no_side_effects": true,
+      "extra_event_trigger": true,
+      "extra_foreign_data_wrapper": true,
+      "original_sha256_unchanged": true,
+      "stage": "derived_source"
+    },
+    {
+      "check_importable": true,
+      "confirmation_line": true,
+      "no_backup_created": true,
+      "stage": "extra_objects_confirmation",
+      "target_service_not_stopped": true,
+      "unconfirmed_refused": true
+    },
+    {
+      "encrypted": true,
+      "internal_entry": true,
+      "live_alembic": true,
+      "live_info_from_running_server": true,
+      "real_adapter_discovery": true,
+      "real_ha_store": true,
+      "server_stopped_before_schema_capture": true,
+      "stage": "candidate_converted",
+      "test_mode": false
+    },
+    {
+      "confirmation_recorded": true,
+      "product_new_cluster_audit_passed": true,
+      "stage": "extra_objects_conversion",
+      "trusted_schema_conversion_completed": true
+    },
+    {
+      "event_function_absent": true,
+      "event_trigger_absent": true,
+      "foreign_data_wrapper_absent": true,
+      "stage": "extra_objects_installed"
+    },
+    {
+      "differ": {},
+      "equal_to_ha_plus_kept": [
+        "agents",
+        "comments",
+        "connections",
+        "conversation_items",
+        "conversation_labels",
+        "conversations",
+        "device_grants",
+        "files",
+        "hosts",
+        "omnigent_conversation_metadata",
+        "policies",
+        "preferences",
+        "projects",
+        "scheduled_task_runs",
+        "scheduled_tasks",
+        "session_permissions",
+        "user_daily_cost",
+        "users"
+      ],
+      "secret_named_tables_equal": true,
+      "stage": "installed_counts_before_login"
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "installed",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "restarted",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "rolled_back",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "db_and_server_markers": true,
+      "one_shot_systemd_failure": true,
+      "real_flow": true,
+      "stage": "automatic_rollback"
+    },
+    {
+      "engine_log_lines": 87,
+      "hits": 0,
+      "journals_scanned": 3,
+      "login_credential_sources": 20,
+      "registered_values": 31,
+      "stage": "secret_scan"
+    },
+    {
+      "complete": true,
+      "private_engine_root_removed": true,
+      "stage": "cleanup"
+    },
+    {
+      "arch": "x86",
+      "result": "PASS",
+      "stage": "omnigent_real_ha"
+    },
+    {
+      "containers_volumes_secrets_unchanged": true,
+      "lock_seconds": 487,
+      "stage": "inventory"
+    },
+    {
+      "network": "none",
+      "published_ports": 0,
+      "running": true,
+      "stage": "isolation",
+      "verified": true,
+      "when": "after"
+    }
+  ],
+  "commercial_acceptance": "not-complete"
+}
