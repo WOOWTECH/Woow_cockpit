@@ -40,8 +40,8 @@ Steps (run in the order given):
                emqx.service` and the probe again; the imported state is recorded for:
                Before that restore the FIRST import attempt is made to fail twice from this device's own state (arm-cold,
                x86-cold and x86-fileonly; asked for on 2026-11-24): a one-shot start failure, then a one-shot change of the
-               restored data that the readback must name; each time the restore must roll back by itself and exactly this
-               device's own state must be back (digest, markers, its own users; HA's admin and MQTT users refused)
+               restored data that the readback must name; this older first-import case expects rollback in both rounds
+               (the current D0/E-90 wrapper skips it; its start-failure round runs in rollback:TAG instead)
   import:x86-fileonly:file | import:x86-noacl:file
                decision C's other half, the usual customer case: a backup WITHOUT ACL rows on dev-d's own target (the
                ACL file only, nothing added) is imported: the same chain as builtin (check ok, real conversion,
@@ -52,8 +52,8 @@ Steps (run in the order given):
   rollback:TAG the rollback rounds in their own lock hold, from the recorded imported state (proven again first): an
                AUTOMATIC rollback (a one-shot ExecStartPre failure of emqx.service armed right before a second
                restore of the same converted backup: the restore must fail and roll back by itself; the probe
-               again), the READBACK rollback (a one-shot ExecStartPre appends one HOCON line to the restored
-               cluster.hocon: the restore's readback must name 設定（log） and roll back by itself; the probe again),
+               again), the READBACK reminder (a one-shot ExecStartPre appends one HOCON line to the restored
+               cluster.hocon: the restore's readback must name 設定（log） and keep the restored data; the probe again),
                and the MANUAL rollback to the baseline (restore of B0: the state digest equals `before`, the
                markers are back)
   suggest-health
@@ -160,7 +160,7 @@ FAIL_ONCE = (b'#!/bin/sh\n'
 FAIL_FILES = (DROPIN, FAIL_SCRIPT, MARKER, FAIL_SEEN)
 # The readback under test: a one-shot ExecStartPre that changes the RESTORED data right before the broker starts (one
 # HOCON line appended to the restored configs/cluster.hocon), so the restored broker no longer equals what the
-# conversion verified; the restore must name it and roll back by itself. Not log.console.level: dev-d's EnvironmentFile
+# conversion verified; E-90 says the restore names the changed root in a reminder. Not log.console.level: dev-d's EnvironmentFile
 # sets EMQX_LOG__CONSOLE__LEVEL and environment overrides win over cluster.hocon (emqx_config.erl:365-366, 455-461).
 TAMPER_DROPIN = DROPDIR + '/woowbk-emqx-product-tamper-once.conf'
 TAMPER_SCRIPT = '.config/emqx-woowbk-tamper.sh'
@@ -1059,23 +1059,23 @@ def start_failure_round(ev, label_text, converted, name):
 
 
 def readback_round(ev, label_text, converted, name):
-    """A restore of `converted` whose restored data is changed right before the start (one HOCON line): the readback must
-    name it (and nothing else) and the restore must roll back by itself."""
+    """E-90: a changed setting is named in the log, and the restore stays successful."""
     dir_existed = arm_tamper_once()
     try:
         job, log, took = restore_with(ev, converted, name)
-        error, result = job.get('error') or {}, job.get('result') or {}
         left = stat_owner([TAMPER_MARKER])
-        message = (error.get('message') if isinstance(error, dict) else '') or ''
-        ev.check(f'{label_text}: a restored broker that differs from what the conversion verified fails the '
-                 'readback, named (設定（log）), and the restore rolls back by itself',
-                 job['state'] == 'rolled-back' and result.get('rolled_back') is True and not left[TAMPER_MARKER]
-                 and '設定（log）' in message and not job_log_has(log, READBACK_LOG),
-                 {'state': job['state'], 'code': error.get('code') if isinstance(error, dict) else None,
-                  'message': message, 'rolled_back': result.get('rolled_back'), 'took_s': round(took, 1)})
-        ev.check(f'{label_text}: the readback named ONLY the changed setting (every other setting and every table of the '
-                 'running broker were the converted ones: HA\'s data really ran)', message.startswith(READBACK_DIFF),
-                 {'message': message})
+        readback_lines = [message for line in log
+                          if (message := line.get('message') if isinstance(line, dict) else str(line))
+                          and 'EMQX 還原後的' in message]
+        ev.check(f'{label_text}: E-90 keeps a restore with only changed settings and consumes the one-shot change',
+                 job['state'] == 'succeeded' and not left[TAMPER_MARKER],
+                 {'state': job['state'], 'marker_left': left[TAMPER_MARKER], 'took_s': round(took, 1)})
+        ev.check(f'{label_text}: the readback names only the changed log setting and explains no rollback',
+                 len(readback_lines) == 1 and READBACK_DIFF in readback_lines[0]
+                 and '提醒：' in readback_lines[0] and '沒有回復' in readback_lines[0]
+                 and not job_log_has(log, READBACK_LOG),
+                 {'readback_lines': len(readback_lines), 'names_log': any(READBACK_DIFF in line for line in readback_lines),
+                  'reminded': any('提醒：' in line for line in readback_lines)})
     finally:
         disarmed(ev, label_text, 'tamper', TAMPER_FILES, dir_existed)
 
@@ -1494,8 +1494,7 @@ def step_import(ev, args, tag, mode):
 
 
 def step_rollback(ev, args, tag):
-    """The rollback rounds of `import:TAG:builtin`, from the imported state it recorded: AUTOMATIC rollback (a
-    one-shot start failure), the READBACK rollback (a one-shot HOCON change), then the MANUAL rollback to B0."""
+    """From imported state: start failure rolls back; settings-only readback warns; then restore B0."""
     mode = 'file' if tag in LAB_MADE else 'builtin'
     label_text = f'import {tag}/emqx ({mode} target)'
     imported = drv.STATE.get('imported') or {}
@@ -1518,13 +1517,13 @@ def step_rollback(ev, args, tag):
         check_imported(ev, f'{label_text} after automatic rollback', rolled, src, mode, tag)
         ev.check(f'{label_text} after automatic rollback: the state equals the one before that restore',
                  stable(rolled) == stable(restarted), {'differs': diff_digest(stable(rolled), stable(restarted))})
-        # THE READBACK: the restored data changed right before the start (one HOCON line); the restore must name the
-        # differing root and roll back by itself.
+        # E-90: a setting changes just before start; the readback names the root but keeps the restored data.
         readback_round(ev, label_text, converted, f'readback-{tag}-{mode}')
-        tampered = run_probe(ev, args, f'{label_text} after the readback rollback', mode, tag)
-        check_imported(ev, f'{label_text} after the readback rollback', tampered, src, mode, tag)
-        ev.check(f'{label_text} after the readback rollback: the state equals the one before that restore',
-                 stable(tampered) == stable(rolled), {'differs': diff_digest(stable(tampered), stable(rolled))})
+        tampered = run_probe(ev, args, f'{label_text} after the readback reminder', mode, tag)
+        check_imported(ev, f'{label_text} after the readback reminder', tampered, src, mode, tag)
+        ev.check(f'{label_text} after the readback reminder: only the log configuration differs from before',
+                 diff_digest(stable(tampered), stable(rolled)) == ['config_sha256'],
+                 {'differs': diff_digest(stable(tampered), stable(rolled))})
         tested = True
     finally:
         manual_baseline(ev, args, label_text, tested)
