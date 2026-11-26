@@ -76,6 +76,7 @@ MIGRATIONS = {'0.29.4': frozenset({'SCHEMA_INIT',
     '202607241200-clear-tagged-node-expiry'})}
 TABLES = frozenset({'migrations', 'users', 'pre_auth_keys', 'api_keys', 'nodes', 'policies', 'database_versions',
                     'sqlite_sequence'})
+SQLITE_STATS = frozenset({'sqlite_stat1', 'sqlite_stat3', 'sqlite_stat4'})   # ANALYZE's own tables, not Headscale data
 COUNTED = ('users', 'nodes', 'pre_auth_keys', 'api_keys', 'policies')
 CORE_TABLES = frozenset({'users', 'nodes', 'api_keys'})   # without these it is no Headscale database (and no API key can be put in)
 NOISE_RE = re.compile(r'privkey:[0-9a-f]{64}\Z')
@@ -97,7 +98,7 @@ ISSUES = {
     'headscale.data-path': 'stop',              # HS-07, HS-08, HS-09: where the database or the key lie
     'headscale.no-database': 'stop',            # HS-13, HS-28: HA's Headscale never started
     'headscale.db-unusable': 'stop',            # HS-14 (kept)
-    'headscale.db-extra-objects': 'stop',       # HS-15: HA's database has tables, triggers or views this device's has not
+    'headscale.db-extra-objects': 'confirm',    # HS-15: remove only the extra schema objects in a sandboxed copy
     'headscale.db-version-differs': 'notice',   # HS-16, HS-18: the database is of another version: configtest decides
     'headscale.noise-key-kept': 'confirm',      # HS-20, HS-38: HA's identity key cannot be used: this device's stays
     'headscale.devices-outside-range': 'confirm',   # HS-19
@@ -148,6 +149,7 @@ class Plan:
         self.keep_noise = False      # HA's identity key cannot be used: this device's stays (HS-20, HS-38)
         self.skip_records = False    # no DNS records file is written: this device's path for it lies on its database or key (HS-34)
         self.policy = None           # 'kept' | 'replaced' | None
+        self.strip_extra = False     # HA has schema objects Headscale on this device does not use (HS-15)
 
 
 def valid_records(data):
@@ -372,11 +374,14 @@ def records_conflict(config):
 
 # ====================================================================== analysis
 
-def _specs(*, replace, copy_policies=False):
+def _specs(*, replace, copy_policies=False, strip_extra=False):
     ha = {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': sorted(TABLES),
           'queries': ['headscale.version', 'headscale.migrations', 'headscale.node_ips', 'headscale.api_key_prefixes']}
     if replace:
         ha['replace_api_keys_from'] = 'live.sqlite'
+        if strip_extra:
+            ha['strip_extra_from'] = 'live.sqlite'
+            ha['keep_tables'] = sorted(TABLES | SQLITE_STATS)
         if copy_policies:
             ha['replace_policies_from'] = 'live.sqlite'
         return [{'db': 'live.sqlite', 'check': 'integrity', 'schema': True, 'queries': ['headscale.api_key_prefixes'],
@@ -405,7 +410,7 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
     plan = Plan()
     sink.extend(VERSIONS.issues(addon_version, version))   # HS-10, HS-11: the table and this device's version only inform
     details = {'users': 0, 'nodes': 0, 'pre_auth_keys': 0, 'api_keys': 0, 'policies': 0, 'db_version': None}
-    known = TABLES | frozenset(((live or {}).get('schema') or {}).get('tables') or ())   # HS-15: this device's own tables count
+    known = TABLES | SQLITE_STATS | frozenset(((live or {}).get('schema') or {}).get('tables') or ())   # HS-15: this device's own tables count
     node_ips = []
     if src.db is None:   # HS-13, HS-28: HA's Headscale never started: only Headscale is left out, this device's stays
         sink.stop('headscale.no-database', 'HA 備份裡沒有 Headscale 的資料庫（db.sqlite），可能從來沒有啟動過；沒有可搬的資料，這台的 Headscale 不會變。',
@@ -426,12 +431,25 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
                 sink.stop('headscale.db-unusable', 'HA 備份裡 Headscale 的資料庫缺少 Headscale 的基本資料表（'
                                                    f'{hacommon.names(sorted(CORE_TABLES - tables), 5)}），不是可以搬過來的 Headscale 資料庫。',
                           action='請在 HA 重新備份後再匯入 Headscale；這台的 Headscale 不會變。')
-            odd = sorted(tables - known) + sorted(schema.get('virtual') or [])
-            if odd or schema.get('triggers') or schema.get('views'):   # HS-15
-                sink.stop('headscale.db-extra-objects',
-                          'HA 的 Headscale 資料庫含有這台的 Headscale 資料庫沒有的資料表、觸發程序或檢視表，無法安全地搬過來'
-                          f'{"（" + hacommon.names(odd, 5) + "）" if odd else ""}。', action='請在 HA 的 Headscale 移除這些多出來的內容後重新備份，再匯入；'
-                                                                                        '這台的 Headscale 不會變。', items=odd)
+            extra_tables = sorted(tables - known)
+            triggers, views = list(schema.get('trigger_names') or []), list(schema.get('view_names') or [])
+            odd = ([f'資料表：{name}' for name in extra_tables]
+                   + [f'觸發程序：{name}' for name in triggers]
+                   + [f'檢視表：{name}' for name in views])
+            if odd:   # HS-15: none of these objects belongs to the imported Headscale data
+                if (len(odd) > 1000 or schema.get('triggers') != len(triggers) or schema.get('views') != len(views)
+                        or any(not isinstance(name, str) or not name or len(name) > 512 or '\x00' in name
+                               for name in [*extra_tables, *triggers, *views])):
+                    sink.stop('headscale.db-unusable', 'HA 的 Headscale 資料庫多出的結構太多或名稱不完整，無法安全地移除。',
+                              action='請先在 HA 檢查資料庫，再重新備份後匯入；這台的 Headscale 不會變。')
+                elif ((live or {}).get('schema') or {}).get('triggers') or ((live or {}).get('schema') or {}).get('views'):
+                    sink.stop('headscale.db-unusable', '這台 Headscale 的資料庫有觸發程序或檢視表，無法確認哪些是應保留的結構。',
+                              action='請先確認這台 Headscale 的資料庫結構，再匯入；這台的 Headscale 不會變。')
+                else:
+                    plan.strip_extra = True
+                    sink.confirm('headscale.db-extra-objects',
+                                 f'HA 的 Headscale 資料庫有這台不使用的內容（{hacommon.names(odd, 5)}）；'
+                                 '匯入時只在轉換用的複本移除這些資料表、觸發程序或檢視表，其餘資料照搬。', odd)
             counts = answer.get('counts') or {}
             details.update({k: ha_odoo._int(counts.get(k)) for k in COUNTED})
             values = answer.get('values') or {}
@@ -753,7 +771,7 @@ def convert(work, app, test_mode, out_dir):
     files = {**_ha_files(src), **live_files}
     converted = staging / 'converted'
     converted.mkdir(mode=0o700)
-    answers = hasqlite.run(_specs(replace=True, copy_policies=plan.copy_policies), files, staging / 'sqlite', outputs=('ha.sqlite',),
+    answers = hasqlite.run(_specs(replace=True, copy_policies=plan.copy_policies, strip_extra=plan.strip_extra), files, staging / 'sqlite', outputs=('ha.sqlite',),
                            out_dir=converted, checkpoint=work.checkpoint, what='Headscale 資料庫')
     replaced = answers['ha.sqlite'].get('replaced') or {}
     live_keys = (answers['live.sqlite'].get('values') or {}).get('headscale.api_key_prefixes') or []
@@ -776,9 +794,13 @@ def convert(work, app, test_mode, out_dir):
     expected_counts['api_keys'] = len(live_keys)
     if plan.copy_policies:
         expected_counts['policies'] = ha_odoo._int(((verified['live.sqlite'].get('counts')) or {}).get('policies'))
-    data_counts = lambda counts: {k: v for k, v in (counts or {}).items() if k != 'sqlite_sequence'}   # noqa: E731
+    sqlite_bookkeeping = {'sqlite_sequence'} | SQLITE_STATS
+    data_counts = lambda counts: {k: v for k, v in (counts or {}).items() if k not in sqlite_bookkeeping}   # noqa: E731
+    schema = verified['ha.sqlite'].get('schema') or {}
+    known_tables = TABLES | SQLITE_STATS | frozenset((((live_answer or {}).get('schema') or {}).get('tables') or ()))
     if (any(hasqlite.problem(verified[name]) for name in ('ha.sqlite', 'original.sqlite', 'live.sqlite'))
             or fresh_keys != live_keys or data_counts(verified['ha.sqlite'].get('counts')) != data_counts(expected_counts)
+            or set(schema.get('tables') or []) - known_tables or schema.get('virtual') or schema.get('triggers') or schema.get('views')
             or (verified['ha.sqlite'].get('values') or {}).get('headscale.api_key_prefixes') != fresh_keys):
         raise haissues.stopped(Issue('headscale.verify-failed', 'stop', '轉換後的 Headscale 資料庫驗證沒有通過，已停止；這台沒有任何變更。',
                                      action='請再試一次；仍然不行時，請把作業紀錄交給工程人員。'), 'job-failed', app=app.id)

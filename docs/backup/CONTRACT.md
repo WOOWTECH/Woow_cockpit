@@ -2601,8 +2601,10 @@ read-only configuration folder, the one mounted at `/etc/headscale`, as its one 
    release does not know are a notice (`headscale.db-version-differs`): this device's `headscale configtest` opens the converted
    database (item 4) and decides. HA's database must be a Headscale database (`users`, `nodes`, `api_keys` present, not empty:
    `headscale.no-database`, `headscale.db-unusable`) and may only have tables that this device's own database has or that the
-   constant TABLES names, no trigger, no view (`headscale.db-extra-objects`: removing them needs a write operation of the SQLite
-   child that does not exist: stops only Headscale). No size refuses it (HS-02, HS-38, HS-39, HS-40): the database and its WAL
+   constant TABLES names. Extra ordinary tables, triggers and views are named in one confirmation
+   (`headscale.db-extra-objects`, HS-15) and removed only from the sandboxed conversion copy before the API keys are
+   replaced; the original HA file and this device's live database are not changed. A virtual table stays a stop because
+   loading or dropping its module is not a safe conversion. No size refuses it (HS-02, HS-38, HS-39, HS-40): the database and its WAL
    go to disk whatever their size (the job watches the free space), a `noise_private.key` over 4 KiB is no key, a
    `dns_records.json` or `config.yaml` over 16 MiB is no valid / not read. HA's prefixes (`config/config.yaml`) replace this
    device's when they differ and the entry names the configuration folder (item 5; `headscale.prefixes-replaced`, confirm); without
@@ -2615,8 +2617,10 @@ read-only configuration folder, the one mounted at `/etc/headscale`, as its one 
    Headscale makes one), `config/dns_records.json` (a JSON array of at most 10000 `{name, type, value}` strings; any other: not
    moved, an empty list is written, `headscale.dns-records-invalid`, confirm), `config/config.yaml` (plain keys only, for the
    checks); never Headplane's data, API key, cookie secret, options or the image.
-3. The sandboxed child reads HA's database (integrity, tables, no trigger or view, counts, version, migrations, node addresses)
-   and, for the conversion, replaces HA's `api_keys` rows by the rows of an integrity-checked copy of the live database (taken from
+3. The sandboxed child reads HA's database (integrity, ordinary tables, trigger and view names, counts, version, migrations,
+   node addresses). During conversion it drops confirmed extra triggers, views and ordinary tables in a transaction on its
+   own copy; the live database's table names and Headscale's known table names are retained, and the converted database's
+   schema is checked again after the write. Then it replaces HA's `api_keys` rows by the rows of an integrity-checked copy of the live database (taken from
    the live volume's export while it runs; read again, up to three times, when it was being written, HS-24/26/29; a Headscale that
    never ran is started once so that it makes one and put back, HS-27), in one transaction, then requires a completed WAL
    checkpoint and independently reopens the output, original and live copies to verify integrity, table counts (SQLite's own

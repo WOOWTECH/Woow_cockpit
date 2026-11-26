@@ -1,5 +1,5 @@
 """The sandboxed SQLite child of the batch 1 importers (hasqlite.py): reads only ordinary tables, answers per database,
-writes only Headscale's API keys, and what it wrote is copied out without following anything (CONTRACT section 9,
+writes only Headscale's checked schema cleanup, API keys and policies, and what it wrote is copied out without following anything (CONTRACT section 9,
 section 10 rule 18). Team E2."""
 import os
 import re
@@ -389,6 +389,72 @@ class PolicyTests(unittest.TestCase):
 
     def test_the_capability_is_announced(self):
         self.assertIs(hasqlite.COPY_POLICIES, True)
+
+
+class StripExtraTests(unittest.TestCase):
+    """HS-15: no SQL from an HA archive is used as a statement; a checked identifier can only be dropped on a copy."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        (self.root / 'out').mkdir()
+        headscale_db(self.root / 'ha', prefixes=['ha'])
+        headscale_db(self.root / 'live', prefixes=['mine'])
+
+    def test_quoted_extra_name_is_dropped_without_executing_it_or_a_trigger(self):
+        with sqlite3.connect(self.root / 'ha') as conn:
+            conn.executescript('''
+                CREATE TABLE "odd; DROP TABLE users; --"(id integer);
+                CREATE VIEW extra_view AS SELECT id FROM "odd; DROP TABLE users; --";
+                CREATE TRIGGER extra_trigger AFTER DELETE ON api_keys
+                  BEGIN DELETE FROM users; END;
+            ''')
+        answers = hasqlite.run([
+            {'db': 'live.sqlite', 'check': 'integrity'},
+            {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': ['users'],
+             'strip_extra_from': 'live.sqlite', 'keep_tables': ['sqlite_sequence'],
+             'replace_api_keys_from': 'live.sqlite'}],
+            {'ha.sqlite': self.root / 'ha', 'live.sqlite': self.root / 'live'},
+            self.root / 'work', outputs=('ha.sqlite',), out_dir=self.root / 'out')
+        answer = answers['ha.sqlite']
+        self.assertIsNone(hasqlite.problem(answer))
+        self.assertEqual(answer['removed'], {'tables': ['odd; DROP TABLE users; --'],
+                                             'views': ['extra_view'], 'triggers': ['extra_trigger']})
+        with sqlite3.connect(answers[None]['ha.sqlite']) as conn:
+            self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)])
+            self.assertEqual(conn.execute('SELECT prefix FROM api_keys').fetchall(), [('mine',)])
+            self.assertFalse({r[0] for r in conn.execute('SELECT name FROM sqlite_master')}
+                             & {'odd; DROP TABLE users; --', 'extra_view', 'extra_trigger'})
+        with sqlite3.connect(self.root / 'ha') as conn:
+            self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)])
+            self.assertEqual(conn.execute('SELECT prefix FROM api_keys').fetchall(), [('ha',)])
+
+    def test_the_strip_source_must_be_a_different_copied_database(self):
+        for source in ('ha.sqlite', 'not-copied.sqlite'):
+            with self.subTest(source=source), self.assertRaises(BackupError):
+                hasqlite.run([{'db': 'ha.sqlite', 'strip_extra_from': source}],
+                             {'ha.sqlite': self.root / 'ha'}, self.root / 'work')
+
+    def test_a_wal_backup_is_checkpointed_after_a_schema_object_is_removed(self):
+        path = self.root / 'ha-wal'
+        conn = headscale_db(path, prefixes=['ha'], wal=True)
+        try:
+            conn.execute('CREATE TABLE foreign_table(id integer)')
+            conn.commit()
+            wal = self.root / 'ha-wal-wal'
+            self.assertTrue(wal.is_file())
+            answers = hasqlite.run([
+                {'db': 'ha.sqlite', 'check': 'integrity', 'strip_extra_from': 'live.sqlite'}],
+                {'ha.sqlite': path, 'ha.sqlite-wal': wal, 'live.sqlite': self.root / 'live'},
+                self.root / 'work', outputs=('ha.sqlite',), out_dir=self.root / 'out')
+            self.assertIsNone(hasqlite.problem(answers['ha.sqlite']))
+            with sqlite3.connect(answers[None]['ha.sqlite']) as converted:
+                self.assertFalse(converted.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='foreign_table'").fetchall())
+                self.assertEqual(converted.execute('SELECT name FROM users').fetchall(), [('alice',)])
+        finally:
+            conn.close()
 
 
 if __name__ == '__main__':

@@ -340,7 +340,6 @@ class CheckTests(HeadscaleCase):
     def test_what_makes_the_data_unusable_stops_only_headscale(self):
         cases = (
             ({'version': '0.1.0'}, 'version.different', 'HA 的 Headscale 是 0.29.3'),   # wave 2 (HS-12): unchanged
-            ({'db': database(prefixes=[], trigger=True)}, 'headscale.db-extra-objects', '觸發程序'),   # HS-15
             ({'db': b'SQLite format 3\x00' + b'\xff' * 4000}, 'headscale.db-unusable', '已損毀'))   # HS-14
         for kwargs, issue_id, words in cases:
             with self.subTest(issue=issue_id):
@@ -449,13 +448,67 @@ class DatabaseTests(HeadscaleCase):
             conn.close()
             return path.read_bytes()
         self.world.live_db = with_table('newer_table')   # a newer Headscale of this device has a table the constant does not know
-        same = self.checked(self.upload_headscale(db=with_table('newer_table')))
+        same_id = self.upload_headscale(db=with_table('newer_table'))
+        same = self.checked(same_id)
         self.assertEqual((same['importable'], same['ok']), (True, True), same['issues'])
+        self.convert(same_id, ['headscale'])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'db.sqlite'
+            path.write_bytes(self.volume('headscale-data')['db.sqlite'][1])
+            with sqlite3.connect(path) as conn:
+                self.assertEqual(conn.execute("SELECT name FROM sqlite_master WHERE name='newer_table'").fetchone(),
+                                 ('newer_table',))
         other = self.checked(self.upload_headscale(db=with_table('foreign_table')))
-        self.assertFalse(other['importable'])
-        line = self.issues(other, 'stop')['headscale.db-extra-objects']
-        self.assertEqual(line['items'], ['foreign_table'])
-        self.assertTrue(line['action'])
+        self.assertTrue(other['importable'])
+        line = self.issues(other, 'confirm')['headscale.db-extra-objects']
+        self.assertEqual(line['items'], ['資料表：foreign_table'])
+
+    def test_extra_table_trigger_and_view_are_confirmed_then_removed_before_keys_are_replaced(self):   # HS-15
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'ha.sqlite'
+            with sqlite3.connect(path) as conn:
+                populate(conn, prefixes=['ha'])
+                conn.executescript("""
+                    CREATE TABLE foreign_table(id integer, note text);
+                    INSERT INTO foreign_table VALUES (1, 'keep only in the original backup');
+                    CREATE VIEW foreign_view AS SELECT note FROM foreign_table;
+                    CREATE TRIGGER foreign_trigger AFTER DELETE ON api_keys
+                      BEGIN INSERT INTO users(name) VALUES ('trigger-ran'); END;
+                """)
+                conn.execute('ANALYZE')
+                self.assertTrue(conn.execute(
+                    "SELECT 1 FROM sqlite_stat1 WHERE tbl='foreign_table'").fetchall())
+            ha_id = self.upload_headscale(db=path.read_bytes())
+        checked = self.checked(ha_id)
+        self.assertTrue(checked['importable'], checked['issues'])
+        line = self.issues(checked, 'confirm')['headscale.db-extra-objects']
+        self.assertEqual(set(line['items']), {'資料表：foreign_table', '觸發程序：foreign_trigger',
+                                              '檢視表：foreign_view'})
+        self.refused(ha_id, 'confirmation-required')
+        self.convert(ha_id, ['headscale'], acknowledged={'headscale': self.confirmations(checked)})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'converted.sqlite'
+            path.write_bytes(self.volume('headscale-data')['db.sqlite'][1])
+            with sqlite3.connect(path) as conn:
+                names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master")}
+                self.assertFalse(names & {'foreign_table', 'foreign_view', 'foreign_trigger'})
+                self.assertFalse(conn.execute("SELECT 1 FROM sqlite_stat1 WHERE tbl='foreign_table'").fetchall())
+                self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)])
+                self.assertEqual(conn.execute('SELECT prefix FROM api_keys ORDER BY id').fetchall(),
+                                 [('live-headplane',), ('live-mcp',)])
+
+    def test_sqlites_own_analyze_statistics_are_not_an_extra_headscale_table(self):   # HS-15
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'ha.sqlite'
+            with sqlite3.connect(path) as conn:
+                populate(conn, prefixes=['ha'])
+                conn.execute('ANALYZE')
+                self.assertIn(('sqlite_stat1',), conn.execute(
+                    "SELECT name FROM sqlite_master WHERE name='sqlite_stat1'").fetchall())
+            ha_id = self.upload_headscale(db=path.read_bytes())
+        checked = self.checked(ha_id)
+        self.assertTrue(checked['importable'], checked['issues'])
+        self.assertNotIn('headscale.db-extra-objects', self.issues(checked))
 
     def test_a_backup_that_does_not_fit_stops_the_whole_job(self):   # HS-02: no size cap, the free space is still the limit
         ha_id = self.upload_headscale()

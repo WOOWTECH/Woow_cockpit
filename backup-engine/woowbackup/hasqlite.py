@@ -18,7 +18,8 @@ never runs those views (verified 2026-11-23 with SQLite 3.45.1). A database that
 itself.
 
 A spec is {db: name, check: 'quick'|'integrity'|None, schema: bool, counts: [table], queries: [QUERIES key],
-replace_api_keys_from: name|None, replace_policies_from: name|None}. The only writes are Headscale's API keys and its access
+replace_api_keys_from: name|None, replace_policies_from: name|None, strip_extra_from: name|None,
+keep_tables: [table]}. The writes are Headscale's extra schema objects, API keys and its access
 policies (the second, S3: a policy of this device's own database is kept when HA's database comes): the target database's
 `policies` rows are replaced by those of the source database in the same way as the API keys (same columns required, at most
 1000 rows, one transaction, WAL truncated). The target database's `api_keys` rows are
@@ -124,9 +125,11 @@ def layout(conn):
                and re.match(r"^\s*CREATE" + gap + r"VIRTUAL" + gap + r"TABLE\b", q, re.I)]
     tables = sorted(n for n, k, q in rows if k == "table" and isinstance(n, str) and n not in virtual
                     and not any(n.startswith(v + "_") for v in virtual))
+    view_names = sorted(str(n) for n, k, _q in rows if k == "view")
+    trigger_names = sorted(str(n) for n, k, _q in rows if k == "trigger")
     return {"tables": tables, "virtual": sorted(str(v) for v in virtual),
-            "views": sum(1 for _n, k, _q in rows if k == "view"),
-            "triggers": sum(1 for _n, k, _q in rows if k == "trigger")}
+            "views": len(view_names), "view_names": view_names,
+            "triggers": len(trigger_names), "trigger_names": trigger_names}
 # Exact upstream Hermes FTS5 layouts; no tokenizer or content source is supplied by the archive.
 HERMES_FTS = {
     "messages_fts": {
@@ -179,6 +182,44 @@ def policies(conn, info):
         raise ValueError("policies table has columns this reader does not know")
     rows = conn.execute("SELECT %s FROM policies ORDER BY id LIMIT 1001" % ", ".join('"%s"' % n for n in names)).fetchall()
     return names, rows
+def identifier(name):
+    if not isinstance(name, str) or not name or len(name) > 512 or "\x00" in name:
+        raise ValueError("unsafe schema object name")
+    return '"' + name.replace('"', '""') + '"'
+def strip_extra(conn, info, source, keep_tables):
+    other = connect(source)
+    try:
+        source_info = layout(other)
+        if source_info["virtual"] or source_info["triggers"] or source_info["views"]:
+            raise ValueError("this device's schema has unsupported objects")
+        if checked(other, "integrity") != ["ok"]:
+            raise ValueError("this device's database is damaged")
+    finally:
+        other.close()
+    extra_tables = sorted(set(info["tables"]) - set(source_info["tables"]) - set(keep_tables))
+    if info["virtual"] or len(extra_tables) + info["views"] + info["triggers"] > 1000:
+        raise ValueError("the archive's extra schema cannot be safely removed")
+    # Drop triggers before their tables; no archived trigger may run while API keys and policies are copied.
+    removed = {"tables": extra_tables, "views": info["view_names"], "triggers": info["trigger_names"]}
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for kind, names in (("TRIGGER", removed["triggers"]), ("VIEW", removed["views"]),
+                            ("TABLE", removed["tables"])):
+            for name in names:
+                conn.execute("DROP " + kind + " " + identifier(name))
+        after = layout(conn)
+        if (after["virtual"] or after["triggers"] or after["views"]
+                or set(after["tables"]) - set(source_info["tables"]) - set(keep_tables)):
+            raise ValueError("the archive's extra schema was not removed")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    checkpoint = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    if checkpoint is None or checkpoint[0] != 0 or checkpoint[1] != checkpoint[2]:
+        raise ValueError("WAL checkpoint did not complete")
+    return removed, after
 for spec in request["dbs"]:
     name = spec["db"]
     doc = {"db": name}
@@ -192,7 +233,7 @@ for spec in request["dbs"]:
             doc["check"] = checked(conn, spec["check"])
         if spec.get("schema"):
             doc["schema"] = info
-        if not spec.get("replace_api_keys_from") and not spec.get("replace_policies_from"):
+        if not spec.get("replace_api_keys_from") and not spec.get("replace_policies_from") and not spec.get("strip_extra_from"):
             conn.execute("PRAGMA query_only=ON")
         counts = {}
         for table in spec.get("counts") or []:
@@ -216,6 +257,12 @@ for spec in request["dbs"]:
                 values[key] = [[c if isinstance(c, (int, str)) else None for c in r] for r in rows]
         if spec.get("queries"):
             doc["values"] = values
+        strip_source = spec.get("strip_extra_from")
+        if strip_source:
+            removed, info = strip_extra(conn, info, strip_source, spec.get("keep_tables") or [])
+            doc["removed"] = removed
+            if spec.get("schema"):
+                doc["schema"] = info
         source = spec.get("replace_api_keys_from")
         if source:
             if info["triggers"] or info["views"]:
@@ -301,10 +348,16 @@ def _spec(spec, names):
     check = spec.get('check')
     source = spec.get('replace_api_keys_from')
     psource = spec.get('replace_policies_from')
+    strip_source = spec.get('strip_extra_from')
+    keep_tables = list(spec.get('keep_tables') or [])
     counts = list(spec.get('counts') or [])
     queries = list(spec.get('queries') or [])
     if (check not in (None, 'quick', 'integrity') or (source is not None and source not in names)
             or (psource is not None and (psource not in names or psource == spec['db'] or spec.get('hermes_fts')))
+            or (strip_source is not None and (strip_source not in names or strip_source == spec['db']
+                                              or spec.get('hermes_fts') or spec['db'] != 'ha.sqlite'))
+            or (strip_source is None and keep_tables)
+            or len(keep_tables) > 128 or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in keep_tables)
             or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in counts)
             or not all(q in QUERIES for q in queries)
             or (spec.get('hermes_fts', False) is not False and
@@ -313,6 +366,7 @@ def _spec(spec, names):
         raise BackupError('internal-error', 'SQLite 讀取要求的格式不正確。')
     return {'db': spec['db'], 'check': check, 'schema': spec.get('schema') is True, 'counts': counts,
             'queries': queries, 'replace_api_keys_from': source, 'replace_policies_from': psource,
+            'strip_extra_from': strip_source, 'keep_tables': keep_tables,
             'hermes_fts': spec.get('hermes_fts') is True}
 
 
