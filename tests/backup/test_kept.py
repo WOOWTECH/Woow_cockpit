@@ -7,6 +7,7 @@ import io
 import json
 import os
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -207,6 +208,22 @@ class KeptCopyFlowTests(ConvertedRestoreCase):
         self.assertEqual(result['kept']['woowbk-demo']['put_back'], [])
         self.assertEqual(len(result['kept']['woowbk-demo']['not_put_back']), 2)
         self.assertFalse(result['rolled_back'])
+
+    def test_a_required_put_back_failure_rolls_back_the_whole_cluster(self):
+        original = FakeAdapter.preflight
+
+        def required(adapter, *args, **kwargs):
+            checks = original(adapter, *args, **kwargs)
+            adapter._cold_ha_pg = adapter.app.postgres[0]
+            return checks
+
+        self.world.put_back_failed['woowbk-demo'] = [('grafana', '不能放回')]
+        with mock.patch.object(FakeAdapter, 'preflight', required):
+            with self.assertRaises(flows.RolledBack) as caught:
+                self.run_converted()
+        self.assertTrue(caught.exception.result['rolled_back'])
+        self.assertIn(('kept-volumes', 'woowbk-demo', ('pgdata',)), self.world.events)
+        self.assertEqual(self.world.data['woowbk-demo'], b'notes-v2-changed')
 
     def test_a_failed_restore_rolls_back_from_the_kept_copy_whole(self):
         self.world.fail_restore_after['woowbk-demo'] = 1
@@ -665,6 +682,87 @@ class KeptClusterTests(AdapterKeptCase):
         with self.assertRaises(BackupError) as caught:
             adapter._run_sql(container, 'notes', 'template1', 'CREATE ROLE b;\n')
         self.assertIn('沒有完整送達', caught.exception.message)
+        self.assertEqual(caught.exception.code, 'job-failed')
+
+
+class ColdOdooKeptTests(AdapterKeptCase):
+    """Odoo's installed catalog has only the cold PGDATA volume, so the logical PostgreSQL loop is empty."""
+
+    def setUp(self):
+        super().setUp()
+
+        def cold(entry):
+            entry['id'] = 'odoo'
+            entry['postgres'] = []
+            entry['volumes'].append({'name': 'woowbk-demo-pgdata', 'label': 'Odoo 資料庫'})
+            entry['verify'] = []
+            entry['config_files'] = []
+
+        self.app = self.make_app(cold)
+        self.owner = KeptOwner(instance=True)
+        self.owner.volumes['woowbk-demo-pgdata'] = VOLUME_TAR
+        self.owner.db['databases'] = {'notes', 'nextcloud', 'tmpl_custom'}
+        self.owner.db['roles'] = ['oc_admin', 'readonly']
+        self.adapter = self.converted()
+        self.live = types.SimpleNamespace(db_file='woowbk-demo-db.container', db_volume='woowbk-demo-pgdata',
+                                          db_container='woowbk-demo-db', db_user='notes')
+        patch = mock.patch('woowbackup.ha_odoo.Live', return_value=self.live)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def manifest(self):
+        return dict(super().manifest(), id='odoo', catalog_sha256=self.app.sha256)
+
+    def test_the_cold_volume_is_detected_and_confirmed_even_without_a_logical_postgres_item(self):
+        self.assertEqual(self.app.postgres, ())
+        checks = self.adapter.preflight(self.manifest(), mode='inplace')
+        self.assertIn('odoo/databases', {check['id'] for check in checks})
+        self.assertEqual(self.adapter.kept_wanted, ['cold-odoo'])
+        self.assertGreater(self.adapter.kept_estimate, 0)
+        (issue,) = self.adapter.restore_issues
+        self.assertEqual((issue.id, issue.level), ('restore.other-databases', 'confirm'))
+        self.assertIn('nextcloud', issue.names)
+        self.assertEqual(self.adapter.kept_pg_specs()[0]['data_volume'], 'woowbk-demo-pgdata')
+
+    def test_a_quadlet_volume_outside_the_catalog_refuses_before_restore(self):
+        self.live.db_volume = 'a-volume-not-in-the-catalog'
+        checks = self.adapter.preflight(self.manifest(), mode='inplace')
+        self.assertEqual([c['status'] for c in checks if c['id'] == 'odoo/cold-database'], ['fail'])
+        self.assertEqual(self.adapter.kept_wanted, [])
+
+    def test_the_copy_and_put_back_use_the_cold_service_even_though_the_catalog_has_no_postgres(self):
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        section, entries, info = self.adapter.keep_cluster(self.work)
+        self.assertEqual(section['volumes'][0]['name'], 'woowbk-demo-pgdata')
+        self.assertEqual(section['postgres'][0]['id'], 'cold-odoo')
+        self.assertIn('apps/odoo/volumes/woowbk-demo-pgdata.tar', {e.path for e in entries})
+        self.owner.reinit()
+        self.owner.units['woowbk-demo-db.service'] = 'active'
+        copy = kept.Kept('kept-copy', info)
+        result = {'kept': {'odoo': copy.view()}, 'warnings': []}
+        plan = types.SimpleNamespace(app=self.app, adapter=self.adapter)
+        kept.put_back(types.SimpleNamespace(log=lambda _message: None), [plan], {'odoo': copy}, result)
+        self.assertEqual(sorted(result['kept']['odoo']['put_back']), ['nextcloud', 'tmpl_custom'])
+        self.assertIn('nextcloud', self.owner.instance)
+
+    def test_a_logical_export_failure_refuses_before_the_old_volume_is_replaced(self):
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        with mock.patch.object(self.adapter, '_dump_instance', side_effect=BackupError('job-failed', '匯出失敗')):
+            with self.assertRaises(BackupError) as caught:
+                self.adapter.keep_cluster(self.work)
+        self.assertIn('已停止匯入', caught.exception.message)
+        self.assertFalse(self.adapter.kept_done)
+        self.assertNotIn('volume export', ' '.join(' '.join(a) for a in self.owner.argvs()))
+
+    def test_put_back_failure_is_fatal_so_the_restore_can_roll_back_the_whole_volume(self):
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        _section, _entries, info = self.adapter.keep_cluster(self.work)
+        copy = kept.Kept('kept-copy', info)
+        result = {'kept': {'odoo': copy.view()}, 'warnings': []}
+        plan = types.SimpleNamespace(app=self.app, adapter=self.adapter)
+        with mock.patch.object(self.adapter, 'put_back_databases', return_value=([], [('nextcloud', '不能放回')])):
+            with self.assertRaises(BackupError) as caught:
+                kept.put_back(types.SimpleNamespace(log=lambda _message: None), [plan], {'odoo': copy}, result)
         self.assertEqual(caught.exception.code, 'job-failed')
 
 

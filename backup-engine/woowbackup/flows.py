@@ -1373,6 +1373,7 @@ def run_restore(ctx, params):
                 result['timing'].append(timing)
                 if timing['unavailable_seconds'] is not None:
                     ctx.log(f'「{plan.app.name}」從停止到健康檢查通過共 {_seconds(timing["unavailable_seconds"])} 秒')
+            kept_copies.put_back(ctx, plans, kept_info, result)  # a required put-back can still roll back the whole cluster
         except BaseException as exc:  # noqa: BLE001 - includes termination signals
             for plan in touched:
                 _collect_warnings(result, plan.adapter)
@@ -1398,7 +1399,6 @@ def run_restore(ctx, params):
             _rollback(ctx, touched, result, staging, error, pending,
                       untouched=[plan for plan in plans if plan not in touched], handover=handover, kept_info=kept_info)
         result['changed'] = True
-        kept_copies.put_back(ctx, plans, kept_info, result)  # S4: the other databases of a kept service go back into the new one
         resume_paused(ctx, plans, result)  # D10: the services paused for the restore run again, the data is in place
         # The job succeeded: the host-directory copies its restore moved aside can go now, and only now. Recorded
         # first, so a job that dies while deleting them is reported as a finished restore (review L4).

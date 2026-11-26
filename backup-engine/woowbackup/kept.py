@@ -167,7 +167,8 @@ def put_back(ctx, plans, kept, result):
                                            f'它們仍在保留的完整複本 {copy.backup_id} 裡。')
             continue
         view = result['kept'][plan.app.id]
-        for pg in plan.app.postgres:
+        specs = getattr(plan.adapter, 'kept_pg_specs', None)
+        for pg in specs() if specs is not None else plan.app.postgres:
             dump = copy.logical.get(pg['id'])
             if dump is None:
                 continue
@@ -187,5 +188,8 @@ def put_back(ctx, plans, kept, result):
             if failed:
                 flows._add_warning(result, f'「{plan.app.name}」的其他資料庫沒有全部放回：{"、".join(name for name, _ in failed[:6])}；'
                                            f'它們仍在保留的完整複本 {copy.backup_id} 裡。')
+                if getattr(plan.adapter, '_cold_ha_pg', None) is pg:
+                    raise BackupError('job-failed', f'Odoo 的其他資料庫沒有全部放回：{"、".join(name for name, _ in failed[:6])}。'
+                                                    '已停止匯入並從完整複本回復原資料。', app=plan.app.id)
             if done:
                 ctx.log(f'已放回資料庫：{"、".join(done)}')

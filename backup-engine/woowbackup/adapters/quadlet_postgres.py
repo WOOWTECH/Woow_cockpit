@@ -493,6 +493,7 @@ class QuadletPostgresAdapter(Adapter):
         self.kept_wanted = []     # ids of the databases whose whole service the restore keeps a copy of first (S4)
         self.kept_estimate = 0    # bytes the kept copy takes (the volumes' export size)
         self.kept_done = False    # keep_cluster() made the copy: other databases cannot be lost any more
+        self._cold_ha_pg = None    # Odoo's catalog lists its PostgreSQL cluster as a volume, not a logical postgres item
         self._own_noted = []      # the app's own units the last writers_hook() call listed as stopped
         self.digest_results = []  # per digest check of the last restore: CONTRACT section 7 `verification[].checks`
         self.unstable_digests = []  # digest checks the last backup dropped because two reads differed (H2, F3)
@@ -674,6 +675,28 @@ class QuadletPostgresAdapter(Adapter):
 
     def _read_owner_quadlets(self):
         return {name: self.runner.read_file(self.qrel(name), MAX_QUADLET_BYTES) for name in self.app.quadlet_files}
+
+    def kept_pg_specs(self):
+        """Trusted database services whose other databases an HA restore must preserve.
+
+        Cold Odoo declares the whole PGDATA volume in the catalog and has no logical PostgreSQL item. Its database
+        service is derived from the installed Quadlets, never from the archive, so it cannot silently bypass S4.
+        """
+        return [*self.app.postgres, *([self._cold_ha_pg] if self._cold_ha_pg is not None else [])]
+
+    def _cold_odoo_pg(self, sources):
+        if not (self.ha_import and self.app.id == 'odoo' and not self.app.postgres):
+            return None
+        from .. import ha_odoo
+        live = ha_odoo.Live(sources, self.runner.home, self.runner.read_file)
+        unit = quadlet_unit(live.db_file)
+        if unit not in self.app.units or live.db_volume not in {v['name'] for v in self.app.volumes}:
+            raise BackupError('incompatible', '這台 Odoo 的資料庫服務或資料卷與應用目錄不一致；為避免覆蓋其他資料庫，已停止匯入。',
+                              app=self.app.id)
+        # template1 is created by every PostgreSQL cluster, even when the maintenance database postgres was dropped.
+        # The new cluster's own Odoo database already exists at put-back time and is never overwritten.
+        return {'id': 'cold-odoo', 'unit': unit, 'container': live.db_container, 'user': live.db_user,
+                'database': 'template1', 'data_volume': live.db_volume, 'scope': 'database'}
 
     def read_templates(self):
         """Trusted templates read by root from the root-owned template dir (never from an archive)."""
@@ -2511,7 +2534,7 @@ class QuadletPostgresAdapter(Adapter):
         checks = []
         seen = {}
         self.restore_issues = []
-        self.kept_wanted, self.kept_estimate = [], 0
+        self.kept_wanted, self.kept_estimate, self._cold_ha_pg = [], 0, None
 
         def add(check_id, status, message):
             seen[check_id] = seen.get(check_id, 0) + 1
@@ -2570,6 +2593,11 @@ class QuadletPostgresAdapter(Adapter):
                 sources = self._read_owner_quadlets()
             except BackupError as error:
                 add('quadlet', 'fail', error.message)
+            if sources is not None:
+                try:
+                    self._cold_ha_pg = self._cold_odoo_pg(sources)
+                except BackupError as error:
+                    add('cold-database', 'fail', error.message)
             if self.runtime_ready():
                 states = self.unit_states(app.units)
                 lost = [u for u in app.units if states[u].get('LoadState') in ('not-found', 'error', 'bad-setting')]
@@ -2623,6 +2651,13 @@ class QuadletPostgresAdapter(Adapter):
                     elif objects:
                         add('maintenance-db', 'warn', f'資料庫執行個體的 postgres 資料庫中有 {objects} 個資料表、函式或擴充功能'
                                                       '（例如排程工作）；原位還原會重建整個資料庫資料卷，這些內容不會保留。')
+                if self._cold_ha_pg is not None and not lost:
+                    pg = self._cold_ha_pg
+                    running = states[pg['unit']].get('ActiveState') == 'active'
+                    found = self.undeclared(pg) if running else None
+                    # The current Odoo database is among these names because cold catalogs do not declare it. Keeping
+                    # the whole service is deliberate: the restore rebuilds the entire cluster, including other roles.
+                    self._preflight_other_databases(pg, found, add, running=running, cold=True)
             add('safety', 'ok', '還原前會先建立並驗證此應用的還原前備份；失敗時會自動回復。')
             if self.http_specs() and not self.digest_specs():
                 # The safety backup keeps the units stopped for the restore, so its http-json snapshot cannot be
@@ -2649,7 +2684,7 @@ class QuadletPostgresAdapter(Adapter):
         self._preflight_space(app_manifest, entry_sizes, add, mode=mode)
         return checks
 
-    def _preflight_other_databases(self, pg, found, add, *, running=True):
+    def _preflight_other_databases(self, pg, found, add, *, running=True, cold=False):
         """S4: the database service of `pg` holds databases the app does not declare, or cannot be listed (`found` None: it
         cannot be asked, because it is not running or does not answer). The restore keeps a copy of the whole service
         (`keep_cluster`) and puts them back; this is the line of the confirmation, and the check that says how much space the
@@ -2668,6 +2703,10 @@ class QuadletPostgresAdapter(Adapter):
         elif found is None:
             add('databases', 'warn', f'無法列出資料庫 {pg["id"]} 執行個體中的資料庫與角色；為免遺失資料，匯入前會先存整個資料庫服務的完整複本。')
             text = KEPT_UNKNOWN_TEXT
+        elif cold:
+            add('databases', 'warn', f'Odoo 使用整個資料庫資料卷；匯入會重建資料庫服務。匯入前會保存完整複本，'
+                                     f'匯入後將新叢集沒有的資料庫自動放回（目前有：{", ".join(names[:10]) or "無法列出名稱"}）。')
+            text = KEPT_TEXT
         else:
             add('databases', 'warn', f'資料庫執行個體中還有應用設定未宣告的資料庫：{", ".join(names[:10])}；匯入前會先存整個資料庫服務的完整複本，'
                                      '匯入後再自動放回。')
@@ -3216,7 +3255,7 @@ class QuadletPostgresAdapter(Adapter):
         work = Path(work)
         for sub in ('postgres', 'volumes'):
             (work / sub).mkdir(mode=0o700, parents=True, exist_ok=True)
-        wanted = [pg for pg in app.postgres if pg['id'] in self.kept_wanted]
+        wanted = [pg for pg in self.kept_pg_specs() if pg['id'] in self.kept_wanted]
         if not wanted:
             raise BackupError('internal-error', '沒有需要保留完整複本的資料庫。', app=app.id)
         states = self.unit_states(app.units)
@@ -3251,6 +3290,11 @@ class QuadletPostgresAdapter(Adapter):
             try:
                 dump = self._dump_instance(pg, work)
             except BackupError as error:
+                if pg is self._cold_ha_pg:
+                    # A physical copy alone cannot meet H4: no other database would be online after the import.
+                    # Refuse before the old data volume is touched; the safety backup still protects the app.
+                    raise BackupError('incompatible', f'Odoo 資料庫無法逐一匯出，無法保證匯入後自動放回其他資料庫：'
+                                                      f'{error.message.rstrip("。")}。已停止匯入，原資料未被覆蓋。', app=app.id) from None
                 note = (f'資料庫 {pg["id"]} 的其他資料庫無法逐一匯出（{error.message.rstrip("。")}）；已保留整個資料庫服務的完整複本，'
                         '但匯入後不會自動放回，需要時請從完整複本取出。')
                 self.log(f'注意：{note}')
@@ -3429,7 +3473,7 @@ class QuadletPostgresAdapter(Adapter):
             self.runner.systemctl('unmask', '--', *units, timeout=SHORT_TIMEOUT, check=check)
 
     def _refuse_undeclared_databases(self, unchecked_ok=False):
-        for pg in self.app.postgres:
+        for pg in self.kept_pg_specs():
             if self.kept_done and pg['id'] in self.kept_wanted:
                 continue  # S4: a copy of the whole service was kept (keep_cluster): nothing in it can be lost any more
             if pg['scope'] == 'instance':
