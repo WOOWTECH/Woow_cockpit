@@ -3243,6 +3243,11 @@ class QuadletPostgresAdapter(Adapter):
                     continue
                 self._recreate_secret(secret['name'], files['secrets'][secret['name']])
             for config in app.config_files:
+                if ha_databases:
+                    # These files can supply live DB URLs/passwords or _FILE values. The retained roles and secrets
+                    # must keep the same current config, including rotations since conversion. HA LiteLLM salt is
+                    # carried separately as its declared Podman secret above.
+                    continue
                 with open(files['config'][config['path']], 'rb') as handle:
                     self.runner.write_file(config['path'], handle, config['mode'])
                 self.log(f'已寫入設定檔 ~/{config["path"]}')

@@ -11,3 +11,5 @@ Fresh HA restore explicitly uses the full conversion-time instance snapshot (rol
 No flows.py/kept.py contract change is needed. No host install, host container/service command, real-device change, or real acceptance claim in this patch.
 
 Selective HA inplace import also retains current declared application secrets so a database password rotated after conversion still matches the retained live roles. LiteLLM's salt is the exception: it is replaced with HA's salt because it encrypts the imported rows. Fresh restores and ordinary restores keep their existing archived-secret behavior.
+
+The same selective boundary retains every current declared config file: EnvironmentFile entries, database URLs and referenced password files must keep matching those live roles. LiteLLM's HA salt remains a separate declared secret replacement. Fresh, ordinary and safety rollback restore config files from their respective full snapshots as before.

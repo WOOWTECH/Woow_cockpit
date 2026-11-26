@@ -156,6 +156,7 @@ class HaInstanceTests(StrengthCase):
         self.owner.roles['oc_admin']['password'] = hashlib.sha256(b'rotated').hexdigest()
         self.owner.roles['notes']['password'] = hashlib.sha256(b'rotated-bootstrap').hexdigest()
         self.owner.secrets['woowbk-demo-db-password'] = b'rotated-device-database-password'
+        self.owner.files[f'.config/{self.app_id}/app.env'] = b'DB_PASSWORD=rotated-device-database-password\n'
         if self.app_id == 'litellm':
             self.owner.secrets['litellm-salt-key'] = b'rotated-device-salt'
         self.owner.roles['new_owner'] = {'superuser': False, 'login': True, 'password': 'new-password-hash'}
@@ -180,6 +181,7 @@ class HaInstanceTests(StrengthCase):
         self.later_changes()
         outside = {n: copy.deepcopy(v) for n, v in self.owner.instance.items() if n != self.application_database}
         roles = copy.deepcopy(self.owner.roles)
+        config = self.owner.files[f'.config/{self.app_id}/app.env']
         secrets = copy.deepcopy(self.owner.secrets)
         if self.app_id == 'litellm':
             secrets['litellm-salt-key'] = b'HA salt fixture'
@@ -187,6 +189,8 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual({n: v for n, v in self.owner.instance.items() if n != self.application_database}, outside)
         self.assertEqual(self.owner.roles, roles)
         self.assertEqual(self.owner.secrets, secrets)
+        self.assertEqual(self.owner.files[f'.config/{self.app_id}/app.env'], config,
+                         'retained live role passwords must keep their current environment/password files')
         self.assertEqual(self.owner.instance[self.application_database]['data'], b'HA rows')
         self.assertEqual(self.owner.instance[self.application_database]['owner'], 'new_owner')
         self.assertEqual(self.owner.dropped, [self.application_database])
@@ -212,6 +216,7 @@ class HaInstanceTests(StrengthCase):
 
     def test_fresh_restore_uses_the_explicit_complete_snapshot_in_a_new_cluster(self):
         manifest, folder, _entries = self.converted()
+        config = self.owner.files[f'.config/{self.app_id}/app.env']
         original = copy.deepcopy(self.owner.instance)
         roles = copy.deepcopy(self.owner.roles)
         self.later_changes()
@@ -225,10 +230,12 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual(self.owner.instance[self.application_database]['data'], b'HA rows')
         self.assertEqual(self.owner.instance[self.application_database]['owner'], original[self.application_database]['owner'])
         self.assertEqual(self.owner.roles, roles)
+        self.assertEqual(self.owner.files[f'.config/{self.app_id}/app.env'], config)
         self.assertTrue(self.owner.applied_globals)
 
     def test_ordinary_restore_keeps_its_full_instance_semantics(self):
         manifest, folder, _entries = self.converted()
+        config = self.owner.files[f'.config/{self.app_id}/app.env']
         original = copy.deepcopy(self.owner.instance)
         roles = copy.deepcopy(self.owner.roles)
         self.later_changes()
@@ -237,6 +244,7 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual(set(self.owner.instance), set(original))
         self.assertEqual(self.owner.instance['nextcloud'], original['nextcloud'])
         self.assertEqual(self.owner.roles, roles)
+        self.assertEqual(self.owner.files[f'.config/{self.app_id}/app.env'], config)
 
     def test_bad_markers_are_refused_before_any_owner_command(self):
         manifest, folder, _entries = self.converted()
@@ -260,6 +268,7 @@ class HaInstanceTests(StrengthCase):
         self.later_changes()
         original, roles = copy.deepcopy(self.owner.instance), copy.deepcopy(self.owner.roles)
         original_secrets = copy.deepcopy(self.owner.secrets)
+        original_config = self.owner.files[f'.config/{self.app_id}/app.env']
         storage, keys, archive = FakeStorage(self.root / 'storage'), FakeKeys(self.root), FakeArchive()
         storage.ensure_layout()
         adapters = []
@@ -289,6 +298,8 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual(self.owner.instance, original)
         self.assertEqual(self.owner.roles, roles)
         self.assertEqual(self.owner.secrets, original_secrets)
+        self.assertEqual(self.owner.files[f'.config/{self.app_id}/app.env'], original_config,
+                         'full current safety rollback restores the current authentication config too')
         safety = [w['manifest']['apps'][0] for w in archive.writes if w['manifest']['type'] == 'safety']
         self.assertTrue(safety)
         self.assertNotIn('ha_database', safety[-1]['postgres'][0])
