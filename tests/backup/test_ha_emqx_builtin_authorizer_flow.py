@@ -138,6 +138,16 @@ class BuiltinProductFlowTests(unittest.TestCase):
         self.assertEqual(transport.running_config['authorization']['no_match'], 'allow')
         self.assertEqual(transport.restore['authorization']['no_match'], 'allow')
 
+    def test_ha_disabled_source_stays_disabled_if_the_import_left_it_enabled(self):
+        """A successful data import can leave a source's old enable flag; HA's reading decides the final flag."""
+        transport = flow.Transport()
+        readings = flow.ha_readings(authz=[{'type': 'file', 'enable': False}])
+        self.invoke(transport, readings=readings)
+        sources = transport.running_config['authorization']['sources']
+        self.assertEqual(sources, [{'type': 'file', 'enable': False,
+                                    'path': '/opt/emqx/data/authz/acl.conf'}])
+        self.assertEqual(transport.restore['authorization']['sources'], sources)
+
     def test_an_authorization_that_does_not_become_ha_s_stops_the_app(self):
         """E-80: right after applying it, the setting must really be HA's."""
         class Ignores(flow.Transport):
@@ -148,8 +158,11 @@ class BuiltinProductFlowTests(unittest.TestCase):
                 if command[:4] == ['emqx', 'ctl', 'conf', 'load']:
                     self.running_config['authorization']['no_match'] = 'deny'   # the load did not take
                 return result
-        with self.assertRaises(BackupError):
+        with self.assertRaises(BackupError) as caught:
             self.invoke(Ignores())
+        self.assertEqual(caught.exception.code, 'incompatible',
+                         'the apply step must stop before later candidate checks')
+        self.assertIn('帳號驗證或授權沒有成為 HA 的設定', caught.exception.message)
 
     def test_a_ha_without_any_authenticator_is_an_explicit_empty_list(self):
         """D5: left alone, the merge would keep this device's authenticators and nobody could reach HA's open broker."""
