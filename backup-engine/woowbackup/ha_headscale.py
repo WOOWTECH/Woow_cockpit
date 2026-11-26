@@ -128,6 +128,7 @@ ISSUES = {
 class Source:
     def __init__(self):
         self.addon = None
+        self.report = None
         self.db = None           # staged path
         self.wal = None
         self.noise = None        # the key text (masked); '' when there is none that can be used
@@ -207,6 +208,7 @@ def scan_member(stream, report, staging, *, checkpoint=None):
                 continue
             src.config = hacommon.scalars(entry.read_all(MAX_SMALL).decode('utf-8', 'replace'), max_bytes=MAX_SMALL)
     src.addon = report.addon
+    src.report = report
     return src
 
 
@@ -681,7 +683,7 @@ def _read_live(work, app, target, staging, config, *, key=False):
 
 def _pass(work, staging):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)
     with work.open(member) as stream:
         src = scan_member(stream, report, staging, checkpoint=work.checkpoint)
     for note in report.warnings():
@@ -713,6 +715,7 @@ def check(work, app):
     staging = work.staging / 'headscale-work'
     staging.mkdir(mode=0o700)
     src = _pass(work, staging)
+    sink.skipped(src.report)   # the selected HA entries the reader left out are shown before import
     work.phase('check')
     answer = None
     if src.db is not None:
@@ -737,6 +740,7 @@ def convert(work, app, test_mode, out_dir):
     staging.mkdir(mode=0o700)
     (out_dir / 'volumes').mkdir(mode=0o700, parents=True, exist_ok=True)
     src = _pass(work, staging)
+    sink.skipped(src.report)   # a changed skip list needs confirmation before the converted data is written
     work.phase('convert')
     addon = work.addon_info(SLUG)
     ha_answer = None

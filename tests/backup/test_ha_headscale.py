@@ -312,6 +312,19 @@ class HeadscaleCase(fk.ConversionCase):
 
 
 class CheckTests(HeadscaleCase):
+    def test_an_unusable_selected_link_is_named_before_import_and_needs_the_same_confirmation_in_conversion(self):
+        name = 'config/dns_records.json'
+        ha_id = self.upload_headscale(records=None, extra=({'name': name, 'type': 'symlink',
+                                                              'linkname': '../missing-records'},))
+        checked = self.checked(ha_id)
+        line = self.issues(checked, 'confirm')['files.skipped']
+        self.assertTrue(checked['importable'])
+        self.assertEqual(line['items'], [name])
+        self.refused(ha_id, 'confirmation-required')
+        converted = self.convert(ha_id, ['headscale'], acknowledged={'headscale': self.confirmations(checked)})
+        self.assertEqual(converted['results'][0]['status'], 'converted')
+        self.assertEqual(self.volume('headscale-data')['extra_records.json'][1], b'[]')
+
     def test_a_clean_backup(self):
         result = self.checked(self.upload_headscale())
         self.assertEqual((result['ok'], result['importable'], result['blockers'], result['target_version']), (True, True, [], '0.29.4'))

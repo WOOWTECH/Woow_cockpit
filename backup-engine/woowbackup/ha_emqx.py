@@ -266,6 +266,7 @@ PLAIN_EXPR = ('Lw = fun(X) when is_list(X) -> X; (X) when is_map(X) -> [X]; (_) 
 class Source:
     def __init__(self):
         self.addon = None
+        self.report = None
         self.node_file = None
         self.node_dirs = set()
         self.node_written = {}   # node dir -> the latest modification time of anything in it (E-07: the last written one)
@@ -324,6 +325,7 @@ def scan_member(stream, report, out=None, *, checkpoint=None):
         if out is not None:
             out.add_entry(rel, entry, mode=0o600 if parts[0] == 'certs' else 0o644, uid=0, gid=0)
     src.addon = report.addon
+    src.report = report
     return src
 
 
@@ -2735,7 +2737,7 @@ def read_device(work, app, target):
 
 def member_pass(work, tmp):
     member = work.addon_member(SLUG)
-    report = habackup.Report()
+    report = habackup.Report(names=haissues.Names)
     holder = {}
 
     def produce(out):
@@ -2981,6 +2983,8 @@ def _build_candidate(work, app, tmp, target, staging, *, version, src=None, node
     if src is None:
         stage('member_pass')
         src = member_pass(work, tmp)
+    if getattr(src, 'report', None) is not None:
+        sink.skipped(src.report)   # selected HA entries left out by the reader need the same confirmation in both passes
     work.phase(phase)
     stage('node_name')
     if node is None:

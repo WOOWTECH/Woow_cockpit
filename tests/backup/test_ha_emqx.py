@@ -62,7 +62,7 @@ SEED = {'emqx_authn_mnesia': 1, 'emqx_authn_scram_mnesia': 0, 'emqx_acl': 0, 'em
         'emqx_admin': 1, 'emqx_app': 0, 'emqx_psk': 0, 'emqx_retainer_message': 0}
 
 
-def addon_tar(*, version='5.9.1', node_file=NODE, nodes=(NODE,), state='started'):
+def addon_tar(*, version='5.9.1', node_file=NODE, nodes=(NODE,), state='started', extra=()):
     addon = {'user': {'version': version, 'image': '1b7b4ce7/amd64-addon-woow-emqx',
                       'options': {'ngrok_authtoken': 'ha-ngrok-secret'}},
              'system': {'slug': 'woow-emqx', 'name': 'Woow EMQX'}, 'version': version, 'state': state}
@@ -89,7 +89,7 @@ def addon_tar(*, version='5.9.1', node_file=NODE, nodes=(NODE,), state='started'
                 {'name': 'data/emqx/plugins/my_plugin-1.0.0/x.beam', 'data': b'code'},
                 {'name': 'config', 'type': 'dir'}, {'name': 'config/log', 'type': 'dir'},
                 {'name': 'config/log/emqx.log.1', 'data': b'log'}]
-    return gzip.compress(hx.tar_bytes(entries), mtime=0)
+    return gzip.compress(hx.tar_bytes(entries + list(extra)), mtime=0)
 
 
 def counts_text(counts):
@@ -337,6 +337,22 @@ def ids(result, level=None):
 
 
 class CheckTests(EmqxCase):
+    def test_a_selected_special_entry_is_named_in_the_one_confirmation_and_checked_again_at_conversion(self):
+        name = 'data/emqx/data/certs/unmovable.pipe'
+        ha_id = self.upload_emqx(extra=({'name': name, 'type': 'fifo'},))
+        checked = self.check(ha_id, ['emqx'])[0]
+        lines = [issue for issue in checked['issues'] if issue['id'] == 'files.skipped']
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]['level'], 'confirm')
+        self.assertEqual(lines[0]['items'], [name])
+        self.world.again()
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(ha_id, acknowledged=[])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.world.again()
+        converted = self.internal_candidate(ha_id, acknowledged=[lines[0]['key']])
+        self.assertIn('files.skipped', [issue.id for issue in converted['issues']])
+
     def test_a_clean_backup(self):
         """A clean backup is importable with nothing to confirm; this device's authorization is no longer judged (D0)."""
         result = self.check(self.upload_emqx(), ['emqx'])[0]
