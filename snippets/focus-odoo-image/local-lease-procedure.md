@@ -34,7 +34,20 @@ Root-protected proof root is a NEW `/var/lib/woowbk-odoo-pg16-proof-20261127-od2
 6. Remove only the proof's uniquely named smoke container in its new store (intent exists before run); assert target containers/volumes empty; re-inspect source and compare all fixed fields exactly; record public result.json and remaining free bytes. No original volumes/images/baselines are deleted. Keep proof artifacts/new stores for coordinator review and ONLY lease-scoped cleanup afterward.
 
 Expected public result: exact pinned config/arch/ref, official config+each ordered uncompressed layer verified, artifact size/SHA, trusted manifest SHA, preparation_loads1, bundle loads1, pulls0, PostgreSQL16.15, anonymous_volumes0, containers_remaining0, source fixed fields unchanged, free bytes >=13GiB. Actual result is pending; no all-service/commercial acceptance is implied.
-## Corrective retry after first real export
+## Corrective Docker-directory retry (r3)
+
+r2 OCI export was also preserved: correct source ref annotation, but converted config7a50f22eb109878acd1ec8e00764853737d8903faf444b5d67d9d0fa36268831
+differs from trusted4278. It correctly stopped before any load with fixed oci-config-ref-pin-mismatch.
+No config substitution/semantic matching/pin relaxation. The next NEW root is `...-od23-r3`.
+
+Use Docker directory transport to preserve original Docker config bytes without legacy archive links. Source export
+data stays solely in the NEW preparation store's owned temporary leaf. The strict adapter refuses links/extra files,
+verifies descriptor SHA/size, pinned4278, and every ordered diff_id while producing a separate root-protected archive.
+No owner-writable archive is installed or loaded. Only then load the NEW preparation store; canonical-tag/export there
+with Docker directory transport; actual packager input_format=docker-dir + install_bundle + owner-load/smoke/reuse.
+Fresh17GiB/13GiB reserve/headroom/RAM/expiry/whole-case mutex rules remain identical. Failed roots are preserved.
+
+## Previous OCI attempt (preserved, superseded)
 
 First root `/var/lib/woowbk-odoo-pg16-proof-20261127-od23` is preserved. Its Docker export's pinned config SHA and
 all11 ordered layer diff_ids passed read-only checks, but11 unused legacy symlink aliases correctly triggered the

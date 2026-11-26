@@ -59,10 +59,29 @@ Only root can write the selected pin, manifest, archive, or ancestors. Symlinks 
 Odoo import keeps existing local image priority. Otherwise it chooses this machine's architecture, verifies the complete installed root trust chain, pin/manifest/artifact SHA, config ID, ref, OS and architecture, and passes the already-open verified file descriptor as stdin to the existing app-owner runner's `podman load`. It inspects loaded ID/OS/architecture, returns the config ID for subsequent `--pull=never` temporary containers, and does not rely on Docker save/load retaining RepoDigests. No root/global-store load or owner-writable archive path is used. A configured but invalid sidecar fails closed for Odoo; no sidecar retains existing pinned pull + retry. Job cancellation/storage failure propagates.
 
 Suggested coordinator docs/registry update: OD-23 now has opt-in installer/release packaging and owner-load implementation, focused synthetic proofs, and a pending real isolated-store artifact/load proof. Link focused test names from `tests/backup/test_pg16_bundle.py` and `tests/test_manage.py::OdooPg16BundleContract`. Do not mark actual artifact delivery proven by unit tests.
-## Podman OCI export correction (actual archive finding)
+## Podman Docker directory export (actual exporter findings)
 
-Podman's Docker-save export includes redundant legacy symlink aliases. Every link remains refused by the default
-Docker validator and packager. Use a canonical-tagged **OCI export** and opt into strict conversion:
+Use `docker-dir` for this Podman source. Docker-save adds forbidden legacy links; OCI-save rewrites config bytes
+and correctly fails the exact config pin. Neither check is waived. Docker directory transport preserves the original
+Docker config and exposes regular config/layer blobs with descriptor hashes and sizes:
+
+```sh
+python3 scripts/package_odoo_pg16.py --input-format docker-dir --archive postgres16-docker-directory \
+  --architecture amd64 --image-id sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873 \
+  --output /trusted-release-root/odoo-pg16-amd64
+```
+
+The directory adapter refuses symlinks/hardlinks/subdirectories/unrelated files/multiple manifests, checks every
+descriptor SHA/size and trusted config ID, streams to a root-protected regular-only Docker archive, then validates
+architecture/OS/canonical ref and every ordered uncompressed layer SHA. Directory transport has no RepoTags; the
+canonical release identity is supplied by the pinned ref plus independently trusted config ID. The leased proof also
+checks the exact original source RepoTag and unchanged source fields. Owner-writable directory export data remains
+untrusted; only the separate protected archive passes to installation/load. Default Docker archive rules are unchanged.
+
+### Optional strict OCI input
+
+Every Docker archive link remains refused. OCI input is supported only when its original config digest already agrees
+with the trusted release pin; config rewritten by an exporter is refused. Explicit strict OCI conversion is available:
 
 ```sh
 python3 scripts/package_odoo_pg16.py --input-format oci-archive --archive postgres16.oci.tar \

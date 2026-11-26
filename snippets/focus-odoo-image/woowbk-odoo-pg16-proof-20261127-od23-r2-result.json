@@ -1,0 +1,10 @@
+{
+  "status": "failed",
+  "phase": "ordered-layer-verification",
+  "error_type": "BundleError",
+  "reason": "oci-config-ref-pin-mismatch",
+  "pulls": 0,
+  "proof_root": "/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r2",
+  "host_ram_available_mib_start": 4317,
+  "source_commit": "360829c7b76ba3190d33d9a1c5046c246189e45b"
+}

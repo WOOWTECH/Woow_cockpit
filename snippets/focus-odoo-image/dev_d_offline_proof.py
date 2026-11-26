@@ -1,7 +1,7 @@
 """LEASE ONLY: remote body for run_dev_d_proof.py. Root on isolated dev-d, never on the host.
 
-Original images are only inspected/exported as OCI (Docker export has forbidden legacy symlinks). A strict adapter
-copies regular blobs into quarantine; the production validator verifies config and EVERY ordered diff_id before load.
+Original images are only inspected/exported as Docker directories (archive has links; OCI rewrites config). A strict
+adapter copies regular blobs into root quarantine; the validator verifies config and EVERY ordered diff_id before load.
 Canonical tagging/export then happens in a new preparation store; the final bundle loads into a second empty store.
 """
 import argparse
@@ -25,7 +25,7 @@ PHASE = 'preflight'
 def failure_reason(error):
     """Public diagnostics contain only exact whitelisted constants, never exception/artifact contents."""
     try:
-        from woowbackup import pg16_bundle as bundle, pg16_oci as oci
+        from woowbackup import pg16_bundle as bundle, pg16_oci as oci, pg16_docker_dir as docker_dir
     except ImportError:
         return 'preflight-import-failed'
     whitelist = {
@@ -36,6 +36,9 @@ def failure_reason(error):
         oci.ERROR_LAYOUT: 'invalid-unsafe-oci-layout',
         oci.ERROR_DESCRIPTOR: 'oci-descriptor-digest-size-mismatch',
         oci.ERROR_IDENTITY: 'oci-config-ref-pin-mismatch',
+        docker_dir.ERROR_DIRECTORY: 'invalid-unsafe-docker-directory',
+        docker_dir.ERROR_DESCRIPTOR: 'docker-directory-descriptor-digest-size-mismatch',
+        docker_dir.ERROR_PIN: 'docker-directory-config-pin-mismatch',
         'source-archive-header-refused': 'source-archive-header-refused',
         'source-trailing-data': 'source-trailing-data',
         'source-archive-truncated': 'source-archive-truncated',
@@ -132,7 +135,7 @@ def main():
     assert memory_headroom_start >= 512 * 1024**2
     import sys
     sys.path.insert(0, str(args.code_root / 'backup-engine'))
-    from woowbackup import ha_odoo, pg16_bundle as bundle, pg16_oci as oci, podman
+    from woowbackup import ha_odoo, pg16_bundle as bundle, pg16_docker_dir as docker_dir, podman
     from woowbackup.errors import BackupError
     assert bundle.architecture() == 'amd64'
     assert bundle.PINNED_REF.endswith('@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139')
@@ -173,20 +176,6 @@ def main():
     before = source_identity()
     assert before['id'].removeprefix('sha256:') == EXPECTED[7:]
     assert before['architecture'] == 'amd64' and before['os'] == 'linux' and before['repo_tags'] == [SOURCE_TAG]
-    export = root / 'original.oci.tar'
-    PHASE = 'source-export'
-    with export.open('xb') as output:
-        source.podman('save', '--format', 'oci-archive', SOURCE_TAG, stdout=output,
-                      timeout=1800, max_output=bundle.MAX_ARCHIVE, abort=guard)
-        output.flush()
-        os.fsync(output.fileno())
-    PHASE = 'ordered-layer-verification'
-    verified = root / 'quarantined-verification-view.tar'
-    with export.open('rb') as source_oci, verified.open('x+b') as output:
-        oci.convert_archive(source_oci, output, bundle, 'amd64', EXPECTED, expected_tag=SOURCE_TAG, abort=guard)
-        os.fsync(output.fileno())
-    # The strict regular-only copy preserved config/layer bytes; diff_ids authenticated original contents.
-    # Make the actual canonical export with Podman in a NEW preparation store; never tag the original store.
     def isolated_owner(leaf):
         owned = root / leaf
         owned.mkdir(mode=0o700)
@@ -200,8 +189,20 @@ def main():
             def podman(self, *argv, **options):
                 return self.run([podman.PODMAN, *flags, *argv], **options)
         return IsolatedOwner('appowner', runner=execute)
-    PHASE = 'disposable-canonical-export'
     preparation = isolated_owner('preparation-store')
+    # The only owner-writable export data stays inside the NEW owned store's temporary leaf. No archive there is
+    # trusted or loaded: descriptor/config/layer verification produces a separate root-protected regular archive.
+    export = root / 'preparation-store/tmp/source-export'
+    PHASE = 'source-export'
+    source.podman('save', '--format', 'docker-dir', '--output', str(export), SOURCE_TAG,
+                  timeout=1800, max_output=65536, abort=guard)
+    PHASE = 'ordered-layer-verification'
+    verified = root / 'quarantined-verification-view.tar'
+    with verified.open('x+b') as output:
+        docker_dir.convert_directory(export, output, bundle, 'amd64', EXPECTED, abort=guard)
+        os.fsync(output.fileno())
+    # Original bytes now authenticate against the official config and EVERY diff_id; only now may a load occur.
+    PHASE = 'disposable-canonical-export'
     with verified.open('rb') as stream:
         preparation.podman('load', input=stream, timeout=1800, max_output=65536, abort=guard)
     actual_id = preparation.podman('image', 'inspect', '--format', '{{.Id}}', EXPECTED, timeout=60).stdout.decode().strip()
@@ -209,18 +210,15 @@ def main():
     preparation.podman('tag', EXPECTED, bundle.TAG, timeout=60, max_output=65536)
     tags = preparation.podman('image', 'inspect', '--format', '{{json .RepoTags}}', EXPECTED, timeout=60).stdout
     assert json.loads(tags) == [bundle.TAG]
-    canonical = root / 'canonical.oci.tar'
-    with canonical.open('xb') as output:
-        preparation.podman('save', '--format', 'oci-archive', bundle.TAG, stdout=output,
-                           timeout=1800, max_output=bundle.MAX_ARCHIVE, abort=guard)
-        output.flush()
-        os.fsync(output.fileno())
+    canonical = root / 'preparation-store/tmp/canonical-export'
+    preparation.podman('save', '--format', 'docker-dir', '--output', str(canonical), bundle.TAG,
+                       timeout=1800, max_output=65536, abort=guard)
     # Packaging + root-trusted staging use the actual release helpers. No root/global-store load.
     spec = importlib.util.spec_from_file_location('od23_packager', args.code_root / 'scripts/package_odoo_pg16.py')
     package = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package)
     PHASE = 'package-and-stage'
-    release = package.package(canonical, 'amd64', EXPECTED, root / 'release', input_format='oci-archive', abort=guard)
+    release = package.package(canonical, 'amd64', EXPECTED, root / 'release', input_format='docker-dir', abort=guard)
     install_root = root / 'install-root'
     install_root.mkdir(mode=0o755)
     staged = bundle.install_bundle(root / 'release', release['manifest_sha256'], install_root, abort=guard)
