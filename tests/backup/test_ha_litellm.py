@@ -1257,16 +1257,18 @@ class ConvertTests(LiteLLMCase):
         self.assert_nothing_loaded()
 
     def test_without_the_one_line_snippet_other_schemas_stop_the_app(self):
-        # Until haimport hands `keep_safety` on, the promise of the line could not be kept: fail closed, as before.
-        self.world.live_signature = dict(signature(), schemas=['extra', 'woow_platform'])
-        result = self.check(self.upload_litellm(), ['litellm'])[0]
-        self.assertFalse(result['importable'])
-        self.assertIn(('litellm.keep-unsupported', 'stop'), [(i['id'], i['level']) for i in result['issues']])
-        line = next(i for i in result['issues'] if i['id'] == 'litellm.other-schemas')
-        with self.assertRaises(BackupError) as caught:
-            self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})
-        self.assertEqual(caught.exception.message, ha_litellm.KEEP_UNSUPPORTED)
-        self.assert_nothing_loaded()
+        # Simulate an older engine without keep_safety even when the integration snippet has been applied.
+        without_keep = tuple(key for key in haimport.ITEM_KEYS if key != 'keep_safety')
+        with mock.patch.object(haimport, 'ITEM_KEYS', without_keep):
+            self.world.live_signature = dict(signature(), schemas=['extra', 'woow_platform'])
+            result = self.check(self.upload_litellm(), ['litellm'])[0]
+            self.assertFalse(result['importable'])
+            self.assertIn(('litellm.keep-unsupported', 'stop'), [(i['id'], i['level']) for i in result['issues']])
+            line = next(i for i in result['issues'] if i['id'] == 'litellm.other-schemas')
+            with self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_litellm(), ['litellm'], acknowledged={'litellm': [line['key']]})
+            self.assertEqual(caught.exception.message, ha_litellm.KEEP_UNSUPPORTED)
+            self.assert_nothing_loaded()
 
     def test_the_pg18_image_is_the_pinned_one_by_content(self):
         self.world.images = set()
