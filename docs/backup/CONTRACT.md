@@ -2130,6 +2130,13 @@ way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps to
   payload cannot be an automatic rollback source. Fresh HA restore explicitly applies the complete conversion-time snapshot to a
   newly initialized cluster, with the normal guard and warning. Ordinary and unmarked restores retain their full-instance path.
   Converted payloads retain their existing app-conversion checks and health checks; source-device digests are not fabricated.
+  Optional `ha_access` records bounded structured database/schema/data-object owners, direct table/sequence/column grants
+  and installed extension identifiers/versions/schemas, never SQL/program definitions. Only n8n public and LiteLLM
+  public/woow_platform schemas qualify. Before selective DROP, current access, required roles, installed extension controls,
+  dependency versions and a bounded dump TOC are checked. Fixed trusted administrator setup precreates installed extensions;
+  the data dump loads under the ordinary DB owner with ownership/ACL/comment/security-label commands suppressed. Current
+  access is restored and read back for moved objects; omitted LiteLLM schemas are not recreated. Fresh marked HA restore
+  uses captured access facts and requires reconversion if they are absent. Ordinary/unmarked full restore stays unchanged.
 * **pg-stdin follow-up F1.** The roles script of an instance restore is `BEGIN;` script `COMMIT;` and an end mark psql prints
   after it (`_run_sql`); a script that arrived short is `job-failed` instead of half applied.
 
@@ -2310,7 +2317,11 @@ secret and mounts); an entry of another shape is `incompatible`.
 3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list ONE database item of
    scope `database` or `instance`, or no database item and the PostgreSQL data volume (cold mode). The container is found by its image
    and `/var/lib/postgresql*` mount; cold mode uses its `POSTGRES_USER`/`POSTGRES_DB`. An instance's normalized maintenance database
-   `postgres` is separate from n8n's actual database: `DB_POSTGRESDB_DATABASE`, then `POSTGRES_DB`, then `n8n`. More than one item
+   `postgres` is separate from n8n's actual database. The unique main container's running n8n process supplies selected
+   database/user/host/port fields through its installed Config/Env decorators, including direct/file/secret/entrypoint/dotenv
+   precedence; n8n defaults to database `n8n` and user `postgres`, never the server's `POSTGRES_DB`. Unreadable or ambiguous
+   configuration stops n8n before conversion. Stopped main/dependencies may be borrowed through a scoped lifecycle and
+   returned to their prior state, including partial start, failure and cancellation. Read-only endpoint APIs never start units. More than one item
    or an unsupported layout stops only n8n. Instance conversion carries the whole device snapshot with only the app DB replaced; the
    marked HA restore follows the selective-instance rule below. A database container without `ContainerName=` has the name systemd gives it.
    n8n's data is the declared volume mounted at `/home/node/.n8n`. The queue's volumes are the declared ones that only containers whose image
