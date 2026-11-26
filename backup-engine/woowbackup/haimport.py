@@ -119,6 +119,7 @@ ISSUES = {
     'ha.not-deployed': 'stop',
     'ha.app-problem': 'stop',
     'ha.not-checked': 'stop',        # the job ended before this app
+    'restore.pause-unavailable': 'stop',  # the HA check cannot safely pause a service that uses this app's data
     'shared.device-key': 'auto',     # HA-13 (D11)
 }
 
@@ -855,9 +856,34 @@ def _examine(work, app_id, app, member, problem, result):
     work.guard.check(3 * member.size)
     module = haapps.get(app_id).load()
     found = module.check(work, app)
+    _preview_pauses(work, app, sink)
     result['target_version'] = found.get('target_version') or ''
     result[app_id] = found[app_id]  # the app's own section (CONTRACT section 7 HaCheck)
     return _collect(app_id, module, found, sink)
+
+
+def _preview_pauses(work, app, sink):
+    """Show the services a converted backup's restore will pause in the first HA confirmation.
+
+    The restore checks the live list again before changing anything. A service that appears after this
+    preview therefore needs a new confirmation key; a container without a service cannot be paused.
+    """
+    from .adapters.quadlet_postgres import MAX_PAUSED, PAUSES_TEXT
+
+    adapter = work.adapter(app)
+    plan = getattr(adapter, 'pause_plan', None)
+    if plan is None:
+        return
+    units, blocked = plan()
+    if blocked:
+        sink.stop('restore.pause-unavailable',
+                  f'{blocked[0]}；匯入時無法自動暫停並恢復這個容器。請先停止它，再重新檢查。')
+    if len(units) > MAX_PAUSED:
+        sink.stop('restore.pause-unavailable',
+                  f'有 {len(units)} 個服務使用這個應用的資料，超過可自動暫停的 {MAX_PAUSED} 個；'
+                  '請先停止其中一部分，再重新檢查。')
+    if units:
+        sink.confirm('restore.pauses', PAUSES_TEXT, sorted({adapter.service_name(unit) for unit in units}))
 
 
 def _collect(app_id, module, found, sink):
@@ -1133,6 +1159,7 @@ def _convert_apps(ctx, params, app_ids, sinks):
                 if database is None:
                     database = _only_database(work, app, importer.load())
                 work.database = database
+            _preview_pauses(work, app, work.sink(app.id))
             values = {'odoo_database': database, 'test_mode': test_mode}
             data = importer.load().convert(work, app, *[values[name] for name in importer.convert_args], out_dir)
             converted[app.id] = data

@@ -43,6 +43,13 @@ class FakeHaAdapter:
     def probe(self):
         return {'deployed': self.app.id not in self.world.undeployed, 'problems': [], 'units': []}
 
+    def pause_plan(self):
+        return (list(self.world.pauses.get(self.app.id, ())), list(self.world.unmanaged.get(self.app.id, ())))
+
+    @staticmethod
+    def service_name(unit):
+        return unit.removesuffix('.service')
+
     def import_manifest(self, staging_dir, **items):
         self.world.imported[self.app.id] = items
         path = Path(staging_dir) / 'quadlet.txt'
@@ -64,6 +71,8 @@ class HaWorld:
     def __init__(self):
         self.undeployed = set()
         self.imported = {}
+        self.pauses = {}
+        self.unmanaged = {}
 
     def factory(self, app, **_kwargs):
         return FakeHaAdapter(app, self)
@@ -150,6 +159,32 @@ class CheckFlowTests(FlowCase):
         self.assertNotIn('choices', n8n_result, 'nothing to choose')
         self.assertEqual(self.reporter.phases(), ['prepare', 'decrypt', 'decrypt', 'check'])
         self.assertFalse((Path(self.paths.staging) / self.job_id).exists(), 'staging is removed')
+
+    def test_ha_check_previews_services_the_restore_will_pause(self):
+        """D10: the single confirmation names other services before conversion, per app."""
+        self.world.pauses['n8n'] = ['woowbk-files.service']
+        ha_id = self.upload(two_addons())
+        with mock.patch.object(ha_odoo, 'check', return_value=odoo_found()), \
+                mock.patch.object(ha_n8n, 'check', return_value=n8n_found()):
+            odoo, n8n = self.run_check(ha_id, ['odoo', 'n8n'])['ha_check']['apps']
+        self.assertTrue(odoo['importable'])
+        self.assertEqual(odoo['issues'], [])
+        self.assertTrue(n8n['importable'])
+        self.assertFalse(n8n['ok'], 'a confirmation is needed')
+        self.assertEqual([(issue['id'], issue['level'], issue['items']) for issue in n8n['issues']],
+                         [('restore.pauses', 'confirm', ['woowbk-files'])])
+        self.assertRegex(n8n['issues'][0]['key'], r'^restore\.pauses:[0-9a-f]{16}$')
+
+    def test_a_container_without_a_service_stops_only_its_app_at_the_ha_check(self):
+        self.world.unmanaged['n8n'] = ['容器 viewer 不是由服務啟動的，無法自動暫停']
+        ha_id = self.upload(two_addons())
+        with mock.patch.object(ha_odoo, 'check', return_value=odoo_found()), \
+                mock.patch.object(ha_n8n, 'check', return_value=n8n_found()):
+            odoo, n8n = self.run_check(ha_id, ['odoo', 'n8n'])['ha_check']['apps']
+        self.assertTrue(odoo['importable'])
+        self.assertFalse(n8n['importable'])
+        self.assertEqual(n8n['issues'][0]['id'], 'restore.pause-unavailable')
+        self.assertIn('viewer', n8n['issues'][0]['message'])
 
     def test_the_processor_is_never_guessed_from_the_image_name(self):
         """HA-06: no name of an image keeps an app out (multi-arch images, the architecture in the tag, a local build);
@@ -264,6 +299,31 @@ class ConvertFlowTests(FlowCase):
         work.phase('convert')
         return {'volumes': {}, 'postgres': {}, 'owner_email': 'ha-probe@probe.invalid', 'packages': [],
                 'workflows_to_fix': [{'name': 'fix', 'active': False, 'reasons': ['x']}], 'counts': {}}
+
+    def test_pause_preview_requires_the_same_names_at_conversion(self):
+        """A service added since the check needs a fresh confirmation before conversion changes an app."""
+        self.world.pauses['n8n'] = ['woowbk-files.service']
+        ha_id = self.upload(two_addons())
+        first = Issue('restore.pauses', 'confirm', 'x', ['woowbk-files']).key('n8n')
+        with mock.patch.object(ha_n8n, 'convert', self.stub_n8n):
+            with self.assertRaises(BackupError) as missing:
+                self.convert(ha_id, ['n8n'])
+            self.assertEqual(missing.exception.code, 'confirmation-required')
+            self.assertEqual(missing.exception.result['results'][0]['status'], 'skipped')
+            self.assertEqual(missing.exception.result['results'][0]['issues'][0]['key'], first)
+            self.assertEqual(self.world.imported, {}, 'an unconfirmed app is not packaged')
+
+            done = self.convert(ha_id, ['n8n'], acknowledged={'n8n': [first]})
+            self.assertEqual(done['results'][0]['status'], 'converted')
+            self.assertEqual(done['results'][0]['issues'][0]['key'], first)
+
+            self.world.pauses['n8n'].append('woowbk-sync.service')
+            with self.assertRaises(BackupError) as changed:
+                self.convert(ha_id, ['n8n'], acknowledged={'n8n': [first]})
+            self.assertEqual(changed.exception.code, 'confirmation-required')
+            later = changed.exception.result['results'][0]['issues'][0]
+            self.assertEqual(later['items'], ['woowbk-files', 'woowbk-sync'])
+            self.assertNotEqual(later['key'], first)
 
     def test_one_manual_backup_with_its_origin(self):
         ha_id = self.upload(two_addons(name='WOOW匯入測試'))
