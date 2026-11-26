@@ -30,6 +30,7 @@ def access_plan(owner='notes', *, table_owner=None, app_role=None, extension=Fal
             'relations': [], 'columns': [], 'extensions': [['pgstattuple', '1.5', 'public']] if extension else []}
     if table_owner:
         plan['relations'] = [['public', 'marker', 'r', table_owner, grants(table_owner, 'r')]]
+        plan['columns'] = [['public', 'marker', c, []] for c in ('id', 'value')]
     if app_role:
         plan['schemas'][0][-1].append([app_role, 'CREATE', False])
         plan['relations'][0][-1] += [[app_role, p, False] for p in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')]
@@ -71,7 +72,12 @@ class InstanceOwner(StrengthOwner):
             return self.json(self.extension_controls, stdout)
         if sql == "SELECT coalesce(json_agg(rolname ORDER BY rolname),'[]'::json) FROM pg_roles":
             return self.json(sorted([*self.roles, 'pg_database_owner']), stdout)
-        if sql.startswith('BEGIN;\n') and any(s in sql for s in ('CREATE EXTENSION ', 'REVOKE ALL ON ', 'SELECT 1 FROM ')):
+        if sql.startswith('SELECT to_json(has_table_privilege('):
+            role, schema, table, privilege = re.fullmatch(
+                r'''SELECT to_json\(has_table_privilege\('([^']+)','"([^"]+)"\."([^"]+)"','([^']+)'\)\)''', sql).groups()
+            row = next(r for r in self.access(database)['relations'] if r[:2] == [schema, table])
+            return self.json(role == row[-2] or any(g[0] in (role, None) and g[1] == privilege for g in row[-1]), stdout)
+        if sql.startswith('BEGIN;\n') and any(s in sql for s in ('CREATE EXTENSION ', 'REVOKE ALL ON ', 'SELECT * FROM ')):
             state = self.instance[database]
             plan = state.setdefault('access', self.access(database))
             statements = sql.split(';')
@@ -101,11 +107,11 @@ class InstanceOwner(StrengthOwner):
                     row[-1] = [g for g in row[-1] if g[0] != role or (action != 'REVOKE ALL' and g[1] != permission)]
                     if action != 'REVOKE ALL':
                         row[-1].append([role, permission, bool(grantable)])
-                read = re.fullmatch(r'SELECT 1 FROM "([^"]+)"\."([^"]+)" LIMIT 0', statement)
+                read = re.fullmatch(r'SELECT \* FROM "([^"]+)"\."([^"]+)" LIMIT 0', statement)
                 if read:
                     role = re.findall(r'SET LOCAL ROLE "([^"]+)"', sql[:sql.index(statement)])[-1]
                     row = next(r for r in plan['relations'] if r[:2] == list(read.groups()))
-                    if role != row[-2] and [role, 'SELECT', False] not in row[-1]:
+                    if role != row[-2] and not any(g[:2] == [role, 'SELECT'] for g in row[-1]):
                         return podman.Result(1, b'', b'permission denied for actual app role')
             mark = sql.rsplit('\\echo ', 1)[1].strip()
             return self.out(0, (mark + '\n').encode(), stdout)
@@ -149,6 +155,8 @@ class InstanceOwner(StrengthOwner):
                 _name, raw = data.split(b':', 2)[1:]
                 info = json.loads(raw)
                 toc = ''.join(f'{i}; 3079 100 EXTENSION - {n} \n' for i, (n, _v) in enumerate(info['extensions'], 1))
+                toc += ''.join(f'{i+101}; 1259 200 {"SEQUENCE" if k == "S" else "TABLE"} {s} {n} {o}\n'
+                    for i, (s,n,k,o,_g) in enumerate(info.get('access', {}).get('relations', [])))
                 return self.out(0, toc.encode(), stdout)
             if 'pg_restore' in args and '-f' not in args:
                 name, raw = data.split(b':', 2)[1:]
@@ -167,6 +175,7 @@ class InstanceOwner(StrengthOwner):
                     loaded['relations'] = [[s, n, k, info['owner'], [[info['owner'], p, False] for p in sorted(access.PRIVILEGES[k])]]
                         for s, n, k, _o, _grants in info.get('access', {}).get('relations', [])]
                     loaded['extensions'] = current.get('access', {}).get('extensions', [])
+                    loaded['columns'] = [r[:-1] + [[]] for r in info.get('access', {}).get('columns', [])]
                     info['access'] = loaded
                     info['extensions'] = current['extensions']
                 self.instance[name.decode()] = info
@@ -195,6 +204,17 @@ class HaInstanceTests(StrengthCase):
     app_id = 'n8n'
     application_database = 'notes'
 
+    def make_adapter(self):
+        adapter = super().make_adapter()
+        # The trusted app-process reader is a separate product seam (Nash for n8n, LiteLLM's reader below). Model the
+        # actual running DB independently from files so both applied and unapplied changes exercise this restore gate.
+        def read(_pg, _sources):
+            if self.owner.units['woowbk-demo-app.service'] != 'active':
+                raise BackupError('not-deployed', 'main process is stopped')
+            return {'database': self.owner.running_database, 'user': 'notes'}
+        adapter._read_ha_app_connection = read
+        return adapter
+
     def make_app(self, mutate=None):
         def change(entry):
             entry.update(id=self.app_id, verify=[{'id': 'db', 'type': 'postgres-digest', 'postgres': 'main'}])
@@ -210,7 +230,10 @@ class HaInstanceTests(StrengthCase):
         super().setUp()
         self.owner = InstanceOwner()
         self.owner.application_database = self.application_database
+        self.owner.running_database = self.application_database
         self.owner.files[f'.config/{self.app_id}/app.env'] = self.owner.files.pop('.config/woowbk-demo/app.env')
+        self.owner.files[f'.config/{self.app_id}/app.env'] = (b'TITLE=Demo\nDB_POSTGRESDB_PASSWORD=original\n' if self.app_id == 'n8n'
+            else b'TITLE=Demo\nDATABASE_URL=postgresql://app:original@pg:5432/litellm\n')
         if self.app_id == 'litellm':
             self.owner.secrets['litellm-salt-key'] = b'original-device-salt'
         if self.application_database != 'notes':
@@ -245,7 +268,8 @@ class HaInstanceTests(StrengthCase):
         self.owner.roles['oc_admin']['password'] = hashlib.sha256(b'rotated').hexdigest()
         self.owner.roles['notes']['password'] = hashlib.sha256(b'rotated-bootstrap').hexdigest()
         self.owner.secrets['woowbk-demo-db-password'] = b'rotated-device-database-password'
-        self.owner.files[f'.config/{self.app_id}/app.env'] = b'DB_PASSWORD=rotated-device-database-password\n'
+        self.owner.files[f'.config/{self.app_id}/app.env'] = (b'TITLE=Demo\nDB_POSTGRESDB_PASSWORD=rotated-device-database-password\n'
+            if self.app_id == 'n8n' else b'TITLE=Demo\nDATABASE_URL=postgresql://app:rotated@pg:5432/litellm\n')
         if self.app_id == 'litellm':
             self.owner.secrets['litellm-salt-key'] = b'rotated-device-salt'
         self.owner.roles['new_owner'] = {'superuser': False, 'login': True, 'password': 'new-password-hash'}
@@ -317,6 +341,60 @@ class HaInstanceTests(StrengthCase):
             self.adapter.restore(manifest, folder, mode='fresh')
         self.assertEqual(len(self.owner.argvs()), count)
 
+    def test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop(self):
+        name = self.application_database
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login')
+        self.owner.instance[name].update(owner='db_owner', access=plan)
+        (self.staging / 'postgres').mkdir(exist_ok=True)
+        dump = self.adapter._dump_instance(self.app.postgres[0], self.staging)
+        db = next(d for d in dump['databases'] if d['name'] == name)
+        for kind in ('r', 'S'):
+            ha = copy.deepcopy(self.owner.instance[name])
+            ha['access']['relations'].append(['public', 'new_ha_object', kind, 'notes', []])
+            converted = self.root / f'new-{kind}.dump'
+            converted.write_bytes(encoded(name, dict(ha, data=b'HA rows')))
+            before = copy.deepcopy(self.owner.instance)
+            with self.subTest(kind=kind), self.assertRaises(BackupError) as caught:
+                self.adapter._restore_ha_instance_database(self.app.postgres[0], db, converted)
+            self.assertIn('目前不存在', caught.exception.message)
+            self.assertEqual(self.owner.instance, before)
+            self.assertFalse(self.owner.dropped)
+            self.assertIn(['app_login', 'INSERT', False], self.owner.access(name)['relations'][0][-1])
+            self.assertIn(['app_login', 'CREATE', False], self.owner.access(name)['schemas'][0][-1])
+
+    def test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses(self):
+        name = self.application_database
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login')
+        self.owner.instance[name].update(owner='db_owner', access=plan)
+        (self.staging / 'postgres').mkdir(exist_ok=True)
+        dump = self.adapter._dump_instance(self.app.postgres[0], self.staging)
+        db = next(d for d in dump['databases'] if d['name'] == name)
+        ha = copy.deepcopy(self.owner.instance[name])
+        ha['access']['columns'].append(['public', 'marker', 'new_ha_column', []])
+        converted = self.root / 'new-column.dump'
+        converted.write_bytes(encoded(name, dict(ha, data=b'HA rows')))
+        original = copy.deepcopy(self.owner.instance[name])
+        self.adapter._restore_ha_instance_database(self.app.postgres[0], db, converted)
+        after = self.owner.access(name)
+        self.assertIn(['public', 'marker', 'new_ha_column', []], after['columns'])
+        self.assertIn(['app_login', 'SELECT', False], after['relations'][0][-1])
+        self.assertIn(['app_login', 'INSERT', False], after['relations'][0][-1])
+        self.owner.instance[name] = original
+        self.owner.dropped.clear()
+        plan = self.owner.instance[name]['access']
+        plan['relations'][0][-1].remove(['app_login', 'SELECT', False])
+        plan['columns'][0][-1].append(['app_login', 'SELECT', False])
+        before = copy.deepcopy(self.owner.instance)
+        with self.assertRaises(BackupError) as caught:
+            self.adapter._restore_ha_instance_database(self.app.postgres[0], db, converted)
+        self.assertIn('個別欄位', caught.exception.message)
+        self.assertEqual(self.owner.instance, before)
+        self.assertFalse(self.owner.dropped)
+
     def test_converted_extension_version_is_recorded_and_checked_against_installed_controls(self):
         name = self.application_database
         self.owner.instance[name]['extensions'] = [['pgstattuple', '1.5']]
@@ -369,6 +447,31 @@ class HaInstanceTests(StrengthCase):
             self.assertEqual(self.owner.instance, before)
             self.assertFalse(self.owner.dropped)
             self.assertFalse(self.owner.applied_globals)
+
+    def test_running_app_database_changed_refuses_before_stop_or_drop(self):
+        manifest, folder, _entries = self.converted()
+        self.owner.instance['other_app_db'] = copy.deepcopy(self.owner.instance[self.application_database])
+        self.owner.running_database = 'other_app_db'
+        before = copy.deepcopy(self.owner.instance)
+        with self.assertRaises(BackupError):
+            self.adapter.restore(manifest, folder, mode='inplace')
+        self.assertEqual(self.owner.instance, before)
+        self.assertFalse(self.owner.dropped)
+        self.assertFalse(self.adapter.destructive_started)
+
+    def test_unapplied_env_file_database_change_refuses_before_stop_or_drop(self):
+        manifest, folder, _entries = self.converted()
+        self.owner.instance['other_app_db'] = copy.deepcopy(self.owner.instance[self.application_database])
+        path = f'.config/{self.app_id}/app.env'
+        self.owner.files[path] = (self.owner.files[path] + b'DB_POSTGRESDB_DATABASE=other_app_db\n' if self.app_id == 'n8n'
+            else self.owner.files[path].replace(b'/litellm\n', b'/other_app_db\n'))
+        before = copy.deepcopy(self.owner.instance)
+        self.assertEqual(self.owner.running_database, self.application_database, 'main has not restarted')
+        with self.assertRaises(BackupError):
+            self.adapter.restore(manifest, folder, mode='inplace')
+        self.assertEqual(self.owner.instance, before)
+        self.assertFalse(self.owner.dropped)
+        self.assertFalse(self.adapter.destructive_started)
 
     def test_fresh_restore_uses_the_explicit_complete_snapshot_in_a_new_cluster(self):
         manifest, folder, _entries = self.converted()

@@ -35,6 +35,7 @@ MIGRATIONS = ['20250326162113_baseline', '20250412081753_team_member_permissions
               '20251122125322_Add organization_id to spend logs']
 QUADLETS = {
     'litellm-postgres.container': b'[Container]\nContainerName=litellm-postgres\n'
+                                  b'Network=litellm.network\n'
                                   b'Image=docker.io/library/postgres:17.11-alpine3.23@sha256:bc27\n'
                                   b'Volume=litellm-pgdata.volume:/var/lib/postgresql/data\n'
                                   b'Environment=PGDATA=/var/lib/postgresql/data/pgdata\n'
@@ -184,6 +185,9 @@ class World(fk.World):
 
     def podman(self, args, data, stdout):
         if args[:2] == ['exec', self.proxy_name] and 'python' in args:
+            if ha_litellm.CONNECTION_PROBE in args:
+                return Result(0, json.dumps(getattr(self, 'proxy_connection',
+                    {'database': 'litellm', 'user': 'litellm', 'host': 'litellm-postgres', 'port': 5432})).encode(), b'')
             return Result(0 if self.app_version else 1, (self.app_version or '').encode(), b'')
         if args[:5] == ['exec', '-i', 'litellm-postgres', 'sh', '-s']:
             self.snapshots.append((args[5:], data))
@@ -1507,6 +1511,17 @@ class SingleProtectionTests(LiteLLMCase):
             self.catalog['litellm'])
         self.assertEqual((target.mode, target.database), ('instance', 'litellm'))
         self.assertEqual(self.blockers(), [])
+
+    def test_instance_refuses_another_actual_proxy_database_or_foreign_backend(self):
+        app = self.catalog['litellm']
+        app.postgres = [dict(app.postgres[0], scope='instance', database='postgres')]
+        original = {'database': 'litellm', 'user': 'litellm', 'host': 'litellm-postgres', 'port': 5432}
+        for changed in ({'database': 'another_db'}, {'host': 'another-postgres'}, {'port': 6543}):
+            self.world.proxy_connection = dict(original, **changed)
+            with self.subTest(changed=changed), self.assertRaises(BackupError):
+                ha_litellm.Target(types.SimpleNamespace(quadlets=lambda _app: self.world.quadlets['litellm'],
+                    runner=lambda _app: self.world.owner), app)
+        self.assertFalse(self.world.runs)
 
     def test_n21_what_the_entry_cannot_be_filled_with_stops_only_this_app(self):
         # L-03: database, instance and cold entries work; multiple database items or no database at all still stop.

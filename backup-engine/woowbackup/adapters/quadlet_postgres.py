@@ -41,6 +41,7 @@ import os
 import platform
 import re
 import secrets
+import shlex
 import socket
 import stat
 import time
@@ -2725,6 +2726,26 @@ class QuadletPostgresAdapter(Adapter):
             self._preflight_dirs(mode, add)
             if self.ha_import and mode == 'inplace':
                 self._preflight_pauses(add)
+        self._ha_live_connections = {}
+        if self.ha_import and mode == 'inplace' and sources is not None and extracted_dir is not None:
+            try:
+                root = Path(extracted_dir)
+                for pg in app.postgres:
+                    marker = self._ha_instance_database(pg, _found['postgres'].get(pg['id']) or {})
+                    if marker is None:
+                        continue
+                    inputs = {kind: {key: self.entry_path(root, item['entry']) for key, item in _found[kind].items()}
+                              for kind in ('config', 'secrets')}
+                    self._check_ha_instance_inputs(app_manifest, root, sources, inputs)
+                    connection = self._read_ha_app_connection(pg, sources)
+                    if connection.get('database') != marker:
+                        raise BackupError('incompatible', '應用目前使用的資料庫已改變，請套用目前設定後重新轉換。', app=app.id)
+                    self._ha_live_connections[pg['id']] = (marker, connection)
+                if self._ha_live_connections:
+                    add('instance-destination', 'ok', '已確認執行中應用的資料庫、可信任的本機目的地與下次啟動的連線設定。')
+            except BackupError as error:
+                self._ha_live_connections = {}
+                add('instance-destination', 'fail', error.message)
         if sources is not None and self.runtime_ready():
             self._preflight_images(app_manifest, sources, add)
             if extracted_dir is not None:
@@ -3194,6 +3215,17 @@ class QuadletPostgresAdapter(Adapter):
                                                   '請以相同的設定還原。', app=app.id)
         templates = self.read_templates() if mode == 'fresh' else None
         sources = templates if mode == 'fresh' else self._read_owner_quadlets()
+        if ha_databases:
+            self._check_ha_instance_inputs(app_manifest, root, sources, files)
+            for pg in app.postgres:
+                if pg['id'] in ha_databases:
+                    checked = getattr(self, '_ha_live_connections', {}).get(pg['id'])
+                    # Real safety backup stopped the writers. Reuse ONLY this adapter's preflight result after the
+                    # existing trusted handover; next-start files/secrets were rechecked immediately above.
+                    connection = (checked[1] if checked and checked[0] == ha_databases[pg['id']] and self._taken_over
+                                  else self._read_ha_app_connection(pg, sources))
+                    if connection.get('database') != ha_databases[pg['id']]:
+                        raise BackupError('incompatible', '應用目前使用的資料庫已改變，請套用目前設定後重新轉換備份。', app=app.id)
         needed = self.container_images(sources)
         # Nested tars from the archive are checked completely before anything changes (review finding SEC-1); the
         # job's preflight usually did so already, before the safety backup (HD-01), and the results are reused.
@@ -3563,6 +3595,128 @@ class QuadletPostgresAdapter(Adapter):
         self._psql_command(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB, f'DROP DATABASE "{name}"')
         self._load_ha_instance_database(pg, db, path, owner, access, toc, extensions)
 
+    def _read_ha_app_connection(self, pg, sources):
+        from types import SimpleNamespace
+        from .. import ha_n8n, ha_litellm, hacommon, tempctr
+        try:
+            if self.app.id == 'litellm':
+                return ha_litellm.read_app_connection(self.runner, sources, postgres=pg)
+            # This lifecycle must end HERE, before restore's safety handover/stop/restart. A job-wide deferred stop
+            # would otherwise stop the successfully restored application. The vendor reader/selector belongs to n8n.
+            temp = tempctr.TempObjects(self.runner, secrets.token_hex(8), log=self.log, scope='endpoint')
+            work = SimpleNamespace(runner=lambda _app: self.runner, temp=lambda _app: temp,
+                                   quadlets=lambda _app: sources, log=self.log)
+            try:
+                connection = ha_n8n.prepare_app_endpoint(work, self.app, quadlets=sources)
+                main = hacommon.container_file(sources, ha_n8n.main_container(self.runner, sources))
+                if main is None or not ha_instance_access.local_backend(connection, sources, main, pg):
+                    raise ValueError()
+            finally:
+                if temp.cleanup():
+                    raise BackupError('job-failed', '無法恢復讀取連線前的服務狀態，已停止還原，請先確認服務。', app=self.app.id)
+            return connection
+        except (AttributeError, TypeError, ValueError):
+            raise BackupError('incompatible', '無法確認應用目前的資料庫目的地，請套用設定後重新轉換。', app=self.app.id) from None
+
+    def _check_ha_instance_inputs(self, manifest, root, sources, files):
+        """Next-start inputs, separate from the running n8n reader. Only verified password changes may differ.
+
+        An unapplied env-file/secret/Quadlet DATABASE or HOST edit must stop BEFORE services stop or the app DB drops.
+        Unknown config formats/changes refuse conservatively; no file is executed and no value enters diagnostics.
+        """
+        from .. import tempctr
+        refuse = lambda: BackupError('incompatible', '應用連線設定在轉換後已變更，無法確認下次啟動仍使用相同資料庫；'
+            '請先套用目前設定再重新轉換。密碼以外的設定不會自動合併。', app=self.app.id)
+        archived = {i['name']: self.entry_path(root, i['entry']) for i in manifest.get('quadlet_files', [])}
+        configs = {path: self.runner.read_file(path, MAX_QUADLET_BYTES) for path in files['config']}
+        assignments = []
+        secret_targets, mounts = [], []
+        for name, data in sources.items():
+            if name not in archived:
+                raise refuse()
+            old = archived[name].read_bytes()
+            if data != old and not ha_instance_access.password_only_change(old, data, quadlet=True):
+                raise refuse()
+            if not name.endswith('.container'):
+                continue
+            for value in tempctr._container_values(data, 'EnvironmentFile'):
+                if value.startswith('%h/'):
+                    path = value[3:]
+                elif value.startswith(self.runner.home + '/'):
+                    path = value[len(self.runner.home) + 1:]
+                else:
+                    raise refuse()
+                if path not in configs:
+                    raise refuse()  # no archived baseline for an undeclared next-start connection input
+            for value in tempctr._container_values(data, 'Environment'):
+                try:
+                    assignments.extend(shlex.split(value))
+                except ValueError:
+                    raise refuse() from None
+            for spec in tempctr.quadlet_secrets(data):
+                pieces = spec.split(',')
+                options = dict(p.split('=', 1) for p in pieces[1:])
+                secret_targets.append((pieces[0], options.get('type', 'mount'), options.get('target', pieces[0])))
+            mounts.extend(tempctr._container_values(data, 'Volume'))
+        for data in configs.values():
+            try:
+                assignments.extend(data.decode('utf-8').splitlines())
+            except UnicodeError:
+                pass  # a changed opaque file still refuses unless it is a proven password-file mount below
+        password_paths, other_paths = set(), set()
+        for value in assignments:
+            key, sep, raw = value.partition('=')
+            if sep and key.endswith('_FILE'):
+                try:
+                    parts = shlex.split(raw)
+                    if len(parts) == 1 and parts[0].startswith('/'):
+                        (password_paths if key[:-5] in ha_instance_access.PASSWORD_KEYS else other_paths).add(parts[0])
+                except ValueError:
+                    raise refuse() from None
+        password_paths -= other_paths
+        password_files, password_secrets, url_secrets, blocked_files, blocked_secrets = set(), set(), {}, set(), set()
+        for spec in mounts:
+            parts = spec.split(':')
+            if len(parts) >= 2 and parts[1] in password_paths | other_paths:
+                source = parts[0]
+                if source.startswith('%h/'):
+                    (password_files if parts[1] in password_paths else blocked_files).add(source[3:])
+                elif source.startswith(self.runner.home + '/'):
+                    (password_files if parts[1] in password_paths else blocked_files).add(source[len(self.runner.home) + 1:])
+        for name, kind, target in secret_targets:
+            if kind == 'env' and target in ha_instance_access.PASSWORD_KEYS:
+                password_secrets.add(name)
+            elif kind == 'env' and target in ha_instance_access.URL_KEYS:
+                url_secrets[name] = target
+            elif kind != 'env' and (target if target.startswith('/') else '/run/secrets/' + target) in password_paths:
+                password_secrets.add(name)
+            else:
+                blocked_secrets.add(name)
+        password_files -= blocked_files
+        password_secrets -= blocked_secrets | set(url_secrets)
+        url_secrets = {name: target for name, target in url_secrets.items() if name not in blocked_secrets}
+        for path, data in configs.items():
+            previous = files['config'][path].read_bytes()
+            if data != previous and path not in password_files and not ha_instance_access.password_only_change(previous, data):
+                raise refuse()
+        for spec in self.app.secrets:
+            name = spec['name']
+            if self.app.id == 'litellm' and name == 'litellm-salt-key':
+                continue
+            result = self.runner.podman('secret', 'inspect', '--showsecret', '--format', '{{.SecretData}}', name,
+                                       timeout=SHORT_TIMEOUT, max_output=MAX_SECRET_BYTES + 2)
+            value = result.stdout or b''
+            result.stdout = None
+            if not value.endswith(b'\n') or len(value) < 2:
+                raise refuse()
+            current, previous = value[:-1], files['secrets'][name].read_bytes()
+            if current == previous or name in password_secrets:
+                continue
+            key = url_secrets.get(name)
+            if key is None or not ha_instance_access.password_only_change(key.encode() + b'=' + previous,
+                                                                         key.encode() + b'=' + current):
+                raise refuse()
+
     def _validate_ha_instance_access(self, plan):
         try:
             return ha_instance_access.validate(plan, self.app.id)
@@ -3618,12 +3772,30 @@ class QuadletPostgresAdapter(Adapter):
         required.update(g[0] for row in access['columns'] for g in row[-1] if g[0] is not None)
         if not isinstance(roles, list) or not required <= set(roles):
             raise BackupError('incompatible', '應用資料庫目前需要的角色不存在，已停止匯入。', app=self.app.id)
+        for schema, table, _column, grants in access['columns']:
+            for role, privilege, _grantable in grants:
+                # A column-only policy cannot establish access to new HA columns. Do not guess an app-role grant or
+                # silently broaden it. Existing table-wide rights, including inherited rights, safely cover new columns.
+                allowed = None if role is None else self._psql_json(pg['container'], pg['user'], db['name'],
+                    f'SELECT to_json(has_table_privilege({ha_instance_access.literal(role)},'
+                    f'{ha_instance_access.literal(ha_instance_access.ident(schema)+"."+ha_instance_access.ident(table))},'
+                    f'{ha_instance_access.literal(privilege)}))', 'HA 應用欄位權限')
+                if allowed is not True:
+                    raise BackupError('incompatible', '應用只有個別欄位的存取權限，無法安全確認新增 HA 欄位的權限；'
+                        '請先建立明確的應用資料表權限再重新轉換。', app=self.app.id)
         with open(path, 'rb') as handle:
             toc = self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '--list', input=handle,
                                       timeout=RESTORE_TIMEOUT, max_output=SMALL_OUTPUT).stdout
         lines, extensions = [], set()
         preseed_schemas = {r[2] for r in ordered}
+        known = {(r[0], r[1], 'SEQUENCE' if r[2] == 'S' else 'TABLE') for r in access['relations']}
         for line in toc.decode('utf-8').splitlines():
+            relation = re.match(r'^\d+; \d+ \d+ (TABLE|SEQUENCE) (public|woow_platform) (\S+) (\S+)\s*$', line)
+            if relation and (relation[2], relation[3], relation[1]) not in known:
+                raise BackupError('incompatible', 'HA 匯出含目前不存在的應用資料表或序列，無法確認其擁有者與應用權限；'
+                    '請先套用應用結構遷移再重新轉換。', app=self.app.id)
+            if re.match(r'^\d+; \d+ \d+ (?:TABLE|SEQUENCE) (?:public|woow_platform) ', line) and not relation:
+                raise BackupError('incompatible', 'HA 應用物件名稱格式無法安全比對目前權限，已停止匯入。', app=self.app.id)
             match = re.match(r'^\d+; \d+ \d+ EXTENSION - (\S+)\s*$', line)
             if match:
                 extensions.add(match[1])
@@ -3677,7 +3849,7 @@ class QuadletPostgresAdapter(Adapter):
                 for role, privilege, _grantable in grants:
                     if role is not None and privilege == 'SELECT':
                         reads.extend([f'SET LOCAL ROLE {ha_instance_access.ident(role)};',
-                            f'SELECT 1 FROM {ha_instance_access.ident(schema)}.{ha_instance_access.ident(table)} LIMIT 0;',
+                            f'SELECT * FROM {ha_instance_access.ident(schema)}.{ha_instance_access.ident(table)} LIMIT 0;',
                             'RESET ROLE;'])
         if reads:
             self._run_sql(pg['container'], pg['user'], name, '\n'.join(reads) + '\n')

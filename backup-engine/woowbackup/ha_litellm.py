@@ -280,11 +280,99 @@ def _is_database(text):
 
 
 def _stop(app, issue_id, message, action, code='incompatible'):
-    return haissues.stopped(Issue(issue_id, 'stop', message, action=action), code, app=app.id)
+    return haissues.stopped(Issue(issue_id, 'stop', message, action=action), code, app=app.id if app is not None else 'litellm')
 
 
 def _layout_stop(app, message):
     return _stop(app, 'litellm.layout-unsupported', message, LAYOUT_ACTION)
+
+
+CONNECTION_PROBE = r'''
+import json,os,pathlib,sys,urllib.parse
+def read(path,limit):
+    with open(path,'rb') as f: value=f.read(limit+1)
+    if len(value)>limit: raise ValueError()
+    return value
+def destination(value):
+    u=urllib.parse.urlsplit(value)
+    query=urllib.parse.parse_qsl(u.query,strict_parsing=True)
+    allowed={'schema','connection_limit','pool_timeout','pgbouncer','sslmode','connect_timeout','statement_cache_size'}
+    if u.scheme not in ('postgres','postgresql') or not u.hostname or not u.username or u.fragment:
+        raise ValueError()
+    if len({k for k,v in query})!=len(query) or any(k not in allowed for k,v in query): raise ValueError()
+    return {'database':urllib.parse.unquote(u.path[1:]),'user':urllib.parse.unquote(u.username),
+            'host':u.hostname,'port':u.port or 5432}
+try:
+    candidates=[]
+    pids=[p for p in pathlib.Path('/proc').iterdir() if p.name.isdigit()]
+    if len(pids)>256: raise ValueError()
+    for proc in pids:
+        if int(proc.name)==os.getpid(): continue
+        try: args=read(proc/'cmdline',32768).decode().split('\0')
+        except (FileNotFoundError,ProcessLookupError): continue
+        if not any(pathlib.Path(a).name in ('litellm','litellm.py','woow_litellm_proxy.py') or
+                   a.startswith('litellm.proxy.proxy_server:') for a in args): continue
+        env={}
+        for item in read(proc/'environ',262144).decode().split('\0'):
+            key,sep,value=item.partition('=')
+            if key in ('DATABASE_URL','DIRECT_URL','DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT'):
+                if key in env: raise ValueError()
+                env[key]=value
+        if any(env.get(k) for k in env if k!='DATABASE_URL'): raise ValueError()
+        found=destination(env['DATABASE_URL'])
+        if '--config' in args:
+            import yaml
+            config=pathlib.Path(args[args.index('--config')+1])
+            if not config.is_absolute(): config=proc/'cwd'/config
+            value=yaml.safe_load(read(config,1048576))
+            pending=[value]; visited=set(); count=0
+            while pending:
+                item=pending.pop(); count+=1
+                if count>10000: raise ValueError()
+                if isinstance(item,(dict,list)):
+                    if id(item) in visited: continue
+                    visited.add(id(item))
+                if isinstance(item,dict):
+                    for key,val in item.items():
+                        if key in ('database_url','direct_url'):
+                            if val!='os.environ/DATABASE_URL' and (not isinstance(val,str) or destination(val)!=found):
+                                raise ValueError()
+                        elif key in ('database_host','database_name','database_user','database_port'):
+                            raise ValueError()
+                    pending.extend(item.values())
+                elif isinstance(item,list): pending.extend(item)
+        candidates.append(found)
+    if not candidates or any(v!=candidates[0] for v in candidates): raise ValueError()
+    print(json.dumps(candidates[0]))
+except Exception:
+    sys.exit(2)
+'''
+
+
+def read_app_connection(runner, quadlets, *, postgres):
+    """Actual running proxy URL, redacted in-container and bound to its declared local PG network/backend.
+
+    An unreadable/custom override refuses instance conversion/restore; no PG initialization setting is a proxy setting.
+    """
+    proxies = [n for n in quadlets if n.endswith('.container') and _is_proxy(quadlets[n])]
+    backend = hacommon.container_file(quadlets, postgres['container'])
+    if len(proxies) != 1 or backend is None:
+        raise _stop(None, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION)
+    result = runner.podman('exec', ha_odoo.quadlet_container_name(quadlets, proxies[0]), 'python', '-I', '-c',
+                           CONNECTION_PROBE, timeout=30, max_output=1024, check=False)
+    try:
+        found = json.loads(result.stdout or b'')
+        shared = set(tempctr._container_values(quadlets[backend], 'Network')) & set(
+            tempctr._container_values(quadlets[proxies[0]], 'Network'))
+        aliases = {postgres['container'], *tempctr._container_values(quadlets[backend], 'NetworkAlias')}
+        if (result.returncode != 0 or not isinstance(found, dict) or set(found) != {'database','user','host','port'}
+                or found['database'] != DATABASE or not isinstance(found['user'], str) or not IDENT_RE.fullmatch(found['user'])
+                or found['host'] not in aliases or type(found['port']) is not int or found['port'] != 5432
+                or not shared - {'host','none'}):
+            raise ValueError()
+    except (ValueError, TypeError):
+        raise _stop(None, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION) from None
+    return found
 
 
 class Target:
@@ -352,6 +440,8 @@ class Target:
                 or len(salt_specs) != 1 or f'target={SALT_ENV}' not in salt_specs[0].split(',')[1:]
                 or SALT_SECRET not in declared or len(declared) != len(set(declared))):
             raise _stop(app, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION)
+        if self.mode == 'instance':
+            self.connection = read_app_connection(work.runner(app), quadlets, postgres=pg)
         # L-03: what the entry declares besides the database is this device's own data; it goes along as it is.
         self.extra_volumes, self.extra_dirs = hatarget.extras(
             app, handled_volumes=(self.db_volume,) if self.mode == 'cold' else ())

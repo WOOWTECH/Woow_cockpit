@@ -5,6 +5,8 @@ neither recreated nor granted back. All SQL below is fixed grammar with quoted c
 """
 import re
 import json
+import shlex
+import urllib.parse
 
 SCHEMAS = {'n8n': ('public',), 'litellm': ('public', 'woow_platform')}
 PRIVILEGES = {'database': {'CONNECT', 'CREATE', 'TEMPORARY'}, 'schema': {'USAGE', 'CREATE'},
@@ -12,6 +14,70 @@ PRIVILEGES = {'database': {'CONNECT', 'CREATE', 'TEMPORARY'}, 'schema': {'USAGE'
               'p': {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'},
               'S': {'SELECT', 'UPDATE', 'USAGE'}, 'column': {'SELECT', 'INSERT', 'UPDATE', 'REFERENCES'}}
 CONTROL_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]{0,62}\Z')
+PASSWORD_KEYS = {'POSTGRES_PASSWORD', 'DB_POSTGRESDB_PASSWORD', 'DATABASE_PASSWORD', 'LITELLM_DATABASE_PASSWORD'}
+URL_KEYS = {'DATABASE_URL', 'DIRECT_URL'}
+
+
+def local_backend(found, quadlets, main, postgres):
+    """Standard local backend only; opaque/custom hosts, ports and network arrangements refuse explicitly."""
+    from . import tempctr
+    names = [name for name in quadlets if name.endswith('.container') and
+             tempctr._container_values(quadlets[name], 'ContainerName') == [postgres['container']]]
+    if len(names) != 1 or not isinstance(found, dict):
+        return False
+    db = quadlets[names[0]]
+    aliases = {postgres['container'], *tempctr._container_values(db, 'NetworkAlias')}
+    shared = set(tempctr._container_values(db, 'Network')) & set(tempctr._container_values(quadlets[main], 'Network'))
+    return (isinstance(found.get('host'), str) and found['host'] in aliases and type(found.get('port')) is int
+            and found['port'] == 5432 and bool(shared - {'host', 'none'}))
+
+
+def password_only_change(before, after, *, quadlet=False):
+    """Conservative byte comparison, masking ONLY known password values. No shell, expansion or config execution.
+
+    Unknown/complex changes refuse; notably DATABASE/_FILE/HOST/USER and n8n encryption-key changes remain visible.
+    This compares inputs for the next start, independently of the running process reader.
+    """
+    def assignment(value):
+        key, sep, raw = value.partition('=')
+        if not sep or key not in PASSWORD_KEYS | URL_KEYS:
+            return value
+        if key in PASSWORD_KEYS:
+            return key + '=<password>'
+        url = urllib.parse.urlsplit(raw)
+        if url.scheme not in ('postgres', 'postgresql') or not url.hostname or url.password is None:
+            raise ValueError('unknown database URL')
+        return key + '=' + repr((url.scheme, url.username, url.hostname, url.port, url.path, url.query, url.fragment))
+    def fingerprint(data):
+        if not isinstance(data, bytes) or len(data) > 1024 * 1024 or b'\0' in data:
+            raise ValueError('unknown configuration')
+        result = []
+        for line in data.decode('utf-8').splitlines():
+            if line.endswith('\\'):
+                raise ValueError('continued configuration')
+            if quadlet:
+                if line.startswith('Environment='):
+                    parts = shlex.split(line[len('Environment='):])
+                    result.append(('Environment', tuple(assignment(v) for v in parts)))
+                else:
+                    result.append(line)
+            else:
+                match = re.fullmatch(r'([A-Z][A-Z0-9_]*)=(.*)', line)
+                if match and match[1] in PASSWORD_KEYS | URL_KEYS:
+                    raw = match[2]
+                    if raw.startswith(('"', "'")):
+                        values = shlex.split(raw)
+                        if len(values) != 1:
+                            raise ValueError('ambiguous credential')
+                        raw = values[0]
+                    result.append(assignment(match[1] + '=' + raw))
+                else:
+                    result.append(line)
+        return result
+    try:
+        return fingerprint(before) == fingerprint(after)
+    except (ValueError, TypeError, UnicodeError):
+        return False
 
 
 def ident(value):
@@ -102,7 +168,7 @@ def capture_sql(app_id):
             _acl('a.attacl', 'c.relowner', "'c'") + ") ORDER BY n.nspname,c.relname,a.attname),'[]'::json) "
             "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace "
             f"WHERE n.nspname IN ({schemas}) AND c.relkind IN ('r','p') AND a.attnum>0 AND NOT a.attisdropped "
-            "AND a.attacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM pg_depend x WHERE x.classid='pg_class'::regclass "
+            "AND NOT EXISTS (SELECT 1 FROM pg_depend x WHERE x.classid='pg_class'::regclass "
             "AND x.objid=c.oid AND x.deptype='e')),'extensions',(SELECT coalesce(json_agg(json_build_array(e.extname,e.extversion,n.nspname) ORDER BY "
             "e.extname),'[]'::json) FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace "
             f"WHERE e.extname<>'plpgsql' AND n.nspname IN ({schemas})))")
@@ -138,7 +204,7 @@ def restore_sql(plan, present, database):
             result += permissions(target, owner, grants, kind)
     owners = {(r[0], r[1]): r[-2] for r in plan['relations']}
     for schema, table, column, grants in plan['columns']:
-        if any(r[:2] == [schema, table] for r in present['relations']):
+        if grants and any(r[:3] == [schema, table, column] for r in present['columns']):
             result += permissions('TABLE ' + ident(schema) + '.' + ident(table), owners[schema, table],
                                   grants, 'column', column)
     return '\n'.join(result) + '\n'
@@ -152,5 +218,5 @@ def comparable(plan, present):
     return {'database': normalize(plan['database']),
             'schemas': [normalize(r) for r in plan['schemas'] if r[0] in schemas],
             'relations': [normalize(r) for r in plan['relations'] if tuple(r[:3]) in relations],
-            'columns': [normalize(r) for r in plan['columns'] if any(p[:2] == r[:2] for p in present['relations'])],
+            'columns': [normalize(r) for r in plan['columns'] if any(p[:3] == r[:3] for p in present['columns'])],
             'extensions': plan['extensions']}
