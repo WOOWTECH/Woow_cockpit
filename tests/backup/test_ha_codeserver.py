@@ -1211,6 +1211,20 @@ class ParityLiveTests(ParityCase):
         self.assertEqual(result['results'][0]['status'], 'converted')
         self.assertEqual((len(self.relays(IDE)), len(self.relays(PI)), self.world.owner.systemd), (2, 1, []))
 
+    def test_cs14_a_volume_without_tar_end_is_never_used(self):
+        whole = self.world.live[IDE]
+        with tarfile.open(fileobj=io.BytesIO(whole), mode='r:') as tar:
+            last = tar.getmembers()[-1]
+        end_of_member = last.offset_data + ((last.size + 511) // 512) * 512
+        self.assertGreaterEqual(len(whole) - end_of_member, 1024)
+        self.world.live[IDE] = whole[:end_of_member]
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_cs(), [APP])
+        self.assertEqual(caught.exception.code, 'job-failed')
+        self.assertEqual(len(self.relays(IDE)), cs.od.READ_TRIES + 1)
+        self.assertEqual(self.world.owner.systemd, [('stop', UNIT), ('start', UNIT)])
+        self.assertEqual((self.storage.list_backups(), self.world.manifests), ([], {}))
+
     def test_cs14_a_volume_that_fails_every_time_is_read_once_with_the_container_paused(self):
         self.world.needs_stopped = {IDE: {UNIT}}
         result = self.convert(self.upload_cs(), [APP])

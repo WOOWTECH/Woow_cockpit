@@ -966,6 +966,13 @@ class ParityLiveTests(ParityCase):
             self.check(self.upload_od(), ['open-design'])
         self.assertEqual(caught.exception.code, 'insufficient-space')
 
+    def test_op14_a_job_wide_reader_failure_with_a_retryable_code_is_not_an_app_stop(self):
+        error = haissues.job_wide(BackupError('job-failed', '資料庫讀取作業已停止。'))
+        with mock.patch.object(hasqlite, 'run', side_effect=error) as read, self.assertRaises(BackupError) as caught:
+            self.check(self.upload_od(), ['open-design'])
+        self.assertIs(caught.exception, error)
+        self.assertEqual(read.call_count, 1)
+
     def test_op14_a_failure_that_is_no_trouble_of_the_reader_is_its_own_stop(self):
         run, calls = self.flaky(99, lambda: BackupError('internal-error', 'SQLite 讀取要求的格式不正確。'))
         with mock.patch.object(hasqlite, 'run', run):
@@ -995,6 +1002,16 @@ class ParityLiveTests(ParityCase):
         line = next(i for i in result['results'][0]['issues'] if i['id'] == 'opendesign.service-paused')
         self.assertEqual((line['level'], line['items']), ('auto', ['open-design-terminal', 'open-design']))
         self.assertEqual(self.volume(DATA)['home/.codex/auth.json'][1], b'target-codex-login')
+
+    def test_op15_paused_containers_restart_before_the_following_volume_is_read(self):
+        self.world.needs_stopped = {DATA: self.UNITS}
+        result = self.convert(self.upload_od(), ['open-design'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        calls = self.world.owner.calls
+        mcp_read = next(i for i, call in enumerate(calls) if call[0] == 'relay' and call[-1] == MCP)
+        for unit in self.UNITS:
+            restarted = next(i for i, call in enumerate(calls) if call == ('systemctl', 'start', unit))
+            self.assertLess(restarted, mcp_read, unit)
 
     def test_op15_the_mcp_volume_is_read_the_same_way_with_its_own_container(self):
         self.world.needs_stopped = {MCP: {'open-design-mcp.service'}}
