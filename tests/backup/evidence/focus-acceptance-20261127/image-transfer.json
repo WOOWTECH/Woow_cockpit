@@ -1,0 +1,14 @@
+{
+  "device": "woowbk-dev-e",
+  "scope": "existing-guarded-code-server-image-transfer",
+  "source_commit": "f2f58704",
+  "exit": 0,
+  "elapsed_seconds": 921,
+  "expected_config_prefix": "7999790230ec",
+  "image_mib": 5362,
+  "compressed_mib": 2517,
+  "lowest_host_free_mib": 24726,
+  "private_output_sha256": "01b4828f3ed8d4087d983d2a426d19589391f3ffe18efaa0064fb4fd696f0321",
+  "host_operations": "read-only inspect and save; no pull",
+  "commercial_acceptance": "not-complete"
+}

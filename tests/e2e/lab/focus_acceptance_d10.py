@@ -69,8 +69,8 @@ def consumer_unit(name, whole_home):
     marker = '/watched/Desktop/woowbk-lab-baseline.txt' if whole_home else '/watched/woowbk-lab-baseline.txt'
     return ('[Unit]\nDescription=Temporary R3 D10 consumer\n[Container]\n'
             f'Image=sha256:{IMAGE}\nContainerName={name}\nNetwork=none\n'
-            f'Volume={source}:/watched:rw\nUser=0\nReadOnly=true\nEntrypoint=/bin/sh\n'
-            'PodmanArgs=--pull=never --cap-drop=all --security-opt=no-new-privileges --pids-limit=16 --memory=64m\n'
+            f'Volume={source}:/watched:rw\nUser=0\nReadOnly=true\n'
+            'PodmanArgs=--entrypoint=/bin/sh --pull=never --cap-drop=all --security-opt=no-new-privileges --pids-limit=16 --memory=64m\n'
             f'Exec=-c "sha256sum {marker}; exec sleep infinity"\n'
             '[Service]\nTimeoutStartSec=60\nTimeoutStopSec=30\n')
 
@@ -318,7 +318,13 @@ def run():
                     r.converted = (job.get('result') or {}).get('backup_id')
                     d.created_backup(r.converted)
             for name in owned:
-                owner('systemctl', '--user', 'stop', name + '.service')
+                load = owner('systemctl', '--user', 'show', '-P', 'LoadState', name + '.service')
+                if load != 'not-found':
+                    owner('systemctl', '--user', 'stop', name + '.service')
+                # A rejected Quadlet never creates a service. Remove its own
+                # source file too, after proving no orphan container remains.
+                check('cleanup: own consumer has no remaining container',
+                      d.owner('podman', 'container', 'exists', name, timeout=30).returncode == 1)
                 owner('rm', '-f', '/home/appowner/.config/containers/systemd/' + name + '.container')
             owner('systemctl', '--user', 'daemon-reload')
             check('cleanup: both temporary consumer containers removed',

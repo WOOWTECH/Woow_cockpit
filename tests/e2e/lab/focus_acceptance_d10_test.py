@@ -61,8 +61,8 @@ class ConsumerTests(unittest.TestCase):
             text = d10.consumer_unit('woowbk-focus-d10-0123456789ab-' + suffix, whole)
             self.assertIn('Image=sha256:' + d10.IMAGE, text)
             self.assertIn('Network=none\n', text)
-            self.assertIn('Entrypoint=/bin/sh\nExec=', text.replace(
-                'PodmanArgs=--pull=never --cap-drop=all --security-opt=no-new-privileges --pids-limit=16 --memory=64m\n', ''))
+            self.assertIn('--entrypoint=/bin/sh', text)
+            self.assertNotIn('\nEntrypoint=', text)  # dev-e's installed generator rejects that newer key
             self.assertIn('--pull=never', text)
             self.assertNotIn('Restart=', text)
             self.assertNotIn('[Install]', text)

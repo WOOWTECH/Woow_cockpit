@@ -40,6 +40,26 @@ The outer image recovery phase records code-server and its health timer as
 inactive before wake; schedule timer was enabled/failed. Those outer service
 states must be restored after this case, since the D10 driver starts after wake.
 
+## First attempt and narrow harness repair
+
+`d10-attempt1.json`: source `f2f58704`, exit1,143.7seconds,40/42 checks. Source
+checking and encrypted conversion succeeded, but dev-e's installed Quadlet
+generator rejected the newer `Entrypoint=` key, so neither temporary consumer
+service existed. **No application restore started.** Cleanup retained the
+converted copy/upload when stopping the nonexistent service failed.
+
+The direct read-only generator check reproduced zero generated services from
+two files. The harness now passes the same shell override through the supported
+`PodmanArgs=--entrypoint=/bin/sh`; the real generator then produced both services
+and systemd loaded them. `consumer-generator-proof.json` records this actual
+version-specific check. The existing offline boundaries still check the pinned,
+isolated shell invocation; no mocked generator result is acceptance evidence.
+
+`attempt1-setup-recovery.json` records independent original baseline verification
+and removal of only this attempt's unit files, converted archive and uploaded
+copy, plus restoration of the schedule mask state. The failed attempt remains
+published. Original fixtures and saved baselines were retained.
+
 Prior service proofs stay applicable to their paths. Newest saved n8n34/34,
 Nextcloud no-share36/36, Odoo substitute cold-preservation37/37, and LiteLLM80/80
 are retained separately in the historical `scratchpad/parity-real/runs/`.
