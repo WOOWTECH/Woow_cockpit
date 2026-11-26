@@ -1,0 +1,35 @@
+{
+  "granted": false,
+  "case": "n8n-instance-original",
+  "device": "woowbk-dev-c",
+  "phases": [
+    "images",
+    "images-recover"
+  ],
+  "name": "woowbk_focus_n8n_0123456789ab",
+  "driver_commit": "REPLACE_WITH_REVIEWED_CONTROLLER_COMMIT",
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "catalog_sha256": "3dfebaa0879d5622514276e2b834bff482f3db53618af0caaa46c5c660e968c4",
+  "expires_utc": null,
+  "image_policy": "retain-for-case",
+  "image_archives": {
+    "c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb": {
+      "compressed_sha256": "0a7352186122520e86fa3b22d0239ab611387e61bb863d082410c38e71f62ccb",
+      "compressed_bytes": 296256084
+    },
+    "28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb": {
+      "compressed_sha256": "7fa274ed6a93924cf90420433d5e0928d72183029ea80437fdf4ebc89e70580f",
+      "compressed_bytes": 196625268
+    }
+  },
+  "bounds": {
+    "host_available_mib": 1200,
+    "host_reserve_gib": 13,
+    "host_write_budget_gib": 8,
+    "device_headroom_mib": 1900,
+    "recovery_reserve_seconds": 600,
+    "load_timeout_seconds": 300,
+    "kill_after_seconds": 30,
+    "load_wait_seconds": 350
+  }
+}

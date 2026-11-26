@@ -1,0 +1,59 @@
+{
+  "protected": {
+    "20261118T095520Z-33eb7474": {
+      "archive": {
+        "filename": "20261118T095520Z-33eb7474.tar",
+        "sha256": "38fac3cbd7d15c1eea11d98248c89040c0b22b97d50df7b38d50f71dfe7b3512",
+        "bytes": 133120,
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1794995721361484419
+      },
+      "sidecar": {
+        "sha256": "ffd0961ee7303fbcf03ec6b11bd36c44b84eeb94beb81cbc5c616168acf68f76",
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1795669850141861151,
+        "filename": "20261118T095520Z-33eb7474.json",
+        "bytes": 644
+      }
+    },
+    "20261118T095247Z-388c9bd7": {
+      "archive": {
+        "filename": "20261118T095247Z-388c9bd7.tar",
+        "sha256": "e7bd639497235c4a3db58e8ee1197bc0d955941e9e35563a590fa44e49a784eb",
+        "bytes": 12564480,
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1794995568877423103
+      },
+      "sidecar": {
+        "sha256": "03eab5e8a5954838f250627364874393730a80e7c0107ec63e46d0dc3dc26819",
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1795677711382308186,
+        "filename": "20261118T095247Z-388c9bd7.json",
+        "bytes": 641
+      }
+    }
+  },
+  "installed_storage_sources": {
+    "storage.py": "d515431db2990025e7acf7cf3d1fd720622865e4dd0fcee3d59c59912c1b703b",
+    "paths.py": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0"
+  },
+  "device": "woowbk-dev-c",
+  "observed_utc": "2026-11-26T23:56:49.301848+00:00",
+  "operation": "fixed-read-only-baseline-files",
+  "database_opened": false,
+  "service_started": false,
+  "helper_called": false,
+  "mutation": false,
+  "probe_sha256": "e30c36b921608d5f77a70720a3511a7c54928c9f42427e348225ebad84e739a7",
+  "ops_sha256": "41f6792a6e419e486a62df53803dd5abe2e137fd1ca340a9a5dacd05c10df0f8",
+  "production_source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "driver_commit": "c0f140c6c16c2677599fb357db2aa56170baae30"
+}
