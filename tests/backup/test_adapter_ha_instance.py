@@ -7,6 +7,8 @@ import copy
 import hashlib
 import json
 import re
+import types
+from unittest import mock
 
 from woowbackup import catalog, flows, haimport, podman, ha_instance_access as access
 from woowbackup.adapters import quadlet_postgres as qp
@@ -281,6 +283,28 @@ class HaInstanceTests(StrengthCase):
             plan['database'][0] = 'new_owner'
             plan['database'][1] = [['new_owner' if r == old_owner else r, p, g] for r, p, g in plan['database'][1]]
 
+    def test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup(self):
+        from woowbackup import ha_n8n, ha_litellm
+        path = qp.QUADLET_DIR + '/woowbk-demo-app.container'
+        self.owner.files[path] += b'Network=woowbk-demo.network\n'
+        manifest, folder, _entries = self.converted()
+        unit = 'woowbk-demo-app.service'
+        self.owner.units[unit] = 'inactive'
+        def prepare(work, app, **_kwargs):
+            temp = work.temp(app)
+            temp.put_back_later('main', lambda: self.owner.units.update({unit:'inactive'}))
+            self.owner.units[unit] = 'active'
+            return {'database':self.application_database,'user':'notes','host':'woowbk-demo-db','port':5432}
+        self.adapter._read_ha_app_connection = types.MethodType(qp.QuadletPostgresAdapter._read_ha_app_connection, self.adapter)
+        module, name = (ha_n8n, 'prepare_app_endpoint') if self.app_id == 'n8n' else (ha_litellm, 'prepare_app_connection')
+        with mock.patch.object(module, name, prepare), \
+                mock.patch.object(ha_n8n, 'main_container', return_value='woowbk-demo-app'):
+            checks = self.adapter.preflight(manifest, mode='inplace', extracted_dir=folder)
+        destination = next(c for c in checks if c['id'].endswith('/instance-destination'))
+        self.assertEqual(destination['status'], 'ok', destination)
+        self.assertEqual(self.owner.units[unit], 'inactive', 'cleanup completes before safety/ordinary restore')
+        self.assertFalse(self.owner.dropped)
+
     def test_complete_payload_contains_every_database_and_all_current_roles(self):
         manifest, _folder, entries = self.converted()
         item = manifest['postgres'][0]
@@ -394,6 +418,26 @@ class HaInstanceTests(StrengthCase):
         self.assertIn('個別欄位', caught.exception.message)
         self.assertEqual(self.owner.instance, before)
         self.assertFalse(self.owner.dropped)
+
+    def test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks(self):
+        name = self.application_database
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        (self.staging / 'postgres').mkdir(exist_ok=True)
+        for old, new in (('r', 'p'), ('p', 'r')):
+            plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login')
+            plan['relations'][0][2] = old
+            self.owner.instance[name].update(owner='db_owner', access=plan)
+            ha = copy.deepcopy(self.owner.instance[name])
+            ha['access']['relations'][0][2] = new
+            path = self.root / f'kind-{old}-{new}.dump'
+            path.write_bytes(encoded(name, dict(ha, data=b'HA rows')))
+            db = {'name': name, 'extensions': [], 'encoding': 'UTF8', 'collate': 'C', 'ctype': 'C'}
+            outsiders = {n: copy.deepcopy(info) for n, info in self.owner.instance.items() if n != name}
+            with self.subTest(old=old, new=new), self.assertRaises(BackupError) as caught:
+                self.adapter._restore_ha_instance_database(self.app.postgres[0], db, path)
+            self.assertIn('種類已改變', caught.exception.message)
+            self.assertEqual({n: info for n, info in self.owner.instance.items() if n != name}, outsiders)
 
     def test_converted_extension_version_is_recorded_and_checked_against_installed_controls(self):
         name = self.application_database

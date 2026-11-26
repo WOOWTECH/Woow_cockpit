@@ -44,6 +44,7 @@ import secrets
 import shlex
 import socket
 import stat
+import sys
 import time
 import urllib.parse
 from pathlib import Path
@@ -3597,23 +3598,32 @@ class QuadletPostgresAdapter(Adapter):
 
     def _read_ha_app_connection(self, pg, sources):
         from types import SimpleNamespace
-        from .. import ha_n8n, ha_litellm, hacommon, tempctr
+        from .. import ha_n8n, ha_litellm, hacommon, tempctr, jobs
         try:
-            if self.app.id == 'litellm':
-                return ha_litellm.read_app_connection(self.runner, sources, postgres=pg)
+            pending = getattr(self, '_ha_endpoint_cleanup', None)
+            if pending is not None:
+                if pending.cleanup():
+                    raise BackupError('job-failed', '讀取連線前的服務仍無法恢復原狀，已停止還原，請先確認服務。', app=self.app.id)
+                self._ha_endpoint_cleanup = None
             # This lifecycle must end HERE, before restore's safety handover/stop/restart. A job-wide deferred stop
             # would otherwise stop the successfully restored application. The vendor reader/selector belongs to n8n.
-            temp = tempctr.TempObjects(self.runner, secrets.token_hex(8), log=self.log, scope='endpoint')
+            temp = tempctr.TempObjects(self.runner, self.job_id or jobs.new_job_id(), log=self.log)
             work = SimpleNamespace(runner=lambda _app: self.runner, temp=lambda _app: temp,
                                    quadlets=lambda _app: sources, log=self.log)
             try:
-                connection = ha_n8n.prepare_app_endpoint(work, self.app, quadlets=sources)
-                main = hacommon.container_file(sources, ha_n8n.main_container(self.runner, sources))
-                if main is None or not ha_instance_access.local_backend(connection, sources, main, pg):
-                    raise ValueError()
+                if self.app.id == 'litellm':
+                    connection = ha_litellm.prepare_app_connection(work, self.app, quadlets=sources, postgres=pg)
+                else:
+                    connection = ha_n8n.prepare_app_endpoint(work, self.app, quadlets=sources)
+                    main = hacommon.container_file(sources, ha_n8n.main_container(self.runner, sources))
+                    if main is None or not ha_instance_access.local_backend(connection, sources, main, pg):
+                        raise ValueError()
             finally:
                 if temp.cleanup():
-                    raise BackupError('job-failed', '無法恢復讀取連線前的服務狀態，已停止還原，請先確認服務。', app=self.app.id)
+                    self._ha_endpoint_cleanup = temp  # retain existing TempObjects retry callbacks after a failed stop
+                    if sys.exc_info()[0] is None:
+                        raise BackupError('job-failed', '無法恢復讀取連線前的服務狀態，已停止還原，請先確認服務。', app=self.app.id)
+                    self.log('無法恢復讀取連線前的服務狀態，已保留重試清理，請確認服務。')
             return connection
         except (AttributeError, TypeError, ValueError):
             raise BackupError('incompatible', '無法確認應用目前的資料庫目的地，請套用設定後重新轉換。', app=self.app.id) from None
@@ -3839,6 +3849,10 @@ class QuadletPostgresAdapter(Adapter):
         finally:
             self.runner.podman('exec', pg['container'], 'rm', '-f', '--', toc_path, timeout=SHORT_TIMEOUT, max_output=0)
         present = self._capture_ha_instance_access(pg, name)
+        current_kinds = {(r[0], r[1]): r[2] for r in access['relations']}
+        if any((r[0], r[1]) in current_kinds and r[2] != current_kinds[r[0], r[1]] for r in present['relations']):
+            raise BackupError('job-failed', 'HA 應用同名資料表的種類已改變，無法沿用目前擁有者與權限；已停止並會自動回復。',
+                              app=self.app.id)
         self._run_sql(pg['container'], pg['user'], name, ha_instance_access.restore_sql(access, present, name))
         after = self._capture_ha_instance_access(pg, name)
         if ha_instance_access.comparable(access, present) != ha_instance_access.comparable(after, access):

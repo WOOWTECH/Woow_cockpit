@@ -315,14 +315,22 @@ try:
         env={}
         for item in read(proc/'environ',262144).decode().split('\0'):
             key,sep,value=item.partition('=')
-            if key in ('DATABASE_URL','DIRECT_URL','DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT'):
+            if key in ('DATABASE_URL','DIRECT_URL','DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT',
+                       'DATABASE_URL_FILE','DIRECT_URL_FILE','CONFIG_FILE_PATH','LITELLM_CONFIG_PATH'):
                 if key in env: raise ValueError()
                 env[key]=value
         if any(env.get(k) for k in env if k!='DATABASE_URL'): raise ValueError()
         found=destination(env['DATABASE_URL'])
-        if '--config' in args:
+        if any(a.startswith(('--database','--direct_url','--direct-url')) for a in args): raise ValueError()
+        configs=[]
+        for i,arg in enumerate(args):
+            if arg in ('--config','-c'): configs.append(args[i+1])
+            elif arg.startswith('--config='): configs.append(arg.split('=',1)[1])
+            elif arg.startswith('-c') and len(arg)>2: configs.append(arg[2:])
+        if len(configs)>1: raise ValueError()
+        if configs:
             import yaml
-            config=pathlib.Path(args[args.index('--config')+1])
+            config=pathlib.Path(configs[0])
             if not config.is_absolute(): config=proc/'cwd'/config
             value=yaml.safe_load(read(config,1048576))
             pending=[value]; visited=set(); count=0
@@ -334,10 +342,11 @@ try:
                     visited.add(id(item))
                 if isinstance(item,dict):
                     for key,val in item.items():
-                        if key in ('database_url','direct_url'):
+                        if key in ('DATABASE_URL','DIRECT_URL','database_url','direct_url'):
                             if val!='os.environ/DATABASE_URL' and (not isinstance(val,str) or destination(val)!=found):
                                 raise ValueError()
-                        elif key in ('database_host','database_name','database_user','database_port'):
+                        elif key in ('DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT','DATABASE_URL_FILE',
+                                     'DIRECT_URL_FILE','database_host','database_name','database_user','database_port'):
                             raise ValueError()
                     pending.extend(item.values())
                 elif isinstance(item,list): pending.extend(item)
@@ -373,6 +382,71 @@ def read_app_connection(runner, quadlets, *, postgres):
     except (ValueError, TypeError):
         raise _stop(None, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION) from None
     return found
+
+
+def prepare_app_connection(work, app, *, quadlets, postgres):
+    """Read a stopped proxy through the existing job lifecycle; preserve every dependency's initial state.
+
+    Restore provides a SHORT scoped TempObjects and must clean it before ordinary restore stops/restarts services.
+    Registration precedes systemctl start, covering a start that partially succeeds before error/cancellation.
+    """
+    from .adapters.quadlet_postgres import quadlet_unit
+    runner = work.runner(app)
+    proxies = [n for n in quadlets if n.endswith('.container') and _is_proxy(quadlets[n])]
+    if len(proxies) != 1:
+        raise _layout_stop(app, TARGET_MISMATCH)
+    container = ha_odoo.quadlet_container_name(quadlets, proxies[0])
+    stopped = not hatarget._running(runner, container)
+    plan = [(container, None, False)]
+    if stopped:
+        temp = work.temp(app)
+        units = {quadlet_unit(n): n for n in quadlets if n.endswith('.container')}
+        aux = {quadlet_unit(n) for n in quadlets if not n.endswith('.container')}
+        result = runner.systemctl('show', '--property=Id,LoadState,ActiveState,Requires,Wants,BindsTo', '--', *units,
+                                  timeout=60, max_output=64 * 1024)
+        blocks = (result.stdout or b'').decode('utf-8').strip().split('\n\n')
+        rows = [dict(line.split('=', 1) for line in b.splitlines() if '=' in line) for b in blocks]
+        if len(rows) != len(units) or any(row.get('Id') != unit for row, unit in zip(rows, units)):
+            raise _layout_stop(app, TARGET_MISMATCH)
+        states, order, visiting = dict(zip(units, rows)), [], set()
+        def visit(unit):
+            if unit in visiting:
+                raise _layout_stop(app, TARGET_MISMATCH)
+            if unit in order:
+                return
+            row = states[unit]
+            if row.get('LoadState') != 'loaded' or row.get('ActiveState') not in ('active', 'inactive', 'failed'):
+                raise _layout_stop(app, TARGET_MISMATCH)
+            visiting.add(unit)
+            for dep in sorted(set(' '.join(row.get(k, '') for k in ('Requires', 'Wants', 'BindsTo')).split())):
+                if dep in units:
+                    visit(dep)
+                elif dep.endswith('.service') and dep not in aux:
+                    raise _layout_stop(app, TARGET_MISMATCH)
+            visiting.remove(unit)
+            order.append(unit)
+        visit(quadlet_unit(proxies[0]))
+        plan = [(ha_odoo.quadlet_container_name(quadlets, units[u]), u, states[u]['ActiveState'] != 'active')
+                for u in order]
+    endpoint = {}
+    def ready(_runner, _container):
+        try:
+            endpoint.update(read_app_connection(runner, quadlets, postgres=postgres))
+            return True
+        except BackupError as error:
+            if not stopped or haissues.is_job_wide(error):
+                raise
+            return False
+    for current, unit, was_stopped in plan:
+        if was_stopped:
+            def stop_again(current=current, unit=unit):
+                runner.systemctl('stop', '--', unit, timeout=hatarget.STOP_TIMEOUT, max_output=64 * 1024)
+                temp.services.pop(current, None)
+            temp.put_back_later(f'LiteLLM 讀取前的服務 {current}', stop_again)
+        hatarget.ensure_running(work, app, current,
+            ready=ready if current == container else 'postgres' if current == postgres['container'] else 'running',
+            size=hatarget.size_hint(getattr(work, 'ha', None)))
+    return endpoint
 
 
 class Target:
@@ -441,7 +515,7 @@ class Target:
                 or SALT_SECRET not in declared or len(declared) != len(set(declared))):
             raise _stop(app, 'litellm.target-mismatch', TARGET_MISMATCH, TARGET_MISMATCH_ACTION)
         if self.mode == 'instance':
-            self.connection = read_app_connection(work.runner(app), quadlets, postgres=pg)
+            self.connection = prepare_app_connection(work, app, quadlets=quadlets, postgres=pg)
         # L-03: what the entry declares besides the database is this device's own data; it goes along as it is.
         self.extra_volumes, self.extra_dirs = hatarget.extras(
             app, handled_volumes=(self.db_volume,) if self.mode == 'cold' else ())

@@ -336,6 +336,9 @@ class LiteLLMCase(fk.ConversionCase):
             self.started.append((container, kwargs))
             if self.on_start is not None:
                 self.on_start(container)
+            if (container == self.world.proxy_name and callable(kwargs.get('ready')) and
+                    kwargs['ready'].__qualname__ == 'prepare_app_connection.<locals>.ready'):
+                self.assertTrue(kwargs['ready'](work.runner(app), container))
 
         patcher = mock.patch.object(hatarget, 'ensure_running', ensure_running)
         patcher.start()

@@ -1,17 +1,110 @@
 """Structured instance access: app data objects only, bounded facts and quoted identifiers."""
 import copy
+import contextlib
+import io
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 from woowbackup import ha_instance_access as access
 from woowbackup import ha_n8n
+from woowbackup import ha_litellm, hatarget, tempctr
+from woowbackup.flows import Cancelled
+from woowbackup.podman import Result
 from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
 from woowbackup.errors import BackupError
 from .test_adapter_ha_instance import access_plan
 
 
 class AccessPlanTests(unittest.TestCase):
+    def test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides(self):
+        # Execute the production fixed probe, redirecting ONLY /proc enumeration to bounded synthetic process files.
+        # URL/YAML parsing, file reads and redaction run unchanged; no podman response stands in for this resolver.
+        with tempfile.TemporaryDirectory() as directory:
+            proc=Path(directory)/'3141599'; proc.mkdir()
+            config=Path(directory)/'config.yaml'
+            current=b'DATABASE_URL=postgresql://app:private-password@litellm-postgres:5432/litellm\0'
+            def probe(args,body):
+                (proc/'cmdline').write_bytes(b'\0'.join(a.encode() for a in ['/usr/local/bin/litellm',*args]))
+                (proc/'environ').write_bytes(current)
+                config.write_text(body)
+                original=Path.iterdir
+                def iterdir(path):
+                    return iter([proc]) if str(path)=='/proc' else original(path)
+                output=io.StringIO()
+                with mock.patch.object(Path,'iterdir',iterdir),contextlib.redirect_stdout(output):
+                    exec(compile(ha_litellm.CONNECTION_PROBE,'fixed-litellm-probe','exec'),{})
+                self.assertNotIn('private-password',output.getvalue())
+                return json.loads(output.getvalue())
+            valid='general_settings:\n  database_url: os.environ/DATABASE_URL\n'
+            for args in (['--config',str(config)],['--config='+str(config)],['-c',str(config)]):
+                self.assertEqual(probe(args,valid),{'database':'litellm','user':'app','host':'litellm-postgres','port':5432})
+            for body in ('general_settings:\n  database_url: postgresql://app:x@other/another\n',
+                         'environment_variables:\n  DATABASE_URL: postgresql://app:x@litellm-postgres/another\n'):
+                with self.assertRaises(SystemExit):
+                    probe(['--config='+str(config)],body)
+            with self.assertRaises(SystemExit):
+                probe(['--database_url=postgresql://app:x@litellm-postgres/another'],'{}')
+
+    def test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped(self):
+        from .test_ha_litellm import QUADLETS
+        sources = dict(QUADLETS, **{'queue.container': b'[Container]\nContainerName=queue\n'})
+        names = {'litellm.service':'litellm', 'litellm-postgres.service':'litellm-postgres', 'queue.service':'queue'}
+        pg = {'container':'litellm-postgres'}
+        app = SimpleNamespace(id='litellm', name='LiteLLM', postgres=[pg])
+        for phase, failure in ((None,None), ('litellm',BackupError('job-failed','partial start')),
+                               ('litellm-postgres',Cancelled()), ('read',Cancelled())):
+            original = {'litellm':False, 'litellm-postgres':False, 'queue':True}
+            state, events, temps = dict(original), [], []
+            class Runner:
+                owner='appowner'; uid=1000; home='/home/appowner'
+                def systemctl(self, *args, **kwargs):
+                    if args[0]=='show':
+                        rows=[]
+                        for unit in args[args.index('--')+1:]:
+                            active='active' if state[names[unit]] else 'inactive'
+                            deps='litellm-postgres.service queue.service' if unit=='litellm.service' else ''
+                            rows.append(f'Id={unit}\nLoadState=loaded\nActiveState={active}\nRequires={deps}\nWants=\nBindsTo=')
+                        return Result(0,'\n\n'.join(rows).encode(),b'')
+                    container=names[args[-1]]
+                    events.append((args[0],container))
+                    state[container]=args[0]=='start'
+                    if args[0]=='start' and container==phase: raise failure
+                    if args[0]=='stop': assert 'abort' not in kwargs
+                    return Result(0,b'',b'')
+                def podman(self,*args,**kwargs):
+                    if args[:2]==('container','inspect'):
+                        return Result(0,b'true' if state[args[-1]] else b'false',b'')
+                    if args[0]=='exec' and 'pg_isready' in args:
+                        return Result(0 if state[args[1]] else 1,b'',b'')
+                    if ha_litellm.CONNECTION_PROBE in args:
+                        assert state['litellm'] and state['litellm-postgres']
+                        if phase=='read': raise failure
+                        return Result(0,json.dumps({'database':'litellm','user':'app_login',
+                            'host':'litellm-postgres','port':5432}).encode(),b'')
+                    raise AssertionError(args[:2])
+            real_temp=tempctr.TempObjects
+            def construct(*args,**kwargs):
+                value=real_temp(*args,**kwargs); temps.append(value); return value
+            adapter=QuadletPostgresAdapter(app,Runner(),lambda _line:None)
+            with mock.patch.object(hatarget,'ensure_user_manager',lambda *_a:None), \
+                    mock.patch.object(tempctr,'TempObjects',side_effect=construct):
+                if failure:
+                    with self.assertRaises(type(failure)):
+                        adapter._read_ha_app_connection(pg,sources)
+                else:
+                    self.assertEqual(adapter._read_ha_app_connection(pg,sources)['database'],'litellm')
+            self.assertEqual(state,original)
+            self.assertNotIn(('stop','queue'),events)
+            if phase!='litellm-postgres':
+                self.assertLess(events.index(('start','litellm-postgres')),events.index(('start','litellm')))
+            state['litellm']=True
+            self.assertEqual(temps[0].cleanup(),[])
+            self.assertTrue(state['litellm'],'scoped callbacks cannot later stop the restored proxy')
+
     def test_endpoint_lifecycle_finishes_before_restore_and_on_error_or_cancel(self):
         from .test_adapter import QUADLETS
         sources = dict(QUADLETS)
@@ -20,7 +113,7 @@ class AccessPlanTests(unittest.TestCase):
         app = SimpleNamespace(id='n8n')
         adapter = QuadletPostgresAdapter(app, runner, lambda _line: None)
         pg = {'container': 'woowbk-demo-db'}
-        for failure in (None, 'job-failed', 'cancelled'):
+        for failure in (None, BackupError('job-failed', 'bounded failure'), Cancelled()):
             state, temps = {'running': False}, []
             def prepare(work, current, *, quadlets):
                 self.assertIs(current, app)
@@ -30,14 +123,14 @@ class AccessPlanTests(unittest.TestCase):
                 temp.put_back_later('main', lambda: state.update(running=False))
                 state['running'] = True
                 if failure:
-                    raise BackupError(failure, 'bounded failure')
+                    raise failure
                 return {'database': 'notes', 'user': 'app', 'host': 'woowbk-demo-db', 'port': 5432}
             with mock.patch.object(ha_n8n, 'prepare_app_endpoint', prepare, create=True), \
                     mock.patch.object(ha_n8n, 'main_container', return_value='woowbk-demo-app', create=True):
                 if failure:
-                    with self.assertRaises(BackupError) as caught:
+                    with self.assertRaises(type(failure)) as caught:
                         adapter._read_ha_app_connection(pg, sources)
-                    self.assertEqual(caught.exception.code, failure)
+                    self.assertIs(caught.exception, failure)
                 else:
                     self.assertEqual(adapter._read_ha_app_connection(pg, sources)['database'], 'notes')
             self.assertFalse(state['running'], 'scoped cleanup already completed')

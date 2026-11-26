@@ -1,25 +1,43 @@
 {
   "N8-01": {
-    "status": "done",
+    "status": "part",
     "tests_add": [
       "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_resolves_the_app_database_separately",
       "tests/backup/test_ha_n8n.py::ConvertFlowTests.test_instance_conversion_keeps_credentials_key_and_all_live_databases",
       "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
       "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
-      "tests/backup/test_archive.py::HaInstanceMarkerTests"
+      "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup"
     ],
-    "tests_remove": ["tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_cannot_be_made_here_and_says_so"],
-    "note": "Complete instance payloads retain all device databases, owners and role/password definitions; only the separately resolved n8n app DB contains converted HA rows. HA inplace import retains live outsiders/roles/authentication secrets, including later changes, and loads under the current app DB owner. Fresh HA restore explicitly applies the complete conversion-time snapshot. Full current safety capture/digest verification/automatic rollback remain active. Guarded unit/flow evidence only; real instance acceptance is separate."
+    "tests_remove": [
+      "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_cannot_be_made_here_and_says_so"
+    ],
+    "note": "Complete instance payload; selective HA import retains current outsiders, roles/passwords and app owners/ACLs. Trusted endpoint/future-input checks precede DROP; stopped-reader cleanup ends before restore. New object ambiguity refuses; installed extensions preseeded; current full safety rollback verified. Guarded source checks only; generated PG and saved real n8n flow remain separate gates."
   },
   "L-03": {
-    "status": "done",
+    "status": "part",
     "tests_add": [
       "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_the_instance_maintenance_database_is_not_the_litellm_database",
       "tests/backup/test_ha_litellm.py::ConvertTests.test_instance_conversion_keeps_salt_schema_guards_and_all_live_databases",
-      "tests/backup/test_adapter_ha_instance.py::LiteLlmInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
-      "tests/backup/test_adapter_ha_instance.py::LiteLlmInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
-      "tests/backup/test_archive.py::HaInstanceMarkerTests"
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+      "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup",
+      "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped",
+      "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides"
     ],
-    "note": "Cold, single DB, extras and complete instance catalogs supported. Instance maintenance postgres is separate from actual litellm DB. Existing salt binding, trusted schema, low-privilege row loading and audits remain required. HA inplace import retains current outsiders, roles/passwords, owners and authentication secrets; LiteLLM salt alone follows HA encrypted rows. Full current safety/rollback verification remains active; fresh restore explicitly uses the complete conversion-time snapshot. Real instance acceptance is separate."
+    "note": "Actual proxy URL bound to local litellm backend; salt/schema guards retained. Current outsiders, credentials and data-object access preserved; installed extensions preseeded. Ambiguous new objects refuse; stopped-reader cleanup scoped. Full current safety rollback remains. Base HaInstanceTests methods also run via LiteLlmInstanceTests inheritance. Generated PG and saved real flow remain separate."
   }
 }
