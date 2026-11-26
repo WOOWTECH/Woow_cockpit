@@ -155,6 +155,43 @@ class GuardsTest(unittest.TestCase):
 
 
 class SummaryTest(unittest.TestCase):
+    def test_derived_source_replaces_only_postgres_and_keeps_other_members_and_artifacts(self):
+        def tar_bytes(rows, mode='w'):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode=mode) as archive:
+                for name, data in rows:
+                    entry = tarfile.TarInfo(name)
+                    entry.size = len(data)
+                    archive.addfile(entry, io.BytesIO(data))
+            return stream.getvalue()
+
+        for compressed in (False, True):
+            with self.subTest(compressed=compressed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                member = 'example_woow-omnigent.tar.gz'
+                inner = tar_bytes([('addon.json', b'{"version":"0.1.23"}'),
+                                   ('data/postgres/PG_VERSION', b'old'),
+                                   ('data/omnigent-home/.omnigent/artifacts/keep.txt', b'kept')],
+                                  'w:gz' if compressed else 'w')
+                original = tar_bytes([('backup.json', b'{"backup":"metadata"}'), (member, inner),
+                                      ('other-addon.tar.gz', b'unrelated unchanged member')])
+                source, pg, output = root / 'source.tar', root / 'pg.tar', root / 'derived.tar'
+                source.write_bytes(original)
+                pg.write_bytes(tar_bytes([('PG_VERSION', b'16\n'), ('base/example', b'new database bytes')]))
+                real.repack_postgres(source, member, pg, output)
+                self.assertEqual(source.read_bytes(), original)
+                with tarfile.open(output) as outer:
+                    self.assertEqual(outer.extractfile('backup.json').read(), b'{"backup":"metadata"}')
+                    self.assertEqual(outer.extractfile('other-addon.tar.gz').read(), b'unrelated unchanged member')
+                    with outer.extractfile(member) as stream, tarfile.open(fileobj=stream, mode='r:*') as archive:
+                        self.assertEqual(archive.extractfile('data/postgres/PG_VERSION').read(), b'16\n')
+                        self.assertEqual(archive.extractfile('data/postgres/base/example').read(), b'new database bytes')
+                        self.assertEqual(archive.extractfile('data/omnigent-home/.omnigent/artifacts/keep.txt').read(),
+                                         b'kept')
+                        self.assertEqual(archive.extractfile('addon.json').read(), b'{"version":"0.1.23"}')
+                self.assertFalse(output.with_suffix('.member').exists())
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
     def test_tar_files_and_member(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'v.tar'

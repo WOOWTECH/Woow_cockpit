@@ -28,9 +28,15 @@ byte-for-byte this device's (never HA's).
 Limits stated in the evidence: the runner is a placeholder container (the Pi agent and runner pairing with a
 model are out of scope); the engine runs on the host and reaches dev-d's owner through owner.sh (the lab
 bridge), and the live /v1/info GET goes through `podman exec` into the running server.
+
+`--extra-objects` derives a separate source from the verified HA fixture, adds a no-op event trigger and an unused
+foreign data wrapper in an isolated PostgreSQL container, then runs the real check, refuses the unconfirmed
+conversion, confirms the reported line and runs conversion/installation/restart/rollback. It checks the product's
+new-cluster audit and verifies those extra objects were not installed. The original fixture is preserved.
 """
 import argparse
 import contextlib
+import copy
 import hashlib
 import json
 import os
@@ -52,7 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import omnigent_real_app_chain as chain  # noqa: E402  (register_private, event, login_registered, cookie readers)
 import omnigent_install_rollback as installer  # noqa: E402  (DeviceOwner bridge, arm_once)
 import dev_d_guard as guard  # noqa: E402  (clean tree, isolation record, team lock)
-from woowbackup import (archive, catalog, flows, ha_omnigent, habackup, haimport, hastore, keys, storage,  # noqa: E402
+from woowbackup import (archive, catalog, flows, ha_odoo, ha_omnigent, habackup, haimport, hastore, keys, storage,  # noqa: E402
                         tempctr, util)
 from woowbackup.adapters import quadlet_postgres  # noqa: E402
 from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter  # noqa: E402
@@ -89,6 +95,110 @@ def file_sha256(path):
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+EXTRA_OBJECTS_SQL = '''
+CREATE FUNCTION public.woowbk_extra_event_function() RETURNS event_trigger
+LANGUAGE plpgsql AS $$ BEGIN RETURN; END $$;
+CREATE EVENT TRIGGER woowbk_extra_event ON ddl_command_end
+EXECUTE FUNCTION public.woowbk_extra_event_function();
+CREATE FOREIGN DATA WRAPPER woowbk_extra_fdw;
+'''
+
+
+def repack_postgres(source, member_name, postgres_tar, destination):
+    """Derived lab source: replace only the Omnigent member's PostgreSQL folder; preserve the other HA members."""
+    inner_path = destination.with_suffix('.member')
+    try:
+        with tarfile.open(source, 'r:') as original:
+            member = original.getmember(member_name)
+            with original.extractfile(member) as stream:
+                compressed = stream.read(2) == b'\x1f\x8b'
+            with original.extractfile(member) as stream, tarfile.open(fileobj=stream, mode='r:*') as inner, \
+                    tarfile.open(inner_path, 'w:gz' if compressed else 'w:', format=tarfile.PAX_FORMAT) as replaced:
+                for entry in inner:
+                    name = entry.name.removeprefix('./').rstrip('/')
+                    if name == ha_omnigent.PG_PREFIX or name.startswith(ha_omnigent.PG_PREFIX + '/'):
+                        continue
+                    replaced.addfile(entry, inner.extractfile(entry) if entry.isfile() else None)
+                root = tarfile.TarInfo(ha_omnigent.PG_PREFIX)
+                root.type, root.mode = tarfile.DIRTYPE, 0o700
+                replaced.addfile(root)
+                with tarfile.open(postgres_tar, 'r:') as postgres:
+                    for entry in postgres:
+                        name = entry.name.removeprefix('./').rstrip('/')
+                        if name in ('', '.'):
+                            continue
+                        item = copy.copy(entry)
+                        item.name = ha_omnigent.PG_PREFIX + '/' + name
+                        if item.islnk():
+                            item.linkname = ha_omnigent.PG_PREFIX + '/' + entry.linkname.removeprefix('./')
+                        item.pax_headers = {k: v for k, v in entry.pax_headers.items() if k not in ('path', 'linkpath')}
+                        replaced.addfile(item, postgres.extractfile(entry) if entry.isfile() else None)
+            with tarfile.open(destination, 'w', format=tarfile.PAX_FORMAT) as output:
+                for entry in original:
+                    if entry.name == member_name:
+                        item = copy.copy(entry)
+                        item.size = inner_path.stat().st_size
+                        item.pax_headers = {k: v for k, v in entry.pax_headers.items() if k != 'size'}
+                        with inner_path.open('rb') as stream:
+                            output.addfile(item, stream)
+                    else:
+                        output.addfile(entry, original.extractfile(entry) if entry.isfile() else None)
+        os.chmod(destination, 0o600)
+    finally:
+        inner_path.unlink(missing_ok=True)
+
+
+def source_with_extra_objects(ctx, app, record, original, directory):
+    """Use the product's isolated HA reader and PostgreSQL container to add harmless lab-only schema objects."""
+    staging = directory / 'derive-source'
+    staging.mkdir(mode=0o700)
+    work = haimport.Work(ctx, record, None, staging)
+    pg_tar, destination = directory / 'derive-postgres.tar', directory / 'extra-objects-source.tar'
+    original_sha256 = file_sha256(original)
+    try:
+        haimport._open(work, ctx, {'ha_backup_id': record['id']})
+        member_name = work.addon_member(ha_omnigent.SLUG).name
+        tmp = work.temp(app)
+        pg_ids = tmp.user_ids('derive-ids', PG_IMAGE, 'postgres')
+        ha_omnigent.member_pass(work, app, tmp, pg_ids)
+        cluster = ha_odoo.start_ha_cluster(work, tmp, PG_IMAGE)
+        cluster.script(EXTRA_OBJECTS_SQL, ha_omnigent.DATABASE, timeout=60)
+        require(cluster.query_json("SELECT json_build_array("
+                                  "(SELECT count(*) FROM pg_event_trigger WHERE evtname='woowbk_extra_event'),"
+                                  "(SELECT count(*) FROM pg_foreign_data_wrapper WHERE fdwname='woowbk_extra_fdw'))",
+                                  ha_omnigent.DATABASE) == [1, 1], 'extra_source_objects_missing')
+        tmp.stop('hapg', timeout=120)
+        tmp.remove('hapg')
+        with pg_tar.open('xb') as output:
+            os.fchmod(output.fileno(), 0o600)
+            tmp.volume_export('hapg', output, max_output=512 * 1024**2)
+        repack_postgres(original, member_name, pg_tar, destination)
+        require(file_sha256(original) == original_sha256, 'original_source_changed')
+        event('derived_source', original_sha256_unchanged=True, derived_sha256=file_sha256(destination),
+              extra_event_trigger=True, extra_foreign_data_wrapper=True, event_function_has_no_side_effects=True)
+        return destination
+    finally:
+        require(not work.close(), 'derived_source_temp_cleanup_failed')
+        pg_tar.unlink(missing_ok=True)
+        shutil.rmtree(staging)
+
+
+def publish_source(paths, source):
+    part = Path(paths.data) / ('.ha-import-' + secrets.token_hex(4) + '.part')
+    shutil.copyfile(source, part)
+    fd = os.open(part, os.O_RDONLY)
+    try:
+        st = os.fstat(fd)
+        summary_doc = habackup.describe(fd).summary()
+        os.lseek(fd, 0, os.SEEK_SET)
+        sha256, size = util.sha256_fd(fd)
+        record, created = hastore.HaStore(paths).publish(fd, st, part, summary_doc, sha256, source.name)
+        require(created and size == source.stat().st_size, 'derived_publish_failed')
+        return record
+    finally:
+        os.close(fd)
 
 
 @contextlib.contextmanager
@@ -415,7 +525,7 @@ def verify_installed(lab, expect, creds, phase, observed, *, target_password, pi
     return admin
 
 
-def run(arch):
+def run(arch, *, extra_objects=False):
     backup = LAB / 'ha-fixtures' / '20261119-b1' / arch / f'woow-b1-{arch}-plain' / f'woow-b1-{arch}-plain.tar'
     require(file_sha256(backup) == FIXTURE_SHA[arch], 'fixture_sha256_mismatch')
     event('real_source', arch=arch, fixture_sha256_matches_record=True)
@@ -539,7 +649,9 @@ def run(arch):
         real_version = ha_omnigent.target_version
         real_alembic = ha_omnigent.live_alembic
         real_trusted_schema = ha_omnigent.trusted_schema
+        real_audit = ha_omnigent.audit_new_cluster
         quiesced = {}
+        audits = []
 
         def observe_version(work, app_, url):
             value = real_version(work, app_, url)
@@ -562,12 +674,37 @@ def run(arch):
             quiesced['server_stopped'] = True
             return real_trusted_schema(work, app_, target, path, alembic)
 
+        def observe_audit(cluster, superuser):
+            real_audit(cluster, superuser)
+            audits.append(True)
+
         params = {'ha_backup_id': record['id'], 'apps': ['omnigent'], 'test_mode': False, 'encrypt': True}
         with mock.patch.object(quadlet_postgres, 'loopback_get', lab.live_get), \
                 mock.patch.object(ha_omnigent, 'target_version', observe_version), \
                 mock.patch.object(ha_omnigent, 'live_alembic', observe_alembic), \
                 mock.patch.object(ha_omnigent, 'trusted_schema', stop_before_schema), \
+                mock.patch.object(ha_omnigent, 'audit_new_cluster', observe_audit), \
                 mock.patch.object(tempctr, 'TempObjects', LabTemp):
+            if extra_objects:
+                derived = source_with_extra_objects(context(), app, record, backup, lab.private)
+                record = publish_source(paths, derived)
+                params['ha_backup_id'] = record['id']
+                checked = haimport.run_ha_check(context(), params)['ha_check']['apps'][0]
+                lines = [line for line in checked['issues'] if line['level'] == 'confirm']
+                require(checked['importable'] and any(line['id'] == 'omnigent.skipped' for line in lines),
+                        'extra_objects_not_confirmable')
+                backups_before = deps.storage.list_backups()
+                try:
+                    haimport._run_omnigent_candidate(context(), params, schema_ddl_quiesced=True)
+                except BackupError as error:
+                    require(error.code == 'confirmation-required', 'unconfirmed_extra_objects_wrong_error')
+                else:
+                    raise RuntimeError('unconfirmed_extra_objects_converted')
+                require(deps.storage.list_backups() == backups_before and not quiesced.get('server_stopped'),
+                        'unconfirmed_extra_objects_changed_target')
+                event('extra_objects_confirmation', check_importable=True, confirmation_line=True,
+                      unconfirmed_refused=True, no_backup_created=True, target_service_not_stopped=True)
+                params['acknowledged'] = {'omnigent': [line['key'] for line in lines]}
             converted = haimport._run_omnigent_candidate(context(), params, schema_ddl_quiesced=True)
         require(quiesced.get('server_stopped') and quiesced.get('live_version') == '0.21.0'
                 and quiesced.get('live_alembic') == [summary['alembic']], 'live_discovery_mismatch')
@@ -575,9 +712,23 @@ def run(arch):
         event('candidate_converted', internal_entry=True, real_ha_store=True, real_adapter_discovery=True,
               live_info_from_running_server=True, live_alembic=True, server_stopped_before_schema_capture=True,
               encrypted=True, test_mode=False)
+        if extra_objects:
+            require(any(line['id'] == 'omnigent.skipped' and line['level'] == 'confirm'
+                        for line in converted['results'][0]['issues']), 'extra_objects_conversion_issue_missing')
+            require(audits, 'extra_objects_new_cluster_not_audited')
+            event('extra_objects_conversion', confirmation_recorded=True, trusted_schema_conversion_completed=True,
+                  product_new_cluster_audit_passed=True)
 
         result = haimport._install_omnigent_candidate(context(), converted['backup_id'])
         require(result['changed'] and not result['rolled_back'], 'install_failed')
+        if extra_objects:
+            counts = lab.sql("SELECT json_build_array("
+                             "(SELECT count(*) FROM pg_event_trigger WHERE evtname='woowbk_extra_event'),"
+                             "(SELECT count(*) FROM pg_foreign_data_wrapper WHERE fdwname='woowbk_extra_fdw'),"
+                             "(SELECT count(*) FROM pg_proc WHERE proname='woowbk_extra_event_function'));")
+            require(json.loads(counts) == [0, 0, 0], 'extra_objects_survived_import')
+            event('extra_objects_installed', event_trigger_absent=True, foreign_data_wrapper_absent=True,
+                  event_function_absent=True)
         # Counts right after the restore (server started by the flow, before any login or API call of this run).
         fresh = table_counts(lab)
         want = dict(summary['db_counts'], users=summary['db_counts']['users'] + 1)
@@ -683,6 +834,8 @@ def main():
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--arch', choices=('x86', 'arm'), required=True)
     parser.add_argument('--outer-isolation-confirmed', action='store_true')
+    parser.add_argument('--extra-objects', action='store_true',
+                        help='derive a lab backup with a no-op event trigger and an unused foreign data wrapper')
     args = parser.parse_args()
     if not args.run or not args.outer_isolation_confirmed:
         parser.error('explicit --run and --outer-isolation-confirmed are required')
@@ -698,7 +851,7 @@ def main():
             runner = chain.Runner()
             before = inventory(runner)
             try:
-                run(args.arch)
+                run(args.arch, extra_objects=getattr(args, 'extra_objects', False))
             finally:
                 unchanged = inventory(runner) == before
                 event('inventory', containers_volumes_secrets_unchanged=unchanged,
