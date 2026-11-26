@@ -6,4 +6,6 @@ The candidate converted to an encrypted backup. After installation and a service
 
 The first attempt at `52190f51` stopped after conversion because the older harness intercepted `_prepare`, which the current product no longer calls. It cleaned up fully. Test commit `67ff6a04` moved the pause to `trusted_schema`, the current capture entry, and its 12 offline harness tests passed before the successful rerun.
 
-The real B1 database has no extra superuser-only object. O-15 remains `part`: a separate real PostgreSQL TOC and restricted-restore probe with such an object is still required. ARM was not imported in this run. `commercial_acceptance`: `not-complete`.
+The real B1 database has no extra superuser-only object. A **separate synthetic PostgreSQL probe** at `a526f82c` generated a genuine custom archive containing an event trigger and a foreign data wrapper. The real `pg_restore -l` showed both; the data-only selection excluded them. The restricted restore carried the expected rows and sequence value without the extra objects, the hostile check condition or the temporary loader role. A same-revision column mismatch stopped before rows were loaded. Its disposable container was removed; the private fixed-event record is `/tmp/omnigent-o15-realpg-final-20261126.private.log`.
+
+O-15 remains `part` until a crafted HA backup with such an object passes the complete check, confirmation, conversion and audit path. The synthetic probe and the normal real-backup run are separate proofs. ARM was not imported in this run. `commercial_acceptance`: `not-complete`.
