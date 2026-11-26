@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import habackup, ha_litellm, ha_litellm_candidate, ha_odoo, haapps, haimport, haissues, hatarget, jobs
+from woowbackup import habackup, ha_litellm, ha_odoo, haapps, haimport, haissues, hatarget, jobs
 from woowbackup.errors import BackupError
 from woowbackup.podman import Result
 
@@ -2395,11 +2395,56 @@ class RowTests(LiteLLMCase):
         self.assertIn(ha_litellm.SALT_MISMATCH, blockers)
 
 
-class CandidateStillGuarded(unittest.TestCase):
-    def test_the_lab_candidate_never_converts(self):
-        with self.assertRaises(BackupError) as caught:
-            ha_litellm_candidate.convert(mock.Mock(), mock.Mock(id='litellm'), False, mock.Mock())
-        self.assertEqual(caught.exception.message, ha_litellm_candidate.GUARD)
+class SaltBindingReaderTests(unittest.TestCase):
+    def test_fixed_sql_restricted_role_and_secret_never_in_command(self):
+        salt = b'sk-' + b'a' * 64
+        fingerprint = hashlib.sha256(b'woow-litellm-salt-v1:' + salt).hexdigest()[:16]
+        cluster = mock.Mock(role='isolated-pg')
+        cluster.tmp.exec.return_value = mock.Mock(
+            returncode=0, stdout=json.dumps({'platform': [salt.decode()], 'fingerprint': [fingerprint]}).encode())
+        self.assertEqual(ha_litellm.read_source_salt_binding(cluster, salt), 'match')
+        args, kwargs = cluster.tmp.exec.call_args
+        self.assertEqual(args[0], 'isolated-pg')
+        self.assertEqual(args[1], ['psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-1',
+                                   '-U', ha_litellm.READER_ROLE, '-d', ha_litellm.DATABASE, '-f', '-'])
+        self.assertIn(b'NOT c.relrowsecurity', kwargs['input'])
+        self.assertIn(b'NOT c.relforcerowsecurity', kwargs['input'])
+        self.assertIn(b'NOT EXISTS (SELECT 1 FROM pg_inherits', kwargs['input'])
+        self.assertIn(b'rolbypassrls', kwargs['input'])
+        self.assertNotIn(salt, kwargs['input'])
+        self.assertNotIn(salt.decode(), repr(args))
+        self.assertEqual((kwargs['max_output'], kwargs['timeout'], kwargs['check']), (4096, 15, False))
+
+    def test_mismatch_malformed_rows_and_failures_never_match_or_leak(self):
+        salt = b'sk-' + b'a' * 64
+        fingerprint = hashlib.sha256(b'woow-litellm-salt-v1:' + salt).hexdigest()[:16]
+        cluster = mock.Mock(role='isolated-pg')
+        def answer(platform, fps):
+            cluster.tmp.exec.return_value = mock.Mock(
+                returncode=0, stdout=json.dumps({'platform': platform, 'fingerprint': fps}).encode())
+            return ha_litellm.read_source_salt_binding(cluster, salt)
+        for values, fps, expected in ((['sk-' + 'b' * 64], [fingerprint], 'mismatch'),
+                                       ([salt.decode()], ['0' * 16], 'mismatch'),
+                                       ([], [fingerprint], 'invalid_rows'),
+                                       ([salt.decode(), salt.decode()], [fingerprint], 'invalid_rows'),
+                                       ([None], [fingerprint], 'invalid_rows'),
+                                       ([salt.decode()], [None], 'invalid_rows'),
+                                       ([salt.decode()], [fingerprint, fingerprint], 'invalid_rows'),
+                                       ([salt.decode()], [fingerprint.upper()], 'invalid_rows')):
+            with self.subTest(expected=expected, values=values, fps=fps):
+                self.assertEqual(answer(values, fps), expected)
+        for response, expected in ((mock.Mock(returncode=1, stdout=b'password=' + salt), 'unknown'),
+                                   (mock.Mock(returncode=0, stdout=b'x' * 4097), 'unknown'),
+                                   (mock.Mock(returncode=0, stdout=b'{"platform":'), 'invalid_rows'),
+                                   (mock.Mock(returncode=0, stdout=b'{"platform":["\\u00e9"],"fingerprint":["0000000000000000"]}'), 'unknown')):
+            cluster.tmp.exec.return_value = response
+            self.assertEqual(ha_litellm.read_source_salt_binding(cluster, salt), expected)
+        cluster.tmp.exec.side_effect = BackupError('job-failed', 'sensitive error')
+        self.assertEqual(ha_litellm.read_source_salt_binding(cluster, salt), 'unknown')
+        cluster.tmp.exec.reset_mock()
+        for bad in (None, b'bad', b'x' * 1025, 'not bytes'):
+            self.assertEqual(ha_litellm.read_source_salt_binding(cluster, bad), 'invalid_source')
+        cluster.tmp.exec.assert_not_called()
 
 
 if __name__ == '__main__':
