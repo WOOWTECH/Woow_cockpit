@@ -70,7 +70,8 @@ class ConfirmationGateTests(unittest.TestCase):
     def test_a_missing_or_damaged_issue_list_is_not_treated_as_no_confirmation(self):
         for result in ({}, {'ok': True, 'importable': True, 'issues': None},
                        {'ok': True, 'importable': True, 'issues': [{}, None]},
-                       {'ok': True, 'importable': True, 'issues': [{'level': 'confirm'}]}):
+                       {'ok': True, 'importable': True, 'issues': [{'level': 'confirm'}]},
+                       {'ok': True, 'importable': True, 'issues': [{'id': 'wrong', 'level': None}]}):
             with self.subTest(result=result), self.assertRaises(hsff.Failed):
                 hsff.require_reviewed_check(result)
 

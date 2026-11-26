@@ -150,10 +150,11 @@ def require_reviewed_check(result):
     issues = result.get('issues')
     if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
         raise Failed('the check did not return a usable issue list')
+    if any(not isinstance(issue.get('id'), str) or issue.get('level') not in ('stop', 'confirm', 'auto', 'notice')
+           for issue in issues):
+        raise Failed('the check returned a malformed issue')
     ids = [issue.get('id') for issue in issues if issue.get('level') == 'confirm']
     if ids:
-        if any(not isinstance(issue_id, str) for issue_id in ids):
-            raise Failed('a confirmation line has no usable id')
         raise Failed(f'check has confirmation lines that this lab case has not reviewed: {sorted(set(ids))}')
 drv.state_path = lambda: LAB / 'run' / 'headscale_full_flow.json'   # never the b1 driver's own state file
 
