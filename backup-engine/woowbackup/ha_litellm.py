@@ -138,12 +138,11 @@ SCHEMA_CHANGED = ('這台 LiteLLM 的資料庫結構在轉換期間改變了（�
                   '請等 LiteLLM 正常執行後再匯入一次。')
 # The catalog entry the import fills (L-03): one single-database `postgres` item (suggest.PREFERRED_MODES makes it the default
 # of a new draft) or, when the entry declares none, the data volume of the database among its volumes (cold mode); every
-# other volume or folder of the entry is carried as it is. What it cannot fill is an entry that dumps the whole database
-# instance (adapter.import_manifest has no instance form) or names no database at all.
-LAYOUT_INSTANCE = '這台的 LiteLLM 應用設定用「整個資料庫執行個體」的方式備份資料庫，這個匯入還不支援這種方式。'
+# other volume or folder of the entry is carried as it is. An instance entry carries all device databases and roles,
+# replacing only litellm; its HA inplace restore retains current other databases/roles, including later changes.
 LAYOUT_NONE = '這台的 LiteLLM 應用設定裡沒有資料庫的匯出項目，也沒有資料庫的資料卷，匯入不知道要把資料放在哪裡。'
 LAYOUT_MANY = '這台的 LiteLLM 應用設定有不只一個資料庫匯出項目，這個匯入只支援一個。'
-LAYOUT_ACTION = ('請到「應用設定」掃描，在 LiteLLM 的草稿選「單一資料庫」（預設）或「冷備份」並安裝，再重新檢查。'
+LAYOUT_ACTION = ('請到「應用設定」掃描，在 LiteLLM 的草稿選資料庫備份方式並安裝，再重新檢查。'
                  '改變方式後，這個應用之前的備份無法以新設定還原。')
 TARGET_MISSING = '這台找不到 LiteLLM 的資料庫或代理服務的 Quadlet 檔（沒有掛載 litellm-salt-key 的容器，或資料庫容器），當作還沒安裝。'
 TARGET_MISSING_ACTION = '請先用它的安裝套件在這台安裝並啟動 LiteLLM，再到「應用設定」加入它，然後重新檢查。'
@@ -156,7 +155,7 @@ SALT_MISSING = 'HA 備份裡找不到格式正確的 LiteLLM 加密金鑰（salt
 SALT_ACTION = '請在 HA 重新做一份 LiteLLM 的備份，再匯入。'
 
 ISSUES = {
-    'litellm.layout-unsupported': 'stop',     # L-03: an entry that dumps the whole instance, or names no database
+    'litellm.layout-unsupported': 'stop',     # L-03: multiple database items or an entry that names no database
     'litellm.extras-carried': 'auto',         # L-03: this device's other volumes and folders go along as they are
     'litellm.target-missing': 'stop',         # L-04: no Quadlet file of the database or of the proxy: not installed
     'litellm.target-mismatch': 'stop',        # L-05 (kept)
@@ -301,15 +300,15 @@ class Target:
         home = work.runner(app).home
         self.app = app
         pgs = list(app.postgres)
-        if any(isinstance(pg, dict) and pg.get('scope', 'database') == 'instance' for pg in pgs):
-            raise _layout_stop(app, LAYOUT_INSTANCE)
         if len(pgs) > 1:
             raise _layout_stop(app, LAYOUT_MANY)
+        if any(pg.get('scope', 'database') not in ('database', 'instance') for pg in pgs):
+            raise _layout_stop(app, LAYOUT_NONE)
         declared_volumes = [item['name'] for item in app.volumes]
         if not pgs and not declared_volumes:
             raise _layout_stop(app, LAYOUT_NONE)
         files = sorted(name for name in quadlets if name.endswith('.container'))
-        self.mode = 'database' if pgs else 'cold'
+        self.mode = pgs[0].get('scope', 'database') if pgs else 'cold'
         pg = pgs[0] if pgs else {}
         self.pg_id = pg.get('id')
         self.db_container = pg.get('container')
@@ -331,7 +330,8 @@ class Target:
         if self.db_container is None:
             self.db_container = ha_odoo.quadlet_container_name(quadlets, db_file)
         self.db_user = pg.get('user') if pgs else self.db_env.get('POSTGRES_USER', 'postgres')
-        self.database = pg.get('database') if pgs else self.db_env.get('POSTGRES_DB', self.db_user)
+        self.database = (pg.get('database') if self.mode == 'database'
+                         else self.db_env.get('POSTGRES_DB', self.db_user))
         mounts = ha_odoo.quadlet_mounts(quadlets, db_file, home)
         wanted = self.db_env.get('PGDATA') or '/var/lib/postgresql/data'
         holder = next((m for m in mounts if wanted == m[1] or wanted.startswith(m[1].rstrip('/') + '/')), None)
@@ -1971,6 +1971,8 @@ def convert(work, app, test_mode, out_dir):
         tmp.remove('ll-db')
         tmp.remove_volume('ll-db')
         postgres = {target.pg_id: {'database': DATABASE, 'server_version': server_version, 'major': major, 'file': dump}}
+        if target.mode == 'instance':
+            postgres[target.pg_id] = work.adapter(app).import_instance_database(app.postgres[0], postgres[target.pg_id], out_dir)
     salt_path = write_secret(out_dir / 'ha-secrets' / SALT_SECRET, src.salt())
     users = key_users(work, app)
     others = other_schemas(trusted)

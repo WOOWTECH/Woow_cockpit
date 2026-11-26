@@ -1,0 +1,25 @@
+{
+  "N8-01": {
+    "status": "done",
+    "tests_add": [
+      "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_resolves_the_app_database_separately",
+      "tests/backup/test_ha_n8n.py::ConvertFlowTests.test_instance_conversion_keeps_credentials_key_and_all_live_databases",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+      "tests/backup/test_archive.py::HaInstanceMarkerTests"
+    ],
+    "tests_remove": ["tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_cannot_be_made_here_and_says_so"],
+    "note": "Complete instance payloads retain all device databases, owners and role/password definitions; only the separately resolved n8n app DB contains converted HA rows. HA inplace import retains live outsiders/roles/authentication secrets, including later changes, and loads under the current app DB owner. Fresh HA restore explicitly applies the complete conversion-time snapshot. Full current safety capture/digest verification/automatic rollback remain active. Guarded unit/flow evidence only; real instance acceptance is separate."
+  },
+  "L-03": {
+    "status": "done",
+    "tests_add": [
+      "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_the_instance_maintenance_database_is_not_the_litellm_database",
+      "tests/backup/test_ha_litellm.py::ConvertTests.test_instance_conversion_keeps_salt_schema_guards_and_all_live_databases",
+      "tests/backup/test_adapter_ha_instance.py::LiteLlmInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+      "tests/backup/test_adapter_ha_instance.py::LiteLlmInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+      "tests/backup/test_archive.py::HaInstanceMarkerTests"
+    ],
+    "note": "Cold, single DB, extras and complete instance catalogs supported. Instance maintenance postgres is separate from actual litellm DB. Existing salt binding, trusted schema, low-privilege row loading and audits remain required. HA inplace import retains current outsiders, roles/passwords, owners and authentication secrets; LiteLLM salt alone follows HA encrypted rows. Full current safety/rollback verification remains active; fresh restore explicitly uses the complete conversion-time snapshot. Real instance acceptance is separate."
+  }
+}

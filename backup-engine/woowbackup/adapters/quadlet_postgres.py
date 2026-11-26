@@ -2095,6 +2095,7 @@ class QuadletPostgresAdapter(Adapter):
                 raise BackupError('internal-error', f'轉換後的資料庫 {pg["id"]} 備份模式和應用設定不一致。', app=app.id)
             if pg.get('scope') == 'instance' and dump.get('id') != pg['id']:
                 raise BackupError('internal-error', f'轉換後的資料庫執行個體識別碼和 {pg["id"]} 不一致。', app=app.id)
+            self._ha_instance_database(pg, dump)
         if not set(replaced) <= {s['name'] for s in app.secrets}:
             raise BackupError('internal-error', f'轉換帶來的應用機密不是應用「{app.name}」設定的機密。', app=app.id)
         for sub in ('postgres', 'volumes', 'dirs', 'secrets', 'config', 'quadlet'):
@@ -2378,6 +2379,38 @@ class QuadletPostgresAdapter(Adapter):
                 'globals': globals_file, 'databases': databases, 'bootstrap_user': bootstrap,
                 'roles': [{'name': r[0], 'superuser': r[1], 'login': r[2]} for r in roles]}
 
+    def import_instance_database(self, pg, converted, staging):
+        """N8-01/L-03: a complete device instance, with just its app database replaced by converted HA data.
+
+        The complete payload is usable on a fresh device. An HA inplace import uses `ha_database` to retain the live
+        instance instead: its other databases and password hashes may have changed since this conversion.
+        """
+        name = converted.get('database')
+        marker = {'scope': 'instance', 'ha_database': name,
+                  'databases': [{'name': name}]}
+        self._ha_instance_database(pg, marker)
+        dump = self._dump_instance(pg, staging)
+        database = next((item for item in dump['databases'] if item['name'] == name), None)
+        if database is None:
+            raise BackupError('incompatible', f'目前的執行個體沒有應用資料庫 {name}，已停止匯入。', app=self.app.id)
+        if database.get('template'):
+            raise BackupError('incompatible', f'應用資料庫 {name} 是範本資料庫，已停止匯入。', app=self.app.id)
+        database['file'] = converted['file']
+        dump['ha_database'] = name
+        return dump
+
+    def _ha_instance_database(self, pg, item):
+        """Validate the optional conversion marker even when it will not be used (ordinary restore/rollback)."""
+        if 'ha_database' not in item:
+            return None
+        name = item['ha_database']
+        if (self.app.id not in ('n8n', 'litellm') or pg.get('scope') != 'instance'
+                or item.get('scope') != 'instance' or not isinstance(name, str) or not DB_NAME_RE.fullmatch(name)
+                or name in ('template0', 'template1') or (self.app.id == 'litellm' and name != 'litellm')
+                or sum(isinstance(db, dict) and db.get('name') == name for db in item.get('databases') or []) != 1):
+            raise BackupError('incompatible', '備份中的 HA 應用資料庫標記不正確。', app=self.app.id)
+        return name
+
     def _bootstrap_user(self, container, user, connect, what):
         answer = self._psql_json(container, user, connect, BOOTSTRAP_SQL, what)
         if (not isinstance(answer, list) or len(answer) != 2 or not all(isinstance(v, str) for v in answer)
@@ -2410,7 +2443,9 @@ class QuadletPostgresAdapter(Adapter):
         return [(row[0], row[1], row[2]) for row in rows]
 
     def _instance_manifest(self, dump, entry):
-        return {'id': dump['id'], 'scope': 'instance', 'database': dump['database'],
+        marker = self._ha_instance_database({'scope': 'instance'}, dump)
+        return {**({'ha_database': marker} if marker is not None else {}),
+                'id': dump['id'], 'scope': 'instance', 'database': dump['database'],
                 'server_version': dump['server_version'], 'major': dump['major'],
                 'bootstrap_user': dump['bootstrap_user'],
                 'entry': entry('postgres', f'{dump["id"]}.globals.sql', dump['globals']),
@@ -2586,7 +2621,7 @@ class QuadletPostgresAdapter(Adapter):
                                               f'此設備設定為{"整個執行個體" if pg["scope"] == "instance" else "單一資料庫"}；'
                                               '請以相同的設定還原。')
             elif pg['scope'] == 'instance' and mode == 'fresh':
-                self._preflight_instance(pg, item, add, running=False)
+                self._preflight_instance(pg, item, add, running=False, fresh=True)
         self._preflight_digests(app_manifest, add)
 
         sources = None
@@ -2723,11 +2758,21 @@ class QuadletPostgresAdapter(Adapter):
             text = KEPT_TEXT
         self.restore_issues.append(Issue('restore.other-databases', 'confirm', text, names))
 
-    def _preflight_instance(self, pg, item, add, *, running):
+    def _preflight_instance(self, pg, item, add, *, running, fresh=False):
         """Instance mode: the restore's own superuser must stay one, the image must have every extension the backup
         uses, and databases that exist now but not in the backup are named (they go; the safety backup keeps them)."""
         if not isinstance(item, dict) or item.get('scope') != 'instance':
             return
+        marker = self._ha_instance_database(pg, item)
+        if self.ha_import and marker is not None and not fresh:
+            if running:
+                self._ha_database_owner(pg, marker)  # missing DB/owner is a refusal, never a bootstrap fallback
+            add('instance', 'ok', f'只替換 HA 的應用資料庫 {marker}；其他資料庫、角色、擁有者與密碼保留目前內容。'
+                                  '還原前仍會備份整個執行個體，失敗時自動回復。')
+            return
+        if marker is not None:
+            add('instance-snapshot', 'warn', '全新還原會使用轉換時保存的完整執行個體（含當時的角色與密碼），'
+                                            '不會合併之後新增或變更的資料。')
         archived = [db.get('name') for db in item.get('databases') or [] if isinstance(db, dict)
                     and isinstance(db.get('name'), str)]
         roles = {role.get('name'): role for role in item.get('roles') or [] if isinstance(role, dict)}
@@ -3068,6 +3113,7 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('incompatible', f'備份中的資料庫 {pg["id"]} 只有單一資料庫，此設備設定為還原整個執行個體；'
                                               '請以相同的設定還原。', app=self.app.id)
         databases = item.get('databases')
+        marker = self._ha_instance_database(pg, item)
         if not isinstance(databases, list) or not 0 < len(databases) <= 64:
             raise BackupError('corrupt-archive', f'備份中的資料庫 {pg["id"]} 記錄格式不正確。', app=self.app.id)
         result, seen = [], set()
@@ -3079,6 +3125,15 @@ class QuadletPostgresAdapter(Adapter):
                                for ext in db.get('extensions', []))):
                 raise BackupError('corrupt-archive', f'備份中的資料庫 {pg["id"]} 記錄格式不正確。', app=self.app.id)
             seen.add(db['name'])
+            if db['name'] == marker and (
+                    not isinstance(db.get('owner'), str) or not 0 < len(db['owner']) <= PG_ROLE_NAME_MAX
+                    or _unprintable(db['owner']) or db.get('template', False)
+                    or not isinstance(db.get('encoding'), str) or not ENCODING_RE.fullmatch(db['encoding'])
+                    or not all(isinstance(db.get(key), str) and LOCALE_RE.fullmatch(db[key]) for key in ('collate', 'ctype'))
+                    or db.get('locale_provider') not in ('libc', 'icu', 'builtin')
+                    or (db.get('icu_locale') is not None and (not isinstance(db['icu_locale'], str)
+                                                             or not LOCALE_RE.fullmatch(db['icu_locale'])))):
+                raise BackupError('corrupt-archive', '備份中的 HA 應用資料庫設定不正確。', app=self.app.id)
             result.append((db, self.entry_path(root, db.get('entry'))))
         return result, self.entry_path(root, item.get('entry'))
 
@@ -3111,6 +3166,13 @@ class QuadletPostgresAdapter(Adapter):
         self._data_bytes = self._restored_bytes(files)
         instances = {pg['id']: self._instance_item(pg, found['postgres'][pg['id']], root)
                      for pg in app.postgres if pg['scope'] == 'instance'}
+        ha_databases = {}
+        for pg in app.postgres:
+            marker = self._ha_instance_database(pg, found['postgres'][pg['id']])
+            if marker is not None and rollback:
+                raise BackupError('incompatible', '自動回復必須使用還原前完整備份，不能使用 HA 轉換後的資料。', app=app.id)
+            if marker is not None and self.ha_import and mode == 'inplace' and not rollback:
+                ha_databases[pg['id']] = marker
         for pg in app.postgres:
             if pg['scope'] == 'database' and found['postgres'][pg['id']].get('scope', 'database') != 'database':
                 raise BackupError('incompatible', f'備份中的資料庫 {pg["id"]} 是整個執行個體，此設備設定為單一資料庫；'
@@ -3175,6 +3237,10 @@ class QuadletPostgresAdapter(Adapter):
                 if how == 'extract' and rel not in self._staged:
                     self._unpack_dir(rel, files['dirs'][rel], rollback=rollback)
             for secret in app.secrets:
+                if ha_databases and not (app.id == 'litellm' and secret['name'] == 'litellm-salt-key'):
+                    # Retained live roles need their current authentication secrets, including rotations since conversion.
+                    # LiteLLM's salt belongs to HA's encrypted rows and is the one secret this import must replace.
+                    continue
                 self._recreate_secret(secret['name'], files['secrets'][secret['name']])
             for config in app.config_files:
                 with open(files['config'][config['path']], 'rb') as handle:
@@ -3184,6 +3250,8 @@ class QuadletPostgresAdapter(Adapter):
                 self._recreate_volume(volume['name'], files['volumes'][volume['name']])
             removed_at, whole = {}, set()
             for pg in app.postgres:
+                if pg['id'] in ha_databases:
+                    continue  # retain current other databases, roles and passwords, including changes after conversion
                 removed_at[pg['id']] = self.wall()  # an instance restore checks that the cluster is newer (F4)
                 copy = (kept_volumes or {}).get(pg['data_volume']) if rollback else None
                 if copy is not None:
@@ -3222,8 +3290,14 @@ class QuadletPostgresAdapter(Adapter):
                     self.log(f'資料庫 {pg["id"]} 已用保留的完整複本整個放回')
                     continue
                 self._check_target_major(pg, app_manifest)
-                if pg['scope'] == 'instance':
-                    self._restore_instance(pg, *instances[pg['id']], removed_at=removed_at.get(pg['id']))
+                if pg['id'] in ha_databases:
+                    name = ha_databases[pg['id']]
+                    db, path = next((db, path) for db, path in instances[pg['id']][0] if db['name'] == name)
+                    self._restore_ha_instance_database(pg, db, path)
+                elif pg['scope'] == 'instance':
+                    marker = self._ha_instance_database(pg, found['postgres'][pg['id']]) if self.ha_import else None
+                    options = {'ha_database': marker} if marker is not None else {}
+                    self._restore_instance(pg, *instances[pg['id']], removed_at=removed_at.get(pg['id']), **options)
                 else:
                     self._ensure_database(pg)
                     self._restore_database(pg, files['postgres'][pg['id']])
@@ -3394,7 +3468,7 @@ class QuadletPostgresAdapter(Adapter):
         if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
             raise BackupError('job-failed', INCOMPLETE_SQL, app=self.app.id)
 
-    def _restore_instance(self, pg, databases, globals_path, *, removed_at=None):
+    def _restore_instance(self, pg, databases, globals_path, *, removed_at=None, ha_database=None):
         """Instance mode into the fresh cluster the image just initialized (CONTRACT section 9): the cluster must be
         newer than the removal of the data volume, extension preflight, the roles (the bootstrap superuser reconciled,
         never recreated; it must stay a superuser that can log in), then every database of the backup created as it
@@ -3438,10 +3512,47 @@ class QuadletPostgresAdapter(Adapter):
                     self._psql_command(container, user, maint, f'ALTER DATABASE "{name}" IS_TEMPLATE false')
                 self._psql_command(container, user, maint, f'DROP DATABASE "{name}"')
             self.log(f'還原資料庫 {pg["id"]}：{name}（擁有者 {db.get("owner", "?")}）')
+            if name == ha_database:
+                self._load_ha_instance_database(pg, db, path, db['owner'])
+                continue
             with open(path, 'rb') as handle:
                 self.runner.podman('exec', '-i', container, 'pg_restore', '--create', '--exit-on-error',
                                    '--no-tablespaces', '-w', '-U', user, '-d', maint, input=handle,
                                    timeout=RESTORE_TIMEOUT)
+
+    def _ha_database_owner(self, pg, name):
+        # A join to pg_roles refuses a missing owner as well as a missing application database. Read again immediately
+        # before the drop; an owner changed since conversion is the owner we use. Never apply the archived role script.
+        sql = ("SELECT json_build_array(r.rolname) FROM pg_database d JOIN pg_roles r ON r.oid=d.datdba "
+               f"WHERE d.datname='{name}' AND NOT d.datistemplate AND d.datallowconn")
+        owner = self._psql_json(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB, sql, 'HA 應用資料庫')
+        if (not isinstance(owner, list) or len(owner) != 1 or not isinstance(owner[0], str)
+                or not 0 < len(owner[0]) <= PG_ROLE_NAME_MAX or _unprintable(owner[0])):
+            raise BackupError('incompatible', f'無法確認應用資料庫 {name} 和目前的擁有者，已停止匯入。', app=self.app.id)
+        return owner[0]
+
+    def _restore_ha_instance_database(self, pg, db, path):
+        """Only reached for a validated HA n8n/LiteLLM inplace conversion; safety rollback stays a full instance restore."""
+        name = db['name']
+        owner = self._ha_database_owner(pg, name)
+        self.log(f'匯入 HA 應用資料庫 {name}（保留目前擁有者；其他資料庫與角色維持目前內容）')
+        self._psql_command(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB, f'DROP DATABASE "{name}"')
+        self._load_ha_instance_database(pg, db, path, owner)
+
+    def _load_ha_instance_database(self, pg, db, path, owner):
+        name = db['name']
+        locale = ['-E', db['encoding'], '--lc-collate', db['collate'], '--lc-ctype', db['ctype']]
+        if db.get('locale_provider') in ('icu', 'builtin'):
+            provider = db['locale_provider']
+            locale += [f'--locale-provider={provider}', f'--{provider}-locale', db['icu_locale'] or db['collate']]
+        self.runner.podman('exec', pg['container'], 'createdb', '-w', '-U', pg['user'], '-T', 'template0',
+                           '-O', owner, *locale, '--', name, timeout=SHORT_TIMEOUT)
+        with open(path, 'rb') as handle:
+            self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '--exit-on-error', '--single-transaction',
+                               '--no-owner', '--no-privileges', '--no-tablespaces', f'--role={owner}',
+                               '-w', '-U', pg['user'], '-d', name, input=handle, timeout=RESTORE_TIMEOUT)
+        if self._ha_database_owner(pg, name) != owner:
+            raise BackupError('job-failed', '匯入後應用資料庫的擁有者不同，已停止並會自動回復。', app=self.app.id)
 
     def _psql_command(self, container, user, database, sql):
         self.runner.podman('exec', container, 'psql', '-X', '-w', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d', database,

@@ -23,8 +23,9 @@ the import may start: this device's own other volumes and folders go along as th
 the queue (Valkey / Redis) volumes are the only ones that are emptied, and a data volume whose owner cannot be read gets
 the owner of the image (N8-11, N8-12). The app settings may list one database item (the dump of one database goes back) or
 the data volume of the database itself, a cold backup (N8-01: the new cluster is made like this device's own, with the
-password of its own, and is the volume that goes back); the instance of a whole PostgreSQL is the one layout that is not
-made by this n8n converter (its output is one database, without instance globals and roles). The SQLite reader grows its time with the size of the file and, when it was killed
+password of its own, and is the volume that goes back). A whole-instance entry carries every device database and role,
+with only n8n's database replaced by converted data; its `ha_database` marker lets an HA inplace restore retain the
+current other databases and roles, including changes after conversion. The SQLite reader grows its time with the size of the file and, when it was killed
 or timed out, is run once more with more time and memory (N8-06, N8-07, N8-09); a database that is broken stops only n8n.
 No key in HA's backup is no gate either: the workflows and everything else move, the credentials cannot be opened and are
 entered again, which is ONE line the customer confirms (N8-15; a key of any shape that n8n takes is used as it is). A
@@ -117,7 +118,7 @@ PATH_KEYS = ('fileSelector', 'filePath', 'fileName', 'path', 'filePathOrName')
 
 # What the customer is told (zh-TW, plain; names go into the issue's items, never a value). Every id of this module is here.
 ISSUES = {
-    'n8n.layout-unsupported': 'stop',       # N8-01 (the whole instance), N8-02: this device's n8n is not set up as the import knows
+    'n8n.layout-unsupported': 'stop',       # N8-01, N8-02: this device's n8n is not set up as the import knows
     'n8n.extras-carried': 'auto',           # N8-02, N8-27: this device's own other volumes and folders go along as they are
     'n8n.mount-skipped': 'notice',          # the n8n side of OD-08, OD-09: a mount that is no data of n8n is left out
     'n8n.no-database': 'stop',              # N8-14: HA's backup holds no SQLite database of n8n
@@ -771,13 +772,10 @@ class Target:
         home = work.runner(app).home
         sink = sink if sink is not None else _sink(work, app)
         self.app = app
-        if len(app.postgres) > 1 or any(item.get('scope', 'database') != 'database' for item in app.postgres):
-            if any(item.get('scope') == 'instance' for item in app.postgres):
-                # This converter currently produces one database dump, not a complete instance with globals and roles.
-                # The adapter supports full instances, but this n8n conversion path does not yet produce one (N8-01 part).
-                raise _layout(app, '它備份的是整個資料庫執行個體，HA 匯入目前只能放進「單一資料庫」或「資料庫資料卷」的設定')
+        if len(app.postgres) > 1 or any(item.get('scope', 'database') not in ('database', 'instance') for item in app.postgres):
             raise _layout(app, '需要一個 PostgreSQL 資料庫項目（單一資料庫），或把資料庫的資料卷列在資料卷裡')
         self.cold = not app.postgres   # N8-01: the data of the database is a volume of the app (a cold backup)
+        self.instance = bool(app.postgres and app.postgres[0].get('scope') == 'instance')
         self.skipped_mounts = []
         mounts = {}
         for name in quadlets:
@@ -822,6 +820,13 @@ class Target:
         env = tempctr.quadlet_environment(quadlets[self.pg_file], {'POSTGRES_USER', 'POSTGRES_DB', 'PGDATA', 'LANG',
                                                                     'TZ', 'POSTGRES_INITDB_ARGS', 'POSTGRES_PASSWORD_FILE'})
         self.pg_env = env
+        if self.instance:
+            # An instance catalog normalizes its maintenance database to postgres; that is not n8n's database.
+            app_env = tempctr.quadlet_environment(quadlets[self.main_file], {'DB_POSTGRESDB_DATABASE'})
+            database = app_env.get('DB_POSTGRESDB_DATABASE') or env.get('POSTGRES_DB') or 'n8n'
+            if not TABLE_RE.fullmatch(database) or database in ('template0', 'template1'):
+                raise _layout(app, '無法確認 n8n 實際使用的資料庫名稱')
+            self.pg = dict(self.pg, database=database)
         self.pg_target = next((t for _n, t in sum(mounts.values(), []) if t.startswith('/var/lib/postgresql')),
                               '/var/lib/postgresql/data')
         if not self.n8n_image or not self.pg_image:
@@ -1292,6 +1297,8 @@ def convert(work, app, test_mode, out_dir):
             tmp.remove_volume(role)
         postgres[items.pg['id']] = {'database': items.pg['database'], 'server_version': str(text)[:32], 'major': major,
                                     'file': dump}
+        if items.instance:
+            postgres[items.pg['id']] = adapter.import_instance_database(items.pg, postgres[items.pg['id']], out_dir)
     # n8n_n8n_data from scratch and the queue's volumes empty, their top directories owned like the live ones.
     data_path = out_dir / 'volumes' / f'{items.data_volume}.tar'
     root = volume_root_or_image(work, app, items.data_volume, lambda: (*node_ids, 0o755), sink)

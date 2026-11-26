@@ -884,10 +884,16 @@ class TargetTests(unittest.TestCase):
         self.assertIn('n8n_n8n_data', issue.message)
         self.stopped(without('x', 'n8n-postgres.container'))
 
-    def test_the_whole_instance_cannot_be_made_here_and_says_so(self):
-        """N8-01 remains partial: the n8n converter emits one database, not a complete instance with globals and roles."""
-        issue = self.stopped(None, n8n_app(postgres=[dict(PG, scope='instance')]))
-        self.assertIn('整個資料庫執行個體', issue.message)
+    def test_the_whole_instance_resolves_the_app_database_separately(self):
+        app = n8n_app(postgres=[dict(PG, scope='instance', database='postgres')])
+        target, _sink = target_of(app=app)
+        self.assertTrue(target.instance)
+        self.assertEqual(target.pg['database'], 'n8n')
+        self.assertEqual(app.postgres[0]['database'], 'postgres', 'the normalized catalog is never changed')
+        quadlets = dict(QUADLETS, **{'n8n.container': QUADLETS['n8n.container']
+                                   + b'Environment=DB_POSTGRESDB_DATABASE=automation\n'})
+        target, _sink = target_of(quadlets, app)
+        self.assertEqual(target.pg['database'], 'automation')
         self.stopped(None, n8n_app(postgres=[PG, dict(PG, id='second', container='other')]))
 
 
@@ -1314,6 +1320,28 @@ class ConvertFlowTests(N8nCase):
         self.assertEqual(list(queue), ['.'], 'HA\'s queued jobs never run here, this device\'s old ones neither')
         self.assertEqual((queue['.'][0].uid, queue['.'][0].gid), (999, 999))
 
+    def test_instance_conversion_keeps_credentials_key_and_all_live_databases(self):
+        from .test_adapter_ha_instance import conversion_adapter
+        app = self.catalog['n8n']
+        app.postgres = [dict(app.postgres[0], scope='instance', database='postgres')]
+        adapter, owner = conversion_adapter(app, app.postgres[0], 'n8n')
+        captured = {}
+
+        def complete(_fake, pg, converted, staging):
+            result = adapter.import_instance_database(pg, converted, staging)
+            captured.update(result)
+            return result
+
+        with mock.patch.object(Adapter, 'import_instance_database', complete, create=True):
+            result = self.converted()
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        item = self.world.manifests['n8n']['postgres']['main']
+        self.assertEqual((item['scope'], item['ha_database'], item['database']), ('instance', 'n8n', 'postgres'))
+        self.assertEqual({db['name'] for db in item['databases']}, set(owner.instance))
+        self.assertEqual(next(db for db in captured['databases'] if db['name'] == 'n8n')['file'].name, 'main.dump')
+        self.assertEqual(json.loads(self.data_tar()['config'][1]), {'encryptionKey': KEY})
+        self.assertTrue(all(db == 'n8n' for role, db in self.world.asked if role == 'n8n-pg'))
+
     def test_no_key_asks_once_and_nothing_is_built_until_it_is_confirmed(self):
         """N8-15, the three of a line to confirm."""
         ha_id = self.upload_n8n(key=None, credentials=('Telegram bot', 'OpenAI'))
@@ -1563,7 +1591,7 @@ COLD_VOLUMES = ('n8n_n8n_data', 'n8n_valkey_data', 'n8n_postgres_data')
 
 class ColdTargetTests(unittest.TestCase):
     """N8-01: this device's app settings may hold the database's data folder as a volume (a cold backup) instead of one database
-    item; the instance of a whole PostgreSQL stays a stop."""
+    item; full instance entries are covered separately."""
 
     def target(self, quadlets=COLD_QUADLETS, volumes=COLD_VOLUMES):
         return target_of(quadlets, n8n_app(volumes=volumes, postgres=[]))

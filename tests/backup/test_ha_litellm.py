@@ -118,7 +118,9 @@ class LiteAdapter(fk.Adapter):
     def import_manifest(self, staging_dir, **items):
         self.world.kept = items.pop('keep_safety', None)
         self.world.converted_secrets = {name: Path(path).read_bytes() for name, path in (items.get('secrets') or {}).items()}
-        self.world.converted_dumps = {pg: Path(d['file']).read_bytes() for pg, d in (items.get('postgres') or {}).items()}
+        self.world.converted_dumps = {pg: Path(d['file'] if d.get('scope') != 'instance' else
+                                              next(db['file'] for db in d['databases'] if db['name'] == d['ha_database'])).read_bytes()
+                                      for pg, d in (items.get('postgres') or {}).items()}
         return super().import_manifest(staging_dir, **items)
 
 
@@ -994,6 +996,25 @@ class SchemaReadTests(LiteLLMCase):
 
 
 class ConvertTests(LiteLLMCase):
+    def test_instance_conversion_keeps_salt_schema_guards_and_all_live_databases(self):
+        from .test_adapter_ha_instance import conversion_adapter
+        app = self.catalog['litellm']
+        app.postgres = [dict(app.postgres[0], scope='instance', database='postgres')]
+        adapter, owner = conversion_adapter(app, app.postgres[0], 'litellm', major=17)
+
+        def complete(_fake, pg, converted, staging):
+            return adapter.import_instance_database(pg, converted, staging)
+
+        with mock.patch.object(LiteAdapter, 'import_instance_database', complete, create=True):
+            result = self.convert(self.upload_litellm(), ['litellm'])
+        self.assertEqual(result['ha_import']['apps'], ['litellm'])
+        item = self.world.manifests['litellm']['postgres']['main']
+        self.assertEqual((item['scope'], item['ha_database'], item['database']), ('instance', 'litellm', 'postgres'))
+        self.assertEqual({db['name'] for db in item['databases']}, set(owner.instance))
+        self.assertEqual(self.world.converted_secrets, {'litellm-salt-key': SALT})
+        self.assertEqual(self.world.converted_dumps, {'main': b'PGDMP-ll-db'})
+        self.assertEqual({user for _role, user, _sql, _data in self.world.copies_in}, {'woowbk_restore'})
+
     def assert_nothing_loaded(self):
         self.assertFalse(self.world.copies_in, 'no HA row was loaded')
         self.assertEqual(self.storage.list_backups(), [])
@@ -1471,15 +1492,21 @@ class SingleProtectionTests(LiteLLMCase):
 
     def shapes(self):
         item = dict(self.catalog['litellm'].postgres[0])
-        instance = {key: value for key, value in item.items() if key != 'database'}
         volume = {'name': 'litellm-pgdata', 'label': 'PostgreSQL 資料（冷備份）'}
         return (('two databases', {'postgres': [item, dict(item, id='db2')]}, ha_litellm.LAYOUT_MANY),
-                ('whole instance', {'postgres': [dict(instance, scope='instance')]}, ha_litellm.LAYOUT_INSTANCE),
                 ('no database item and no volume', {'postgres': []}, ha_litellm.LAYOUT_NONE))
 
+    def test_the_instance_maintenance_database_is_not_the_litellm_database(self):
+        item = self.catalog['litellm'].postgres[0]
+        self.catalog['litellm'].postgres = [dict(item, database='postgres', scope='instance')]
+        target = ha_litellm.Target(types.SimpleNamespace(
+            quadlets=lambda _app: self.world.quadlets['litellm'], runner=lambda _app: self.world.owner),
+            self.catalog['litellm'])
+        self.assertEqual((target.mode, target.database), ('instance', 'litellm'))
+        self.assertEqual(self.blockers(), [])
+
     def test_n21_what_the_entry_cannot_be_filled_with_stops_only_this_app(self):
-        # L-03: the single-database entry, the cold entry and an entry with other volumes and folders are filled; an entry
-        # that dumps the whole instance (the converted backup has no such form), two database items, or none, are not.
+        # L-03: database, instance and cold entries work; multiple database items or no database at all still stop.
         original = vars(self.catalog['litellm']).copy()
         for name, fields, words in self.shapes():
             vars(self.catalog['litellm']).update(original, **fields)

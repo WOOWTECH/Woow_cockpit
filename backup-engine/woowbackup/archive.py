@@ -490,7 +490,11 @@ def _postgres_instance(item, w, app_id, ref):
     # `bootstrap_user` (2026-11-14, review F5): the instance's bootstrap superuser at backup time; optional (archives
     # written before it have none).
     _obj(item, w, ('id', 'scope', 'database', 'server_version', 'major', 'entry', 'databases', 'roles'),
-         ('bootstrap_user',))
+         ('bootstrap_user', 'ha_database'))
+    if 'ha_database' in item:
+        _need(app_id in ('n8n', 'litellm'), f'{w}.ha_database invalid app')
+        _str(item['ha_database'], f'{w}.ha_database', PG_DB_RE, max_len=63)
+        _need(app_id != 'litellm' or item['ha_database'] == 'litellm', f'{w}.ha_database invalid')
     if 'bootstrap_user' in item:
         _printable(item['bootstrap_user'], f'{w}.bootstrap_user', max_len=63)
     _str(item['database'], f'{w}.database', PG_DB_RE, max_len=63)
@@ -506,6 +510,8 @@ def _postgres_instance(item, w, app_id, ref):
                      'entry'), ('template',))
         if 'template' in db:
             _bool(db['template'], f'{d}.template')
+        if db.get('name') == item.get('ha_database'):
+            _need(not db.get('template', False), f'{d}.template invalid HA application database')
         _str(db['name'], f'{d}.name', PG_DB_RE, max_len=63)
         _need(db['name'] not in ('template0', 'template1'), f'{d}.name invalid')
         _need(db['name'] not in names, f'{d}.name duplicate')
@@ -524,6 +530,8 @@ def _postgres_instance(item, w, app_id, ref):
             _printable(ext['name'], f'{e}.name')
             _printable(ext['version'], f'{e}.version')
         ref(app_id, 'postgres', db['entry'], f'{d}.entry')
+    if 'ha_database' in item:
+        _need(item['ha_database'] in names, f'{w}.ha_database missing database')
     _list(item['roles'], f'{w}.roles', 1000)
     for i, role in enumerate(item['roles']):
         r = f'{w}.roles[{i}]'

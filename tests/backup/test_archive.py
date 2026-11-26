@@ -477,6 +477,62 @@ class ReviewFixManifestTests(unittest.TestCase):
                 self.assertEqual(ctx.exception.code, 'invalid-manifest')
 
 
+class HaInstanceMarkerTests(unittest.TestCase):
+    """Optional conversion marker: explicit app DB, never the normalized instance maintenance DB."""
+
+    def manifest(self, app_id='n8n'):
+        value = ReviewFixManifestTests.manifest(self)
+        value = json.loads(json.dumps(value).replace(f'apps/{APP}/', f'apps/{app_id}/'))
+        value['apps'][0]['id'] = app_id
+        item = value['apps'][0]['postgres'][-1]
+        item['ha_database'] = 'litellm' if app_id == 'litellm' else 'notes'
+        item['databases'][0]['name'] = item['ha_database']
+        return value
+
+    def test_valid_markers_and_older_instances_are_accepted(self):
+        for app_id in ('n8n', 'litellm'):
+            value = self.manifest(app_id)
+            self.assertIs(archive.validate_manifest(value), value)
+            del value['apps'][0]['postgres'][-1]['ha_database']
+            self.assertIs(archive.validate_manifest(value), value)
+
+    def test_malformed_missing_foreign_and_template_markers_are_rejected(self):
+        def item(value):
+            return value['apps'][0]['postgres'][-1]
+
+        cases = [(f'marker {name}', lambda v, name=name: item(v).update(ha_database=name))
+                 for name in (None, True, 1, [], {}, '', 'missing', 'template0', 'template1', 'notes\n', '../notes')]
+        cases += [
+            ('foreign app', lambda v: v['apps'][0].update(id='hermes')),
+            ('custom template', lambda v: item(v).update(ha_database='template_gis')),
+            ('app is template', lambda v: item(v)['databases'][0].update(template=True)),
+            ('duplicate app DB', lambda v: item(v)['databases'][1].update(name='notes', template=False)),
+            ('single database scope', lambda v: v['apps'][0]['postgres'][0].update(ha_database='notes')),
+        ]
+        for name, mutate in cases:
+            value = self.manifest()
+            mutate(value)
+            with self.subTest(name=name), self.assertRaises(BackupError) as caught:
+                archive.validate_manifest(value)
+            self.assertEqual(caught.exception.code, 'invalid-manifest')
+        value = self.manifest('litellm')
+        item(value).update(ha_database='notes')
+        item(value)['databases'][0]['name'] = 'notes'
+        with self.assertRaises(BackupError):
+            archive.validate_manifest(value)
+
+    @needs_age
+    def test_encrypted_marker_roundtrip(self):
+        ws = Workspace(self)
+        value = self.manifest()
+        value['key_id'] = ws.key.key_id
+        payloads = {e['path']: b'instance marker payload' for e in value['entries']}
+        value['apps'][0]['verify_digests'][0]['digest'] = hashlib.sha256(b'instance marker payload').hexdigest()
+        dest, _result, _entries = ws.write(payloads, value)
+        restored = archive.extract_archive(dest, ws.keys.identities(), ws.dest())
+        self.assertEqual(restored['apps'][0]['postgres'][-1]['ha_database'], 'notes')
+
+
 class DataDirManifestTests(unittest.TestCase):
     """Host directories (`data_dirs`, entries `apps/<id>/dirs/<n>.tar`): optional, strict when present."""
 
