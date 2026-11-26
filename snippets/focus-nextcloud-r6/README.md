@@ -31,6 +31,24 @@ the existing image lease. Whole mutex; same-config pin refresh with exact privat
 prior copies; baseline verification; original inactive/enablement state and
 Quadlet bytes restored; retain loaded images. No installer/source deployment.
 
+**Phase2 strict wake/baseline has now PASSED on exact `e365ac88`**, under its
+separate parent lease. All five original Image references and canonical tags
+resolved to the trusted config IDs before writes; no guard correction was needed.
+Read-only baseline verification7/7 passed. Prior unit bytes, UID/GID/mode/mtime,
+original references and config bindings were independently re-read after return
+and exactly equal. Original inactive/enablement states, catalog, baseline archive
+and manifest streaming hashes, installed engine hashes, cap and isolation all
+match. Five images retained; pulls0. No restore or source deployment occurred.
+
+Actual source `e365ac88bc5e536ea632dda39c24f01a1d1b6e20`; private evidence
+`~/.woowbk-lab/evidence/focus-nextcloud-r6-wake/20261127T074932/` (including exact
+prior and independently re-read post-revert units, both private). Public files
+`wake-baseline-result.json`, `wake-baseline-verifier-summary.json` and
+`inventory-after-wake-baseline.json` are in this lane's evidence folder.
+Start minimum free28,905,500,672 bytes, peak measured memory809,451,520;
+fresh cold free29,021,827,072 and memory554,872,832 under the unchanged3GiB cap.
+No additional tests were run for this evidence-only retention.
+
 ## Exact original source images
 
 Live host fixed-field inspection uses the same `podman image inspect` route as

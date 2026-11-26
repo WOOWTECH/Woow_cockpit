@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "source_commit": "e365ac88bc5e536ea632dda39c24f01a1d1b6e20",
+  "baseline_id": "20261123T132013Z-34811d90",
+  "checks": 7,
+  "passed": 7,
+  "verifier": "batch2_baseline.py --verify nextcloud",
+  "verification_kind": "read-only-original-markers-file-sha-status-health-and-encrypted-record-identity",
+  "restore_executed": false
+}
