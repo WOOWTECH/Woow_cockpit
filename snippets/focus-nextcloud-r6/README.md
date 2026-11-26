@@ -5,6 +5,32 @@ bytes copied, no device mutation, no pulls.** This worktree starts at main
 `3e3e9315`. OD-23's final separate handoff commit is `081278f1`; its worktree,
 retained release and failed-export quarantines are preserved.
 
+The statement above describes phase0. **Phase1 image-only recovery has now
+PASSED on exact source `ea17ae7964201e43c0a3f318019dfa97652fa86a` under the
+parent's55minute image-only lease.** All five exact original IDs are loaded;
+source metadata is unchanged, pulls0. Units/Quadlets/catalog/baseline metadata
+and3GiB cap/isolation match before/after exactly. Independent post-run inventories
+confirm this. Minimum completed transfer free28,070MiB; final fresh free
+29,423,403,008 bytes and memory271,290,368. Images retained. No wake, install,
+deployment, fixture copy, catalog write or restore was performed.
+
+Actual receipt is `image-recovery-result.json` in this lane's evidence folder;
+private controller evidence is
+`~/.woowbk-lab/evidence/focus-nextcloud-r6-recovery/20261127T071755/`.
+The original NC image alone used the reviewed lab `ignore_chown_errors` option:
+UID65534 exceeds the unchanged nested range. The config ID remains exact; this
+is an explicit lab mapping limitation.
+
+**Next proposal:** [wake-PROPOSAL.md](wake-PROPOSAL.md), executable
+`focus_nextcloud_r6_wake.py` and inert `lease-wake.template.json`. Eleven focused
+offline tests pass (0failure/error/skip), including functional snapshot/pin/revert
+on disposable local files, wrong identity/no writes, tampered copy and foreign
+edit refusal, default no device access, and image-only lease refusing wake.
+It requires a NEW parent-reviewed wake-baseline lease. No wake is authorized by
+the existing image lease. Whole mutex; same-config pin refresh with exact private
+prior copies; baseline verification; original inactive/enablement state and
+Quadlet bytes restored; retain loaded images. No installer/source deployment.
+
 ## Exact original source images
 
 Live host fixed-field inspection uses the same `podman image inspect` route as
