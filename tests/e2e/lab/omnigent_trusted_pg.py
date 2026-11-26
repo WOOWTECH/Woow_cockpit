@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -321,5 +322,8 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as exc:
-        event('failed', error_type=type(exc).__name__)
+        frames = traceback.extract_tb(exc.__traceback__)
+        event('failed', error_type=type(exc).__name__, error_code=getattr(exc, 'code', None),
+              frames=[{'file': Path(frame.filename).name, 'line': frame.lineno, 'function': frame.name}
+                      for frame in frames[-4:]])
         sys.exit(1)
