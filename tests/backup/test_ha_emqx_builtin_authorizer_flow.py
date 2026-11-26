@@ -32,12 +32,12 @@ class BuiltinProductFlowTests(unittest.TestCase):
                 self.assertIn('import', transport.events)
                 self.assertEqual(transport.running_config['authorization'], flow.HA_AUTHORIZATION)
 
-    def test_a_file_reference_of_an_unknown_kind_still_stops_until_the_generic_scan_exists(self):
-        """Not E-31 (the shape of a built-in source): a `path` field is a file reference the walk cannot place (EMQX-B)."""
+    def test_a_file_reference_of_an_unknown_kind_is_found_by_the_generic_scan(self):
+        """E-50 (HAOS parity, EMQX-B): a `path` field of a built-in source is no file setting to the scan (only a file source's
+        is) and stops nothing; the file settings of every source are scanned wherever they are."""
         transport = self.fixture({'type': 'built_in_database', 'enable': False, 'path': '/fixture/loader'})
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('export', transport.events)
+        self.assertEqual(len(self.invoke(transport)), 4)
+        self.assertIn('export', transport.events)
 
     def test_a_list_of_sources_that_cannot_be_read_still_stops(self):
         for sources in (None, 'x', [1]):
@@ -48,15 +48,22 @@ class BuiltinProductFlowTests(unittest.TestCase):
                 self.invoke(transport)
             self.assertNotIn('export', transport.events)
 
-    def test_builtin_does_not_hide_unsafe_file_in_either_order(self):
+    def test_builtin_does_not_hide_a_file_in_either_order(self):
+        """E-29, E-30 (HAOS parity, EMQX-B): where a file source's file is decides nothing about the import (HA's authorization
+        replaces it); one in the data volume is carried in either order, one elsewhere is the candidate's the way it is this
+        device's."""
         for reverse in (False, True):
-            t = self.fixture({'type': 'built_in_database', 'enable': True})
-            t.config['authorization']['sources'][0]['path'] = '/outside/unmounted.acl'
-            if reverse:
-                t.config['authorization']['sources'].reverse()
-            with self.subTest(reverse=reverse), self.assertRaises(BackupError):
-                self.invoke(t)
-            self.assertNotIn('export', t.events)
+            for path, carried in (('/outside/unmounted.acl', None), ('/opt/emqx/data/authz/custom.acl', 'authz/custom.acl')):
+                t = self.fixture({'type': 'built_in_database', 'enable': True})
+                t.config['authorization']['sources'][0]['path'] = path
+                if reverse:
+                    t.config['authorization']['sources'].reverse()
+                t.running_config = copy.deepcopy(t.config)
+                with self.subTest(reverse=reverse, path=path):
+                    self.assertEqual(len(self.invoke(t)), 4)
+                    self.assertIn('export', t.events)
+                    if carried:
+                        self.assertIn(carried, t.seed)
 
     def test_raw_reader_never_expands_or_drops_fields(self):
         self.assertIn('emqx:get_raw_config([])', emqx.CONFIG_EXPR)

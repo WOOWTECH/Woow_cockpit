@@ -311,12 +311,16 @@ class CandidateFlowTests(unittest.TestCase):
                 self.assertEqual(transport.logs, [])
                 self.assertNotIn('export', transport.events)
 
-    def test_unsupported_root_stops_before_export(self):
+    def test_a_connector_or_an_unknown_root_of_this_device_is_no_reason_to_stop(self):
+        """E-32, E-41 (HAOS parity, EMQX-B): neither a root the engine has no list for nor what this device has of its own
+        stops the conversion; the latter is a line the customer confirms (ha_emqx_settings.own_items)."""
         transport = Transport()
         transport.config['connectors'] = {'unreviewed': {}}
-        with self.assertRaises(BackupError):
-            self.invoke(transport)
-        self.assertNotIn('export', transport.events)
+        transport.config['future_root'] = {'x': 1}
+        transport.running_config = copy.deepcopy(transport.config)
+        self.assertEqual(len(self.invoke(transport)), 4)
+        self.assertIn('export', transport.events)
+        self.assertEqual(transport.running_config['future_root'], {'x': 1})
 
     class ImportMovesAnOperationalRoot(Transport):
         """HA's import changed one of this device's own roots: the candidate must load it back (E-72)."""

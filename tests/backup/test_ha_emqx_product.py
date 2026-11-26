@@ -43,27 +43,28 @@ class TemplatePathTests(unittest.TestCase):
         return ha_emqx.authorization_file_references({'sources': [dict(FILE, path=path)]}, mounts,
                                                      include_cluster=False, etc_dir=etc_dir)
 
-    def test_the_vendor_template_resolves_only_on_the_proven_etc_dir(self):
+    def test_the_vendor_template_resolves_to_the_etc_dir_this_devices_broker_reports(self):
+        """E-24, E-30 (HAOS parity, EMQX-B): `${EMQX_ETC_DIR}` is where the running broker says (a plain folder); the file is then a
+        mount, the image's own or the data volume's like any other, and none of that stops the import."""
         self.assertEqual(self.references('${EMQX_ETC_DIR}/acl.conf'), set(), 'the read-only mount is the ACL')
-        for etc_dir in (None, '/etc/emqx'):
-            with self.subTest(etc_dir=etc_dir), self.assertRaises(BackupError):
-                self.references('${EMQX_ETC_DIR}/acl.conf', etc_dir=etc_dir)
-        with self.assertRaises(BackupError) as caught:
-            self.references('${EMQX_ETC_DIR}/acl.conf', mounts=[])
-        self.assertIn('唯一的唯讀掛載', caught.exception.message)
+        for etc_dir in (None, '/etc/emqx'):   # None: the image's default
+            with self.subTest(etc_dir=etc_dir):
+                self.assertEqual(self.references('${EMQX_ETC_DIR}/acl.conf', etc_dir=etc_dir), set())
+        self.assertEqual(self.references('${EMQX_ETC_DIR}/acl.conf', mounts=[]), set(), 'not a mount: the image\'s place')
+        self.assertEqual(self.references('${EMQX_ETC_DIR}/acl.conf', etc_dir='/opt/emqx/data/etc'), {'etc/acl.conf'},
+                         'an etc folder in the data volume is carried like any file in it')
         other = MOUNT + [('/home/appowner/.config/emqx/other.conf', '/opt/emqx/etc/other.conf', 'ro')]
         for path in ('$EMQX_ETC_DIR/acl.conf', '${EMQX_ETC_DIR}/other.conf', '${EMQX_ETC_DIR}/../etc/acl.conf',
                      '${OTHER_DIR}/acl.conf', '${EMQX_ETC_DIR}//acl.conf'):
-            with self.subTest(path=path), self.assertRaises(BackupError):
-                self.references(path, mounts=other)
+            with self.subTest(path=path):
+                self.assertEqual(self.references(path, mounts=other), set(), 'none of them is a data-volume file')
 
 
 class TargetReadTests(unittest.TestCase):
-    def test_the_etc_dir_must_be_the_images(self):
+    def test_the_etc_dir_is_the_one_the_broker_reports(self):
+        """E-24 (HAOS parity, EMQX-B): any plain absolute folder is the answer; only what is no answer stops."""
         self.assertEqual(ha_emqx.target_etc_dir(answer(b'WOOWETC:/opt/emqx/etc:ENDok\n')), '/opt/emqx/etc')
-        with self.assertRaises(BackupError) as caught:
-            ha_emqx.target_etc_dir(answer(b'WOOWETC:/etc/emqx:ENDok\n'))
-        self.assertIn('EMQX_ETC_DIR', caught.exception.message)
+        self.assertEqual(ha_emqx.target_etc_dir(answer(b'WOOWETC:/etc/emqx:ENDok\n')), '/etc/emqx')
         for raw, code in ((b'garbage', 0), (b'WOOWETC:/opt/emqx/etc:ENDok', 1), (b'', 0)):
             with self.subTest(raw=raw), self.assertRaises(BackupError) as caught:
                 ha_emqx.target_etc_dir(answer(raw, code))
@@ -244,7 +245,8 @@ class HaAuthorizationTests(base.EmqxCase):
         self.assertFalse([n for n in done['ha_import']['notes'] if '不會生效' in n])
 
     def test_the_conversion_reads_this_devices_broker_before_it_builds_anything(self):
-        """The preflight is still read-only and first: a device whose EMQX_ETC_DIR is not the image's stops before HA's broker."""
+        """The preflight is still read-only: a device whose EMQX_ETC_DIR the candidate does not have (E-24: its own etc folder is
+        the candidate's too, here it is not) stops this app before anything is imported or packaged."""
         self.world.stopped = False
         real = self.world.evaluate
 
@@ -255,7 +257,8 @@ class HaAuthorizationTests(base.EmqxCase):
         self.world.evaluate = evaluate
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_emqx(state='stopped'), ['emqx'])
-        self.assertIn('EMQX_ETC_DIR', caught.exception.message)
+        self.assertEqual(caught.exception.message, ha_emqx.ETC_DIFFERS)
+        self.assertEqual([c for c in self.world.ctl_calls if c[1][:2] == ['data', 'import'] and c[0] == 'emqx-new'], [])
         self.assertEqual(self.storage.list_backups(), [])
 
 

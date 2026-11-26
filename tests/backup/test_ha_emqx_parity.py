@@ -35,9 +35,11 @@ class IssueTableTests(unittest.TestCase):
             self.assertTrue(issue_id.startswith('emqx.'), issue_id)
         self.assertEqual({i for i, lv in ha_emqx.ISSUES.items() if lv == 'confirm'},
                          {'emqx.file-secret', 'emqx.jq-rule', 'emqx.external-authn', 'emqx.external-authz', 'emqx.exhook',
-                          'emqx.no-authentication', 'emqx.import-partial', 'emqx.default-dashboard-exposed'})
+                          'emqx.no-authentication', 'emqx.import-partial', 'emqx.default-dashboard-exposed',
+                          'emqx.device-integrations', 'emqx.device-routing', 'emqx.device-psk', 'emqx.durable-sessions'})
         self.assertEqual({i for i, lv in ha_emqx.ISSUES.items() if lv == 'stop'},
-                         {'emqx.no-database', 'emqx.node-gone', 'emqx.config-changing'})
+                         {'emqx.no-database', 'emqx.node-gone', 'emqx.config-changing', 'emqx.data-dir-moved',
+                          'emqx.output-dir-unusable'})
 
     def test_the_old_protections_of_the_owner_decisions_that_are_superseded_are_gone(self):
         """E-73a, E-73b, E-73c: nothing of this device's authorization is preserved, switched off or written back any more."""

@@ -2500,11 +2500,24 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
    the app) or a tunnel container (ngrok, Cloudflare) is installed it is `emqx.default-dashboard-exposed` (confirm, H3).
 4. This device's broker (the candidate). A stopped broker is started for the read and put back (`hatarget.ensure_running`: `target.service-started`
    auto, `target.service-failed` stop; E-22). Read first from the running broker as the owner, with fixed `emqx eval`
-   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR` (must be `/opt/emqx/etc`)
-   and the no-follow state of `data/configs/cluster.hocon`. HA's authorization replaces this device's (D0), so this device's authorization
-   sources are not judged (E-26, E-27, E-31): they only name files the candidate needs (a path may be the list of character codes EMQX makes of
-   it, E-28); a file source's path on a read-only mount, under `${EMQX_ETC_DIR}`, or in the data volume under `authz/`, `configs/`, `certs/`;
-   a bootstrap file that cannot be followed (E-48, E-49) or that the candidate cannot read (E-61) is left off and said (`emqx.bootstrap-lost`,
+   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR` (any plain absolute folder: it is
+   what `${EMQX_ETC_DIR}` means to this device's broker, E-24; the candidate must report the same one, else only this app stops: 「EMQX 不能搬過來：這台 EMQX 執行中的設定目錄（EMQX_ETC_DIR）和用它的設定啟動的暫用 EMQX 不同，多半是改過設定還沒重新啟動；為避免匯入後設定跑掉，已停止，這台沒有任何改變。請先重新啟動這台 EMQX，再重新檢查與匯入。」) and the no-follow state of
+   `data/configs/cluster.hocon`. HA's authorization replaces this device's (D0), so this device's authorization sources are not judged (E-26,
+   E-27, E-31). No list of roots or fields is judged either (E-32, E-33, E-34, E-37, E-39, E-40, E-45, E-46): the candidate starts with this
+   device's configuration as it is and `ha_emqx.file_scan` looks at EVERY setting of EVERY root for the files it names: by its name
+   (`certfile`, `keyfile`, `cacertfile`, `dhfile`, `bootstrap_file`, `init_file`, `config_files`, `filename`, anything ending in `file` or `files`,
+   `path` of a source of type `file`) or by a value that is an absolute `/opt/emqx/data/…` path or a `file://` secret. A path may be the list of
+   character codes EMQX makes of it (E-28), start with `$NAME` or `${NAME}` (EMQX_ETC_DIR, EMQX_LOG_DIR and the Quadlet's own `EMQX_*` settings) or be
+   relative to `/opt/emqx`, the broker's working folder (`data/authz/acl.conf` is the form the Dashboard writes, E-30). A file in the data volume
+   is carried wherever in it it lies (not the Mnesia database, nor what the converted volume drops anyway: E-29); one on this device's mounts or in
+   the image is the candidate's the way it is this device's; one that cannot be placed (an unknown variable, a `..`, /proc or /tmp) is named,
+   setting names only, and the import goes on (`emqx.files-not-carried`, notice, E-50): 「這台 EMQX 的設定提到 N 個暫用的 EMQX 帶不過去的檔案（下列設定項目）：它們放在只有執行時才有的位置、找不到的環境變數底下或不會搬的資料夾。匯入不會搬動它們，匯入後請確認它們還在原處。」 The one node setting that still
+   stops is a data directory that is not the image's (`emqx.data-dir-moved`, stop, E-36): 「EMQX 不能搬過來：這台 EMQX 的資料目錄（node.data_dir）不在 /opt/emqx/data，HA 的資料會放到錯的位置，已停止；這台沒有任何改變。」 with the advice 「請先把這台 EMQX 的資料目錄改回 /opt/emqx/data（環境變數 EMQX_NODE__DATA_DIR），再匯入 EMQX；其他應用不受影響。」
+   The folders of the log files, the crash dump and EMQX_LOG_DIR (E-23, E-35) are outputs, never read: when this device keeps them
+   elsewhere the candidate mounts its own log volume there as scratch space (logs are not carried) and this device's real folder is never mounted
+   into it for writing (`emqx.dirs-follow-device`, auto: 「這台 EMQX 的日誌或設定目錄不是預設的位置；暫用的 EMQX 用同樣的目錄（日誌放在暫用空間，不會搬），不影響匯入。」); a place inside `/opt/emqx` or below a mount of this device cannot be given and stops
+   only this app (`emqx.output-dir-unusable`, stop): 「EMQX 不能搬過來：這台 EMQX 把日誌或當機記錄寫在暫用的 EMQX 無法安全提供的位置（下列資料夾），已停止；這台沒有任何改變。」 with the advice 「請先把這台 EMQX 的日誌與當機記錄路徑（log.file.*.path、node.crash_dump_file、EMQX_LOG_DIR）改回 /opt/emqx/log 底下，再匯入 EMQX；其他應用不受影響。」
+   A bootstrap file that cannot be followed (E-48, E-49) or that the candidate cannot read (E-61) is left off and said (`emqx.bootstrap-lost`,
    notice); the image's own TLS files are fingerprinted (one that cannot be read is left out, E-54). The data volume's
    `configs/cluster.hocon` and the data-volume files the configuration names are snapshotted; one named file that is not there is said
    (`emqx.target-file-missing`, notice, E-55: this device's own broker has the same hole); the read is made again up to three times when the
@@ -2513,10 +2526,18 @@ line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids
    `--env-file`, never into a command line; what they hold is no longer judged, E-53), its `Secret=` mounts and read-only host files, the
    snapshot in an otherwise empty data volume (owned by the image's emqx user, which may be root, E-56) and the export at `/work/in`. It starts
    with this device's scheduler counts (`ERL_AFLAGS="+S total:online"`; a count that cannot be read or is not answered is only logged, E-57).
-   Before anything is imported its `EMQX_ETC_DIR`, node name and image TLS fingerprints must equal this device's, and HA's export is listed by the
+   Before anything is imported its `EMQX_ETC_DIR` (this device's own, E-24), node name and image TLS fingerprints must equal this device's, and HA's export is listed by the
    vendor's own functions on the very file the import reads (B1-03: only `META.hocon`, `cluster.hocon` with `DATA_ROOTS` and the table backups).
    A root where the candidate's boot differs from this device's running configuration (changed, not yet restarted) is listed (`emqx.config-differs`,
    notice, E-60) and what the candidate booted with is the baseline of every later comparison; only another node name stops.
+   What this device already has of its own is mixed with HA's by the import (a merge: a same-named entry of HA's wins, the others stay next to HA's): the
+   names, read from the finished candidate by `ha_emqx_settings.own_items` so the check and the conversion say the same, are lines of the one
+   confirmation (E-41, E-42, E-43, E-47) or a reminder (E-44), never a refusal: `emqx.device-integrations` (confirm, rules, connectors, actions, sources,
+   bridges, gateways; asked only when HA's import brought entries of that kind, otherwise this device's own stay exactly as they are; the message says
+   how many the import replaced): 「這台的 EMQX 已經有自己的規則、連接器、動作、來源、橋接或閘道（共 N 項，列在下面）。匯入會把 HA 的加進來：同名的以 HA 的為準，其他的留在原處、和 HA 的一起運作（HA 的規則也可能觸發這台的連接器）。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-routing` (confirm, topic rewrite, topic metrics, auto-subscribe,
+   ExHook servers, asked under the same condition; the same ExHook servers may also be named by `emqx.exhook`, which reads the finished candidate): 「這台的 EMQX 已經有自己的主題改寫、主題統計、自動訂閱或 ExHook 伺服器（共 N 項，列在下面）。匯入後它們和 HA 的並存，同名的以 HA 的為準，會和 HA 的一起改寫主題或把訊息送出去。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-psk`
+   (confirm): 「這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。」 `emqx.durable-sessions` (confirm): 「這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。」 `emqx.device-plugins` (notice; the plugin records are kept, a plugin
+   that is not installed is only logged by the broker): 「這台的 EMQX 裝了外掛（共 N 個，列在下面）：外掛程式放在容器裡、不在資料卷裡，這次匯入不會搬動或改動它們，設定裡的外掛記錄照舊保留。匯入後如果外掛沒有啟動，請到這台 EMQX 管理頁重新安裝。」
    H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
    `EnvironmentFile=` lines: names only) win over HA's after the next start: `emqx.env-wins` (notice, names).
    `emqx ctl data import` then runs. Output that does not say "imported successfully" names, as far as it names roots or tables, what EMQX could
