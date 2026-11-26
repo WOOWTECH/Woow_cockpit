@@ -571,12 +571,19 @@ CS_ENV_LINE=Environment=WOOW_CONNECTOR_DATA_DIR=/data/pi-agent/connectors-primar
 
 code_server_edit_copy() {
     owner python3 -I - "$HOME_D/${DEST[code-server]}/quadlet/code-server.container" "$(device_pin "$CS_GHCR")" "$CS_ENV_LINE" <<'PY' ||
-import sys
+import re, sys
 path, pin, env = sys.argv[1], sys.argv[2], sys.argv[3] + '\n'
 text = open(path, encoding='utf-8').read()
 image = 'Image=' + pin + '\n'
 if env in text and image in text:
     print('quadlet/code-server.container: already has the host edits')
+    sys.exit(0)
+prior_pin = re.findall(r'(?m)^Image=ghcr\.io/woowtech/woow-code-server-amd64:4\.139\.1-8@sha256:[0-9a-f]{64}$', text)
+image_lines = re.findall(r'(?m)^Image=.*$', text)
+if (text.count('[Container]\n') == 1 and text.count(env) == 1 and
+        len(prior_pin) == 1 and image_lines == prior_pin):
+    open(path, 'w', encoding='utf-8').write(text.replace(prior_pin[0] + '\n', image))
+    print('quadlet/code-server.container: image pin updated after lab image rotation')
     sys.exit(0)
 old_image = 'Image=localhost/woow-code-server:4.139.1-8\n'
 if text.count('[Container]\n') != 1 or text.count(old_image) != 1 or env in text:
