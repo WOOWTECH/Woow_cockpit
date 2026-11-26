@@ -125,6 +125,23 @@ drv.state_path = lambda: LAB / 'run' / 'codeserver_full_flow.json'
 Failed = drv.Failed
 
 
+def require_reviewed_check(result):
+    """A real-flow script must review every confirmation before it imports."""
+    if result.get('ok') is not True or result.get('importable') is not True or result.get('blockers'):
+        raise Failed('the check did not mark code-server importable without blockers')
+    issues = result.get('issues')
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise Failed('the check did not return a usable issue list')
+    if any(not isinstance(issue.get('id'), str) or issue.get('level') not in ('stop', 'confirm', 'auto', 'notice')
+           for issue in issues):
+        raise Failed('the check returned a malformed issue')
+    if any(issue['level'] == 'stop' for issue in issues):
+        raise Failed('the check returned a stop issue')
+    confirmations = sorted({issue['id'] for issue in issues if issue['level'] == 'confirm'})
+    if confirmations:
+        raise Failed(f'check has confirmation lines that this lab case has not reviewed: {confirmations}')
+
+
 def label(text):
     return SAFE_LABEL.sub(' ', str(text))[:140].strip() or 'check'
 
@@ -792,6 +809,7 @@ class Run:
                  and section.get('unknown') == ['codex-bootstrap']
                  and any('share' in w for w in result.get('warnings') or []),
                  {'warnings': len(result.get('warnings') or []), 'unknown': section.get('unknown')})
+        require_reviewed_check(result)
         leftovers = drv.labelled()
         ev.check('check: no throwaway container, volume or network left (the version container is gone)',
                  not any(leftovers.values()), leftovers)
