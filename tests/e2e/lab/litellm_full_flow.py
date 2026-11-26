@@ -142,6 +142,23 @@ def _load(name):
 
 drv = _load('ha_import_b1_e2e')
 Failed = drv.Failed
+
+
+def require_reviewed_check(result):
+    """Do not let an older real-flow script approve a new conditional LiteLLM import."""
+    if result.get('ok') is not True or result.get('importable') is not True or result.get('blockers'):
+        raise Failed('the check did not mark LiteLLM importable without blockers')
+    issues = result.get('issues')
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise Failed('the check did not return a usable issue list')
+    if any(not isinstance(issue.get('id'), str) or issue.get('level') not in ('stop', 'confirm', 'auto', 'notice')
+           for issue in issues):
+        raise Failed('the check returned a malformed issue')
+    ids = sorted({issue['id'] for issue in issues if issue['level'] == 'confirm'})
+    if ids:
+        raise Failed(f'check has confirmation lines that this lab case has not reviewed: {ids}')
+
+
 drv.state_path = lambda: LAB / 'run' / 'litellm_full_flow.json'   # never the b1 driver's own state file
 
 
@@ -878,6 +895,7 @@ class Run:
         section = result.get('litellm') or {}
         ev.check('check: ok, no blockers (salt bound to HA\'s database, data shape equals this device\'s)',
                  result.get('ok') is True and not result.get('blockers'), result.get('blockers'))
+        require_reviewed_check(result)
         ev.check('check: source amd64, add-on 0.1.15 (LiteLLM 1.104.0), this device 1.104.0, PostgreSQL 18 -> 17',
                  (result.get('arch'), result.get('version'), result.get('target_version'), section.get('litellm_version'),
                   section.get('pg_major'), section.get('target_pg_major')) == ('amd64', '0.1.15', '1.104.0', '1.104.0',
