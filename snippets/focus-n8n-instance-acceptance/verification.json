@@ -1,0 +1,61 @@
+{
+  "preparation_commit": "67ef14144a28728fb33e0405d4f2832f10a5532a",
+  "base_integration_commit": "abc746834c9eb1884ca31d61250aa58a74ea29c6",
+  "packet_path": "/tmp/parity-focus-20261127/n8n-instance-preparation-attempt2.json",
+  "packet_sha256": "76943de296a5314efd13a913492c59364c5bd6b85c63336482f3b73de064642d",
+  "driver_sha256": "da7a781c7e9b6de1a85997859f0119421f44630f89cdc9c625ba512d16ac0a6c",
+  "local_cache": [
+    {
+      "config_id": "c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb",
+      "archive_sha256": "0a7352186122520e86fa3b22d0239ab611387e61bb863d082410c38e71f62ccb",
+      "archive_bytes": 296256084,
+      "archive_hash_verified_now": true,
+      "image_loaded": false
+    },
+    {
+      "config_id": "28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb",
+      "archive_sha256": "7fa274ed6a93924cf90420433d5e0928d72183029ea80437fdf4ebc89e70580f",
+      "archive_bytes": 196625268,
+      "archive_hash_verified_now": true,
+      "image_loaded": false
+    }
+  ],
+  "guarded_tests": {
+    "count": 20,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "shim_hits": 0,
+    "run_native": "absent",
+    "log": "/tmp/parity-focus-20261127/n8n-instance-preparation-gate-2.log"
+  },
+  "history": [
+    {
+      "attempt": "gate-1",
+      "result": "loader_import_error_before_tests",
+      "cause": "discovery needs --top tests/e2e/lab",
+      "runtime": false
+    },
+    {
+      "attempt": "packet-1",
+      "result": "source_sha_changed_before_output",
+      "cause": "operator supplied incorrect full expected SHA; fixed by reading git rev-parse HEAD",
+      "runtime": false
+    },
+    {
+      "attempt": "packet-2",
+      "result": "prepared_cache_hashes_verified",
+      "runtime": false
+    }
+  ],
+  "native_case_executed": false,
+  "device_mutation": false,
+  "execution_ready": false,
+  "remaining_before_native": [
+    "coordinator_frozen_final_product_sha",
+    "reviewed_mutation_controller",
+    "explicit_dev_c_lease",
+    "exact_image_recovery_if_still_missing"
+  ]
+}
