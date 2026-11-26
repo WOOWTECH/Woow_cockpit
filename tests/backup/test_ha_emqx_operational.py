@@ -910,6 +910,26 @@ class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
         self.assertTrue([v for v in self.candidate_volumes() if v[1] == '/custom/etc/acl.conf'])
         self.assertEqual([i['id'] for i in result['issues'] if i['id'] == 'emqx.target-file-missing'], [])
 
+    def test_the_running_brokers_etc_template_carries_a_file_in_its_data_volume(self):
+        """E-24: preflight resolves the template with the running broker's directory before selecting snapshot files."""
+        import io
+        import tarfile
+
+        etc = '/opt/emqx/data/device-etc'
+        self.world.quadlets = quadlet(env=[f'EMQX_ETC_DIR={etc}'])
+        self.world.etc = {'woow-emqx': etc, 'emqx-new': etc}
+        self.world.volume_files = {'device-etc/cert.pem': b'fixture certificate bytes'}
+        self.world.target_config['listeners'] = {'ssl': {'default': {'ssl_options': {
+            'certfile': '${EMQX_ETC_DIR}/cert.pem'}}}}
+        self.world.current_config = copy.deepcopy(self.world.target_config)
+
+        result = self.check(self.upload_emqx(), ['emqx'])[0]
+        self.assertTrue(result['importable'], result['blockers'])
+        with tarfile.open(fileobj=io.BytesIO(self.world.imported['emqx-new'])) as archive:
+            carried = {member.name for member in archive if member.isfile()}
+        self.assertIn('device-etc/cert.pem', carried)
+        self.assertNotIn('emqx.target-file-missing', [issue['id'] for issue in result['issues']])
+
     def test_an_etc_folder_that_the_candidate_does_not_have_stops_only_this_app(self):
         """E-24: this device says /custom/etc and the candidate something else: the candidate is not this device's replica."""
         self.world.etc = {'woow-emqx': '/custom/etc'}
