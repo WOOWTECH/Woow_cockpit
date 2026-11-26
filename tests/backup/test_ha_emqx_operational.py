@@ -4,8 +4,10 @@ starts with them as they are, every setting is scanned for the files it names, a
 and a place for logs the candidate cannot be given (E-35) are what is left to stop one app; what this device has of its own
 that HA's import is mixed with -- rules, connectors, rewrite, PSK, plugins, durable sessions -- is named in the one
 confirmation (E-41, E-42, E-43, E-44, E-47)."""
+import base64
 import copy
 import hashlib
+import json
 import re
 import unittest
 from pathlib import Path
@@ -635,10 +637,88 @@ class EnvironmentFileTests(unittest.TestCase):
         self.assertEqual(ha_emqx.device_log_dir(target), '/var/log/quadlet', 'the Quadlet\'s own setting is the stronger one')
 
 
+EMPTY_PLUGIN = {'binary': False, 'data': False, 'config': None, 'running': False}
+
+
+def plugin_reply(facts):
+    return b'WOOWPLUG:' + base64.b64encode(json.dumps(facts).encode()) + b':ENDok\n'
+
+
+class PluginWorld(base.World):
+    """Device image/mount plugins are present by default; tests can model absent data-volume material separately."""
+    def __init__(self):
+        super().__init__()
+        self.plugin_facts = {}
+
+    def evaluate(self, role, expression):
+        if expression == ha_emqx.PLUGIN_INVENTORY_EXPR:
+            config = self.target_config if role == 'woow-emqx' else self.current_config
+            return plugin_reply({name: self.plugin_facts.get(role, {}).get(name,
+                dict(EMPTY_PLUGIN, binary=True, running=state.get('enable', True)))
+                for name, state in ha_emqx_settings.plugin_records(config).items()})
+        return super().evaluate(role, expression)
+
+
+class PluginInventoryTests(unittest.TestCase):
+    config = {'plugins': {'states': [{'name_vsn': 'device-1.0'}]}}
+
+    def read(self, body, code=0):
+        calls = []
+        def execute(command):
+            calls.append(command)
+            return Result(code, body, b'private vendor output')
+        result = ha_emqx.plugin_inventory(execute, self.config)
+        self.assertEqual(calls, [['emqx', 'eval', ha_emqx.PLUGIN_INVENTORY_EXPR]])
+        return result
+
+    def test_absence_is_an_explicit_complete_answer(self):
+        self.assertEqual(self.read(plugin_reply({'device-1.0': EMPTY_PLUGIN})), {'device-1.0': EMPTY_PLUGIN})
+        self.assertEqual(ha_emqx.plugin_inventory(lambda _: self.fail('no configured plugins'), {}), {})
+
+    def test_presence_and_configuration_fingerprints_are_read_without_values(self):
+        facts = dict(EMPTY_PLUGIN, binary=True, data=True, running=True, config='A' * 64)
+        self.assertEqual(self.read(plugin_reply({'device-1.0': facts})), {'device-1.0': facts})
+
+    def test_bad_or_partial_inventory_is_not_absence(self):
+        docs = [{}, [], {'other-1.0': EMPTY_PLUGIN}, {'device-1.0': {}},
+                {'device-1.0': dict(EMPTY_PLUGIN, binary=0)},
+                {'device-1.0': dict(EMPTY_PLUGIN, config='secret')},
+                {'device-1.0': dict(EMPTY_PLUGIN, config='A' * 64)},
+                {'device-1.0': dict(EMPTY_PLUGIN, extra=True)}]
+        bodies = [plugin_reply(doc) for doc in docs] + [b'', b'private output', b'WOOWPLUG:???:END',
+                  plugin_reply({'device-1.0': EMPTY_PLUGIN}) + b'private output',
+                  b'WOOWPLUG:' + base64.b64encode(b'{"device-1.0":{},"device-1.0":{}}') + b':END']
+        for body in bodies:
+            with self.subTest(body_length=len(body)), self.assertRaises(BackupError) as caught:
+                self.read(body)
+            self.assertNotIn('private', caught.exception.message)
+            self.assertNotIn('secret', caught.exception.message)
+        with self.assertRaises(BackupError):
+            self.read(plugin_reply({'device-1.0': EMPTY_PLUGIN}), code=1)
+
+    def test_unknown_record_shapes_and_unsafe_identities_are_never_guessed(self):
+        for states in ('x', [{'name_vsn': '../device-1.0'}], [{'name_vsn': 'device-1.0', 'enable': 0}],
+                       [{'name_vsn': 'device-1.0'}] * 2, [{}]):
+            with self.subTest(states=states), self.assertRaises(BackupError):
+                ha_emqx_settings.plugin_records({'plugins': {'states': states}})
+
+    def test_cleanup_preserves_other_roots_fields_and_start_order(self):
+        states = [{'name_vsn': 'last-1.0', 'enable': False}, {'name_vsn': 'gone-1.0'}, {'name_vsn': 'first-1.0'}]
+        config = {'plugins': {'states': states, 'install_dir': '/mounted/plugins', 'check_interval': '10s'},
+                  'dashboard': {'listeners': {'http': {'bind': 18083}}}}
+        original = copy.deepcopy(config)
+        facts = {row['name_vsn']: dict(EMPTY_PLUGIN, binary=row['name_vsn'] != 'gone-1.0') for row in states}
+        expected, removed = ha_emqx_settings.clean_plugin_records(config, facts, facts)
+        self.assertEqual(expected['plugins'], dict(config['plugins'], states=[states[0], states[2]]))
+        self.assertEqual(expected['dashboard'], config['dashboard'])
+        self.assertEqual(removed, [states[1]])
+        self.assertEqual(config, original)
+
+
 class OwnLinesTests(base.EmqxCase):
     """E-41, E-42, E-43, E-44, E-47 through the whole candidate of the generated device: each line to confirm has its three steps
     (not confirmed: only this app stops; confirmed: it goes on; one more name: confirm again), the plugins are a notice."""
-    world_class = base.World
+    world_class = PluginWorld
 
     def set_own(self, **roots):
         self.world.target_config.update(copy.deepcopy(roots))
@@ -738,18 +818,142 @@ class OwnLinesTests(base.EmqxCase):
         found = [issue.id for issue in self.internal_candidate(self.upload_emqx(state='stopped'))['issues']]
         self.assertNotIn('emqx.durable-sessions', found, 'durable sessions that are off queue nothing')
 
-    def test_plugins_are_a_notice_and_nothing_is_cleared(self):
-        """E-44: the plugin files live in the container, not in the data; the records stay (vendor emqx_plugins.erl only logs a
-        plugin that is not installed), the customer is told once."""
+    def test_available_device_plugins_keep_configuration_and_records(self):
+        """E-44: this device's available plugins retain their settings; HA's plugin code/records are excluded."""
         own = {'plugins': {'states': [{'name_vsn': 'my_plugin-1.0.0', 'enable': True}], 'install_dir': 'plugins'}}
         self.set_own(**own)
         result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
         self.assertEqual(levels(result['issues']).get('emqx.device-plugins'), 'notice')
         [line] = [issue for issue in result['issues'] if issue.id == 'emqx.device-plugins']
         self.assertEqual(line.names, ('plugins.my_plugin-1.0.0',))
-        self.assertIn('重新安裝', line.message)
+        self.assertIn('HA 備份的外掛程式及啟用記錄不會搬入', line.message)
         self.assertTrue(result['volumes'], 'a notice needs no confirmation')
         self.assertEqual(self.world.current_config['plugins'], own['plugins'], 'the records are this device\'s and stay')
+
+    def missing_plugins(self, *states):
+        self.set_own(plugins={'states': list(states), 'install_dir': 'plugins', 'check_interval': '5s'})
+        facts = {row['name_vsn']: dict(EMPTY_PLUGIN) for row in states}
+        self.world.plugin_facts = {role: copy.deepcopy(facts) for role in ('woow-emqx', 'emqx-new')}
+
+    def test_enabled_missing_records_need_confirmation_and_new_names_need_it_again(self):
+        def make():
+            self.missing_plugins({'name_vsn': 'gone-1.0'})  # vendor default enable=true
+        def more():
+            self.missing_plugins({'name_vsn': 'gone-1.0'}, {'name_vsn': 'second-1.0', 'enable': True})
+        line = self.three('emqx.plugin-records-remove', make, more=more)
+        self.assertEqual(line.names, ('plugins.gone-1.0',))
+        self.assertIn('以後補上程式也不會自動啟用', line.message)
+        self.assertIn('自動備份', line.message)
+        self.assertEqual(self.world.current_config['plugins']['states'], [])
+        self.assertEqual(self.world.target_config['plugins']['states'][0]['name_vsn'], 'gone-1.0', 'live device is unchanged')
+
+    def test_disabled_missing_records_are_cleaned_with_a_notice(self):
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': False})
+        result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
+        self.assertEqual(levels(result['issues'])['emqx.plugin-records-unused'], 'notice')
+        self.assertNotIn('emqx.plugin-records-remove', levels(result['issues']))
+        self.assertEqual(self.world.current_config['plugins'], {'states': [], 'install_dir': 'plugins', 'check_interval': '5s'})
+
+    def test_long_distinct_plugin_identities_are_not_collapsed_or_said_to_be_retained(self):
+        name = 'plugin_' + 'a' * 70 + '-1.0'
+        self.missing_plugins({'name_vsn': name, 'enable': False})
+        result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
+        self.assertNotIn('emqx.device-plugins', levels(result['issues']))
+        [line] = [line for line in result['issues'] if line.id == 'emqx.plugin-records-unused']
+        self.assertEqual(line.names, ('plugins.' + name,))
+
+    def test_retained_plugin_configuration_changed_during_import_is_refused(self):
+        self.missing_plugins({'name_vsn': 'device-1.0', 'enable': True})
+        for role in ('woow-emqx', 'emqx-new'):
+            self.world.plugin_facts[role]['device-1.0'] = dict(EMPTY_PLUGIN, binary=True, data=True, config='A' * 64)
+        real_exec = self.world.exec
+        def execute(role, command, data, stdout):
+            result = real_exec(role, command, data, stdout)
+            if role == 'emqx-new' and command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                self.world.plugin_facts[role]['device-1.0']['config'] = 'B' * 64
+            return result
+        self.world.exec = execute
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(self.upload_emqx(state='stopped'))
+        self.assertIn('外掛程式或設定和核對時不同', caught.exception.message)
+
+    def test_enabling_a_previously_disabled_missing_record_needs_confirmation(self):
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': False})
+        ha_id = self.upload_emqx(state='stopped')
+        self.internal_candidate(ha_id, acknowledged=[])
+        self.world.again()
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': True})
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(ha_id, acknowledged=[])
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+
+    def test_the_check_lists_record_removal_without_mutating_the_device(self):
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': True})
+        result = self.check(self.upload_emqx(state='stopped'), ['emqx'])[0]
+        self.assertTrue(result['importable'])
+        self.assertFalse(result['ok'])
+        [line] = [line for line in result['issues'] if line['id'] == 'emqx.plugin-records-remove']
+        self.assertTrue(line['key'])
+        self.assertEqual(line['items'], ['plugins.gone-1.0'])
+        self.assertNotIn('woow_emqx_data', self.world.imported)
+
+    def test_device_plugin_material_or_configuration_lost_by_candidate_stops_the_import(self):
+        for material in (dict(EMPTY_PLUGIN, binary=True), dict(EMPTY_PLUGIN, data=True),
+                         dict(EMPTY_PLUGIN, running=True), dict(EMPTY_PLUGIN, data=True, config='A' * 64)):
+            with self.subTest(material=material):
+                self.world.again()
+                self.missing_plugins({'name_vsn': 'device-1.0', 'enable': True})
+                self.world.plugin_facts['woow-emqx']['device-1.0'] = material
+                with self.assertRaises(BackupError) as caught:
+                    self.internal_candidate(self.upload_emqx(state='stopped'))
+                self.assertEqual(caught.exception.code, 'incompatible')
+                self.assertIn('device-1.0', caught.exception.message)
+                self.assertNotIn('woow_emqx_data', self.world.imported)
+
+    def test_a_regenerated_default_plugin_configuration_cannot_replace_the_devices(self):
+        self.missing_plugins({'name_vsn': 'device-1.0', 'enable': True})
+        for role, digest in (('woow-emqx', 'A' * 64), ('emqx-new', 'B' * 64)):
+            self.world.plugin_facts[role]['device-1.0'] = dict(EMPTY_PLUGIN, binary=True, data=True, config=digest, running=True)
+        with self.assertRaises(BackupError):
+            self.internal_candidate(self.upload_emqx(state='stopped'))
+
+    def test_an_available_candidate_plugin_is_kept_even_when_device_material_was_absent(self):
+        self.missing_plugins({'name_vsn': 'bundled-1.0', 'enable': False})
+        self.world.plugin_facts['emqx-new']['bundled-1.0'] = dict(EMPTY_PLUGIN, binary=True)
+        result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
+        self.assertNotIn('emqx.plugin-records-unused', levels(result['issues']))
+        self.assertEqual(self.world.current_config['plugins']['states'], [{'name_vsn': 'bundled-1.0', 'enable': False}])
+
+    def test_retained_plugins_keep_their_order_and_settings_while_missing_ones_are_removed(self):
+        self.missing_plugins({'name_vsn': 'mounted-1.0', 'enable': False}, {'name_vsn': 'gone-1.0', 'enable': False},
+                             {'name_vsn': 'bundled-1.0', 'enable': True})
+        for role in ('woow-emqx', 'emqx-new'):
+            for name in ('mounted-1.0', 'bundled-1.0'):
+                self.world.plugin_facts[role][name] = dict(EMPTY_PLUGIN, binary=True, data=True, config='A' * 64)
+        result = self.internal_candidate(self.upload_emqx(state='stopped'), acknowledged=[])
+        self.assertEqual([row['name_vsn'] for row in self.world.current_config['plugins']['states']], ['mounted-1.0', 'bundled-1.0'])
+        self.assertEqual(levels(result['issues'])['emqx.device-plugins'], 'notice')
+        self.assertEqual(levels(result['issues'])['emqx.plugin-records-unused'], 'notice')
+
+    def test_a_failed_record_cleanup_is_not_hidden_by_the_configuration_comparison(self):
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': False})
+        real_exec = self.world.exec
+        def execute(role, command, data, stdout):
+            result = real_exec(role, command, data, stdout)
+            if role == 'emqx-new' and command[:4] == ['emqx', 'ctl', 'conf', 'load']:
+                self.world.current_config['plugins'] = copy.deepcopy(self.world.target_config['plugins'])
+            return result
+        self.world.exec = execute
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(self.upload_emqx(state='stopped'))
+        self.assertIn('未能保留目標有效設定', caught.exception.message)
+
+    def test_other_operational_changes_are_still_detected_with_record_cleanup(self):
+        self.missing_plugins({'name_vsn': 'gone-1.0', 'enable': False})
+        self.world.import_changes = {'node': {'name': 'different@127.0.0.1'}}
+        with self.assertRaises(BackupError) as caught:
+            self.internal_candidate(self.upload_emqx(state='stopped'))
+        self.assertIn('無法安全移除', caught.exception.message)
 
     def test_nothing_of_its_own_nothing_to_confirm(self):
         found = levels(self.internal_candidate(self.upload_emqx(state='stopped'))['issues'])
@@ -1008,7 +1212,7 @@ class FoldersAndFilesInTheRealFlowTests(base.EmqxCase):
 
 
 class OwnDocsTests(unittest.TestCase):
-    """The docs quote the engine's own sentences of this lane's lines (the EMQX-B snippets of CONTRACT.md and docs/backup.md)."""
+    """The shared docs plus coordinator-owned E-44 integration snippet quote the engine's sentences."""
     ROOT = Path(__file__).resolve().parents[2]
 
     @staticmethod
@@ -1017,10 +1221,12 @@ class OwnDocsTests(unittest.TestCase):
         return [ha_emqx.DIRS_FOLLOW, ha_emqx.FILES_NOT_CARRIED.format(**plain), ha_emqx.DEVICE_INTEGRATIONS.format(**plain),
                 ha_emqx.DEVICE_ROUTING.format(**plain), ha_emqx.DEVICE_PSK, ha_emqx.DEVICE_PLUGINS.format(**plain),
                 ha_emqx.DURABLE_SESSIONS, ha_emqx.OUTPUT_DIR_UNUSABLE, ha_emqx.OUTPUT_DIR_ACTION, ha_emqx.DATA_DIR_MOVED,
-                ha_emqx.DATA_DIR_ACTION, ha_emqx.ETC_DIFFERS]
+                ha_emqx.DATA_DIR_ACTION, ha_emqx.ETC_DIFFERS, ha_emqx.PLUGIN_RECORDS_REMOVE.format(**plain),
+                ha_emqx.PLUGIN_RECORDS_UNUSED.format(**plain)]
 
     def test_the_docs_quote_the_engine(self):
-        guide = (self.ROOT / 'docs' / 'backup.md').read_text(encoding='utf-8')
+        pending = (self.ROOT / 'snippets' / 'focus-emqx-plugins' / 'integration.md').read_text(encoding='utf-8')
+        guide = (self.ROOT / 'docs' / 'backup.md').read_text(encoding='utf-8') + pending
         if self.texts()[2] not in guide:
             self.skipTest('docs/backup.md does not hold the EMQX-B text yet: the lane\'s snippets are not merged')
         for text in self.texts():
@@ -1028,7 +1234,7 @@ class OwnDocsTests(unittest.TestCase):
 
         def bare(text):
             return re.sub(r'\s+', '', text)
-        contract = bare((self.ROOT / 'docs' / 'backup' / 'CONTRACT.md').read_text(encoding='utf-8'))
+        contract = bare((self.ROOT / 'docs' / 'backup' / 'CONTRACT.md').read_text(encoding='utf-8') + pending)
         if bare(self.texts()[2]) not in contract:
             self.skipTest('CONTRACT.md does not hold the EMQX-B text yet: the lane\'s snippets are not merged')
         for text in self.texts():

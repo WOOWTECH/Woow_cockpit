@@ -12,11 +12,15 @@ the comparison after the import proves it). What is left:
 * `own_items`: the names of what this device already has that HA's import is mixed with -- rules, connectors, actions,
   sources, bridges, gateways (E-41), topic rewrite, topic metrics, auto-subscribe, ExHook (E-42), PSK (E-43), plugins (E-44),
   durable sessions (E-47) -- for the one confirmation (ha_emqx says them);
+* `clean_plugin_records`: remove only plugin state records proven to have no material or running app on either device
+  or candidate. Available device plugins must retain their settings; ha_emqx asks before removing an enabled record;
 * the roots of each kind (`ROOTS`, `PASSIVE_ROOTS`, `MONITOR_ROOTS`), which the lab harness reads.
 
 Where the files of the settings are is not decided here: ha_emqx scans every setting for file references (E-23, E-24, E-29,
 E-30, E-32, E-35, E-36, E-50).
 """
+import re
+
 from .errors import BackupError
 
 IMMUTABLE_ROOTS = frozenset({'node', 'rpc', 'cluster'})
@@ -26,6 +30,52 @@ PASSIVE_ROOTS = EMPTY_MAP_ROOTS | {'rewrite', 'topic_metrics', 'auto_subscribe',
                                   'psk_authentication', 'plugins', 'rule_engine'}
 MONITOR_ROOTS = frozenset({'limiter', 'prometheus', 'sysmon', 'durable_sessions', 'durable_storage'})
 DATA_DIRS = ('data', '/opt/emqx/data')
+
+
+def plugin_records(config):
+    """Configured identities, in vendor start order. Never guess an identity or treat unreadable data as absence."""
+    plugins = config.get('plugins', {})
+    states = plugins.get('states', []) if isinstance(plugins, dict) else None
+    if not isinstance(states, list):
+        raise BackupError('incompatible', '無法安全核對這台 EMQX 的外掛記錄，已停止。')
+    found = {}
+    for state in states:
+        name = state.get('name_vsn') if isinstance(state, dict) else None
+        if (not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_]+-[A-Za-z0-9_.+-]+', name)
+                or name in found or type(state.get('enable', True)) is not bool):
+            raise BackupError('incompatible', '無法安全核對這台 EMQX 的外掛記錄，已停止。')
+        found[name] = state
+    return found
+
+
+def clean_plugin_records(config, device, candidate):
+    """Remove only records with no material AND no running app on either side (E-44).
+
+    Material includes an extracted plugin, an installable archive, or its own data/config directory. A device plugin
+    must survive with the same configuration and running status; absence in the candidate is never permission to
+    disable it. HA's plugins are excluded separately, at source boot and at the validated export boundary.
+    Returns (expected configuration, removed states); preserves all other fields and the remaining start order.
+    """
+    states = plugin_records(config)
+    if set(device) != set(states) or set(candidate) != set(states):
+        raise BackupError('incompatible', 'EMQX 外掛記錄在核對時改變，請重新檢查。')
+    def present(facts):
+        return facts['binary'] or facts['data'] or facts['running']
+
+    removed = []
+    for name, state in states.items():
+        if present(device[name]):
+            if device[name] != candidate[name]:
+                raise BackupError('incompatible',
+                    f'這台 EMQX 的外掛（{name}）程式、設定或執行狀態無法在暫用的 EMQX 保留，已停止；'
+                    '請先把外掛程式與設定放在可保留的映像或掛載中，再重新檢查。')
+        elif not present(candidate[name]):
+            removed.append(state)
+    if not removed:
+        return config, []
+    removed_names = {row['name_vsn'] for row in removed}
+    plugins = dict(config['plugins'], states=[state for name, state in states.items() if name not in removed_names])
+    return dict(config, plugins=plugins), removed
 
 
 def refuse():
@@ -138,7 +188,8 @@ def _entries(config):
     if states:
         for index, body in enumerate(states if isinstance(states, list) else [states]):
             name = body.get('name_vsn') if isinstance(body, dict) else None
-            found['plugins'][f'plugins.{_text(name) if isinstance(name, str) and name else index + 1}'] = body
+            # Keep the complete identity for cleanup/retention and confirmation keys; Issue.view bounds displayed names.
+            found['plugins'][f'plugins.{name if isinstance(name, str) and name else index + 1}'] = body
     if isinstance(plugins, dict) and plugins.get('install_dir') not in (None, '', 'plugins', '/opt/emqx/plugins'):
         found['plugins']['plugins.install_dir'] = plugins['install_dir']
     sessions = config.get('durable_sessions')

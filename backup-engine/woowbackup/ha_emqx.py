@@ -100,7 +100,9 @@ ISSUES = {
     'emqx.device-integrations': 'confirm',    # E-41: this device's own rules, connectors, actions, sources, bridges, gateways
     'emqx.device-routing': 'confirm',         # E-42: ... topic rewrite, topic metrics, auto-subscribe, ExHook servers
     'emqx.device-psk': 'confirm',             # E-43: ... PSK authentication
-    'emqx.device-plugins': 'notice',          # E-44: ... plugins (they live in the container, not in the data)
+    'emqx.device-plugins': 'notice',          # E-44: available device plugins keep their records
+    'emqx.plugin-records-remove': 'confirm',  # E-44: removing enabled records whose plugin material is absent
+    'emqx.plugin-records-unused': 'notice',   # E-44: removing disabled records whose plugin material is absent
     'emqx.durable-sessions': 'confirm',       # E-47: the messages queued for offline devices are not in HA's export
 }
 STATE = 'data/emqx'
@@ -1652,6 +1654,7 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
     device=lambda command: work.runner(app).podman('exec', target.container, *command, timeout=120,
                                                    max_output=MAX_HOCON, check=False)
     target_boot=boot_form(device)
+    target_plugins = plugin_inventory(device, target_boot)
     # ... and the candidate starts with this device's scheduler counts, which some of those defaults come from.
     # E-57: a count that cannot be read, or that the candidate does not get, is no reason to stop.
     try:
@@ -1664,7 +1667,7 @@ def candidate_from_target(work, app, tmp, target, staging, export, ids, *, hint=
     if observe is not None:observe('target_runtime')
     return target_broker(work,tmp,target,export,ids,hint=hint,
         target_snapshot=snapshot,target_config=original,image_fingerprints=fingerprints,target_boot=target_boot,
-        target_vm=target_vm,readings=readings,notes=notes)
+        target_vm=target_vm,readings=readings,notes=notes,target_plugins=target_plugins)
 
 def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, authorization, *, hint=''):
     """Stage known file ACL references and seed a candidate; not a complete preservation check.
@@ -1679,8 +1682,59 @@ def candidate_with_effective_acl(work, app, tmp, target, staging, export, ids, a
 
 def preserved_settings(config):
     """This device's operational settings stay; HA's data roots migrate (D0: HA's authentication and authorization with
-    them: access_roots)."""
+    them: access_roots). E-44's explicit missing-plugin plan adjusts only its expected state list before this comparison."""
     return {key: value for key, value in config.items() if key not in DATA_ROOTS}
+
+
+# Read only THIS broker's configured plugin paths; never load, install, stop or call plugin code. Metadata errors are
+# not absence. v5.8.9 emqx_plugins.erl:859-872,1561-1593: install_dir/<name-vsn>, <name-vsn>.tar.gz and
+# data/plugins/<app>/config.hocon. Include hidden/disabled plugins and already running apps even if their files vanished.
+PLUGIN_INVENTORY_EXPR = (
+    'Exists=fun(P) -> case file:read_link_info(P) of {ok,_} -> true; {error,enoent} -> false; '
+    '_ -> error(plugin_metadata) end end, '
+    'Digest=fun(P) -> case file:read_file_info(P) of {error,enoent} -> null; '
+    '{ok,I} when element(3,I)=:=regular, element(2,I)=<MAX_BYTES -> '
+    '{ok,H}=file:open(P,[read,binary,raw]), B=try case file:read(H,MAX_BYTES+1) of '
+    'eof -> <<>>; {ok,V} when byte_size(V)=<MAX_BYTES -> V; _ -> error(plugin_config) end '
+    'after file:close(H) end, '
+    'binary:encode_hex(crypto:hash(sha256,B)); _ -> error(plugin_config) end end, '
+    'Apps=[atom_to_binary(A,utf8) || {A,_,_} <- application:which_applications()], '
+    'Rows=[begin N=unicode:characters_to_binary(N0), [App|_]=binary:split(N,<<"-">>), '
+    'Dir=filename:join(emqx_plugins:install_dir(),N), '
+    'Data=filename:join([emqx:data_dir(),"plugins",App]), '
+    '{N,#{binary => Exists(Dir) orelse Exists(<<Dir/binary,".tar.gz">>), data => Exists(Data), '
+    'config => Digest(filename:join(Data,"config.hocon")), running => lists:member(App,Apps)}} '
+    'end || #{name_vsn := N0} <- emqx:get_config([plugins,states],[])], '
+    'io:format("WOOWPLUG:~s:END~n",[base64:encode(emqx_utils_json:encode(maps:from_list(Rows)))]).'
+).replace('MAX_BYTES', str(MAX_HOCON))
+
+
+def plugin_inventory(execute, config):
+    """Names, presence flags and a configuration digest; unreadable/partial answers fail closed."""
+    states = ha_emqx_settings.plugin_records(config)
+    if not states:
+        return {}
+    try:
+        result = execute(['emqx', 'eval', PLUGIN_INVENTORY_EXPR])
+        body = result.stdout or b''
+        if result.returncode or len(body) > MAX_HOCON or not body.startswith(b'WOOWPLUG:'):
+            raise ValueError()
+        encoded, tail = body[9:].split(b':END', 1)
+        if tail.strip() not in (b'', b'ok'):
+            raise ValueError()
+        facts = util.loads_strict(base64.b64decode(encoded, validate=True), max_bytes=MAX_HOCON)
+        if not isinstance(facts, dict) or set(facts) != set(states):
+            raise ValueError()
+        for row in facts.values():
+            if (not isinstance(row, dict) or set(row) != {'binary', 'data', 'config', 'running'}
+                    or any(type(row[key]) is not bool for key in ('binary', 'data', 'running'))
+                    or not (row['config'] is None or isinstance(row['config'], str)
+                            and re.fullmatch('[0-9A-Fa-f]{64}', row['config']))
+                    or row['config'] is not None and not row['data']):
+                raise ValueError()
+        return facts
+    except (ValueError, TypeError, KeyError, RecursionError):
+        raise BackupError('incompatible', '無法安全核對這台 EMQX 的外掛程式與設定，已停止。') from None
 
 
 def authn_key(row):
@@ -1838,6 +1892,8 @@ def restore_target_settings(tmp, original, read_candidate, *, observe=None, orig
     Roots absent on the target cannot be restored by guessing an empty/default value.
     Any such extra operational root remains a failure until removal is implemented.
     `original_boot`: this device's configuration in its boot form (boot_form); a root loaded back must equal it there.
+    E-44: the caller may supply the explicit expected configurations with proven absent plugin records removed;
+    every field and other root is still compared. This is never a blanket exemption of the plugins root.
     """
     before = read_effective_config(read_candidate, allow_authz_omission=True)
     expected = preserved_settings(original)
@@ -2135,7 +2191,8 @@ def read_schedulers(execute):
 
 
 def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=None, target_config=None,
-                  image_fingerprints=None, target_boot=None, target_vm=None, readings=None, notes=None):
+                  image_fingerprints=None, target_boot=None, target_vm=None, readings=None, notes=None,
+                  target_plugins=None):
     """This device's broker on an empty volume: import HA's export, make HA's authentication and authorization HA's, load
     this device's other settings back, verify.
 
@@ -2212,6 +2269,20 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
                         baseline.pop(root, None)
         check_candidate_bootstrap(tmp, target, target_config, lost=notes.setdefault('lost', []),   # E-61
                                   etc_dir=notes.get('etc_dir', ETC_DIR), log_dir=notes.get('log_dir', LOG_TARGET))
+    plugin_expected, plugin_boot, candidate_plugins = target_config, target_boot, None
+    if target_config is not None and ha_emqx_settings.plugin_records(target_config):
+        if target_plugins is None:
+            raise BackupError('incompatible', '缺少這台 EMQX 的外掛核對資料，已停止。')
+        candidate_plugins = plugin_inventory(read_candidate, target_config)
+        plugin_expected, removed = ha_emqx_settings.clean_plugin_records(target_config, target_plugins, candidate_plugins)
+        removed_names = {row['name_vsn'] for row in removed}
+        if removed and target_boot is not None:
+            plugin_boot = dict(target_boot, plugins=dict(target_boot['plugins'], states=[
+                row for row in target_boot['plugins'].get('states', []) if row['name_vsn'] not in removed_names]))
+        notes['plugin_records'] = {kind: sorted('plugins.' + row['name_vsn'] for row in removed
+                                              if row.get('enable', True) is enabled)
+                                   for kind, enabled in (('enabled', True), ('disabled', False))}
+        candidate_plugins = {name: row for name, row in candidate_plugins.items() if name not in removed_names}
     seeded = parse_counts(evaluate(tmp, 'emqx-new', COUNT_EXPR))
     strict = parse_strict(evaluate(tmp, 'emqx-new', STRICT_EXPR))
     authn = read_authn(tmp, 'emqx-new')
@@ -2230,12 +2301,14 @@ def target_broker(work, tmp, target, export, ids, *, hint='', target_snapshot=No
             facts = apply_ha_access(tmp, read_candidate, readings, target_config, list(notes.get('lost') or ()),
                                     observe=observe)
         notes['bootstrap'] = facts['bootstrap']
-        restore_target_settings(tmp, target_config, read_candidate, observe=observe, original_boot=target_boot)
+        restore_target_settings(tmp, plugin_expected, read_candidate, observe=observe, original_boot=plugin_boot)
         if image_fingerprints is not None and tls_fingerprints(read_candidate, image_fingerprints) != image_fingerprints:
             raise BackupError('incompatible', 'EMQX 匯入後憑證與目標不一致，已停止。')
         if snapshot_digests:   # after every settings change; the remaining checks only read
             notes['acl_replaced'] = check_snapshot_files(read_candidate, snapshot_digests)
         final = read_effective_config(read_candidate)
+        if candidate_plugins is not None and plugin_inventory(read_candidate, final) != candidate_plugins:
+            raise BackupError('incompatible', 'EMQX 匯入後的外掛程式或設定和核對時不同，已停止。')
         notes['security'] = security_items(final)
         # E-41, E-42, E-43, E-44, E-47: what this device had of its own (its boot form: both sides have their defaults filled)
         # and what the import did with it
@@ -2812,8 +2885,13 @@ DEVICE_ROUTING = ('這台的 EMQX 已經有自己的主題改寫、主題統計�
                   '同名的以 HA 的為準{replaced}，會和 HA 的一起改寫主題或把訊息送出去。匯入前的自動備份裡還有這台原本的設定。')
 DEVICE_PSK = ('這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，'
               '用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。')
-DEVICE_PLUGINS = ('這台的 EMQX 裝了外掛（共 {count} 個，列在下面）：外掛程式放在容器裡、不在資料卷裡，這次匯入不會搬動或改動它們，'
-                  '設定裡的外掛記錄照舊保留。匯入後如果外掛沒有啟動，請到這台 EMQX 管理頁重新安裝。')
+DEVICE_PLUGINS = ('這台 EMQX 的外掛設定（共 {count} 項，列在下面）會保留；已核對外掛程式、設定及執行狀態可在暫用的 EMQX 保留。'
+                  'HA 備份的外掛程式及啟用記錄不會搬入，需要 HA 的外掛時請另外安裝。')
+PLUGIN_RECORDS_REMOVE = ('這台 EMQX 有 {count} 個啟用中的外掛記錄（列在下面），但這台與暫用的 EMQX 都找不到其程式、安裝包、'
+                         '外掛資料或執行中的程式。匯入會移除這些啟用記錄，以後補上程式也不會自動啟用；需要時請重新安裝並啟用。'
+                         '匯入前的自動備份保留原記錄。')
+PLUGIN_RECORDS_UNUSED = ('這台 EMQX 有 {count} 個已停用、且這台與暫用的 EMQX 都沒有程式或資料的外掛記錄（列在下面），'
+                         '匯入會移除這些記錄。')
 DURABLE_SESSIONS = ('這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：'
                     '這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。')
 OUTPUT_DIR_UNUSABLE = ('EMQX 不能搬過來：這台 EMQX 把日誌或當機記錄寫在暫用的 EMQX 無法安全提供的位置（下列資料夾），已停止；'
@@ -2913,8 +2991,16 @@ def candidate_lines(sink, target, readings, notes, device):
         sink.confirm('emqx.device-psk', DEVICE_PSK, haissues.Names(own['psk']))
     if own.get('durable'):
         sink.confirm('emqx.durable-sessions', DURABLE_SESSIONS, haissues.Names(own['durable']))
-    if own.get('plugins'):
-        sink.notice('emqx.device-plugins', DEVICE_PLUGINS.format(count=len(own['plugins'])), haissues.Names(own['plugins']))
+    removed = notes.get('plugin_records') or {}
+    if removed.get('enabled'):
+        sink.confirm('emqx.plugin-records-remove', PLUGIN_RECORDS_REMOVE.format(count=len(removed['enabled'])),
+                     haissues.Names(removed['enabled']))
+    if removed.get('disabled'):
+        sink.notice('emqx.plugin-records-unused', PLUGIN_RECORDS_UNUSED.format(count=len(removed['disabled'])),
+                    haissues.Names(removed['disabled']))
+    retained = sorted(set(own.get('plugins') or ()) - set(removed.get('enabled') or ()) - set(removed.get('disabled') or ()))
+    if retained:
+        sink.notice('emqx.device-plugins', DEVICE_PLUGINS.format(count=len(retained)), haissues.Names(retained))
     if notes.get('anonymous') and notes.get('device_authenticated'):
         where = EXPOSURE_TEXT[exposure(target, MQTT_PORTS)]
         if target.tunnels:

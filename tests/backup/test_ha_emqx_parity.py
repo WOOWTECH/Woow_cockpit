@@ -36,7 +36,8 @@ class IssueTableTests(unittest.TestCase):
         self.assertEqual({i for i, lv in ha_emqx.ISSUES.items() if lv == 'confirm'},
                          {'emqx.file-secret', 'emqx.jq-rule', 'emqx.external-authn', 'emqx.external-authz', 'emqx.exhook',
                           'emqx.no-authentication', 'emqx.import-partial', 'emqx.default-dashboard-exposed',
-                          'emqx.device-integrations', 'emqx.device-routing', 'emqx.device-psk', 'emqx.durable-sessions'})
+                          'emqx.device-integrations', 'emqx.device-routing', 'emqx.device-psk', 'emqx.durable-sessions',
+                          'emqx.plugin-records-remove'})
         self.assertEqual({i for i, lv in ha_emqx.ISSUES.items() if lv == 'stop'},
                          {'emqx.no-database', 'emqx.node-gone', 'emqx.config-changing', 'emqx.data-dir-moved',
                           'emqx.output-dir-unusable'})
