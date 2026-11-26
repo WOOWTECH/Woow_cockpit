@@ -19,6 +19,59 @@ from woowbackup.errors import BackupError
 from .test_adapter_ha_instance import access_plan
 
 
+class LiteLlmStandardEndpointTests(unittest.TestCase):
+    def actual_probe(self, companions, *, url='postgresql://litellm:private-password@litellm-postgres:5432/litellm'):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)/'3141599'; proc.mkdir()
+            (proc/'cmdline').write_bytes(b'/usr/local/bin/python\0/usr/local/bin/litellm\0--port\0' b'4000\0')
+            env = dict(DATABASE_URL=url, **companions)
+            (proc/'environ').write_bytes(b'\0'.join((k+'='+v).encode() for k,v in env.items()))
+            iterdir = Path.iterdir
+            def processes(path):
+                return iter([proc]) if str(path) == '/proc' else iterdir(path)
+            output = io.StringIO()
+            with mock.patch.object(Path, 'iterdir', processes), contextlib.redirect_stdout(output):
+                exec(compile(ha_litellm.CONNECTION_PROBE, 'actual-litellm-probe', 'exec'), {})
+            self.assertNotIn('private-password', output.getvalue())
+            return json.loads(output.getvalue())
+
+    def test_standard_package_companions_and_optional_aliases_agree_with_actual_url(self):
+        standard = {'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm','DATABASE_USERNAME':'litellm'}
+        for extra in ({}, {'DATABASE_USER':'litellm','DATABASE_PORT':'5432'}):
+            self.assertEqual(self.actual_probe(dict(standard, **extra)),
+                             {'database':'litellm','user':'litellm','host':'litellm-postgres','port':5432})
+        self.assertEqual(self.actual_probe(standard, url='postgresql://litellm:private-password@litellm-postgres/litellm')['port'], 5432)
+
+    def test_each_conflicting_companion_and_alternative_url_refuses(self):
+        standard = {'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm','DATABASE_USERNAME':'litellm'}
+        for name, value in (('DATABASE_HOST','remote'), ('DATABASE_NAME','another'),
+                            ('DATABASE_USERNAME','another'), ('DATABASE_USER','another'),
+                            ('DATABASE_PORT','5433'), ('DATABASE_PORT','0'), ('DATABASE_PORT',' 5432'),
+                            ('DATABASE_PORT',''), ('DIRECT_URL','postgresql://litellm:x@litellm-postgres/litellm'),
+                            ('DATABASE_URL_FILE','/run/secrets/database-url'), ('CONFIG_FILE_PATH','/other.yaml')):
+            with self.subTest(name=name, value=value), self.assertRaises(SystemExit):
+                self.actual_probe(dict(standard, **{name:value}))
+
+    def test_explicit_url_port_zero_cannot_default_to_5432(self):
+        with self.assertRaises(SystemExit):
+            self.actual_probe({}, url='postgresql://litellm:private-password@litellm-postgres:0/litellm')
+
+    def test_compiled_endpoint_still_requires_declared_same_pg_network_and_local_port(self):
+        from .test_ha_litellm import QUADLETS
+        endpoint = self.actual_probe({'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm',
+                                      'DATABASE_USERNAME':'litellm'})
+        runner = SimpleNamespace(podman=lambda *_a, **_kw: Result(0,json.dumps(endpoint).encode(),b''))
+        pg = {'container':'litellm-postgres'}
+        self.assertEqual(ha_litellm.read_app_connection(runner,QUADLETS,postgres=pg),endpoint)
+        for changed in (dict(QUADLETS, **{'litellm.container':QUADLETS['litellm.container'].replace(
+                b'Network=litellm.network', b'Network=another.network')}),):
+            with self.assertRaises(BackupError):
+                ha_litellm.read_app_connection(runner,changed,postgres=pg)
+        endpoint['port'] = 5433
+        with self.assertRaises(BackupError):
+            ha_litellm.read_app_connection(runner,QUADLETS,postgres=pg)
+
+
 class AccessPlanTests(unittest.TestCase):
     def test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides(self):
         # Execute the production fixed probe, redirecting ONLY /proc enumeration to bounded synthetic process files.

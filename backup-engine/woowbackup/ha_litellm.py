@@ -300,8 +300,10 @@ def destination(value):
     if u.scheme not in ('postgres','postgresql') or not u.hostname or not u.username or u.fragment:
         raise ValueError()
     if len({k for k,v in query})!=len(query) or any(k not in allowed for k,v in query): raise ValueError()
+    port=u.port if u.port is not None else 5432
+    if not 1<=port<=65535: raise ValueError()
     return {'database':urllib.parse.unquote(u.path[1:]),'user':urllib.parse.unquote(u.username),
-            'host':u.hostname,'port':u.port or 5432}
+            'host':u.hostname,'port':port}
 try:
     candidates=[]
     pids=[p for p in pathlib.Path('/proc').iterdir() if p.name.isdigit()]
@@ -315,12 +317,21 @@ try:
         env={}
         for item in read(proc/'environ',262144).decode().split('\0'):
             key,sep,value=item.partition('=')
-            if key in ('DATABASE_URL','DIRECT_URL','DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT',
+            if key in ('DATABASE_URL','DIRECT_URL','DATABASE_HOST','DATABASE_NAME','DATABASE_USERNAME','DATABASE_USER','DATABASE_PORT',
                        'DATABASE_URL_FILE','DIRECT_URL_FILE','CONFIG_FILE_PATH','LITELLM_CONFIG_PATH'):
                 if key in env: raise ValueError()
                 env[key]=value
-        if any(env.get(k) for k in env if k!='DATABASE_URL'): raise ValueError()
         found=destination(env['DATABASE_URL'])
+        # The trusted package's db_prepare.py also consumes these companion
+        # inputs before exec'ing LiteLLM. They must describe the SAME actual URL;
+        # they never select a fallback destination or override the proxy URL.
+        fields={'DATABASE_HOST':'host','DATABASE_NAME':'database','DATABASE_USERNAME':'user','DATABASE_USER':'user'}
+        for key,field in fields.items():
+            if key in env and env[key]!=found[field]: raise ValueError()
+        if 'DATABASE_PORT' in env:
+            value=env['DATABASE_PORT']
+            if not value.isascii() or not value.isdecimal() or len(value)>5 or int(value)!=found['port']: raise ValueError()
+        if any(env.get(k) for k in env if k not in {'DATABASE_URL','DATABASE_PORT',*fields}): raise ValueError()
         if any(a.startswith(('--database','--direct_url','--direct-url')) for a in args): raise ValueError()
         configs=[]
         for i,arg in enumerate(args):
@@ -345,8 +356,8 @@ try:
                         if key in ('DATABASE_URL','DIRECT_URL','database_url','direct_url'):
                             if val!='os.environ/DATABASE_URL' and (not isinstance(val,str) or destination(val)!=found):
                                 raise ValueError()
-                        elif key in ('DATABASE_HOST','DATABASE_NAME','DATABASE_USER','DATABASE_PORT','DATABASE_URL_FILE',
-                                     'DIRECT_URL_FILE','database_host','database_name','database_user','database_port'):
+                        elif key in ('DATABASE_HOST','DATABASE_NAME','DATABASE_USERNAME','DATABASE_USER','DATABASE_PORT','DATABASE_URL_FILE',
+                                     'DIRECT_URL_FILE','database_host','database_name','database_username','database_user','database_port'):
                             raise ValueError()
                     pending.extend(item.values())
                 elif isinstance(item,list): pending.extend(item)
