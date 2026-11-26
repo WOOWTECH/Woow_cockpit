@@ -47,6 +47,8 @@
 #           none kept; fewer than 5 free stops); the host must keep FLOOR + RESERVE free after the app's first-start
 #           ID-mapped copy (code-server's is made first by a throwaway container, see cs_idmap_copy); its units started in
 #           order, its timers once the catalog health URLs answer, then check:APP within WAKE_READY_S
+# wake-loaded:APP  uses the same checks and startup after all images were loaded into dev-e from the isolated lab store.
+#           It checks every image there and never reads the host's regular Podman store.
 # Every phase can be run again: loaded images and copies that are already there are kept.
 # Start over with: tests/e2e/lab/reset.sh e --up
 source "$(dirname "$0")/lib.sh"
@@ -74,6 +76,7 @@ while [ $# -gt 0 ]; do
             opendesign | cockpit | catalog | check | check:nextcloud | check:code-server | check:opendesign | \
             drop-images:nextcloud | drop-images:code-server | drop-images:opendesign | \
             wake:nextcloud | wake:code-server | wake:opendesign | \
+            wake-loaded:nextcloud | wake-loaded:code-server | wake-loaded:opendesign | \
             rotate:nextcloud | rotate:code-server | rotate:opendesign) phases+=("$1") ;;
         *) die "unknown argument: $1" ;;
     esac
@@ -771,10 +774,16 @@ phase_rotate() {  # <app>
     log "rotate:$app: units stopped and inactive, no container left, images dropped; host $(($(host_free) >> 20)) MiB free"
 }
 
-phase_wake() {  # <app>
-    local app=$1 unit start deadline free
+phase_wake() {  # <app> [loaded]: start with images already loaded in the isolated device
+    local app=$1 source=${2:-copy} unit start deadline free spec src name flag
     deployed "$app" || die "wake:$app: $app is not installed in $NAME (install it with its app phase)"
-    phase_images "$app"
+    if [ "$source" = copy ]; then
+        phase_images "$app"
+    else
+        while IFS='|' read -r src name flag; do
+            [ -n "$(device_id "$name")" ] || die "wake:$app: $name is not loaded in $NAME"
+        done <<<"${IMAGES[$app]}"
+    fi
     images_resolve "$app"
     if [ "$app" = code-server ]; then
         inotify_headroom "the ID-mapped copy container"
@@ -812,6 +821,7 @@ for phase in "${phases[@]}"; do
         images:*) phase_images "${phase#images:}" ;;
         drop-images:*) phase_drop_images "${phase#drop-images:}" ;;
         wake:*) phase_wake "${phase#wake:}" ;;
+        wake-loaded:*) phase_wake "${phase#wake-loaded:}" loaded ;;
         rotate:*) phase_rotate "${phase#rotate:}" ;;
         check:*) phase_check "${phase#check:}" ;;
         code-server) phase_code_server ;;
