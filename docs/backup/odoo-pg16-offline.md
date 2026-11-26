@@ -2,11 +2,11 @@
 
 This adds optional image provisioning. It does not add application installation, change VERSION, pull/build images, or require a sidecar for ordinary Cockpit installs/updates. Keep current local-first and pinned online retry behavior when no sidecar is installed. Do not describe this as commercial/hardware acceptance until the leased-store proof is recorded.
 
-Release input is a pre-exported, single-image, uncompressed `docker-archive` from a trusted isolated source. The exact source must match:
+Release input is a pre-exported, single-image `docker-archive`, `docker-dir`, or `oci-archive` from a trusted isolated source. The exact source must match:
 
 `docker.io/library/postgres:16.15-alpine@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139`
 
-RepoTags must be exactly `["docker.io/library/postgres:16.15-alpine"]`; use the canonical tagged ref for export after independently verifying its config ID and RepoDigests against this pin. The CLI never retags or exports images. One bundle is built per architecture (`amd64` or `arm64`, Linux). The release builder must independently obtain the expected `sha256:<config-id>` from trusted pinned platform metadata; deriving this argument from an unreviewed input archive does not establish provenance.
+For the default uncompressed Docker archive, RepoTags must be exactly `["docker.io/library/postgres:16.15-alpine"]`; use the canonical tagged ref for export after independently verifying its config ID and RepoDigests against this pin. The CLI never retags or exports images. One bundle is built per architecture (`amd64` or `arm64`, Linux). The release builder must independently obtain the expected `sha256:<config-id>` from trusted pinned platform metadata; deriving this argument from an unreviewed input archive does not establish provenance.
 
 ```
 python3 scripts/package_odoo_pg16.py \
@@ -57,6 +57,44 @@ Installed layout:
 Only root can write the selected pin, manifest, archive, or ancestors. Symlinks in paths and hardlinked payloads are refused. A new generation is fully staged/fsynced, then renamed into place; `active.sha256` is atomically replaced last. Failed staging leaves the previous generation active. Archive bytes never enter the Cockpit desired-file dictionary, installed.json, or rollback journals. Image provisioning persists independently of Cockpit UI rollback; ordinary updates/`--no-backup` preserve sidecars without opening/hashing them. Superseded generations remain for explicit release maintenance (no automatic deletion).
 
 Odoo import keeps existing local image priority. Otherwise it chooses this machine's architecture, verifies the complete installed root trust chain, pin/manifest/artifact SHA, config ID, ref, OS and architecture, and passes the already-open verified file descriptor as stdin to the existing app-owner runner's `podman load`. It inspects loaded ID/OS/architecture, returns the config ID for subsequent `--pull=never` temporary containers, and does not rely on Docker save/load retaining RepoDigests. No root/global-store load or owner-writable archive path is used. A configured but invalid sidecar fails closed for Odoo; no sidecar retains existing pinned pull + retry. Job cancellation/storage failure propagates.
+
+## Podman Docker directory export
+
+
+Use `docker-dir` for this Podman source. Docker-save adds forbidden legacy links; OCI-save rewrites config bytes
+and correctly fails the exact config pin. Neither check is waived. Docker directory transport preserves the original
+Docker config and exposes regular config/layer blobs with descriptor hashes and sizes:
+
+```sh
+python3 scripts/package_odoo_pg16.py --input-format docker-dir --archive postgres16-docker-directory \
+  --architecture amd64 --image-id sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873 \
+  --output /trusted-release-root/odoo-pg16-amd64
+```
+
+The directory adapter refuses symlinks/hardlinks/subdirectories/unrelated files/multiple manifests, checks every
+descriptor SHA/size and trusted config ID, streams to a root-protected regular-only Docker archive, then validates
+architecture/OS/canonical ref and every ordered uncompressed layer SHA. Directory transport has no RepoTags; the
+canonical release identity is supplied by the pinned ref plus independently trusted config ID. The leased proof also
+checks the exact original source RepoTag and unchanged source fields. Owner-writable directory export data remains
+untrusted; only the separate protected archive passes to installation/load. Default Docker archive rules are unchanged.
+
+### Optional strict OCI input
+
+Every Docker archive link remains refused. OCI input is supported only when its original config digest already agrees
+with the trusted release pin; config rewritten by an exporter is refused. Explicit strict OCI conversion is available:
+
+```sh
+python3 scripts/package_odoo_pg16.py --input-format oci-archive --archive postgres16.oci.tar \
+  --architecture amd64 --image-id sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873 \
+  --output /trusted-release-root/odoo-pg16-amd64
+```
+
+The OCI adapter accepts one manifest, the expected canonical reference annotation (full reference or its OCI short
+tag), regular SHA256 blobs only, exact descriptor sizes/hashes, and no unrelated blobs. It copies config/layer bytes
+into a regular-only Docker-save archive, then runs the production config/architecture/ref/ordered diff_id verifier.
+No extraction, link following, pulls, image-store changes, or whole-image buffering occurs. Input and expanded layers
+remain bounded to2GiB with1MiB reads; optional abort callbacks cover conversion, packaging, and installation copies.
+Bundle schema/install/owner-load contracts are unchanged. The default input format remains strict Docker-save.
 
 ## Verification scope
 
