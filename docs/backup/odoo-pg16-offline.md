@@ -98,4 +98,4 @@ Bundle schema/install/owner-load contracts are unchanged. The default input form
 
 ## Verification scope
 
-Focused synthetic bundle/installer/runtime tests pass. Actual isolated-store export, installation and owner-load proof is pending; delivery of a release artifact and commercial acceptance are not established by these unit tests.
+Focused synthetic bundle/installer/runtime tests pass. The [amd64 isolated-store proof](../../tests/backup/evidence/parity-odoo-pg16-offline-20261127/README.md) also passed actual packaging, root-protected installation, app-owner loading, image reuse and PostgreSQL 16.15 startup with zero pulls and unchanged source fields. A 297,140,736-byte local release artifact is retained outside Git with an independently rechecked manifest SHA. ARM loading, original Odoo tenant-image acceptance and ten-service acceptance remain separate; no commercial completion is claimed.
