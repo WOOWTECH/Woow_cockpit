@@ -1,0 +1,17 @@
+{
+ "source_commit": "6ccf7106a73af07e57f9d21a101619b3d7fa2cad",
+ "scope": "headscale-virtual-child",
+ "exit": 0,
+ "elapsed_seconds": 4.0,
+ "stdout_sha256": "700b382b88cb5e4a23c08f042ce37d589cda698fd9adc5dd3d542c09cedec135",
+ "fixed_status": [
+  "source commit 6ccf7106a73af07e57f9d21a101619b3d7fa2cad",
+  "dev-d isolation: true none {}",
+  "{\"stage\": \"headscale_virtual_child\", \"variants\": 2, \"passed\": true, \"originals_unchanged\": true, \"root_started_isolated_child\": true}",
+  "Headscale virtual child: PASS",
+  "dev-d isolation: true none {}",
+  "lock held for 3 s"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,43 @@
+{
+ "headscale_sqlite_issues": {
+  "tests": 192,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "blocked": 0,
+  "shim_hits": 0,
+  "masked_log": "/tmp/parity-hs15-rebuild-flow-20261127.log",
+  "sha256": "3b45f0ec0a6ad818daadab2bda782ab6dd066168a97d609a5a280d571ae0e84c"
+ },
+ "sqlite_final_guards": {
+  "tests": 38,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "blocked": 0,
+  "shim_hits": 0,
+  "masked_log": "/tmp/parity-hs15-rebuild-child-guards-20261127.log",
+  "sha256": "798bae4ce3417aa1b30d9a61f72eb4dcf993960f7be75aff02e631d1a74188ab"
+ },
+ "full_suite": {
+  "source_commit": "6ccf7106a73af07e57f9d21a101619b3d7fa2cad",
+  "tests": 3381,
+  "failures": 0,
+  "errors": 0,
+  "skips": 2,
+  "blocked": 0,
+  "shim_hits": 0,
+  "run_native": "absent",
+  "elapsed_seconds": 717,
+  "masked_log": "/tmp/parity-hs15-full-20261127.log",
+  "sha256": "175732a057ecd9c22afaff221eda0e33018e16e87bd72756792c3e4d11cafc57"
+ },
+ "original_ha_x86_full_flow": {
+  "source_commit": "6ccf7106a73af07e57f9d21a101619b3d7fa2cad",
+  "exit": 0,
+  "checks": 96,
+  "failures": 0,
+  "elapsed_seconds": 274.5,
+  "fixed_event_file": "original-ha-x86-full-flow.json"
+ }
+}
