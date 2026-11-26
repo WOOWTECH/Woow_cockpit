@@ -529,7 +529,13 @@ def target_core(work, app, target):
     image = work.adapter(app).image_inspect(target.image) or {}
     version = next((item.split('=', 1)[1] for item in image.get('env') or []
                     if isinstance(item, str) and item.startswith('OD_APP_VERSION=')), None)
-    return (revision if REVISION_RE.fullmatch(revision) else None), hacommon.semver(version or '')
+    version = hacommon.semver(version or '')
+    reader = getattr(work, 'image_version', None)
+    if version is None and reader is not None:
+        # Ask the trusted image's program for its release environment when image inspection did not provide it.
+        version = reader(app, target.image, env=('OD_APP_VERSION',),
+                         command=('node', '-p', 'process.env.OD_APP_VERSION || ""'))
+    return (revision if REVISION_RE.fullmatch(revision) else None), version
 
 
 CORE_UNKNOWN = ('這台的版本對照表還不認得 HA 的 OpenDesign 附加元件版本 {version}，不用版本判斷能不能匯入；'

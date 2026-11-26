@@ -60,6 +60,7 @@ folder, dirs 0755, files 0644, the cookie key 0600; `.cache/` never moves); `omn
 it is (the runner's identity, logins and pairings never move). HA's runtime setting files in /data (sharing, admins,
 allowed domains, config.yaml) are settings: this device keeps its own and the check lists HA's.
 """
+import base64
 import json
 import os
 import re
@@ -104,7 +105,6 @@ TOC_KINDS = sorted(TOC_ALLOWED | set(ha_odoo.SUPERUSER_KINDS) | {
     'FOREIGN SERVER'}, key=len, reverse=True)
 USER_RE = re.compile(r'[a-z0-9][a-z0-9_.@+-]{0,127}\Z')
 KEY_RE = re.compile(r'[A-Za-z0-9_.-]{1,128}(?:/[A-Za-z0-9_.-]{1,128}){0,3}\Z')
-ALEMBIC_RE = re.compile(r'[0-9a-z_]{1,64}\Z')
 SERVER_VERSION_RE = re.compile(r'[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}\Z')
 MAX_KEYS = 1_000_000
 DUMP_TIMEOUT = ha_odoo.DUMP_TIMEOUT
@@ -911,7 +911,7 @@ LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;
 \\o $snapdir/snapshot
 SELECT pg_export_snapshot();
 \\o $snapdir/revision
-SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[]'::json)::text FROM public.alembic_version) = '__REVISION__' THEN 'ok' ELSE 'mismatch' END;
+SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num COLLATE "C"), '[]'::json)::jsonb FROM public.alembic_version) = convert_from(decode('__REVISION_BASE64__', 'base64'), 'UTF8')::jsonb THEN 'ok' ELSE 'mismatch' END;
 \\o $snapdir/columns
 __COLUMNS__;
 \\o
@@ -962,14 +962,15 @@ def capture_consistent_target_schema(work, app, target, path, expected_alembic):
     columns (60, 120, 180 seconds): this device may be busy (O-58, O-59), answer badly for a moment (O-32, O-33). What is
     left of a failed try is removed before the next one.
     """
-    if not expected_alembic or any(not isinstance(v, str) or not ALEMBIC_RE.fullmatch(v) for v in expected_alembic):
+    if not isinstance(expected_alembic, (list, tuple)) or any(not isinstance(v, str) for v in expected_alembic):
         raise BackupError('incompatible', '目標 Omnigent 的結構版本不明。', app=app.id)
-    revision = json.dumps(sorted(expected_alembic), ensure_ascii=True)
+    # The heredoc is expanded by sh. Only a base64 alphabet enters it; revision values remain JSON data for PostgreSQL.
+    revision = base64.b64encode(json.dumps(sorted(expected_alembic), ensure_ascii=True).encode('ascii')).decode('ascii')
     tries = []
 
     def attempt():
         tries.append(1)
-        script = SNAPSHOT_SCRIPT.replace('__REVISION__', revision.replace("'", "''"))
+        script = SNAPSHOT_SCRIPT.replace('__REVISION_BASE64__', revision)
         script = script.replace('__COLUMNS__', ' '.join(SCHEMA_COLUMNS_SQL.split()))
         script = script.replace('__WAIT__', str(60 * len(tries)))
         return _capture_once(work, app, target, path, script)

@@ -2694,7 +2694,7 @@ def _prepare(work, app):
     target = Target(work, app)
     reader = getattr(work, 'image_version', None)
     if reader is not None:
-        return target, reader(app, target.image)
+        return target, reader(app, target.image, env=('EMQX_VERSION',), command=('/opt/emqx/bin/emqx', 'version'))
     return target, hacommon.semver(hacommon.image_labels(work, app, target.image).get('org.opencontainers.image.version'))
 
 

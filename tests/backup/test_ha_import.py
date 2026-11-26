@@ -1495,7 +1495,7 @@ class ImageVersionTests(FlowCase):
         code, stdout = answer
         return types.SimpleNamespace(returncode=code, stdout=stdout)
 
-    def version(self, run=None, **kwargs):
+    def version(self, run=None, probe=None, **kwargs):
         test = self
 
         class Temp:
@@ -1520,7 +1520,7 @@ class ImageVersionTests(FlowCase):
 
         with mock.patch.object(tempctr, 'TempObjects', Temp):
             self.work._temps.clear()
-            found = self.work.image_version(self.app, 'docker.io/emqx/emqx:5.8.9', **kwargs)
+            found = probe() if probe else self.work.image_version(self.app, 'docker.io/emqx/emqx:5.8.9', **kwargs)
             self.assertEqual([c for tmp in self.work._temps.values() for c in tmp.containers], [])
         return found
 
@@ -1549,6 +1549,40 @@ class ImageVersionTests(FlowCase):
         self.assertTrue(any('讀不到映像' in line for line in self.reporter.logs))
         found = haissues.version_issues('EMQX', '5.9.1', '5.8.9', self.version())
         self.assertEqual([(i.id, i.level) for i in found], [('version.target-unknown', 'notice')])
+
+    def test_each_importer_uses_settings_then_the_program_when_its_label_is_missing(self):
+        """CM-06 caller wiring: real importer entry points use the real shared reader, including container cleanup."""
+        from woowbackup import ha_emqx, ha_headscale, ha_hermes, ha_opendesign
+
+        image = 'docker.io/emqx/emqx:5.8.9'
+        target = types.SimpleNamespace(image=image)
+        self.work.adapter(self.app).image_inspect = lambda _image: {'env': []}
+        with mock.patch.object(ha_emqx, 'Target', return_value=target), \
+                mock.patch.object(ha_headscale, 'Target', return_value=target), \
+                mock.patch.object(ha_headscale, 'live_config', return_value={}), \
+                mock.patch.object(ha_headscale, 'data_paths'):
+            cases = (
+                ('emqx', 'EMQX_VERSION', '5.8.9', '/opt/emqx/bin/emqx', ['version'],
+                 lambda: ha_emqx._prepare(self.work, self.app)[1]),
+                ('headscale', 'HEADSCALE_VERSION', '0.29.4', 'headscale', ['version'],
+                 lambda: ha_headscale._prepare(self.work, self.app)[1]),
+                ('hermes', 'HERMES_VERSION', '0.22.5', '/opt/hermes/bin/hermes', ['--version'],
+                 lambda: ha_hermes.target_release(self.work, self.app, target)[0]),
+                ('open-design', 'OD_APP_VERSION', '0.24.1', 'node', ['-p', 'process.env.OD_APP_VERSION || ""'],
+                 lambda: ha_opendesign.target_core(self.work, self.app, target)[1]),
+            )
+            for app_id, env, expected, entrypoint, args, probe in cases:
+                with self.subTest(app=app_id):
+                    self.app = app(app_id, app_id)
+                    self.answers['labels'] = (0, b'{}')
+                    self.answers['env'] = (0, json.dumps([env + '=' + expected]).encode())
+                    self.ran.clear()
+                    self.assertEqual(self.version(probe=probe), expected)
+                    self.assertEqual(self.ran, [], 'the image settings already provide a version')
+                    self.answers['env'] = (0, b'[]')
+                    self.assertEqual(self.version(run=(0, ('release v' + expected).encode()), probe=probe), expected)
+                    self.assertEqual(self.ran, [(image, args, entrypoint, True)])
+                    self.assertIsNone(self.version(run=(1, b''), probe=probe), 'no answer remains unknown')
 
     def test_what_is_not_a_missing_version_is_not_hidden(self):
         self.answers['labels'] = (125, b'')

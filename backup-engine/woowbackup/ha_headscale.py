@@ -718,6 +718,9 @@ def _prepare(work, app, sink=None):
             raise
         labels = {}
     version = hacommon.semver(labels.get('org.opencontainers.image.version'))
+    reader = getattr(work, 'image_version', None)
+    if version is None and reader is not None:
+        version = reader(app, target.image, env=('HEADSCALE_VERSION',), command=('headscale', 'version'))
     config = live_config(work, app, target)
     data_paths(config)
     return target, version, config

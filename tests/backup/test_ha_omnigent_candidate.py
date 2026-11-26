@@ -77,14 +77,30 @@ class CandidateFlowTests(OmnigentCase):
                              for role, cmd, _data in self.world.execs))
         self.assertEqual(self.storage.list_backups(), [])
 
-    def test_invalid_revision_rejected_before_capture(self):
-        for revision in (['bad;sql'], ['d0a1f879a01d', "x'"], [5], [], None):
+    def test_non_string_revision_rejected_before_capture(self):
+        for revision in ([5], [None], None, 'not a list'):
             work = mock.Mock()
             with self.subTest(revision=revision), self.assertRaises(BackupError) as caught:
                 omni.capture_consistent_target_schema(work, self.catalog['omnigent'], None, None, revision)
             self.assertEqual((caught.exception.code, caught.exception.message),
                              ('incompatible', '目標 Omnigent 的結構版本不明。'))
             self.assertEqual(work.mock_calls, [])
+
+    def test_revision_text_and_empty_revisions_are_encoded_as_data_in_the_capture(self):
+        import base64
+        import json
+        import re
+
+        work = mock.Mock()
+        work.abort.return_value = None
+        for values in ([], ['bad;sql'], ['d0a1f879a01d', "x'; quote \" slash \\"], ['結構版本']):
+            with self.subTest(values=values), mock.patch.object(omni, '_capture_once', return_value=COLUMNS) as capture:
+                self.assertEqual(omni.capture_consistent_target_schema(work, self.catalog['omnigent'],
+                                                                       None, None, values), COLUMNS)
+                script = capture.call_args.args[-1]
+                encoded = re.search(r"decode\('([A-Za-z0-9+/=]+)', 'base64'\)", script).group(1)
+                self.assertEqual(json.loads(base64.b64decode(encoded)), sorted(values))
+                self.assertFalse(any(value in script for value in values))
 
     def test_the_compatibility_entry_needs_no_promise_about_ddl(self):
         """O-56: only the lab harnesses ever call it, and `convert` proves the capture's stability itself (trusted_schema:

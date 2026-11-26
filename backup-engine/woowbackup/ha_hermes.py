@@ -463,9 +463,13 @@ def target_release(work, app, target):
             raise
         base = ''
     match = re.fullmatch(r'[A-Za-z0-9./_-]+:(v?[0-9.]+)(?:@(sha256:[0-9a-f]{64}))?', base)
-    if not match:
+    if match and hacommon.semver(match.group(1)):
+        return hacommon.semver(match.group(1)), match.group(2)
+    reader = getattr(work, 'image_version', None)
+    if reader is None:
         return None, None
-    return hacommon.semver(match.group(1)), match.group(2)
+    return reader(app, target.image, env=('HERMES_VERSION',),
+                  command=('/opt/hermes/bin/hermes', '--version')), None
 
 
 def judge(sink, src, answers, *, addon_version, release, digest):

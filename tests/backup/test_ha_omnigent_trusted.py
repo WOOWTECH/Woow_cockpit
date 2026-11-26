@@ -224,7 +224,7 @@ printf 'PGDMP-schema-only'
         pause.start()
         self.addCleanup(pause.stop)
 
-    def capture(self, **answers):
+    def capture(self, revision=None, **answers):
         env = {'PATH': f'{self.root / "bin"}:/usr/bin:/bin', 'LC_ALL': 'C', 'STUB': str(self.root),
                'STUB_SNAPSHOT': self.SNAPSHOT, 'STUB_REVISION': 'ok', 'STUB_COLUMNS': json.dumps(self.COLUMNS),
                'STUB_LOCKED': 'no', 'STUB_DUMP': 'ok', 'STUB_BAD_TEXT': 'not json', **answers}
@@ -242,7 +242,8 @@ printf 'PGDMP-schema-only'
                                guard=SimpleNamespace(budget=lambda: 1024 * 1024, check=lambda n: None))
         return omni.capture_consistent_target_schema(
             work, SimpleNamespace(id='omnigent'),
-            SimpleNamespace(db_container='omnigent-postgres', db_user='appuser'), self.path, ['d0a1f879a01d'])
+            SimpleNamespace(db_container='omnigent-postgres', db_user='appuser'), self.path,
+            ['d0a1f879a01d'] if revision is None else revision)
 
     def recorded(self, name):
         path = self.root / name
@@ -272,14 +273,23 @@ printf 'PGDMP-schema-only'
                 "SET LOCAL idle_in_transaction_session_timeout = '10920s';",
                 'LOCK TABLE public.alembic_version IN ACCESS SHARE MODE;',
                 f'\\o {folder}/snapshot', 'SELECT pg_export_snapshot();', f'\\o {folder}/revision',
-                "SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num), '[]'::json)::text "
-                'FROM public.alembic_version) = \'["d0a1f879a01d"]\' THEN \'ok\' ELSE \'mismatch\' END;',
+                'SELECT CASE WHEN (SELECT coalesce(json_agg(version_num ORDER BY version_num COLLATE "C"), '
+                "'[]'::json)::jsonb FROM public.alembic_version) = "
+                "convert_from(decode('WyJkMGExZjg3OWEwMWQiXQ==', 'base64'), 'UTF8')::jsonb "
+                "THEN 'ok' ELSE 'mismatch' END;",
                 f'\\o {folder}/columns', ' '.join(omni.SCHEMA_COLUMNS_SQL.split()) + ';', '\\o']
         self.assertEqual(self.recorded('psql.stdin'), sent + ['COMMIT;', '\\q'])
         self.assertIn(self.recorded('psql.stdin.at-dump'), (sent, sent[:-1]), 'the transaction is open while pg_dump runs')
         self.assertEqual(self.path.read_bytes(), b'PGDMP-schema-only', 'the archive without the columns line')
         self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
         self.assertEqual([p.name for p in self.root.iterdir() if p.name.startswith('target')], ['target-schema.dump'])
+
+    def test_revision_text_is_encoded_as_data_before_building_the_script(self):
+        value = "結構' ; quote \" slash \\\n"
+        self.assertEqual(self.capture(revision=[value]), self.COLUMNS)
+        sent = '\n'.join(self.recorded('psql.stdin'))
+        self.assertNotIn(value, sent)
+        self.assertIn("decode('", sent)
 
     def test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one(self):
         for name, code, answers in (

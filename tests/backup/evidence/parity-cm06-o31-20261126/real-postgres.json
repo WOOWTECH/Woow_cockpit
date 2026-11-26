@@ -1,0 +1,15 @@
+{
+  "test": "Omnigent snapshot revision comparison",
+  "device": "dev-d isolated lab",
+  "image_id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "network": "none",
+  "published_ports": 0,
+  "scenarios": {
+    "normal_revision": "PASS",
+    "punctuation_unicode_revision": "PASS",
+    "empty_revision_list": "PASS",
+    "real_postgresql_comparison": "PASS",
+    "temporary_container_cleanup": "PASS"
+  },
+  "commercial_acceptance": "not-complete"
+}

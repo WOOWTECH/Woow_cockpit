@@ -1,0 +1,51 @@
+test_each_importer_uses_settings_then_the_program_when_its_label_is_missing (tests.backup.test_ha_import.ImageVersionTests.test_each_importer_uses_settings_then_the_program_when_its_label_is_missing)
+CM-06 caller wiring: real importer entry points use the real shared reader, including container cleanup. ... ok
+test_nothing_tells_it (tests.backup.test_ha_import.ImageVersionTests.test_nothing_tells_it) ... ok
+test_the_label_is_enough (tests.backup.test_ha_import.ImageVersionTests.test_the_label_is_enough) ... ok
+test_the_settings_then_the_program (tests.backup.test_ha_import.ImageVersionTests.test_the_settings_then_the_program) ... ok
+test_what_is_not_a_missing_version_is_not_hidden (tests.backup.test_ha_import.ImageVersionTests.test_what_is_not_a_missing_version_is_not_hidden) ... ok
+test_full_synthetic_backup_candidate (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_full_synthetic_backup_candidate) ... ok
+test_non_string_revision_rejected_before_capture (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_non_string_revision_rejected_before_capture) ... ok
+test_private_entry_rejects_truthy_quiescence_and_mixed_apps (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps) ... ok
+test_request_fields_cannot_select_a_converter_or_skip_a_check (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_select_a_converter_or_skip_a_check) ... ok
+test_revision_text_and_empty_revisions_are_encoded_as_data_in_the_capture (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_revision_text_and_empty_revisions_are_encoded_as_data_in_the_capture) ... ok
+test_same_alembic_but_different_columns_is_rejected_before_data (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_same_alembic_but_different_columns_is_rejected_before_data) ... ok
+test_the_compatibility_entry_is_the_product_conversion (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_the_compatibility_entry_is_the_product_conversion) ... ok
+test_the_compatibility_entry_needs_no_promise_about_ddl (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_the_compatibility_entry_needs_no_promise_about_ddl)
+O-56: only the lab harnesses ever call it, and `convert` proves the capture's stability itself (trusted_schema: ... ok
+test_the_product_conversion_itself_refuses_a_schema_that_moves (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_the_product_conversion_itself_refuses_a_schema_that_moves)
+What the promise stood for is the product's own check, whoever calls: a structure that keeps changing while it is ... ok
+test_unregistered_quadlet_secret_is_a_notice_not_a_refusal (tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_is_a_notice_not_a_refusal)
+O-48: the candidate entry is the product conversion; a secret the app settings do not list only says so. ... ok
+test_a_damaged_columns_line_is_read_again_and_then_refused (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_a_damaged_columns_line_is_read_again_and_then_refused)
+O-32, O-33: the first line of the snapshot is no JSON (or no list of columns): another try; still damaged after ... ok
+test_a_failed_dump_is_not_a_schema (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_a_failed_dump_is_not_a_schema) ... ok
+test_a_snapshot_id_that_is_no_id_is_never_tried_again (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_a_snapshot_id_that_is_no_id_is_never_tried_again) ... ok
+test_a_snapshot_that_is_never_taken_stops_after_three_tries (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_a_snapshot_that_is_never_taken_stops_after_three_tries) ... ok
+test_a_snapshot_that_was_not_taken_is_tried_again_with_a_longer_wait (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_a_snapshot_that_was_not_taken_is_tried_again_with_a_longer_wait)
+O-58, O-59: psql that ends by itself (no connection, no lock within 15 s: exit 21) or finds another revision (exit ... ok
+test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one) ... ok
+test_revision_text_is_encoded_as_data_before_building_the_script (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_revision_text_is_encoded_as_data_before_building_the_script) ... ok
+test_the_dump_is_schema_only_and_reads_the_exported_snapshot (tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_the_dump_is_schema_only_and_reads_the_exported_snapshot)
+pg_dump of the live database takes its schema and nothing else (`--schema-only`: this device's rows -- ... ok
+test_candidate_uses_target_schema_and_restricted_loader (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_candidate_uses_target_schema_and_restricted_loader) ... ok
+test_malformed_or_duplicate_or_empty_fails (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_malformed_or_duplicate_or_empty_fails) ... ok
+test_schema_entries_are_not_selected (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_schema_entries_are_not_selected) ... ok
+test_snapshot_failure_preserves_preexisting_files (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_snapshot_failure_preserves_preexisting_files) ... ok
+test_snapshot_failure_removes_capture (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_snapshot_failure_removes_capture) ... ok
+test_snapshot_partial_output_removed_on_copy_failure (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_snapshot_partial_output_removed_on_copy_failure) ... ok
+test_strict_list_takes_each_trusted_name_once (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_strict_list_takes_each_trusted_name_once) ... ok
+test_the_listing_of_the_dump_is_counted_against_its_own_header (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_the_listing_of_the_dump_is_counted_against_its_own_header)
+pg-stdin follow-up F4 (the header of `pg_restore -l` says how many entries the archive has). ... ok
+test_the_old_public_guards_are_replaced_by_the_product_checks (tests.backup.test_ha_omnigent_trusted.TrustedDataTests.test_the_old_public_guards_are_replaced_by_the_product_checks) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 98.463s
+
+OK
+
+BLOCKED: []
+SHIM_HITS: []
+RUN_NATIVE: absent
+SPAWNED: [('sh', 50)]
+ELAPSED: 98

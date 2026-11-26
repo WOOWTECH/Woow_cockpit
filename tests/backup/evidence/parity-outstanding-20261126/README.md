@@ -12,4 +12,4 @@ This audit checks the integrated product at `d0cfef06` (still the product tree i
 
 The selected existing tests ran through the integration guard: **70 tests, 0 failures, 0 errors, 0 skips, 0 blocked commands, 0 shim hits**, in 19 seconds. `selected-tests.json` holds the 60 selected test/class identifiers; class expansion accounts for the total of 70. The complete masked runner output is `focused-tests.log`. This is unit/integration-double evidence, not a new device acceptance run. The already-passing complete guarded suite on the same product was 3357 tests (2 skips).
 
-Registry after these eleven closures: 460 done, 11 part, 1 open for wave 1 (472 rows); 60 deferred rows are unchanged. CM-06 still needs caller fallback work. The remaining product cases and real-device acceptance stay open; `commercial_acceptance` remains `not-complete`.
+The two follow-up rows CM-06 and O-31 were completed in `parity-cm06-o31-20261126/README.md`. Current registry: 462 done and 10 part for wave 1 (472 rows); 60 deferred rows are unchanged. The remaining product cases and ten-service real-device acceptance stay open; `commercial_acceptance` remains `not-complete`.

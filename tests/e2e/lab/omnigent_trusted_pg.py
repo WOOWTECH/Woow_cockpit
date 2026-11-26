@@ -82,6 +82,40 @@ def probe_toc_names():
           trusted_entry_selected_once=True, forged_id_not_selected=True, restored_only_trusted_data=True)
 
 
+def probe_snapshot_revision():
+    """Revision values are compared as JSON data, including punctuation and Unicode."""
+    inside(['createdb', '-U', 'omnigent', 'revision_probe'])
+    sql('revision_probe', 'CREATE TABLE alembic_version (version_num text);')
+
+    class Runner:
+        def podman(self, *args, **kwargs):
+            result = call(list(args), data=kwargs.get('input'))
+            if kwargs.get('stdout') is not None:
+                kwargs['stdout'].write(result.stdout)
+            return result
+
+    work = SimpleNamespace(log=lambda _message: None, runner=lambda _app: Runner(), abort=lambda: None,
+                           guard=SimpleNamespace(budget=lambda: 128 * 1024**2, check=lambda _size: None))
+    app = SimpleNamespace(id='synthetic-omnigent')
+    target = SimpleNamespace(db_container=NAME, db_user='omnigent')
+    punctuation = "revision ; quote' double-quote \" backslash\\ and newline\n結構版本"
+    original_db = omni.DATABASE
+    try:
+        omni.DATABASE = 'revision_probe'
+        with tempfile.TemporaryDirectory(prefix='woowbk-revision-') as temporary:
+            for i, values in enumerate((['same_revision'], [punctuation], [])):
+                sql('revision_probe', 'TRUNCATE alembic_version;')
+                for value in values:
+                    sql('revision_probe', 'INSERT INTO alembic_version VALUES (' + ha_odoo.sql_literal(value) + ');')
+                path = Path(temporary) / str(i)
+                columns = omni.capture_consistent_target_schema(work, app, target, path, values)
+                assert columns and path.read_bytes().startswith(b'PGDMP')
+            event('snapshot_revision_values', normal=True, punctuation_and_unicode=True, empty=True,
+                  compared_by_real_postgresql=True)
+    finally:
+        omni.DATABASE = original_db
+
+
 class Tmp:
     def exec(self, role, argv, **kwargs):
         incoming = kwargs.get('input')
@@ -197,6 +231,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--toc-names-only', action='store_true', help='only the TOC control-character probe')
+    parser.add_argument('--snapshot-revision-only', action='store_true', help='only the encoded revision probe')
     args = parser.parse_args()
     if not args.run:
         parser.error('explicit --run required')
@@ -225,6 +260,9 @@ def main():
             raise RuntimeError('postgres_not_ready')
         if args.toc_names_only:
             probe_toc_names()
+            return
+        if args.snapshot_revision_only:
+            probe_snapshot_revision()
             return
         for db in ('trusted', 'source', 'bad_dest'):
             inside(['createdb', '-U', 'omnigent', db])
