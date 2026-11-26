@@ -250,16 +250,15 @@ phase_images() {  # [app]
     log "host disk after the images: $(($(host_free) >> 30)) GiB free"
 }
 
-phase_drop_images() {  # <app>
+phase_drop_images() {  # <app>: only dev-e's images; rotation never reads the host's Podman
     local src name id spec specs
     mapfile -t specs <<<"${IMAGES[$1]}"
     for spec in "${specs[@]}"; do
         IFS='|' read -r src name _ <<<"$spec"
-        id=$(podman image inspect --format '{{.Id}}' "$src") || die "the host has no image $src"
-        if owner podman image exists "$id"; then
-            owner podman rmi -f "$id" >/dev/null || die "removing $name from $NAME failed"
-            log "removed $name (${id:0:12}) from $NAME"
-        fi
+        id=$(device_id "$name")
+        [ -n "$id" ] || { log "$name is already absent from $NAME"; continue; }
+        owner podman rmi "$id" >/dev/null || die "removing $name from $NAME failed (image kept)"
+        log "removed $name (${id:0:12}) from $NAME"
     done
 }
 

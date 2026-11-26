@@ -96,7 +96,7 @@ class Batch2ScriptsTest(unittest.TestCase):
 
 # Stand-ins for deploy-batch2.sh's rotate:APP and wake:APP: a labpodman that keeps dev-e's unit, container and image
 # state in a JSON file (starting a unit makes its containers, stopping removes them: quadlet's --rm), a host podman
-# that only answers `image inspect` (anything else, e.g. save, is UNEXPECTED), and a df with a chosen free space.
+# that only answers `image inspect` for wake (rotate must not call it), and a df with a chosen free space.
 # Every call is logged. Nothing reaches a real labpodman, the host's Podman or a device.
 FAKE_DEVICE_LP = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -199,6 +199,8 @@ import json, os, sys
 argv = sys.argv[1:]
 st = json.load(open(os.environ['FAKE_STATE']))
 if argv[:3] == ['image', 'inspect', '--format'] and argv[3] == '{{.Id}}':
+    with open(os.environ['FAKE_LOG'], 'a') as handle:
+        handle.write(json.dumps(['host-inspect', argv[4]]) + '\n')
     print(st['host_ids'][argv[4]]); sys.exit(0)
 with open(os.environ['FAKE_LOG'], 'a') as handle:
     handle.write(json.dumps(['UNEXPECTED', 'host podman', argv]) + '\n')
@@ -274,6 +276,7 @@ class RotationPhasesTest(unittest.TestCase):
         stops = [c[2] for c in calls if c[:2] == ['systemctl', 'stop']]
         self.assertEqual(stops, ['code-server-health.timer', 'code-server-health.service', 'code-server.service'])
         self.assertEqual([c for c in calls if c[0] == 'rmi'], [['rmi', CS_ID]])
+        self.assertEqual([c for c in calls if c[0] == 'host-inspect'], [])
         self.assertGreater(calls.index(['rmi', CS_ID]), calls.index(['systemctl', 'stop', 'code-server.service']))
         self.assertEqual(state['images'], {})
         self.assertEqual(state['containers'], [])
