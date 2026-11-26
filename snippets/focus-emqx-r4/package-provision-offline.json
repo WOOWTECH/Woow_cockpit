@@ -1,0 +1,21 @@
+{
+  "blocked": 0,
+  "errors": 0,
+  "failures": 0,
+  "final_gate": {
+    "attempt02_exit": 75,
+    "attempt02_tests_started": false,
+    "status": "pending-heavy-slot",
+    "tests_planned": 12
+  },
+  "installer_or_upgrader": false,
+  "kind": "offline-only",
+  "log": "/tmp/parity-focus-20261127/emqx-r4-provision-offline01.guardlog",
+  "log_sha256": "ad45bf511a61ddaab5a2035763eb1496a8535d995d20fe31640448a6a8905742",
+  "native_provisioning": false,
+  "run_native": "absent",
+  "scope": "Initial 11 boundary checks passed. Exact package source review then added owned active-healthcheck passthrough and a 12th boundary check.",
+  "shim_hits": 0,
+  "skipped": 0,
+  "tests": 11
+}

@@ -14,7 +14,7 @@ Reviewed exact package HEAD `ea5886c58ef2c6ab1f4e6a4d01908cc9dc4525de` in `/home
 
 The script addresses `woow-emqx`, `emqx.service`, `woow_emqx_network` and package secret names directly. Changing names, stubbing `systemctl` or secret readers, or pretending a fresh generated broker is that installed package would not prove the exact package behavior. Existing dev-d apps must remain untouched. A fresh fixture device gives those names their literal meaning and contains only synthetic values.
 
-## Prepared follow-on choice: a fresh package-shaped device
+## Initial proposal: a fresh package-shaped device (current driver: package-provision.md)
 
 Controller must remain the existing isolated lab tool, never host Podman. Exact existing clean device image was read-only inspected:
 
@@ -38,7 +38,7 @@ Reviewed outer creation command shape (prepared only; fresh names must first be 
 
 This follows the existing lab systemd/nested-Podman device model, including its privileged flag **inside the rootless isolated lab store**. It is a separate review item, not a silent extension of the two-broker dev-d lease. No device/provisioner command has been executed.
 
-Required provisioning, still pending code/review before a package-native lease:
+Initial sequencing below predates the provisioning code; `package-provision.md` now supplies the reviewed-source candidate for the next provisioning lease:
 
 1. New device only: use image's existing `woowbk-provision --appowner-uid 1031` with a fixed **synthetic** disposable login on stdin; never `up.sh` (it reads the existing lab password). Start/wait its user manager; only fresh device's passwd/subuid/systemd state changes. Do not copy existing app HOME/volume/secrets/catalog/helper data.
 2. Copy selected exact package source/config/Quadlet templates into `/home/appowner/r4-package`, verify `package-source.json` hashes. Transfer only the already cached exact EMQX/nginx/mosquitto images through bounded save/load; no pulls. Require the unchanged smoke's pinned client reference exists before it runs; if archive load loses digest identity, stop and prepare an explicit image binding rather than waive the pin.
@@ -56,4 +56,8 @@ The executor requires lease case `EMQX-R4-package:noauth`, exact `source_commit`
 
 6. Before lease release: retain fixed smoke statuses and artifact/fixture provenance, stop/remove only that exact labelled outer device with `rm --force --volumes`, verify no inner resources remain with its namespace destroyed, then remove only the three exact labelled owned volumes. Never `system prune`, no baseline cleanup. Independent existing device/catalog/volume/image/source invariants and shared-mutex release must be recorded by the provisioning driver. The executor deliberately does not own/provision/delete that device by itself.
 
-This is a concrete prepared choice and a guarded smoke executor, **not a completed fixture provisioning/transfer driver**. Next smallest runnable lease is the noauth broker delta in `lease-plan.md`. No installer/upgrader lease is requested.
+This initial proposal led to the new provisioning controller in `package-provision.md`. Native package-profile generation, transfer, provisioning and smoke remain pending. No installer/upgrader lease is requested.
+
+## Current implementation update
+
+The preceding section records the original proposal. The separate provisioning/verification/cleanup driver is now implemented in new focus_emqx_r4 files and passed initial11/11 guarded offline boundary checks; final12-case gate pending a heavy slot. `package-provision.md` is the current exact command/lease/recovery contract and supersedes the earlier standalone smoke invocation above. No provisioning, image archive export, package-profile candidate generation, installer/upgrader or smoke has run. The matching candidate producer/artifact and verified OCI archives remain explicit prerequisites, not completed transfer proof.

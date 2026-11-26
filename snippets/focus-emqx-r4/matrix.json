@@ -6,7 +6,9 @@
       "decision": "D1",
       "expected": "candidate-and-restart",
       "id": "plain",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/",
+      "native_source_commit": "27cb52c4eafbaaa2dbc2ba2916b9604a8941a280",
+      "native_status": "passed-generated-delta-23-of-23",
       "notices": [
         "emqx.plain-passwords",
         "emqx.clear-rows"

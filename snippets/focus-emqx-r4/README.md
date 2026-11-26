@@ -1,6 +1,6 @@
-# EMQX R4: prepared generated cases, not runtime evidence
+# EMQX R4: plain delta proven; remaining cases/package pending
 
-Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. No native fixture, installer, upgrader or new package smoke was executed. No product/package/shared registry file was changed. E44's branch remains clean. The package draft remains local and unpushed.
+Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. One plain generated delta ran23/23PASS from frozen27cb52c4 (coordinator-promoted `tests/backup/evidence/focus-emqx-r4-20261127/`); no installer, upgrader or new package smoke ran. No product/package/shared registry file was changed. E44's branch remains clean. The package draft remains local and unpushed.
 
 ## Evidence already complete and preserved
 
@@ -10,7 +10,7 @@ Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. No na
 
 ## Exact remaining matrix
 
-All eleven rows are **prepared / native pending**. Every positive broker case uses a real vendor-generated export, product `candidate_from_target`, actual target snapshot and vendor import, row-count check, named issue boundary, exact acknowledgement/no-ack refusal when required, restart and full configuration/admin receipts, unmocked postcheck plus negative admin-receipt refusal. Its target is generated, not an installed app. This is the internal conversion delta; public helper/package/install/safety-rollback acceptance remains the preserved real D0 evidence plus the separately pending package phase.
+Plain is **23/23PASS generated delta**; the other ten rows remain **prepared / native pending**. Every positive broker case uses a real vendor-generated export, product `candidate_from_target`, actual target snapshot and vendor import, row-count check, named issue boundary, exact acknowledgement/no-ack refusal when required, restart and full configuration/admin receipts, unmocked postcheck plus negative admin-receipt refusal. Its target is generated, not an installed app. This is the internal conversion delta; public helper/package/install/safety-rollback acceptance remains the preserved real D0 evidence plus the separately pending package phase.
 
 | Case ID | Decision | Generated input and required distinct result | New package smoke |
 |---|---|---|---|
@@ -35,7 +35,11 @@ All eleven rows are **prepared / native pending**. Every positive broker case us
 
 - `tests/e2e/lab/focus_emqx_r4.py`: plan by default; one exact case per fresh coordinator lease. Sends only committed ordinary Python source + immutable fixture module to a private HOME payload. Holds the existing dev-d mutex throughout. No real HA backup/credential readers.
 - `focus_emqx_r4_runtime.py`: owned TempObjects, no network/ports, image-volume ignore and rm --volumes, exact-image pin, resource floors, mutation target validation, private bounded diagnostics and fixed JSON checks. Source is removed before target+candidate start, so at most2 brokers run. Successful payloads are deleted; failed payloads remain explicitly named for scoped diagnosis/cleanup.
-- `focus_emqx_r4_package.py`: default plan only; exact unchanged smoke executor for a **separately provisioned owned synthetic device**. Requires its own lease, device label/mounts/UID1031/fixture marker, package hashes and already cached pinned client. It does not provision that device, copy candidate data or promote a candidate into package Quadlets. Those prerequisites are a prepared follow-on choice, not completed functionality.
+- `focus_emqx_r4_package.py`: default plan only; exact unchanged smoke executor for a **separately provisioned owned synthetic device**. Requires its own lease, device label/mounts/UID1031/fixture marker, package hashes and already cached pinned client. It does not provision that device, copy candidate data or promote a candidate into package Quadlets. The new provisioning transaction is described below; a matching package-profile artifact and verified OCI inputs remain prerequisites.
 - `focus_emqx_r4_tests.py`: targeted offline input/lease/resource/mutation-target checks, never a native runtime.
 
 See `lease-plan.md` for the next bounded case and cleanup, `package-source.json` for exact reviewed package hashes, and `matrix.json` for machine-readable scope/status. No R4 closure or ten-service completion is claimed.
+
+## Package provisioning source ready for review
+
+The new `_provision.py` transaction, `_artifact.py` verifier/export hook, `_inner.py` real fixture setup/postcheck/smoke, `_client_guard.py` resource wrapper and `_provision_tests.py` now implement the separate provisioning/cleanup driver. Initial offline11/11PASS; final12-case gate pending an available heavy slot; no fresh device or package command executed. See `package-provision.md` for exact image IDs, command, new lease schema, resource bounds and recovery. A matching package-profile candidate producer/artifact and verified OCI archives are prerequisites still pending; queued27cb broker-only runs are not promoted. The earlier standalone `_package.py` executor is not the provisioning entrypoint. Plain lease released, owned resources/payloads0; dead_row/noauth await R8 retry release.
