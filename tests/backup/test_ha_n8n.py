@@ -2,12 +2,15 @@
 SQLite copy (owner, counts, no views), the workflows to fix, community packages and native code, and the throwaway
 source volume. Team E2."""
 import gzip
+import hashlib
 import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import struct
+import subprocess
 import tarfile
 import tempfile
 import types
@@ -775,12 +778,201 @@ def n8n_app(*, volumes=('n8n_n8n_data', 'n8n_valkey_data'), data_dirs=(), postgr
                                  volumes=[{'name': name} for name in volumes], data_dirs=[{'path': path} for path in data_dirs])
 
 
-def target_of(quadlets=None, app=None):
+VENDOR_CONFIG = Path(__file__).resolve().parents[2] / 'snippets/focus-instance-db-resolution/vendor'
+
+# Run the product's fixed JS with the pinned, actual vendor Config/Env implementation. Only DI registration/metadata
+# and the container's /proc/module locations are fixtures; setting precedence and normalization execute vendor code.
+CONNECTION_HARNESS = r"""
+const nativeFS = require('node:fs');
+const moduleAPI = require('node:module');
+const fixture = JSON.parse(nativeFS.readFileSync(0, 'utf8'));
+const factories = new Map(), metadata = new WeakMap();
+Reflect.defineMetadata = (kind, type, target, key) => {
+    let fields = metadata.get(target); if (!fields) metadata.set(target, fields = new Map()); fields.set(key, type);
+};
+Reflect.getMetadata = (kind, target, key) => metadata.get(target)?.get(key);
+const Container = {get: target => factories.get(target)()};
+const Service = ({factory}) => target => factories.set(target, factory);
+const z = {ZodType: class {}};
+let source = nativeFS.readFileSync(fixture.vendor, 'utf8');
+source = source.replace(/^import .*;\n/gm, '');
+source = moduleAPI.stripTypeScriptTypes(source).replace(/^export /gm, '');
+const vendor = new Function('readFileSync', 'Container', 'Service', 'z', source + '\nreturn {Config, Env};')(
+    (...args) => nativeFS.readFileSync(...args), Container, Service, z);
+const realOpen = nativeFS.openSync, realReadFile = nativeFS.readFileSync;
+nativeFS.openSync = function(file, ...args) {
+    if (file.includes('/password')) throw new Error('password read forbidden');
+    return realOpen.call(this, file.startsWith('/proc/') ? fixture.root + file : file, ...args);
+};
+nativeFS.readFileSync = function(file, ...args) {
+    if (typeof file === 'string' && file.includes('/password')) throw new Error('password read forbidden');
+    return realReadFile.call(this, file, ...args);
+};
+const realReaddir = nativeFS.readdirSync, realRealpath = nativeFS.realpathSync;
+const realReadlink = nativeFS.readlinkSync;
+nativeFS.readlinkSync = file => file.startsWith('/proc/') && file.endsWith('/exe') ? '/usr/local/bin/node' : realReadlink(file);
+nativeFS.readdirSync = (file, ...args) => realReaddir(file === '/proc' ? fixture.root + file : file, ...args);
+nativeFS.realpathSync = file => file === '/usr/local/bin/n8n' ? '/usr/local/lib/node_modules/n8n/bin/n8n' : realRealpath(file);
+const realChdir = process.chdir;
+process.chdir = file => realChdir(file.startsWith('/proc/') ? fixture.root + file : file);
+moduleAPI.createRequire = file => {
+    const loader = name => {
+        if (name === './decorators') return vendor;
+        if (name === '@n8n/di') return {Container};
+        if (name === 'dotenv') return require(fixture.dotenv);
+        throw new Error('unexpected vendor module');
+    };
+    loader.resolve = name => {
+        if (name !== '@n8n/config') throw new Error('unexpected resolution');
+        return '/vendor/config/index.js';
+    };
+    return loader;
+};
+"""
+
+
+class ConnectionRunner:
+    home = '/home/appowner'
+
+    def __init__(self, env=None, *, exec_env=None, files=None, processes=1, command=None):
+        self.env, self.exec_env, self.files = env or {}, exec_env or {}, files or {}
+        self.processes, self.command = processes, command
+        self.calls = []
+
+    def podman(self, *args, **kwargs):
+        if not shutil.which('node'):
+            raise unittest.SkipTest('node is needed to execute the fixed selected-field reader')
+        assert args == ('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', 'n8n', 'node', '-e', ha_n8n.CONNECTION_PROBE)
+        assert kwargs == {'timeout': 30, 'max_output': 1024, 'check': False}
+        self.calls.append(args)
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for index in range(self.processes):
+                process = root / 'proc' / str(index + 7)
+                process.mkdir(parents=True)
+                (process / 'cwd').mkdir()
+                (process / 'cmdline').write_bytes(self.command or b'n8n\0\0\0')
+                (process / 'environ').write_bytes(b''.join(k.encode() + b'=' + v.encode() + b'\0' for k, v in self.env.items()))
+                for name, data in self.files.items():
+                    if data is None:
+                        (process / 'cwd' / name).mkdir()
+                    else:
+                        (process / 'cwd' / name).write_bytes(data)
+            if not self.processes:
+                (root / 'proc').mkdir()
+            fixture = {'root': folder, 'vendor': str(VENDOR_CONFIG / 'decorators.ts'),
+                       'dotenv': str(VENDOR_CONFIG / 'dotenv/lib/main.js')}
+            result = subprocess.run([shutil.which('node'), '--disable-warning=ExperimentalWarning', '-e', CONNECTION_HARNESS + args[-1]],
+                                    input=json.dumps(fixture).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    env={'PATH': os.defpath, 'LANG': 'C.UTF-8', **self.exec_env}, timeout=10)
+            # Never expose raw stderr, even in a failed assertion.
+            assert len(result.stdout) <= 1024, 'probe output exceeded its fixed-field budget'
+            return Result(result.returncode, result.stdout, b'private bounded diagnostics omitted')
+
+
+def target_of(quadlets=None, app=None, runner=None):
     """(Target, the sink it told its findings to) for these Quadlet files and app settings."""
     quadlets = dict(QUADLETS if quadlets is None else quadlets)
-    work = types.SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: types.SimpleNamespace(home='/home/appowner'))
+    runner = runner or ConnectionRunner(ha_n8n.tempctr.quadlet_environment(
+        quadlets.get('n8n.container', b''), {'DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER'}))
+    work = types.SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: runner)
     sink = Sink('n8n')
     return ha_n8n.Target(work, app or n8n_app(), sink), sink
+
+
+class ConnectionTests(unittest.TestCase):
+    def connection(self, env=None, **kwargs):
+        return ha_n8n.read_target_connection(ConnectionRunner(env, **kwargs), 'n8n')
+
+    def test_default_is_n8n_and_postgres_independently_of_server_bootstrap(self):
+        self.assertEqual(self.connection({'POSTGRES_DB': 'unrelated', 'POSTGRES_USER': 'bootstrap'}),
+                         {'database': 'n8n', 'user': 'postgres'})
+
+    def test_reference_is_bound_to_the_trusted_vendor_revision_and_actual_defaults(self):
+        reference = json.loads((VENDOR_CONFIG / 'source.json').read_bytes())
+        self.assertEqual(reference['revision'], 'ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5')
+        for row in reference['files']:
+            self.assertEqual(hashlib.sha256((VENDOR_CONFIG / row['file']).read_bytes()).hexdigest(), row['sha256'])
+        database = (VENDOR_CONFIG / 'database.config.ts').read_text()
+        self.assertRegex(database, r"@Env\('DB_POSTGRESDB_DATABASE'\)\s+database: string = 'n8n';")
+        self.assertRegex(database, r"@Env\('DB_POSTGRESDB_USER'\)\s+user: string = 'postgres';")
+
+    def test_direct_values_win_over_file_values_in_actual_vendor_config(self):
+        self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'app_role',
+                                          'DB_POSTGRESDB_DATABASE_FILE': 'missing-db', 'DB_POSTGRESDB_USER_FILE': 'missing-user'}),
+                         {'database': 'automation', 'user': 'app_role'})
+
+    def test_file_values_use_actual_vendor_whitespace_and_quotes_normalization(self):
+        self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE_FILE': 'db', 'DB_POSTGRESDB_USER_FILE': 'user'},
+                                         files={'db': b'  "automation"\n', 'user': b' app_role\r\n'}),
+                         {'database': 'automation', 'user': 'app_role'})
+        self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': '  "automation"\n', 'DB_POSTGRESDB_USER': " 'app_role' "}),
+                         {'database': 'automation', 'user': 'app_role'})
+
+    def test_entrypoint_process_environment_wins_over_podman_exec_environment(self):
+        self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'app_role'},
+                                         exec_env={'DB_POSTGRESDB_DATABASE': 'wrong_exec_db', 'DB_POSTGRESDB_USER': 'wrong_user'}),
+                         {'database': 'automation', 'user': 'app_role'})
+
+    def test_vendor_cli_process_title_is_recognized_and_old_startup_argv_also_works(self):
+        for command in (b'n8n\0\0', b'n8n start\0', b'node\0/usr/local/bin/n8n\0start\0'):
+            with self.subTest(command=command):
+                self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': 'automation'}, command=command)['database'],
+                                 'automation')
+
+    def test_actual_vendor_dotenv_startup_selects_only_missing_settings(self):
+        self.assertEqual(self.connection(files={'.env': b'DB_POSTGRESDB_DATABASE="automation"\nDB_POSTGRESDB_USER=app_role\n'}),
+                         {'database': 'automation', 'user': 'app_role'})
+        self.assertEqual(self.connection({'DB_POSTGRESDB_DATABASE': 'inline'},
+                                         files={'.env': b'DB_POSTGRESDB_DATABASE=automation\n'})['database'], 'inline')
+        self.assertEqual(self.connection({'E2E_TESTS': 'true'},
+                                         files={'.env': b'DB_POSTGRESDB_DATABASE=automation\n'})['database'], 'n8n')
+
+    def test_main_container_selection_is_shared_with_restore_preflight_and_rejects_ambiguity(self):
+        runner = ConnectionRunner({'DB_POSTGRESDB_DATABASE': 'automation'})
+        self.assertEqual(ha_n8n.read_app_connection(runner, QUADLETS)['database'], 'automation')
+        with_workers = dict(QUADLETS, **{
+            'n8n-worker.container': QUADLETS['n8n.container'] + b'Exec=worker\n',
+            'n8n-webhook.container': QUADLETS['n8n.container'] + b'Exec=webhook\n',
+            'n8n.container': QUADLETS['n8n.container'] + b'Volume=/etc/localtime:/etc/localtime:ro\n'})
+        self.assertEqual(ha_n8n.read_app_connection(runner, with_workers)['database'], 'automation')
+        for quadlets in ({}, dict(QUADLETS, **{'other.container': QUADLETS['n8n.container']})):
+            with self.subTest(files=sorted(quadlets)), self.assertRaises(BackupError):
+                ha_n8n.read_app_connection(runner, quadlets)
+
+    def test_never_reads_passwords_or_ignored_secret_files(self):
+        env = {'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_DATABASE_FILE': '/password-ignored',
+               'DB_POSTGRESDB_PASSWORD': 'private-password-sentinel', 'DB_POSTGRESDB_PASSWORD_FILE': '/password-secret'}
+        self.assertEqual(self.connection(env), {'database': 'automation', 'user': 'postgres'})
+
+    def test_ordinary_node_memory_options_do_not_hide_the_connection(self):
+        self.assertEqual(self.connection({'NODE_OPTIONS': '--max-old-space-size=512 --enable-source-maps'}),
+                         {'database': 'n8n', 'user': 'postgres'})
+
+    def test_unknown_or_unreadable_inputs_stop_only_this_app(self):
+        cases = [({'DB_POSTGRESDB_DATABASE': '', 'DB_POSTGRESDB_DATABASE_FILE': 'valid'}, {'files': {'valid': b'automation'}}),
+                 ({'DB_POSTGRESDB_DATABASE': 'template1'}, {}),
+                 ({'DB_POSTGRESDB_DATABASE': 'unsafe;DROP'}, {}), ({'DB_POSTGRESDB_USER': 'x' * 64}, {}),
+                 ({'DB_POSTGRESDB_DATABASE_FILE': 'missing'}, {}),
+                 ({'DB_POSTGRESDB_DATABASE_FILE': 'huge'}, {'files': {'huge': b'x' * 4097}}),
+                 ({'DB_POSTGRESDB_DATABASE_FILE': 'directory'}, {'files': {'directory': None}}),
+                 ({'N8N_CONFIG_FILES': 'custom.json'}, {}), ({'NODE_OPTIONS': '--require custom.js'}, {}),
+                 ({}, {'processes': 0}), ({}, {'processes': 2}),
+                 ({}, {'command': b'node\0/custom/bootstrap.js\0'})]
+        for env, kwargs in cases:
+            with self.subTest(keys=sorted(env), variant=sorted(kwargs)), self.assertRaises(BackupError) as caught:
+                self.connection(env, **kwargs)
+            self.assertEqual(caught.exception.code, 'incompatible')
+            self.assertEqual(caught.exception.issues[0].id, 'n8n.layout-unsupported')
+            self.assertNotIn('private-password-sentinel', str(caught.exception))
+
+    def test_malformed_or_partial_reader_output_never_falls_back(self):
+        for body in (b'', b'true', b'{}', b'{"database":"automation"}',
+                     b'{"database":"automation","user":"role","password":"private"}'):
+            runner = types.SimpleNamespace(podman=lambda *args, **kwargs: Result(0, body, b'private stderr'))
+            with self.subTest(body=body), self.assertRaises(BackupError) as caught:
+                ha_n8n.read_target_connection(runner, 'n8n')
+            self.assertNotIn('private', str(caught.exception))
 
 
 def without(name, *removed):
@@ -1100,6 +1292,7 @@ class World(fk.World):
     def __init__(self):
         super().__init__()
         self.quadlets = {'n8n': dict(QUADLETS)}
+        self.connection_env = {}
         self.version = b'2.43.6\n'
         self.tables, self.n8n_tables = {}, {}      # what HA's database holds / what the import made of it
         self.unpublished = False
@@ -1141,6 +1334,9 @@ class World(fk.World):
         return fk.Result(0, b'', b'')
 
     def exec(self, role, command, data, stdout):
+        if command == ['node', '-e', ha_n8n.CONNECTION_PROBE]:
+            return ConnectionRunner(self.connection_env).podman('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', 'n8n', *command,
+                                                               timeout=30, max_output=1024, check=False)
         if command[0] == 'pg_dump':
             stdout.write(b'PGDMP-n8n')
         return fk.Result(0, b'', b'')
@@ -1341,6 +1537,62 @@ class ConvertFlowTests(N8nCase):
         self.assertEqual(next(db for db in captured['databases'] if db['name'] == 'n8n')['file'].name, 'main.dump')
         self.assertEqual(json.loads(self.data_tar()['config'][1]), {'encryptionKey': KEY})
         self.assertTrue(all(db == 'n8n' for role, db in self.world.asked if role == 'n8n-pg'))
+
+    def test_instance_env_file_selects_automation_when_both_databases_exist(self):
+        from .test_adapter_ha_instance import conversion_adapter, encoded
+        app = self.catalog['n8n']
+        app.postgres = [dict(app.postgres[0], scope='instance', database='postgres')]
+        self.world.quadlets['n8n']['n8n.container'] += b'EnvironmentFile=%h/.config/n8n/db.env\n'
+        self.world.files['.config/n8n/db.env'] = b'DB_POSTGRESDB_DATABASE=automation\nDB_POSTGRESDB_USER=n8n\n'
+        # This is the effective environment Podman gives the existing application, not the PG server's environment.
+        self.world.connection_env = {'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'n8n'}
+        adapter, owner = conversion_adapter(app, app.postgres[0], 'n8n')
+        owner.instance['automation'] = dict(owner.instance['n8n'], data=b'old automation rows')
+        unrelated = dict(owner.instance['n8n'])
+        captured = {}
+        selected_dump = []
+        original_exec = self.world.exec
+
+        def execute(role, command, data, stdout):
+            if command[0] == 'pg_dump':
+                name = command[command.index('-d') + 1]
+                stdout.write(encoded(name, dict(owner.instance[name], data=b'HA automation rows')))
+                return fk.Result(0, b'', b'')
+            return original_exec(role, command, data, stdout)
+
+        def complete(_fake, pg, converted, staging):
+            result = adapter.import_instance_database(pg, converted, staging)
+            captured.update(result)
+            selected_dump.append(next(db['file'] for db in result['databases'] if db['name'] == result['ha_database']).read_bytes())
+            return result
+
+        self.world.exec = execute
+        with mock.patch.object(Adapter, 'import_instance_database', complete, create=True):
+            result = self.converted()
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        item = self.world.manifests['n8n']['postgres']['main']
+        self.assertEqual(item['ha_database'], 'automation')
+        self.assertEqual({db['name'] for db in item['databases']}, set(owner.instance))
+        self.assertTrue(all(db == 'automation' for role, db in self.world.asked if role == 'n8n-pg'))
+        selected = next(db for db in captured['databases'] if db['name'] == item['ha_database'])
+        with tempfile.TemporaryDirectory() as folder:
+            dump = Path(folder) / 'converted.dump'
+            dump.write_bytes(selected_dump[0])
+            adapter._restore_ha_instance_database(app.postgres[0], selected, dump)
+        self.assertEqual(owner.dropped, ['automation'])
+        self.assertEqual(owner.instance['automation']['data'], b'HA automation rows')
+        self.assertEqual(owner.instance['n8n'], unrelated)
+
+    def test_unresolved_instance_connection_stops_before_any_conversion_work(self):
+        app = self.catalog['n8n']
+        app.postgres = [dict(app.postgres[0], scope='instance', database='postgres')]
+        self.world.connection_env = {'DB_POSTGRESDB_DATABASE_FILE': 'missing-setting-file'}
+        error = self.convert_stopped(self.upload_n8n())
+        self.assertEqual(error.code, 'incompatible')
+        self.assertEqual(error.issues[0].id, 'n8n.layout-unsupported')
+        self.assertEqual(self.world.runs, [])
+        self.assertEqual(self.world.manifests, {})
+        self.assertEqual(self.storage.list_backups(), [])
 
     def test_no_key_asks_once_and_nothing_is_built_until_it_is_confirmed(self):
         """N8-15, the three of a line to confirm."""
@@ -1699,6 +1951,10 @@ class ReferenceHostTests(unittest.TestCase):
 
     def quadlets(self):
         return {path.name: path.read_bytes() for path in sorted(self.FIXTURES.iterdir()) if path.name.startswith('n8n')}
+
+    def test_instance_reader_selects_main_and_not_worker_or_webhook_on_the_real_queue_layout(self):
+        connection = ha_n8n.read_app_connection(ConnectionRunner({'DB_POSTGRESDB_DATABASE': 'automation'}), self.quadlets())
+        self.assertEqual(connection['database'], 'automation')
 
     def target(self, volumes, postgres):
         quadlets = self.quadlets()

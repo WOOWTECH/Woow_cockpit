@@ -1,0 +1,55 @@
+{
+  "repository": "https://github.com/n8n-io/n8n",
+  "tag": "n8n@2.43.6",
+  "revision": "ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5",
+  "files": [
+    {
+      "file": "decorators.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/%40n8n/config/src/decorators.ts",
+      "sha256": "03acdd49b0a4f6c50f9e3c2e10eb224b983e242cb289d34e103c4b9cd1ddd42f",
+      "bytes": 5149
+    },
+    {
+      "file": "database.config.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/%40n8n/config/src/configs/database.config.ts",
+      "sha256": "128bc5434459d46712c27b522e160784766ed3b9aa076f68dd16df87d6392b7f",
+      "bytes": 9447
+    },
+    {
+      "file": "n8n-bin.js",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/cli/bin/n8n",
+      "sha256": "b057fa30179f9accebb00816a0d406b1f81196c2d540d2bf9abcf2f988c769ca",
+      "bytes": 2708
+    },
+    {
+      "file": "docker-entrypoint.sh",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/docker/images/n8n/docker-entrypoint.sh",
+      "sha256": "9aa246571e1614b2169b4dc72ff8ac02dba0e9240cc6eaea7f0ae411443b8a3e",
+      "bytes": 386
+    },
+    {
+      "file": "dotenv/lib/main.js",
+      "url": "https://raw.githubusercontent.com/motdotla/dotenv/v17.2.3/lib/main.js",
+      "sha256": "3b2fbc2d9380e853e1dbff4e33f1db0ca6293d6bba53f6234e7d51303cef8c64",
+      "bytes": 12787
+    },
+    {
+      "file": "dotenv/package.json",
+      "url": "https://raw.githubusercontent.com/motdotla/dotenv/v17.2.3/package.json",
+      "sha256": "0acf359b717328e052594ba48387b6b69e61f051d5c9f5a13e4846fa3f93ef9a",
+      "bytes": 1716
+    },
+    {
+      "file": "dotenv/LICENSE",
+      "url": "https://raw.githubusercontent.com/motdotla/dotenv/v17.2.3/LICENSE",
+      "sha256": "74b629b24865e1e83c5277ee84590b7937644d6fd959d0c7bdce758676cd2ced",
+      "bytes": 1294
+    },
+    {
+      "file": "N8N-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/LICENSE.md",
+      "sha256": "d2f621f59aa4c10eab79b6333e59d9d3d5b53307dcfd16dbd75e40e679e84965",
+      "bytes": 4445
+    }
+  ]
+}

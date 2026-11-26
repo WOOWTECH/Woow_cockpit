@@ -759,6 +759,140 @@ def _container_names(quadlets):
     return found
 
 
+# Only these two non-secret settings cross the container boundary. Read the existing container's effective environment:
+# Podman has already applied image defaults, EnvironmentFile, Environment and env secrets in its own precedence order.
+# Read through the installed vendor's Config/Env decorators, on a class with ONLY these two string fields. This keeps
+# direct/_FILE precedence and whitespace handling identical to that release without loading the full DatabaseConfig
+# (which would also read passwords). Never infer an application setting from the database server.
+CONNECTION_PROBE = r"""
+const fs = require('node:fs');
+const path = require('node:path');
+const {createRequire} = require('node:module');
+function read(file, limit, regular = false) {
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    try {
+        if (regular && !fs.fstatSync(fd).isFile()) throw new Error('not a regular setting file');
+        const bytes = Buffer.alloc(limit + 1);
+        let size = 0, got;
+        while (size < bytes.length && (got = fs.readSync(fd, bytes, size, bytes.length - size, null))) size += got;
+        if (size > limit) throw new Error('oversized input');
+        return bytes.subarray(0, size).toString('utf8');
+    } finally { fs.closeSync(fd); }
+}
+try {
+    // exec's environment can differ from the entrypoint's child. Select the actual n8n start process, never this probe.
+    const pids = fs.readdirSync('/proc').filter(p => /^[0-9]+$/.test(p));
+    if (pids.length > 256) throw new Error('too many processes');
+    const candidates = [];
+    for (const pid of pids) {
+        let args;
+        try { args = read('/proc/' + pid + '/cmdline', 4096).split('\0').filter(Boolean); }
+        catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') continue; throw error; }
+        if ((args.length === 1 && ['n8n', 'n8n start'].includes(args[0])) ||
+            (path.basename(args[0] || '') === 'node' &&
+             ['/usr/local/bin/n8n', '/usr/local/lib/node_modules/n8n/bin/n8n'].includes(args[1]) &&
+             (args.length === 2 || (args.length === 3 && args[2] === 'start')))) {
+            if (path.basename(fs.readlinkSync('/proc/' + pid + '/exe')) !== 'node') throw new Error('not Node');
+            candidates.push({pid, script: '/usr/local/bin/n8n'});
+        }
+    }
+    if (candidates.length !== 1) throw new Error('ambiguous n8n process');
+    const {pid, script} = candidates[0];
+    const env = Object.create(null);
+    const keys = ['DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER'];
+    const selected = [...keys, ...keys.map(k => k + '_FILE'), 'N8N_CONFIG_FILES', 'NODE_OPTIONS', 'E2E_TESTS'];
+    for (const item of read('/proc/' + pid + '/environ', 256 * 1024).split('\0')) {
+        const equals = item.indexOf('=');
+        const key = item.slice(0, equals);
+        if (equals >= 0 && selected.includes(key)) {
+            if (Object.prototype.hasOwnProperty.call(env, key)) throw new Error('duplicate setting');
+            env[key] = item.slice(equals + 1);
+        }
+    }
+    process.chdir('/proc/' + pid + '/cwd');
+    const vendorRequire = createRequire(fs.realpathSync(script));
+    // The trusted n8n CLI loads dotenv from cwd before config. Parse with its installed vendor, selecting only our keys.
+    if (env.E2E_TESTS !== 'true') {
+        let dotenv;
+        try { dotenv = read('.env', 64 * 1024, true); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+        if (dotenv !== undefined) {
+            const values = vendorRequire('dotenv').parse(dotenv);
+            for (const key of selected) if (!(key in env) && key in values) env[key] = values[key];
+        }
+    }
+    // Custom bootstrap code/config files can mutate process.env after exec; /proc cannot establish those settings.
+    const benignNodeOptions = new Set(['--enable-source-maps', '--no-deprecation', '--trace-deprecation',
+                                      '--use-openssl-ca', '--use-bundled-ca']);
+    const nodeOptions = (env.NODE_OPTIONS || '').split(/\s+/).filter(Boolean);
+    if (env.N8N_CONFIG_FILES || nodeOptions.some(option => !benignNodeOptions.has(option) &&
+        !/^--(?:max[-_]old[-_]space[-_]size|max[-_]semi[-_]space[-_]size|stack[-_]size)=[1-9][0-9]*$/.test(option)))
+        throw new Error('custom configuration bootstrap');
+    for (const key of selected) { delete process.env[key]; if (key in env) process.env[key] = env[key]; }
+    // The vendor alone chooses direct/_FILE precedence. Bound its selected-file reads lazily; unused files stay unopened.
+    const files = new Set(keys.map(key => env[key + '_FILE']).filter(Boolean));
+    const originalRead = fs.readFileSync;
+    fs.readFileSync = function(file, ...args) {
+        return files.has(file) ? read(file, 4096, true) : originalRead.call(this, file, ...args);
+    };
+    console.warn = () => {}; // vendor whitespace warnings must not expose diagnostics
+    const configRequire = createRequire(vendorRequire.resolve('@n8n/config'));
+    const {Config, Env} = configRequire('./decorators');
+    const {Container} = configRequire('@n8n/di');
+    class Connection { constructor() { this.database = 'n8n'; this.user = 'postgres'; } }
+    for (const [field, key] of [['database', keys[0]], ['user', keys[1]]]) {
+        Reflect.defineMetadata('design:type', String, Connection.prototype, field);
+        Env(key)(Connection.prototype, field);
+    }
+    Config(Connection);
+    const {database, user} = Container.get(Connection);
+    if (![database, user].every(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(v)))
+        throw new Error('invalid identifier');
+    if (database === 'template0' || database === 'template1') throw new Error('template database');
+    process.stdout.write(JSON.stringify({database, user}));
+} catch (_) { process.exitCode = 2; }
+"""
+
+
+def read_target_connection(runner, container):
+    """Validated {'database', 'user'} of the live n8n, for conversion and the HA instance adapter.
+
+    Fixed selected fields only, through the existing owner runner. Unreadable/stopped containers or _FILE inputs stop
+    this app; no fallback to a server's POSTGRES_DB or catalog bootstrap user. No raw diagnostics escape this reader.
+    """
+    try:
+        result = runner.podman('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', container, 'node', '-e', CONNECTION_PROBE,
+                               timeout=30, max_output=1024, check=False)
+        if result.returncode != 0:
+            raise ValueError('connection probe failed')
+        connection = json.loads(result.stdout or b'')
+        if (not isinstance(connection, dict) or set(connection) != {'database', 'user'}
+                or any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', value)
+                       for value in connection.values())
+                or connection['database'] in ('template0', 'template1')):
+            raise ValueError('invalid connection')
+    except (BackupError, ValueError, TypeError) as error:
+        if isinstance(error, BackupError) and haissues.is_job_wide(error):
+            raise
+        raise _layout(None, '無法讀取這台 n8n 實際使用的資料庫名稱和帳號，請確認 n8n 正在執行且資料庫環境設定和設定檔可讀取') from None
+    return connection
+
+
+def read_app_connection(runner, quadlets):
+    """Current connection for HA restore preflight; select exactly one main n8n by its fixed data mount.
+
+    Call while the app is still running, before stopping services/DROP. A marked archive whose database differs from
+    this result must stop and request reconversion. This reads current app state, never an archived configuration.
+    """
+    main = [name for name in quadlets if name.endswith('.container')
+            and (tempctr._container_values(quadlets[name], 'Exec') or [''])[-1].strip() in ('', 'start')
+            and any(target == '/home/node/.n8n' for _source, target, _options
+                    in quadlet_mounts(quadlets, name, runner.home, skipped=[]))]
+    if len(main) != 1:
+        raise _layout(None, '無法唯一確認這台 n8n 的主要容器')
+    return read_target_connection(runner, quadlet_container_name(quadlets, main[0]))
+
+
 class Target:
     """The n8n app's catalog items the import fills, resolved against the live Quadlet files.
 
@@ -822,11 +956,8 @@ class Target:
         self.pg_env = env
         if self.instance:
             # An instance catalog normalizes its maintenance database to postgres; that is not n8n's database.
-            app_env = tempctr.quadlet_environment(quadlets[self.main_file], {'DB_POSTGRESDB_DATABASE'})
-            database = app_env.get('DB_POSTGRESDB_DATABASE') or env.get('POSTGRES_DB') or 'n8n'
-            if not TABLE_RE.fullmatch(database) or database in ('template0', 'template1'):
-                raise _layout(app, '無法確認 n8n 實際使用的資料庫名稱')
-            self.pg = dict(self.pg, database=database)
+            self.connection = read_app_connection(work.runner(app), quadlets)
+            self.pg = dict(self.pg, database=self.connection['database'])
         self.pg_target = next((t for _n, t in sum(mounts.values(), []) if t.startswith('/var/lib/postgresql')),
                               '/var/lib/postgresql/data')
         if not self.n8n_image or not self.pg_image:
