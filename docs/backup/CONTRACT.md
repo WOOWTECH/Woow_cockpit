@@ -115,7 +115,7 @@ not `ok`); the check job isolates every app (§8 "Results"); `ha-import-start` (
 the one confirmation; its chain of single-app jobs is §8's, lane F2), `choices` and `acknowledged` in the start commands and
 `restore-start`, the error code `confirmation-required`; per-app `results` of a conversion (§7); the device key is created
 where it was demanded (`key_created`; D11); one key for the whole backup, the share folder included (KEY-16); versions inform and
-no longer gate (CM-01, CM-02, CM-06: `haissues.version_issues`, `Work.image_version`; each importer changes over in its own lane);
+no longer gate in those common cases (CM-01, CM-02, CM-06: `haissues.version_issues`, `Work.image_version`; each importer changes over in its own lane; OpenDesign's known core mismatch still stops, §9);
 the image's processor name is no gate (HA-06); `ha-imports.json` schema 2 (§3). `api` stays 1: every new field is optional or
 belongs to a new command. Compatibility: older page + this engine reads `ok/blockers/warnings` (an app with lines to confirm
 shows as not importable until the page is reloaded); this page + an older engine sees no `schema: 2` and keeps the two-step
@@ -1181,12 +1181,13 @@ Shapes:
   (8 hex each), files, bytes, dirs, symlinks, hardlinks, skipped_symlinks, projects, conversations, messages,
   routines, routines_active, project_folders, mcp_servers (HA's that move), mcp_integration_entries (HA's `woow-paseo`,
   not moved), shared, ha_urls[("<file>：<host>")], left_out{<top-level
-  name>: entries}},
+  name>: entries}, links_copied, skipped (count of entries in `files.skipped`), config_skipped[]},
   woow-code-server?{woow-code-server_version (HA's code-server, from the add-on version), pins{code-server, pi, claude,
   codex} (HA's, '' when the add-on ships none), target_pins{same keys} (what the live image prints), files, bytes,
   sessions, claude_projects, codex_sessions, skills, snippets, settings(bool), extensions (HA's own, without the
   connector VSIX), mcp_servers, workspace(bool: `projects/` found in HA's share folder), share(bool), workspace_files,
-  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[]},
+  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[],
+  links_copied, skipped (count of entries in `files.skipped`), files_kept[]},
   nextcloud?{nextcloud_version (HA's config.php `version`), addon_nextcloud_version|null, users, files (file cache rows),
   shares, tokens, calendar_objects, contacts, datadir (HA's `datadirectory`), datadir_in_backup(bool), datadir_files,
   datadir_bytes, custom_apps[], pg_version, office(bool: richdocuments enabled on HA), ha_url, target_url},
@@ -1201,7 +1202,8 @@ Shapes:
   the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
   for EMQX and Headscale) — an app
   is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (app
-  not installed or not deployed here, no owner account in HA's n8n, different versions, missing modules with the
+  not installed or not deployed here, no owner account in HA's n8n, version differences that remain stops for an app
+  (OpenDesign's two known core revisions, §9), missing modules with the
   share-folder hint, missing Python packages or programs of custom modules, a custom module to copy with an ELF file for
   another processor, newer PostgreSQL, unsupported extensions,
   pending module operations, not enough space; batch 1: an add-on version the engine's table does not know, a different
@@ -1233,6 +1235,9 @@ Shapes:
   issues[HaIssue]` — `skipped`: kept out before its data was touched (a `stop`, a missing add-on, `confirmation-required`),
   `failed`: it went wrong half way; this device is unchanged either way. A conversion of one app has it also when the job
   fails; one of several apps (the labs) fails as a whole, as before.
+  The OpenDesign importer's conversion details also carry `links_copied` and `config_skipped[]`; code-server's carry
+  `links_copied`, `files_kept[]`, `workspace_conflict[]` and `extensions_unreadable`. These are importer details, not new
+  fields of `ConvertResult`.
 * `GroupResult` (2026-11-25): `app_id, status("imported"|"converted"|"rolled-back"|"failed"|"skipped"|"not-started"),
   convert_job_id, restore_job_id, backup_id, safety_backup_id, code, message` (null where there is none).
   `imported`: restored and checked; `converted`: only converted (the import does not restore, or its restore did not happen
@@ -2626,13 +2631,17 @@ read-only configuration folder, the one mounted at `/etc/headscale`, as its one 
 `woow_ha_code_server` → app `woow-code-server`: the container `code-server` (`keep-id:uid=1000`) with the volumes
 `woow-code-server-pi-data` (at `/data/pi-agent`), `woow-code-server-ide` (at `/home/coder/.local/share/code-server/User`)
 and `woow-code-server-extensions` (at `…/code-server/extensions`), and, when the catalog lists it (D1 b), the workspace
-folder bound at `/workspace` (one data dir, the bind's path below the owner's home); another set of volumes or data
-dirs is `incompatible`. No database server.
-1. Versions (D6): the add-on version maps to the four programs that write the data (code-server, Pi, Claude Code,
-   Codex; 0.1.6–0.1.15 all code-server 4.139.1, Pi 0.99.1, Claude Code 2.1.285, Codex 0.167.0 from 0.1.8, none before),
-   and each must equal what the live image prints: `--version` of each in one throwaway container of the live image
-   (entrypoint `/bin/sh`, network none, nothing pulled). An unknown add-on version, a program that differs or cannot be
-   read is a blocker; a program the add-on did not ship is not compared.
+folder bound at `/workspace` (the bind's path below the owner's home). Revised 2026-11-25 (HAOS parity):
+the catalog entry's additional volumes or host folders are carried as they are (item 8). A missing container or one of
+the three required volumes, or a catalog entry with a database, stops only code-server. No database server.
+1. Versions (D6, revised): the add-on version maps to the four programs that write the data (code-server, Pi, Claude Code,
+   Codex; 0.1.6–0.1.15 all code-server 4.139.1, Pi 0.99.1, Claude Code 2.1.285, Codex 0.167.0 from 0.1.8, none before).
+   `--version` of each runs in one throwaway container of the live image (entrypoint `/bin/sh`, network none); an image
+   absent here is downloaded first as the owner (`hatarget.ensure_image`). None of these version results stops the import:
+   an unknown add-on version (`codeserver.addon-unknown`, CS-01), unreadable program versions
+   (`codeserver.target-versions-unknown`, items: the programs, CS-02), a version command that did not run
+   (`codeserver.version-command-failed`, CS-07) and differing programs (`codeserver.versions-differ`, items:
+   `<program>（HA x, 這台 y）`, CS-03) are notices. A program the add-on did not ship is not compared.
 2. One pass over `data/pi-agent/**`, `data/vscode/User/**` and `data/vscode/extensions/**`; never handed out (NEVER_READ or
    excluded from the walk): `options.json`, `pi-agent/{auth.json, mcp-auth.json, claude/.credentials.json,
    codex/auth.json}`, `.ssh/`, `git/`, `.zsh_history`, the legacy `claude/`, `woow-connectors-primary/`,
@@ -2650,24 +2659,49 @@ dirs is `incompatible`. No database server.
    has stays whole, HA's is skipped and named), `claude/projects/`, `claude/file-history/`, `codex/sessions/`,
    `codex/archived_sessions/`, `settings.json`, `models.json`, `codex/session_index.jsonl`,
    `home/.pi/pi-acp/session-map.json`; `claude/history.jsonl` merged by `timestamp` (each line once; this device's file
-   stays when either side is not JSON lines or both exceed 32 MiB); `shared/mcp.json` merged (D4 a: HA's servers added, the
-   same name stays this device's; servers with `headers`/`env` and HA-only hosts in their URLs are named for review,
-   never their values). Left: the logins (D2 a) and `claude/.claude.json`, `codex/config.toml`, `mcp.json`, `trust.json`,
+   stays when either side is not JSON lines or their merged content exceeds 64 MiB); `shared/mcp.json` merged (D4 a:
+   HA's servers are added; the same name stays this device's; servers with `headers`/`env` and HA-only hosts in their
+   URLs are named for review, never their values). Left: the logins (D2 a) and `claude/.claude.json`,
+   `codex/config.toml`, `mcp.json`, `trust.json`,
    `.woow-pi-store`, `*.before-*`, `bin/`, `npm-global/` (programs), every other file below `claude/`, `codex/`, `home/`,
    `shared/` (caches, locks, state databases); another top-level name with files in it is left with a warning naming it.
 5. Extensions: HA's extension folders listed in its `extensions.json`, except the connector VSIX (`woowtech.*`), the ids
    this device has, `targetPlatform` for another processor and folders with a program for another processor; this
    device's `extensions.json` gains them with `location.path` below this device's folder (an unreadable list moves none).
 6. Moved SQLite files (header `SQLite format 3`) are staged with their `-wal`/`-journal` (never `-shm`) and quick-checked by
-   the sandboxed child (`hasqlite`); a damaged one stays in HA (a warning).
+   the sandboxed child (`hasqlite`); a damaged one stays in HA (notice `codeserver.databases-skipped`). A child that does
+   not finish (timeout, no network cut, died) is started once more; then the databases in that batch do not move and are
+   one line to confirm, `codeserver.databases-unchecked` (items: their names, CS-12).
 7. Every moved member is owned like the live volume's top folder, permission bits without setuid/setgid; symlinks as link
-   entries when relative and inside their own tree (others skipped and counted); hard links only to an earlier moved
-   file (one to a file that does not move: `incompatible`). Each volume is then completed from a live export (read while
-   the app runs; not a cold snapshot) with its owners and modes; a folder both sides have keeps the live owner and mode;
-   a kept hard link to a replaced file stops the job (`job-failed`). The workspace dir tar is the live folder pack plus
-   HA's `projects/**` in a new folder `ha-projects-<HA backup date>` (a suffix when the name exists), owned like the live
-   folder's root. Secrets (`code-server-config`), `woow-code-server.env` and units are the live ones (packaging below).
-   Test mode changes nothing of code-server (it runs no scheduled work).
+   entries when relative and inside their own tree (others skipped and counted: notice `codeserver.symlinks-skipped`).
+   Hard links to earlier moved files remain links (CS-10, CS-13). A link to a file that does not move because this
+   device's version wins, or it is otherwise not moved, becomes a separate copy (`Entry.copy_later`; auto
+   `codeserver.links-copied`), but default-deny applies: links to logins, accounts, device files, programs, connector
+   identities or unknown folders are left out and listed in `files.skipped` (kind `hardlink`); only files that move anyway
+   and package-manager caches below `home/` can be copied. A hard link kept from this device's live export whose target
+   HA replaces gets its own content: a second pass makes the first link a file and the rest links to it
+   (`codeserver.kept-links-copied`, CS-15). A kept link whose target is not a regular file in the export is left out and
+   listed at conversion time (DESIGN B7). Each volume is completed from a live export while the app runs, retaining
+   live owners and modes; a folder both sides have keeps the live owner and mode. The export must be read to its end with
+   its two zero end blocks (`check_tar_end`; `tarfile` alone can accept a tar cut at a header). A failed read is retried
+   three times (`hatarget.retry`), then once with only the app's container that mounts it paused; it is started again in
+   `finally` and clean-up (`TempObjects.put_back_later`; auto `codeserver.service-paused`, items: container; CS-14). If
+   the read still fails, code-server stops and this device's data is unchanged. The workspace dir tar is the live folder
+   pack read the same way (CS-16) plus HA's `projects/**` in a new folder `ha-projects-<HA backup date>` (a suffix when
+   the name exists), owned like the live folder's root. Secrets (`code-server-config`), `woow-code-server.env` and units
+   are the live ones (packaging below). Test mode changes nothing of code-server (it runs no scheduled work).
+8. Additional catalog volumes and host folders are carried as they are (`hatarget.carry`; auto
+   `codeserver.extras-carried`, items: their names; CS-04). If the catalog names host folders other than just the
+   workspace folder, HA's workspace does not move: one line to confirm, `codeserver.workspace-not-moved` (items: those
+   folders, CS-05), checked before this device's data is read; the folders are carried and the customer is reminded to
+   copy HA's projects manually. A catalog entry with a database is `codeserver.target-has-database` (stop, CS-04).
+   No VS Code settings and no agent data in HA's backup is `codeserver.no-data` (stop, CS-08).
+9. Large settings (CS-11): `settings.json`, `shared/mcp.json` or `extensions.json` above 16 MiB (was 4), and
+   `claude/history.jsonl` above 64 MiB (was 32), are left out by `read_or_skip` and listed in `files.skipped` (kind
+   `large`); this device's file stays (`codeserver.files-kept` notices the other settings). If `extensions.json` is too
+   large, no HA extensions move (`codeserver.extensions-skipped`). An unreadable staged extension folder discovered only in
+   conversion (CS-17) leaves out only extensions (`extensions_unreadable`, reminder to reinstall; DESIGN B7: no line
+   in the check).
 
 **Batch 2: add-ons that are not moved** (page only). The Cloudflare Tunnel (`*_cloudflared`; facts `cf-tunnel.md` D1 a:
 its token, certificate and PaaS link belong to the tunnel it serves, and its routes are in options this engine never
@@ -2880,12 +2914,18 @@ regular file of 1..511999 bytes.
 the slug after the repository prefix and must carry `system.slug` `woow_ha_opendesign`) → app `open-design`: volumes
 `open-design_open_design_data` (at `/app/.od` of the `open-design` container, `keep-id`) and `open-design_mcp_data`
 (at `/data/mcp`); no database server (the daemon keeps `app.sqlite`, WAL mode, and plain files).
-1. Versions: the data has no version stamp and the daemon migrates `app.sqlite` forward silently, so the add-on version
-   maps to the WoowTech fork revision of the OpenDesign core it ships (0.2.15 → OpenDesign 0.24.1, fork
-   `05b23f5a5259d4f2c22e5c6e3eb92ce9103ed34a`) and that revision must equal the live image's label
-   `io.woow.opendesign.source-revision` (a shorter label must be a prefix of it); `OD_APP_VERSION` of the image is
-   shown. An add-on version the table does not know, a missing label or another revision is a blocker.
-2. One pass over `data/opendesign/**` (never `data/mcp/**` nor `data/options.json`). Moved (owner decisions O4, O5 =
+1. Versions (revised): the data has no version stamp, so the add-on version maps to the WoowTech fork revision of its
+   OpenDesign core (0.2.15 → OpenDesign 0.24.1, fork `05b23f5a5259d4f2c22e5c6e3eb92ce9103ed34a`) and the live
+   image's `io.woow.opendesign.source-revision` label says what this device has (a shorter label must prefix the known
+   revision); `OD_APP_VERSION` is shown. An unknown add-on version (`opendesign.core-unknown`, OP-01), older or newer,
+   is a notice: the daemon can migrate `app.sqlite`
+   forward, and the restore's health check and automatic rollback are the safety net. A missing or unreadable image label
+   (`opendesign.target-core-unknown`, OP-02/OP-05) is also a notice. When both revisions are known and different,
+   `opendesign.core-different` still stops this app (OP-03; installing HA's core is wave 2). If the live image is absent,
+   `hacommon.image_labels` downloads it first via `hatarget.ensure_image`; a missing locally built `localhost/...` image
+   cannot be downloaded and stops this app with an explanation. A Quadlet without `Image=` still stops it.
+2. One pass over `data/opendesign/**` (never `data/options.json`; `data/mcp/**` is excluded from the walk, including as a
+   hard-link target). Moved (owner decisions O4, O5 =
    the facts' recommended answers): `app.sqlite` with `-wal`/`-journal` (never `-shm`), `projects/ runs/ artifacts/
    chat-artifact-blobs/ critique-artifacts/ design-systems/ design-templates/ brands/ library/ memory/ skills/ plugins/
    connectors/`, `mcp-config.json` (every `/data/opendesign` path in its strings remapped to `/app/.od`; the entries
@@ -2896,24 +2936,38 @@ the slug after the repository prefix and must carry `system.slug` `woow_ha_opend
    `/data/opendesign` remapped, others dropped with a warning), and HA's `shared/workspaces/**`, `shared/skills/**`
    copied inert. Left out: `home/` (agent logins, O1), `paseo/`, `integrations/` (Paseo pairing and Omnigent host
    identity, O2), `installation.json`, `diagnostics/`, `od-next-run-inputs/`, `od-next-task-inputs/`, `agent-runtime/`,
-   `export-render/`, `export-pdf/`, `credentials`, `.backup/`, `shared/mcp`, `shared/plugins`. Another top-level entry
-   with anything but directories in it is a blocker. Special files must be regular files (folders directories).
-   Every moved member is owned like the live volume's top folder, permission bits without setuid/setgid; symlinks as
-   link entries when relative and inside the tree (others skipped and counted); hard links only to an earlier moved
-   file (one to a file that does not move stops the job, `incompatible`). Warnings: programs for another processor in
-   the moved trees, skipped symlinks, HA-only hosts in the moved settings, projects imported from a folder
+   `export-render/`, `export-pdf/`, `credentials`, `.backup/`, `shared/mcp`, `shared/plugins`. No OpenDesign folder is
+   `opendesign.no-folder` and no `app.sqlite` is `opendesign.no-database` (stops of this app only, with actions). Unknown
+   top-level entries holding anything but directories are one line to confirm, `opendesign.unknown-entries` (items:
+   their names, at most 2000 tracked; OP-10), and stay in HA. Device files, FIFOs, names the reader cannot hand out,
+   unresolved hard links and files above the limit are one `files.skipped` line. `app-config.json` and `mcp-config.json`
+   above 16 MiB (was 4; OP-13) are left out by `read_or_skip` and listed there; this device's own file stays (notice
+   `opendesign.config-kept`; for `mcp-config.json` its whole file stays). Every moved member is owned like the live
+   volume's top folder, permission bits without setuid/setgid; relative symlinks inside the tree remain links (others
+   skipped and counted). Hard links to earlier moved files remain links; a hard link to a file that does not move is
+   copied as content (OP-11; auto `opendesign.links-copied`) only for files that move anyway or package-manager caches
+   below `home/`. Default-deny leaves out links to logins, Paseo pairing, Omnigent identity, rewritten preferences or
+   unknown folders and lists them in `files.skipped`. Warnings: programs for another processor in the moved trees,
+   skipped symlinks, HA-only hosts in the moved settings, projects imported from a folder
    (`metadata_json.baseDir`; they will not open here), dropped preferences, active routines (they run here).
 3. The sandboxed child (`hasqlite`) opens `app.sqlite` with its WAL: `quick_check`, the counts of `projects`,
    `conversations`, `messages`, `routines`, the folder projects and the active routines (fixed queries
-   `opendesign.project_folders`, `opendesign.routines_active`); a damaged database or one without `projects` is a
-   blocker.
+   `opendesign.project_folders`, `opendesign.routines_active`); a damaged database (`opendesign.database-damaged`) or one
+   without `projects` (`opendesign.database-not-opendesign`) stops this app. A child that does not finish is started once
+   more (OP-14); if it still cannot finish, `opendesign.database-unreadable` stops only this app.
 4. `open-design_open_design_data` from scratch: HA's moved tree, plus from a live export of the volume (read while the
    daemon runs, like Odoo's web data; not a cold snapshot) this device's `home/`, `paseo/`, `integrations/`,
    `installation.json`, `export-render/`, `export-pdf/` (and its `app-config.json` when HA has none that can be used)
-   with their live owners; a kept hard link to a replaced file stops the job. `open-design_mcp_data`: the live export,
-   unchanged (O3: this device's MCP token and tool grants stay). Secrets (`open-design-api-token`, the htpasswd),
-   `open-design.env`, nginx files and units are the live ones (packaging below).
+   and its whole `mcp-config.json` when HA's is too large, with their live owners. Every live export is read to its end
+   and must have its two zero end blocks; a failed read is retried three times, then once with only the app's own
+   containers that mount it paused and started again (OP-15; auto `opendesign.service-paused`). A kept hard link to a
+   replaced file gets its own original content (OP-16; auto `opendesign.kept-links-copied`). `open-design_mcp_data`:
+   the live export read the same way, unchanged (O3: this device's MCP token and tool grants stay). Secrets
+   (`open-design-api-token`, the htpasswd), `open-design.env`, nginx files and units are the live ones (packaging below).
    Test mode changes nothing of OpenDesign (its routines are not paused; the reminder says so).
+
+Evidence for the OpenDesign/code-server parity lane (2026-11-25): checks and conversion used simulated Podman,
+systemctl, owner runner and catalog; the two real x86 batch-2 backups were inspected read-only. No device import ran.
 
 ## 10. Security rules (reviewers will check each)
 
