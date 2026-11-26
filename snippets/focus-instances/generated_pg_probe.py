@@ -472,6 +472,17 @@ def package_engine():
     return out.getvalue()
 
 
+def verify_isolation(device):
+    # owner.sh's historical --verify-isolation whitelist excludes c. Read exactly the SAME fixed fields through its
+    # existing isolated LAB_HOME/bin/labpodman; no host Podman, wrapper edits or device configuration changes.
+    script = ('source "$1"; device_vars "$2"; exec "$LP" inspect "$NAME" --format '
+              "'{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}'")
+    result = subprocess.run(['bash', '-c', script, 'woowbk-instance-isolation',
+                             str(ROOT / 'tests/e2e/lab/lib.sh'), device],
+                            capture_output=True, timeout=30)
+    return result.returncode == 0 and result.stdout.strip() == b'true none {}'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', action='store_true')
@@ -508,7 +519,8 @@ def main():
                'engine_zip': base64.b64encode(package).decode(), 'engine_sha256': hashlib.sha256(package).hexdigest()}
     with Path('/tmp/woowbk-dev-'+args.device+'-mutation.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        subprocess.run([str(OWNER), args.device, '--verify-isolation'], check=True, capture_output=True, timeout=30)
+        if not verify_isolation(args.device):
+            raise RuntimeError('selected device isolation assertion failed before remote dispatch')
         source = 'P=' + repr(payload) + '\n' + REMOTE
         result = subprocess.run([str(OWNER), args.device, 'python3', '-B', '-'], input=source.encode(),
                                 capture_output=True, timeout=360)
@@ -516,8 +528,7 @@ def main():
             raise RuntimeError('isolated generated proof runner failed; raw output withheld')
         evidence = json.loads(result.stdout)
         private = evidence.pop('_private_stderr', '')
-        isolation = subprocess.run([str(OWNER), args.device, '--verify-isolation'], capture_output=True, timeout=30)
-        evidence['checks']['outer-isolation-preserved'] = isolation.returncode == 0
+        evidence['checks']['outer-isolation-preserved'] = verify_isolation(args.device)
         for path, data in ((args.out, json.dumps(evidence, indent=2, sort_keys=True)+'\n'),
                            (args.out.with_suffix('.private.log'), private)):
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

@@ -59,4 +59,6 @@ python3 -B -I /tmp/parity-focus-instances-20261127/snippets/focus-instances/gene
 
 The driver rejects an active EMQX priority marker and mismatched/expired lease. Failed cleanup retains its private run root and ownership journal; evidence identifies only the run-owned IDs/volumes for exact recovery, never existing app resources.
 
+Harness correction after dev-c attempt01: historical owner.sh's --verify-isolation option rejects c before dispatch (d/e whitelist), so that attempt created no resources. The standalone driver now obtains the exact same fixed isolation fields through lib.sh's existing isolated LAB_HOME/bin/labpodman, requiring literal `true none {}` both before and after. No owner.sh/lib.sh/hardware payload edits and no weaker isolation rule. The failed01 result/private diagnostic are preserved; the next leased output must be `instances-generated-pg-c-02.json`.
+
 Preparation validation only: outer/remote Python AST parse and read-only default plan. Runtime not yet executed and no device mutation performed by this lane.
