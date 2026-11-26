@@ -1,0 +1,17 @@
+{
+  "source": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "tools_available": 5,
+  "apt_needed": false,
+  "source_stage_exit": 0,
+  "host_free_mib": 32930,
+  "device_headroom_mib": 3080,
+  "scope": "r8-frozen-source-stage-result",
+  "elapsed_seconds": 11.4,
+  "capture_stdout_hash_verified": true,
+  "original_schedule_state": {
+    "ActiveState": "inactive",
+    "UnitFileState": "masked"
+  },
+  "nonpersistent_probe_count": 1,
+  "commercial_acceptance": "not-complete"
+}

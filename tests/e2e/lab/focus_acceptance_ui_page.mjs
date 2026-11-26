@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
 
 if (process.argv.slice(2).join(' ') !== '--run') {
   console.log('R8 page prepared: syntax only; requires reviewed controller and dev-d lease');
@@ -16,9 +17,10 @@ const { chromium } = await import(pathToFileURL(config.playwright).href);
 const checks = [];
 const channels = new Map();
 const requests = new Set();
+const responseBuffers = new Map();
 const wire = { check_starts: 0, import_starts: 0, unique_import_requests: 0,
   separate_restore_starts: 0, import_apps: [], then_restore: false, confirm: false,
-  overwrite: false, acknowledged_keys: 0, malformed: 0 };
+  overwrite: false, acknowledged_keys: 0, expected_acknowledged_keys: null, malformed: 0 };
 const check = (name, ok) => {
   checks.push({ check: name, ok: Boolean(ok) });
   if (!ok) throw new Error(name);
@@ -51,8 +53,42 @@ function observe(payload) {
   }
 }
 
+// Read only the real verify-job result already requested by the page. Buffers
+// stay in memory and are discarded; no frame, key or response is persisted.
+function observeReply(payload) {
+  if (typeof payload !== 'string') return;
+  const newline = payload.indexOf('\n');
+  if (newline < 0) return;
+  const channel = payload.slice(0, newline);
+  const chunk = payload.slice(newline + 1);
+  if (!channel) {
+    try {
+      const control = JSON.parse(chunk);
+      if (control.command === 'close') {
+        channels.delete(control.channel);
+        responseBuffers.delete(control.channel);
+      }
+    } catch { /* never persist malformed input */ }
+    return;
+  }
+  if (channels.get(channel) !== 'job-status') return;
+  const text = (responseBuffers.get(channel) || '') + chunk;
+  if (text.length > 4 * 1024 * 1024) { wire.malformed++; responseBuffers.delete(channel); return; }
+  responseBuffers.set(channel, text);
+  let reply;
+  try { reply = JSON.parse(text); } catch { return; }
+  responseBuffers.delete(channel);
+  const job = reply.job;
+  if (job?.type !== 'verify' || job.params?.ha_backup_id !== config.ha_id || !job.result?.ha_check) return;
+  try { wire.expected_acknowledged_keys = issueKeyCount(job.result.ha_check); }
+  catch { wire.malformed++; }
+}
+
 let browser;
+let context;
 let frame;
+const issued = new Set();
+const cookieObservations = [];
 let pageErrors = 0;
 let recording = false;
 let clicks = 0;
@@ -67,10 +103,8 @@ process.once('SIGTERM', async () => {
 try {
   browser = await chromium.launch({ executablePath: config.chromium,
     args: ['--disable-background-networking', '--disable-component-update'] });
-  const context = await browser.newContext({ ignoreHTTPSErrors: true, locale: 'en-US',
+  context = await browser.newContext({ ignoreHTTPSErrors: true, locale: 'en-US',
     viewport: { width: 1440, height: 900 } });
-  const issued = new Set();
-  const cookieObservations = [];
   // Observe login/renewal Set-Cookie values as well as the final cookie jar.
   // No cookie/header is persisted; scan every observed value before teardown.
   context.on('response', response => {
@@ -85,7 +119,10 @@ try {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
-  page.on('websocket', ws => ws.on('framesent', event => observe(event.payload)));
+  page.on('websocket', ws => {
+    ws.on('framesent', event => observe(event.payload));
+    ws.on('framereceived', event => observeReply(event.payload));
+  });
   page.on('pageerror', () => { if (recording) pageErrors++; });
   // Existing Cockpit password + administrative access, same as cockpit-login.mjs.
   await page.goto(config.base, { waitUntil: 'domcontentloaded' });
@@ -137,6 +174,7 @@ try {
   await frame.locator('[data-focus="ha-key-next"]').click();
   await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
   stage = 'one-confirmation';
+  check('UI actual check confirmation keys observed including valid zero', wire.expected_acknowledged_keys !== null);
   check('UI corrupt EMQX blocked and both other apps importable',
     await frame.locator('[data-ha-app="emqx"][data-importable="no"] .ha-issue-stop').count() > 0
     && await frame.locator('[data-ha-app="hermes"][data-importable="yes"]').count() === 1
@@ -159,17 +197,25 @@ try {
     && await frame.locator('[data-ha-app="omnigent"][data-status="imported"]').count() === 1
     && await frame.locator('[data-ha-app="emqx"][data-status="excluded"]').count() === 1);
   check('UI one click sends one real acknowledged import intent for only importable apps',
-    clicks === 1 && ticks === 1 && wire.check_starts === 1 && wire.unique_import_requests === 1
-    && JSON.stringify(wire.import_apps) === JSON.stringify(['hermes', 'omnigent'])
-    && wire.then_restore && wire.confirm && wire.overwrite && wire.acknowledged_keys > 0
-    && wire.separate_restore_starts === 0 && wire.malformed === 0);
+    validImportIntent(wire, ticks, clicks));
   check('UI no page script errors during this page flow', pageErrors === 0);
   await frame.locator('#view').screenshot({ path: join(config.evidence, 'result.png'), mask: [frame.locator('input,textarea')] });
   completed = true;
+
+} catch (error) {
+  // No raw Playwright errors: those can include a key or page text.
+  failureKind = error?.name === 'TimeoutError' ? 'timeout' : 'check-or-browser-error';
+  checks.push({ check: 'UI bounded flow completed', ok: false });
+} finally {
+  recording = false;
+  // Capture and scan before closing even when a preceding assertion failed.
+  try {
+    if (!context || !frame) throw new Error('authenticated frame unavailable');
   stage = 'issued-value-scan';
   // Cookies stay in this process. Scan device records/journal and our own text
   // for these issued values through the real privileged bridge before close.
-  await Promise.all(cookieObservations);
+  const observed = await Promise.allSettled(cookieObservations);
+  check('UI cookie observation completed without gaps', observed.every(x => x.status === 'fulfilled'));
   for (const cookie of await context.cookies()) if (cookie.value) issued.add(cookie.value);
   const values = [...issued];
   check('UI Cockpit issued authenticated cookie values observed', values.length > 0);
@@ -180,12 +226,10 @@ try {
   }, { script: config.cookie_scan, values, since: config.since });
   issuedScan = report.hits === 0 && report.scanned > 0;
   check('UI issued Cockpit values absent from records and journal', issuedScan);
-} catch (error) {
-  // No raw Playwright errors: those can include a key or page text.
-  failureKind = error?.name === 'TimeoutError' ? 'timeout' : 'check-or-browser-error';
-  checks.push({ check: 'UI bounded flow completed', ok: false });
-} finally {
-  recording = false;
+  } catch {
+    failureKind ||= 'issued-value-scan-error';
+    checks.push({ check: 'UI issued-value scan completed before close', ok: false });
+  }
   if (browser) await browser.close();
   const result = { stage, failure_kind: failureKind, completed, issued_values_scanned: issuedScan, page_errors: pageErrors,
     acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks };

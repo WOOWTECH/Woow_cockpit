@@ -130,6 +130,37 @@ def stable_units(rows, properties):
     return result
 
 
+def scan_program(needle_source):
+    """Strict current storage roots; index sidecars are in archives/."""
+    return 'import json\n' + needle_source + r'''
+import json, os, subprocess, sys
+req=json.load(sys.stdin)
+values=list(req["values"])
+for name in req.get("podman_secrets",[]):
+    p=subprocess.run(["/usr/local/bin/woowbk-owner","podman","secret","inspect","--showsecret","--format","{{.SecretData}}",name],capture_output=True,check=True)
+    values.append(p.stdout.rstrip(b"\n"))
+needles=secret_scan_needles(values)
+hits=scanned=index_sidecars=0
+base="/var/lib/woowtech-backup/"
+for root in [base+x for x in ("jobs","ha-backups","ha-imports.json","requests.json","archives","uploads","staging","pending","exports")]+["/run/woowtech-backup"]:
+    if not os.path.exists(root) or os.path.islink(root): raise RuntimeError("scan root unsafe")
+    paths=[root] if os.path.isfile(root) else []
+    for d,dirs,files in os.walk(root,followlinks=False):
+        if any(os.path.islink(os.path.join(d,x)) for x in dirs): raise RuntimeError("scan path unsafe")
+        paths.extend(os.path.join(d,x) for x in files)
+    for p in paths:
+        if os.path.islink(p): raise RuntimeError("scan path unsafe")
+        if p.endswith(".tar") and ("/archives/" in p or "/ha-backups/" in p): continue
+        data=open(p,"rb").read(); scanned+=1
+        if "/archives/" in p and p.endswith(".json"): index_sidecars+=1
+        hits+=sum(data.count(x) for x in needles)
+j=subprocess.run(["journalctl","--no-pager","-o","cat","--since","@%d"%req["since"]],capture_output=True,check=True).stdout
+hits+=sum(j.count(x) for x in needles)
+print(json.dumps({"scanned":scanned,"hits":hits,"journal_bytes":len(j),"archive_index_sidecars_scanned":index_sidecars}))
+'''
+
+
+
 def run(source):
     sys.path.insert(0, str(HERE))
     import ha_import_e2e as h
@@ -279,31 +310,7 @@ def run(source):
 
     # Same strict scan for static/moved values and the Cockpit cookie scan, using
     # the existing encoded-needle builder. Only counts return from the device.
-    scan = 'import json\n' + inspect.getsource(b1.secret_scan_needles) + r'''
-import json, os, subprocess, sys
-req=json.load(sys.stdin)
-values=list(req["values"])
-for name in req.get("podman_secrets",[]):
-    p=subprocess.run(["/usr/local/bin/woowbk-owner","podman","secret","inspect","--showsecret","--format","{{.SecretData}}",name],capture_output=True,check=True)
-    values.append(p.stdout.rstrip(b"\n"))
-needles=secret_scan_needles(values)
-hits=scanned=0
-base="/var/lib/woowtech-backup/"
-for root in [base+x for x in ("jobs","ha-backups","ha-imports.json","index.json","archives","uploads","staging")]+["/run/woowtech-backup"]:
-    if not os.path.exists(root) or os.path.islink(root): raise RuntimeError("scan root unsafe")
-    paths=[root] if os.path.isfile(root) else []
-    for d,dirs,files in os.walk(root,followlinks=False):
-        if any(os.path.islink(os.path.join(d,x)) for x in dirs): raise RuntimeError("scan path unsafe")
-        paths.extend(os.path.join(d,x) for x in files)
-    for p in paths:
-        if os.path.islink(p): raise RuntimeError("scan path unsafe")
-        if p.endswith(".tar") and ("/archives/" in p or "/ha-backups/" in p): continue
-        data=open(p,"rb").read(); scanned+=1
-        hits+=sum(data.count(x) for x in needles)
-j=subprocess.run(["journalctl","--no-pager","-o","cat","--since","@%d"%req["since"]],capture_output=True,check=True).stdout
-hits+=sum(j.count(x) for x in needles)
-print(json.dumps({"scanned":scanned,"hits":hits,"journal_bytes":len(j)}))
-'''
+    scan = scan_program(inspect.getsource(b1.secret_scan_needles))
     try:
         save()
         require('source: both reviewed checkouts clean', all(not subprocess.check_output(['git','-C',str(p),'status','--porcelain','--untracked-files=no'], text=True).strip() for p in (source, REPO)))

@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
+const empty = {schema:2,shared:[],apps:[{app_id:'hermes',importable:true,issues:[]},{app_id:'omnigent',importable:true,issues:[]},{app_id:'emqx',importable:false,issues:[{level:'confirm',key:'ignored'}]}]};
+assert.equal(issueKeyCount(empty),0);
+const checks = structuredClone(empty);
+checks.shared=[{level:'confirm',key:'s'},{level:'confirm',key:'s'},{level:'notice',key:'ignored'}];
+checks.apps[0].issues=[{level:'confirm',key:'h'},{level:'confirm',key:'h'}];
+assert.equal(issueKeyCount(checks),2);
+assert.throws(()=>issueKeyCount({schema:1,apps:[]}));
+assert.throws(()=>issueKeyCount({schema:2,shared:[{level:'confirm'}],apps:[]}));
+const wire={check_starts:1,unique_import_requests:1,import_apps:['hermes','omnigent'],then_restore:true,confirm:true,overwrite:true,expected_acknowledged_keys:0,acknowledged_keys:0,separate_restore_starts:0,malformed:0};
+assert.equal(validImportIntent(wire,1,1),true);
+for(const changed of [{expected_acknowledged_keys:null},{expected_acknowledged_keys:1},{acknowledged_keys:1},{separate_restore_starts:1},{import_apps:['emqx','hermes']}]) assert.equal(validImportIntent({...wire,...changed},1,1),false);
+assert.equal(validImportIntent(wire,2,1),false);
+console.log('R8 issue-key boundaries: 11/11 PASS (offline only)');

@@ -1,0 +1,38 @@
+{
+  "scope": "r8-attempt1-preserved-functional-facts",
+  "source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "driver_commit": "c79700cc1e3056c2a4f09acd8e834992ad00a420",
+  "attempt_passed": false,
+  "passed": 50,
+  "failed": 3,
+  "elapsed_seconds": 706.8,
+  "browser_wire": {
+    "check_starts": 1,
+    "import_starts": 1,
+    "unique_import_requests": 1,
+    "separate_restore_starts": 0,
+    "import_apps": [
+      "hermes",
+      "omnigent"
+    ],
+    "then_restore": true,
+    "confirm": true,
+    "overwrite": true,
+    "acknowledged_keys": 0,
+    "malformed": 0
+  },
+  "acknowledgement_ticks": 1,
+  "import_clicks": 1,
+  "page_errors": 0,
+  "result_rows_observed": true,
+  "issued_cookie_coverage": "absent-not-retroactively-proved",
+  "cookie_scan_ran": false,
+  "baseline_restored": true,
+  "case_archives_retained": 6,
+  "aggregate_index_path_obsolete": true,
+  "actual_index_sidecars_under_archives": true,
+  "old_guard_sha256": "e63eaed2bc2684aaec500ece00c56bef21175df7e35294ed5e255345caba11e6",
+  "old_receipt_sha256": "52c16a7d041574b2106f129264b1c2a313ce2282192229107cc03e1501f92ecb",
+  "old_summary_sha256": "3f16afc0d9f6d094e363785389e166bd347ba3c3a3c0cb03deb86f41cf66909f",
+  "commercial_acceptance": "not-complete"
+}

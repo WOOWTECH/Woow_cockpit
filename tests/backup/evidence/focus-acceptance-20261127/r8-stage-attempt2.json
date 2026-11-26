@@ -1,0 +1,10 @@
+{
+ "source_commit": "c79700cc1e3056c2a4f09acd8e834992ad00a420",
+ "scope": "r8-frozen-source-stage",
+ "exit": 0,
+ "elapsed_seconds": 11.4,
+ "stdout_sha256": "31e3a6f53a7f3c086dc76c97fa9824792cd9ad4c39b1a5b875f7b1c9617be024",
+ "fixed_status": [],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
