@@ -63,3 +63,15 @@ the NEW preparation store, where canonical tagging/export alone occurs. Export c
 real packager with `input_format='oci-archive'`, install_bundle, owner-load, offline smoke/reuse/cleanup checks.
 The original Docker archive and failed quarantine remain untouched. New result filenames include the proof root
 and use exclusive creation, preserving earlier attempts. No auth/host/network/pull/package/account changes.
+
+## Runtime path correction (r4)
+
+r3 verified exact config4278 and every ordered layer before load, then Podman rejected its long runtime path with
+exact fixed error owner-runroot-too-long. New r4 uses an owner Python process anchored by its cwd to each exact NEW
+store leaf; /proc/<owner-pid>/cwd/run and /tmp are short aliases to those SAME physical leased directories. No filesystem
+symlink/new root/runtime outside the lease or auth route is created. Anchors use the existing OwnerRunner prefix and
+remain live throughout the case; finally close their stdin and wait. No production path behavior changes.
+
+After successful version/reuse/source-unchanged/empty-store checks, the driver removes only its2 exact new VFS store
+leaves (checked owner0700/no nested mounts/symlink-safe rmtree), retaining release/staged archives and manifests.
+All first/r2/r3 failed artifacts remain preserved. Reserve/headroom/expiry/wholecase mutex remain identical.

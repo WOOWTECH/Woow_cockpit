@@ -59,6 +59,9 @@ class CanonicalArchiveTests(BundleCase):
                          'ordered-layer-digest-mismatch')
         self.assertEqual(proof.failure_reason(bundle.BundleError('private artifact contents')),
                          'unclassified-fixed-failure')
+        from woowbackup import podman
+        error = podman.CommandError('private command text', returncode=125, stderr=proof.ERROR_RUNROOT)
+        self.assertEqual(proof.failure_reason(error), 'owner-runroot-too-long')
 
 
 if __name__ == '__main__':

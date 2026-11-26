@@ -12,7 +12,9 @@ import os
 from pathlib import Path
 import pwd
 import secrets
+import select
 import shutil
+import subprocess
 import tarfile
 import types
 
@@ -20,12 +22,14 @@ EXPECTED = 'sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741
 SOURCE_TAG = 'docker.io/library/postgres:16.15-alpine3.24'
 RESERVE = 13 * 1024**3
 PHASE = 'preflight'
+ANCHORS = []
+ERROR_RUNROOT = b'Error: the specified runroot is longer than 50 characters'
 
 
 def failure_reason(error):
     """Public diagnostics contain only exact whitelisted constants, never exception/artifact contents."""
     try:
-        from woowbackup import pg16_bundle as bundle, pg16_oci as oci, pg16_docker_dir as docker_dir
+        from woowbackup import pg16_bundle as bundle, pg16_oci as oci, pg16_docker_dir as docker_dir, podman
     except ImportError:
         return 'preflight-import-failed'
     whitelist = {
@@ -46,6 +50,11 @@ def failure_reason(error):
     }
     if isinstance(error, (bundle.BundleError, ValueError)):
         return whitelist.get(str(error), 'unclassified-fixed-failure')
+    if isinstance(error, podman.CommandError):
+        if error.stderr.strip() == ERROR_RUNROOT:
+            return 'owner-runroot-too-long'
+        code = podman.reason_code(error)
+        return 'owner-command-' + code if code in podman.KNOWN_REASONS else 'owner-command-unclassified'
     return 'assertion-failed' if isinstance(error, AssertionError) else 'unclassified-fixed-failure'
 
 
@@ -183,8 +192,22 @@ def main():
         for name in ('graph', 'run', 'tmp'):
             (owned / name).mkdir(mode=0o700)
             os.chown(owned / name, account.pw_uid, account.pw_gid)
-        flags = ['--root', str(owned / 'graph'), '--runroot', str(owned / 'run'), '--storage-driver', 'vfs',
-                 '--events-backend', 'file', '--tmpdir', str(owned / 'tmp'), '--cgroup-manager', 'cgroupfs']
+        # Podman caps its runtime path at50 characters. A live owner process anchors a short proc cwd path to
+        # this SAME exact owned leaf, without filesystem aliases, additional roots, or source-runtime changes.
+        anchor = subprocess.Popen(podman.OwnerRunner('appowner').prefix() + [podman.PYTHON, '-I', '-c',
+            'import os,sys; os.chdir(sys.argv[1]); print(os.getpid(),flush=True); sys.stdin.buffer.read()', str(owned)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            cwd='/', env=dict(podman.ROOT_ENV), close_fds=True)
+        ANCHORS.append(anchor)
+        assert select.select([anchor.stdout], [], [], 10)[0]
+        pid_text = anchor.stdout.readline(32).strip()
+        assert pid_text.isdigit()
+        proc = Path('/proc') / pid_text.decode()
+        assert proc.stat().st_uid == account.pw_uid and (proc / 'cwd').resolve() == owned
+        runtime = str(proc / 'cwd')
+        assert len(runtime + '/tmp') <= 50
+        flags = ['--root', str(owned / 'graph'), '--runroot', runtime + '/run', '--storage-driver', 'vfs',
+                 '--events-backend', 'file', '--tmpdir', runtime + '/tmp', '--cgroup-manager', 'cgroupfs']
         class IsolatedOwner(podman.OwnerRunner):
             def podman(self, *argv, **options):
                 return self.run([podman.PODMAN, *flags, *argv], **options)
@@ -202,15 +225,18 @@ def main():
         docker_dir.convert_directory(export, output, bundle, 'amd64', EXPECTED, abort=guard)
         os.fsync(output.fileno())
     # Original bytes now authenticate against the official config and EVERY diff_id; only now may a load occur.
-    PHASE = 'disposable-canonical-export'
+    PHASE = 'preparation-load'
     with verified.open('rb') as stream:
         preparation.podman('load', input=stream, timeout=1800, max_output=65536, abort=guard)
+    PHASE = 'preparation-inspect'
     actual_id = preparation.podman('image', 'inspect', '--format', '{{.Id}}', EXPECTED, timeout=60).stdout.decode().strip()
     assert actual_id.removeprefix('sha256:') == EXPECTED[7:]
+    PHASE = 'preparation-canonical-tag'
     preparation.podman('tag', EXPECTED, bundle.TAG, timeout=60, max_output=65536)
     tags = preparation.podman('image', 'inspect', '--format', '{{json .RepoTags}}', EXPECTED, timeout=60).stdout
     assert json.loads(tags) == [bundle.TAG]
     canonical = root / 'preparation-store/tmp/canonical-export'
+    PHASE = 'preparation-canonical-export'
     preparation.podman('save', '--format', 'docker-dir', '--output', str(canonical), bundle.TAG,
                        timeout=1800, max_output=65536, abort=guard)
     # Packaging + root-trusted staging use the actual release helpers. No root/global-store load.
@@ -259,7 +285,22 @@ def main():
               'containers_remaining': 0, 'free_bytes_after': shutil.disk_usage(root).free,
               'free_bytes_start': free_start, 'device_headroom_bytes_start': memory_headroom_start,
               'reserve_bytes': RESERVE, 'commercial_acceptance': 'not-complete'}
-    (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    # Both stores are exclusively new, VFS, contain no containers/volumes, and have completed the proof. Remove
+    # only these redundant exact leaves while their runtime anchors are still live; keep all release/staged files.
+    PHASE = 'owned-store-cleanup'
+    assert preparation.podman('ps', '-a', '--format', '{{.Names}}', timeout=60).stdout.strip() == b''
+    assert preparation.podman('volume', 'ls', '--format', '{{.Name}}', timeout=60).stdout.strip() == b''
+    assert shutil.rmtree.avoids_symlink_attacks
+    for leaf in ('preparation-store', 'owner-store'):
+        path = root / leaf
+        assert not path.is_symlink() and path.stat().st_uid == account.pw_uid and path.stat().st_mode & 0o777 == 0o700
+        assert not any(line.split()[4].startswith(str(path) + '/') or line.split()[4] == str(path)
+                       for line in Path('/proc/self/mountinfo').read_text().splitlines())
+        shutil.rmtree(path)
+    result['redundant_owned_stores_removed'] = 2
+    result['free_bytes_after_cleanup'] = shutil.disk_usage(root).free
+    with (root / 'result.json').open('x') as output:
+        output.write(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, sort_keys=True))
 
 
@@ -270,3 +311,11 @@ if __name__ == '__main__':
         print(json.dumps({'status': 'failed', 'phase': PHASE, 'error_type': type(error).__name__,
                           'reason': failure_reason(error), 'pulls': 0}))
         raise SystemExit(1)
+    finally:
+        for anchor in ANCHORS:
+            anchor.stdin.close()
+            try:
+                anchor.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                anchor.terminate()
+                anchor.wait(timeout=10)

@@ -1,0 +1,10 @@
+{
+  "status": "failed",
+  "phase": "disposable-canonical-export",
+  "error_type": "CommandError",
+  "reason": "unclassified-fixed-failure",
+  "pulls": 0,
+  "proof_root": "/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r3",
+  "host_ram_available_mib_start": 4217,
+  "source_commit": "0123142e8de8a77411c4cfe96310f2b4f000c668"
+}
