@@ -106,6 +106,23 @@ def _load(name):
 
 drv = _load('ha_import_b1_e2e')
 Failed = drv.Failed
+
+
+def require_reviewed_check(result):
+    """The real import must stop on a new refusal, confirmation or malformed issue list."""
+    if result.get('ok') is not True or result.get('importable') is not True or result.get('blockers'):
+        raise Failed('the check did not mark Omnigent importable without blockers')
+    issues = result.get('issues')
+    if not isinstance(issues, list) or any(not isinstance(issue, dict) for issue in issues):
+        raise Failed('the check did not return a usable issue list')
+    if any(not isinstance(issue.get('id'), str) or issue.get('level') not in ('stop', 'confirm', 'auto', 'notice')
+           for issue in issues):
+        raise Failed('the check returned a malformed issue')
+    ids = sorted({issue['id'] for issue in issues if issue['level'] == 'confirm'})
+    if ids:
+        raise Failed(f'check has confirmation lines that this lab case has not reviewed: {ids}')
+
+
 drv.state_path = lambda: LAB / 'run' / 'omnigent_full_flow.json'   # never the b1 driver's own state file
 
 
@@ -565,6 +582,7 @@ class Run:
         ev.save(f'check-{tag}-omnigent.json', result)
         ev.check(f'check {tag}/omnigent: ok, no blockers (no security hold; the schema equals this device\'s)',
                  result.get('ok') is True and not result.get('blockers'), result.get('blockers'))
+        require_reviewed_check(result)
         ev.check(f'check {tag}/omnigent: source {drv.ARCH[self.arch]}, add-on 0.1.23, target 0.21.0',
                  result.get('arch') == drv.ARCH[self.arch] and result.get('version') == '0.1.23'
                  and result.get('target_version') == '0.21.0',
