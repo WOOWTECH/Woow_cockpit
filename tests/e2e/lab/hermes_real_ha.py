@@ -757,10 +757,10 @@ def step_before(ev, args):
     continuity(ev, 'before', 'base')
 
 
-def bind_store(ev):
+def bind_store(ev, tags=None):
     listing = drv.ok('list', ev=ev)
     present = {h.get('id') for h in listing.get('ha_backups') or []}
-    for tag in TAGS:
+    for tag in TAGS if tags is None else tags:
         store_id = STORE_IDS[tag]
         meta = json.loads(drv.out(drv.root('cat', f'/var/lib/woowtech-backup/ha-backups/{store_id}.json', check=True)))
         local = drv.STATE.setdefault('fixture_sha256', {}).get(tag)
@@ -776,10 +776,10 @@ def bind_store(ev):
     drv.save_state()
 
 
-def step_check(ev, args):
-    bind_store(ev)
+def step_check(ev, args, *, tags=None):
+    bind_store(ev, tags)
     key = args.secrets['HA_BACKUP_KEY']
-    for tag in TAGS:
+    for tag in TAGS if tags is None else tags:
         needs_key = drv.UPLOADS[tag][2]
         job, took = drv.run_check(drv.STATE[f'ha_{tag}'], ['hermes'], ev=ev, key=key if needs_key else None,
                                   tag=f'check-{tag}-hermes')

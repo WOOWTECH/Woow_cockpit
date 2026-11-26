@@ -3,6 +3,7 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('hermes_instance_test', HERE / 'hermes_instance_real.py')
@@ -11,6 +12,27 @@ spec.loader.exec_module(case)
 
 
 class InstanceCaseTests(unittest.TestCase):
+    def test_fixture_publication_uploads_only_when_absent_and_checks_its_identity(self):
+        digest = 'f82422e327f151ec819d' + '0' * 44
+        store = case.hr.STORE_IDS['x86-enc']
+        for present in (False, True):
+            with self.subTest(present=present), mock.patch.object(case.hr, 'sha256_file', return_value=digest), \
+                    mock.patch.object(case.drv, 'ok', return_value={'ha_backups': [{'id': store}] if present else []}), \
+                    mock.patch.object(case.drv, 'upload', return_value=(0, {'ha_backup': {'id': store}})) as upload, \
+                    mock.patch.object(case.drv, 'STATE', {}):
+                created = set()
+                case.ensure_fixture('x86-enc', mock.Mock(), created)
+                self.assertEqual(upload.call_count, 0 if present else 1)
+                self.assertEqual(created, set() if present else {store})
+                self.assertEqual(case.drv.STATE['fixture_sha256']['x86-enc'], digest)
+
+    def test_wrong_original_fixture_is_refused_before_upload_or_probe(self):
+        with mock.patch.object(case.hr, 'sha256_file', return_value='0' * 64), \
+                mock.patch.object(case.drv, 'upload') as upload:
+            with self.assertRaises(case.hr.Failed):
+                case.ensure_fixture('x86-enc', mock.Mock(), set())
+            upload.assert_not_called()
+
     def test_catalog_change_keeps_every_other_setting_and_the_input(self):
         original = {'postgres': [{'id': 'main', 'database': 'hermes', 'scope': 'database', 'user': 'hermes'}],
                     'secrets': [{'name': 'existing'}], 'volumes': [{'name': 'data'}]}

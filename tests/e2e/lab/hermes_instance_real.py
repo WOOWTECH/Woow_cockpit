@@ -74,6 +74,23 @@ def probe(pg, database):
                           "(SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='public.kept_marker'::regclass));"))
 
 
+def ensure_fixture(tag, ev, created):
+    path = hr.fixture_path(tag)
+    digest = hr.sha256_file(path)
+    store_id = hr.STORE_IDS[tag]
+    if store_id != 'ha-' + digest[:20]:
+        raise hr.Failed('original fixture does not match the expected store id')
+    listed = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+    if store_id not in listed:
+        # Track the expected id before upload, including an interrupted upload-finish reply.
+        created.add(store_id)
+        rc, reply = drv.upload(path, ev=ev)
+        if rc or (reply.get('ha_backup') or {}).get('id') != store_id:
+            raise hr.Failed('publishing the original encrypted fixture failed')
+    drv.STATE.setdefault('fixture_sha256', {})[tag] = digest
+    ev.check('fixture: original encrypted backup available for this run', True)
+
+
 def run():
     if not hr.clean_tree():
         raise hr.Failed('commit tested code first')
@@ -92,16 +109,21 @@ def run():
     role = database + '_role'
     changed = seeded_role = seeded_database = False
     old_roles = None
+    created_stores = set()
     timer = drv.out(drv.root('systemctl', 'is-enabled', hr.TIMER, timeout=60)).strip()
     success = False
     try:
-        for name, step in (('setup', hr.step_setup), ('before', hr.step_before), ('check', hr.step_check)):
+        for name, step in (('setup', hr.step_setup), ('before', hr.step_before)):
             if time.monotonic() - started > hr.HOLD_BUDGET:
                 raise hr.Failed('hold budget reached before ' + name)
             hr.headroom()
             step(ev, args)
             if any(not result['ok'] for result in ev.results):
                 raise hr.Failed('a required ' + name + ' check failed')
+        ensure_fixture('x86-enc', ev, created_stores)
+        hr.step_check(ev, args, tags=('x86-enc',))
+        if any(not result['ok'] for result in ev.results):
+            raise hr.Failed('a required encrypted backup check failed')
         original = drv.catalog('hermes')
         target = instance_entry(original)
         pg = target['postgres'][0]
@@ -145,6 +167,11 @@ def run():
             if old_roles is not None:
                 ev.check('cleanup: original role-password fingerprint restored', roles(pg) == old_roles)
             hr.step_cleanup(ev, args)
+            present = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+            for store_id in sorted(created_stores & present):
+                drv.ok('ha-delete', {'ha_backup_id': store_id, 'confirm': True}, ev=ev)
+            left = {h.get('id') for h in drv.ok('list', ev=ev).get('ha_backups') or []}
+            ev.check('cleanup: uploads created only for this run removed', not (created_stores & left))
             hr.step_leaks(ev, args)
         except Exception as error:
             success = False
