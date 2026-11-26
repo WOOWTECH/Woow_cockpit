@@ -142,6 +142,10 @@ def run():
     args = SimpleNamespace(secrets=d.Secrets([d.SECRET_DIR / 'b1-creds.env', d.SECRET_DIR / 'ha-import-creds.env'],
                                            d.SECRET_DIR / 'dev-d-markers.json'), test_login='')
     ev = cs.Ev(args.secrets, area='focus-acceptance-d10')
+    d.load_state()
+    if d.STATE.get('created_backups'):
+        os.close(fd)
+        raise cs.Failed('previous D10 recovery backups remain; coordinator recovery required')
     d.STATE.clear()
     d.STATE['created_backups'] = []
     d.STATE['run_started'] = int(time.time()) - 1
@@ -224,6 +228,8 @@ def run():
         return job
 
     try:
+        check('setup: no previous private code-server needle directory exists',
+              d.root('test', '-e', os.path.dirname(cs.NEEDLES), timeout=30).returncode == 1)
         check('setup: code-server is already active after independent baseline verification', original_unit == 'active')
         actual = owner('podman', 'container', 'inspect', '--format', '{{.Image}}', 'code-server')
         check('setup: running code-server has the exact reviewed image config', actual.removeprefix('sha256:') == IMAGE)
@@ -266,6 +272,9 @@ def run():
         job = restore(r.converted, keys)
         ev.save('confirmed-restore.json', job)
         check('D10: confirmed real restore succeeds with a safety backup', job['state'] == 'succeeded' and bool(r.safety))
+        # Capture moved HA values while they are installed; after safety rollback
+        # they are absent from the live app and cannot seed a complete leak scan.
+        r.collect_needles()
         after = folder()
         check('D10: existing folder contents modes and owners preserved exactly', after['rows'] == before['rows'])
         check('D10: restore replaced the existing folder', after['inode'] != before['inode'])
@@ -304,7 +313,8 @@ def run():
             ev.save('independent-baseline.log', d.out(p) + p.stderr.decode('utf-8', 'replace'))
             safe = safe and p.returncode == 0
             check('recovery: independent original baseline verification passes', safe)
-            r.collect_needles()
+            if not r.needles:
+                r.collect_needles()
             r.step_leaks()
             check('recovery: secret scan completed without a failing check', all(x['ok'] for x in ev.results if x['check'].startswith('leaks:')))
             if safe:
