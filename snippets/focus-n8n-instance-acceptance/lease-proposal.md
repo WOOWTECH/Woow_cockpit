@@ -1,81 +1,68 @@
-# Candidate dev-c lease: n8n original instance path
+# dev-c staged controller lease proposal — not granted
 
-**DRAFT / not granted / not ready to execute.** Preparation is complete enough
-to review the exact resources, source requirements, operations and recovery.
-A mutating controller is not included or dispatched by the preparer. The parent
-must supply its frozen final integration SHA/path and review that controller
-before an executable runtime lease is issued. No `--run` invocation is valid in
-this preparation commit. Do not run the historical34 driver as a substitute.
+Actual controller code is now reviewable. No device phase has run. See
+`controller-phases.md` for exact mutations, deterministic hook and recovery.
+The preparer remains non-executing; the companion `*_run.py` requires --execute.
 
-## Proposed limits
+## Independent initial image phase
 
-- One dev-c lease, <=40minutes including recovery; heavy.sh global slot plus
-  `/tmp/woowbk-dev-c-mutation.lock`, `flock LOCK_EX|LOCK_NB` before any mutation.
-  Do not hold the device while waiting for a global slot. Reserve a recovery
-  window rather than killing the controller at40minutes.
-- Host>=1200MiB available, disk>=13GiB reserve PLUS8GiB peak budget after expected
-  writes, device>=1900MiB reclaim-adjusted headroom under its existing memory cap.
-  Stop on resource shortfall; no automatic resource-limit change or image rotation.
-- Exact source: final coordinator SHA, installed helper and every `.py` hash equal
-  the packet. Include f665cc6e binding plus coordinator-approved final shared
-  instance preflight/access fixes. Pin driver commit separately; no deploy here.
-- One original encrypted x86 HA fixture, n8n selected only. Original old n8n and
-  Odoo baseline archives are immutable. Other applications and DBs on other PG
-  instances are outside the mutation scope. No host Podman/install/pull, egress,
-  helper deployment, generated mock n8n, browser listener, or new host package.
-- Allowed future mutations: existing n8n seven services and schedule timer,
-  exactly one CAS catalog file, three exact app Quadlets and retained n8n.env,
-  uniquely named DBs/NOLOGIN role, temporary main-service failure hook, actual HA
-  check/convert/restore/rollback/jobs, case-created backups/upload/receipt. Safety
-  recovery may rebuild the original n8n PG volume through the normal full restore.
+Proposed20minute lease includes `images` + `images-recover`, device dev-c only.
+Source d09 is provided for binding but no installed helper match/deployment is
+needed for this phase. Exact source/driver commit and case name are mandatory.
+The inert JSON template also binds compressed SHA256/length and resource/time
+bounds; changed bindings refuse before device access. Both
+protected original backup archives AND actual per-ID JSON sidecars are pinned
+from the fixed read-only capture (`protected-baselines-readonly.json`). This is
+not the image cache: both saved compressed image archives are independently
+verified too. Initially absent image IDs are recorded before
+load; only owner-created missing n8n c8d7… and matching runner28c5… may be loaded
+from `~/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/<id>.tar.gz`.
+PG4278… and Valkey650f… stay. No service/PG/database/catalog mutation or pulls.
+Image recovery is included and removes only proven owned images with no-prune.
+Each load rechecks the full returned config ID through `--format '{{.ID}}'`.
 
-## Image prerequisite: separate explicit approval required
-
-Read-only inventory confirmed n8n and runner images missing, PG/Valkey present.
-Restore only the following already saved, original dev-c OCI archives if approved:
-
-| config ID | compressed SHA256 | bytes |
-| --- | --- | ---: |
-| c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb | 0a7352186122520e86fa3b22d0239ab611387e61bb863d082410c38e71f62ccb | 296256084 |
-| 28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb | 7fa274ed6a93924cf90420433d5e0928d72183029ea80437fdf4ebc89e70580f | 196625268 |
-
-Files: `~/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/<config>.tar.gz`.
-After the original archive length/hash and trusted config/layers are checked,
-the command class is a bounded gzip reader piped into the **existing device's**
-owner `podman load`, sequentially, under heavy+dev-c lock. Require resulting
-config ID exactly as above; no pull or retag fallback. Do not load the Odoo
-archives alongside these. No image load has been approved or performed yet.
-Whether to keep or rotate these two images back out after successful recovery
-must be explicit in the final lease; the preparer authorizes neither deletion
-nor leaving an unrecorded image-inventory delta.
-
-## Exact non-mutating preparation command
-
-Run from the committed new worktree (replace SHA with that checkout's exact
-commit; a stale SHA or dirty checkout is refused). The new output must not exist:
+Concrete command, run from the committed controller worktree after parent grant:
 
 ```sh
-/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/team/heavy.sh python3 -B -I tests/e2e/lab/focus_n8n_instance_acceptance.py --source /tmp/parity-focus-n8n-instance-acceptance-20261127 --expected-source <exact-preparation-commit> --verify-cache --output /tmp/parity-focus-20261127/n8n-instance-preparation-unique.json
+HEAVY_FREE=/tmp/woowbk-dev-c-mutation.lock HEAVY_WAIT=600 /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/team/heavy.sh python3 -B -I tests/e2e/lab/services_a_capture.py --private=/tmp/parity-focus-20261127/n8n-images-attempt1.private.log /tmp/parity-focus-20261127/n8n-images-attempt1.json n8n-instance-images -- python3 -B -I tests/e2e/lab/focus_n8n_instance_acceptance_run.py --execute --phase images --lease /tmp/parity-focus-20261127/lease-n8n-instance-images-dev-c.json --source /tmp/parity-focus-final-gate2-20261127 --receipt /home/woowtechopenclaw/.woowbk-lab/run/focus_n8n_instance_acceptance.json
 ```
 
-This only reads local Git/source/cache and writes the named new JSON. It cannot
-wake dev-c or execute its prepared device programs. After final integration,
-regenerate against the final source checkout and review changed module hashes;
-do not silently accept source movement during a runtime lease.
+The recovery command uses the same flags with `--phase images-recover` and fresh
+exclusive capture paths. All commands acquire the existing nonblocking dev-c
+mutation lock inside the controller, after the heavy slot.
 
-## Controller requirements before runtime command approval
+## Fresh safety phase and full flow
 
-Use the existing `ha_import_e2e` private credential reader/transport and
-`services_a_capture.py`; preserve every failed attempt with an exclusive new
-public JSON and0600 private log. The new controller must implement the ordered
-steps in README, write a crash-recovery receipt BEFORE start/clone/upload/CAS/
-hook intent, resolve every own job by recorded ID/request ID on uncertain
-responses, and wait terminal before rollback. Never race a timed-out active job.
-No cleanup deletes a full safety copy until `may_clean` is true. Recovery begins
-with the exact recorded fresh full safety, not the old single-DB baseline.
+Separate safety20minute lease: `safety` + `recover`, after final helper d09 is
+already installed and all four exact images exist. Same case name and receipt;
+no fixture yet. It captures a NEW encrypted whole-instance safety backup then
+returns original catalog/service/timer state. This can be reviewed and run as a
+separate phase while the full API case is reviewed. It does not restore the
+historical single-DB backup or reuse it as whole-instance safety.
 
-The real runtime command will be a separately committed/frozen controller through
-the same heavy+capture path. Its final SHA, exact command, expiration, image policy
-and private receipt path must appear in the granted lease. This draft does not
-ask for or infer that approval; the current user instruction remains PREPARATION
-ONLY.
+Use the same command structure with phase `safety`, a separate granted safety
+lease, and `n8n-safety-attempt1` capture files. Full flow has its own <=40minute
+lease, phases `flow` + `recover`; change only phase/lease/capture paths. Both
+require exact frozen product SHA `d09f4fe8e06305aff6a1150f41d6de719e7b7f6a`, exact
+reviewed driver commit, original catalog SHA
+`3dfebaa0879d5622514276e2b834bff482f3db53618af0caaa46c5c660e968c4`, unique case name,
+explicit image recovery policy, clean source and no competing job.
+
+Host>=1200MiB available, >=13GiB reserve PLUS8GiB write budget; device>=1900MiB
+reclaim-adjusted headroom. New forward work reserves600seconds for recovery;
+job waits are bounded600seconds and total phase stops at lease expiry. No host
+install/Podman, image pulls, helper deploy, egress or new listener. Keep original
+Odoo/n8n baselines, other applications and their catalogs untouched. Retain all
+recovery artifacts on an unresolved job or comparison failure.
+
+## Lease JSON (explicitly inert example)
+
+`images-lease.example.json` is a template, not approval. Parent must set granted,
+exact driver SHA, unique name and actual future expiration; the controller
+refuses this example unchanged. `source_commit` is already the exact d09 hash.
+Two exact compressed image bindings and all enforced bounds are in the template.
+A later phase lease lists only its reviewed phases and the same case/receipt.
+
+No claim of actual original n8n instance acceptance follows from source,
+preparation hashes or offline controller tests. Existing ordinary34 and native
+Kuhn PG proofs are complementary and were not rerun here.

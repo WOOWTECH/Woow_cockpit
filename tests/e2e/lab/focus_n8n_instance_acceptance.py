@@ -319,6 +319,10 @@ def verify_cache():
     return rows
 
 
+def reviewed_baselines():
+    return json.loads((REPO/'snippets'/AREA/'protected-baselines-readonly.json').read_text())['protected']
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', type=Path, default=REPO)
@@ -337,6 +341,7 @@ def main(argv=None):
     if found['catalog_sha256'] != FOUND_SHA:
         raise ValueError('reviewed catalog binding changed')
     result = packet(source, actual, found['entry'], args.case)
+    result['protected_baselines'] = reviewed_baselines()
     result['local_cache'] = verify_cache() if args.verify_cache else 'not_rehashed'
     result['driver_sha256'] = sha(Path(__file__))
     args.output.parent.mkdir(parents=True, exist_ok=True)

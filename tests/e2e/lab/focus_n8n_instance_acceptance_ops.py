@@ -1,8 +1,8 @@
 """Fixed dev-c operations for the n8n case. Importing this file performs no I/O.
 
 The controller sends this committed file to device Python, never installs it.
-Only dispatch() touches the device; every write is restricted to the leased
-case's files or the four reviewed existing files/catalog.
+Only explicit operations touch the device. Fixture changes are restricted to
+three app quadlets/env/catalog; recovery restores captured declared n8n files.
 """
 import base64
 import hashlib
@@ -62,12 +62,13 @@ def read_regular(path, limit=1024*1024):
             b = inp.read(limit + 1)
         if len(b) > limit:
             raise ValueError('unbounded case file')
-        return b, {'sha256': digest(b), 'mode': stat.S_IMODE(s.st_mode), 'uid': s.st_uid, 'gid': s.st_gid}
+        return b, {'sha256': digest(b), 'mode': stat.S_IMODE(s.st_mode), 'uid': s.st_uid, 'gid': s.st_gid,
+                   'mtime_ns': s.st_mtime_ns}
     finally:
         os.close(fd)
 
 
-def atomic(path, data, *, mode=0o600, uid=None, gid=None):
+def atomic(path, data, *, mode=0o600, uid=None, gid=None, mtime_ns=None):
     """Same-directory atomic replacement, fsync before receipt advancement."""
     path = Path(path)
     if any(p.is_symlink() for p in path.parents):
@@ -77,7 +78,10 @@ def atomic(path, data, *, mode=0o600, uid=None, gid=None):
         with os.fdopen(fd, 'wb') as out:
             out.write(data); out.flush(); os.fchmod(out.fileno(), mode)
             os.fchown(out.fileno(), os.geteuid() if uid is None else uid,
-                      os.getegid() if gid is None else gid); os.fsync(out.fileno())
+                      os.getegid() if gid is None else gid)
+            if mtime_ns is not None:
+                os.utime(out.fileno(), ns=(os.fstat(out.fileno()).st_atime_ns, mtime_ns))
+            os.fsync(out.fileno())
         os.replace(temp, path)
         dfd = os.open(path.parent, os.O_DIRECTORY)
         try: os.fsync(dfd)
@@ -117,7 +121,7 @@ class Store:
             self.state['allowed'][path] = [meta['sha256']]
         self.save()
 
-    def replace(self, path, data):
+    def replace(self, path, data, *, restore_metadata=False):
         meta = self.state['original'][path]
         _, now = read_regular(path)
         if now['sha256'] not in self.state['allowed'][path]:
@@ -125,7 +129,8 @@ class Store:
         h = digest(data)
         if h not in self.state['allowed'][path]: self.state['allowed'][path].append(h)
         self.save()  # intent before replacement, including partial failure
-        atomic(path, data, mode=meta['mode'], uid=meta['uid'], gid=meta['gid'])
+        atomic(path, data, mode=meta['mode'], uid=meta['uid'], gid=meta['gid'],
+               mtime_ns=meta['mtime_ns'] if restore_metadata else None)
 
     def restore(self, paths):
         for path in paths:
@@ -133,7 +138,51 @@ class Store:
             data, _ = read_regular(self.path/meta['copy'])
             if digest(data) != meta['sha256']:
                 raise ValueError('protected recovery bytes changed')
-            self.replace(path, data)
+            self.replace(path, data, restore_metadata=True)
+
+
+def protected_inventory(folder='/var/lib/woowtech-backup/archives'):
+    """Fixed production Storage archive/index names; never confuse JSON with an archive.
+
+    The root-owned sidecar is hashed as opaque bytes, never executed or trusted
+    for choosing a path. Preserve its absence too. A second archive is ambiguous.
+    """
+    result = {}
+    for bid in PROTECTED:
+        candidates = [Path(folder)/(bid+suffix) for suffix in ('.tar', '.woowbackup')]
+        paths = [p for p in candidates if os.path.lexists(p)]
+        if len(paths) != 1:
+            raise ValueError('protected original archive missing or ambiguous')
+        p = paths[0]
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 1024**3:
+                raise ValueError('unsafe or unbounded original archive')
+            h = hashlib.sha256(); total = 0
+            with os.fdopen(os.dup(fd), 'rb') as inp:
+                while True:
+                    b = inp.read(8*1024**2)
+                    if not b: break
+                    total += len(b)
+                    if total > 1024**3: raise ValueError('unbounded original archive')
+                    h.update(b)
+            after = os.fstat(fd)
+            if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns) != (
+                    after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns) or total != before.st_size:
+                raise ValueError('original archive changed during read')
+            archive = {'filename':p.name, 'sha256':h.hexdigest(), 'bytes':total,
+                       'mode':stat.S_IMODE(before.st_mode),'uid':before.st_uid,'gid':before.st_gid,
+                       'mtime_ns':before.st_mtime_ns}
+        finally:
+            os.close(fd)
+        side = Path(folder)/(bid+'.json')
+        sidecar = None
+        if os.path.lexists(side):
+            data, meta = read_regular(side, 256*1024)
+            sidecar = dict(meta, filename=side.name, bytes=len(data))
+        result[bid] = {'archive':archive, 'sidecar':sidecar}
+    return result
 
 
 def unit_state(unit, *, root=False):
@@ -141,6 +190,25 @@ def unit_state(unit, *, root=False):
         'show', unit, '--property=ActiveState,SubState,UnitFileState']
     p = call(argv) if root else owner(*argv)
     return dict(x.split('=', 1) for x in p.stdout.decode().splitlines() if '=' in x)
+
+
+def dependencies(entry):
+    names=set(UNITS)
+    for filename in entry['quadlet']['files']:
+        if filename.endswith('.volume'):names.add(filename[:-7]+'-volume.service')
+        if filename.endswith('.network'):names.add(filename[:-8]+'-network.service')
+    harmless={'basic.target','default.target','network-online.target','sockets.target','timers.target','paths.target',
+              'app.slice','-.slice','podman-user-wait-network-online.service'}
+    graph={}
+    for unit in sorted(names):
+        p=owner('systemctl','--user','show',unit,'--property=LoadState,Requires,Wants,BindsTo',check=False)
+        fields=dict(x.split('=',1) for x in p.stdout.decode().splitlines() if '=' in x)
+        if p.returncode or fields.get('LoadState') not in ('loaded','generated'):
+            raise ValueError('unknown application dependency unit')
+        edges=set(' '.join(fields.get(k,'') for k in ('Requires','Wants','BindsTo')).split())
+        if edges-names-harmless:raise ValueError('foreign service dependency would be started')
+        graph[unit]=sorted(edges)
+    return graph
 
 
 def inventory():
@@ -152,16 +220,7 @@ def inventory():
     files = {QDIR+n: read_regular(QDIR+n)[1] for n in entry['quadlet']['files']}
     for c in entry['config_files']:
         path = APP+'/'+c['path']; files[path] = read_regular(path)[1]
-    protected = {}
-    for bid in PROTECTED:
-        paths = list(Path('/var/lib/woowtech-backup/archives').glob(bid+'.*'))
-        if len(paths) != 1 or paths[0].is_symlink():
-            raise ValueError('protected original baseline missing or ambiguous')
-        p = paths[0]
-        h = hashlib.sha256()
-        with p.open('rb') as inp:
-            for b in iter(lambda: inp.read(8*1024**2), b''): h.update(b)
-        protected[bid] = {'sha256': h.hexdigest(), 'bytes': p.stat().st_size}
+    protected = protected_inventory()
     jobs = []
     paths = list(Path('/var/lib/woowtech-backup/jobs').glob('j*.json'))
     if len(paths) > 10000: raise ValueError('unbounded job inventory')
@@ -272,6 +331,7 @@ def dispatch(q):
     if not BASE.fullmatch(name): raise ValueError('invalid case name')
     if op=='inventory': return inventory()
     if op=='hashes': return engine_hashes()
+    if op=='dependencies':return dependencies(json.loads(read_regular(CATALOG)[0]))
     if op=='intent': return resolve_intent(q['request_id'])
     if op=='job_quiescent':
         jid=q['job_id']
@@ -285,7 +345,7 @@ def dispatch(q):
     if op=='init':
         before = inventory()
         store = Store(name, create=True)
-        store.capture([CATALOG]+[QDIR+n for n in ('n8n.container','n8n-worker.container','n8n-webhook.container')]+[ENV])
+        store.capture([CATALOG]+sorted(before['files']))
         store.state['before'] = before; store.save()
         return before
     store = Store(name)

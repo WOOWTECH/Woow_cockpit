@@ -31,6 +31,11 @@ PHASES = ('images','images-recover','safety','flow','recover')
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 FROZEN_PRODUCT = 'd09f4fe8e06305aff6a1150f41d6de719e7b7f6a'
+IMAGE_ARCHIVES = {config:{'compressed_sha256':sha,'compressed_bytes':size}
+                  for config,(sha,size) in plan.ARCHIVES.items()}
+BOUNDS = {'host_available_mib':1200,'host_reserve_gib':13,'host_write_budget_gib':8,
+          'device_headroom_mib':1900,'recovery_reserve_seconds':600,
+          'load_timeout_seconds':300,'kill_after_seconds':30,'load_wait_seconds':350}
 
 API_PAUSE = r'''
 import http.cookiejar,json,sys,urllib.request,re
@@ -62,11 +67,15 @@ def validate_lease(lease, phase, *, now, driver_commit, source_commit):
     if (lease.get('granted') is not True or lease.get('device') != plan.DEVICE
             or lease.get('case') != 'n8n-instance-original' or phase not in lease.get('phases',[])
             or lease.get('driver_commit') != driver_commit
+            or lease.get('source_commit') != source_commit
             or lease.get('catalog_sha256') != plan.FOUND_SHA
             or not ops.BASE.fullmatch(lease.get('name',''))):
         raise ValueError('coordinator lease does not authorize this phase/source')
-    if phase not in ('images','images-recover') and (lease.get('source_commit') != source_commit or source_commit!=FROZEN_PRODUCT):
+    if phase not in ('images','images-recover') and source_commit!=FROZEN_PRODUCT:
         raise ValueError('coordinator product source mismatch')
+    if phase in ('images','images-recover') and (lease.get('image_archives') != IMAGE_ARCHIVES
+                                                or lease.get('bounds') != BOUNDS):
+        raise ValueError('reviewed image archive/bounds binding mismatch')
     expires = datetime.fromisoformat(lease['expires_utc']).timestamp()
     if expires <= now or expires-now > 40*60:
         raise ValueError('lease expired or exceeds bounded window')
@@ -142,7 +151,15 @@ class Controller:
 
     def root_json(self,script,request=None,*,timeout=180):
         p=self.h.root('python3','-I','-c',script,input=json.dumps(request or {}).encode(),timeout=timeout)
-        if p.returncode:raise RuntimeError('fixed device operation failed; raw output withheld')
+        if p.returncode:
+            self.r['device_exit_code']=p.returncode
+            try:
+                error=json.loads(p.stderr)
+                if set(error)=={'error_class'} and re.fullmatch(r'[A-Za-z]{1,40}',error['error_class']):
+                    self.r['device_error_class']=error['error_class']
+            except (ValueError,TypeError,KeyError):pass
+            self.save()
+            raise RuntimeError('fixed device operation failed; raw output withheld')
         return json.loads(p.stdout)
 
     def op(self,operation,**kwargs):
@@ -172,6 +189,7 @@ class Controller:
     def acquire_original(self):
         before=self.op('inventory')
         self.require('original_catalog_pin',before['catalog'].get('n8n.json')==plan.FOUND_SHA)
+        self.require('reviewed_protected_baselines',before['protected']==plan.reviewed_baselines())
         self.require('original_services_stopped',not before['running'] and all(
             before['units'][u]['ActiveState']=='inactive' for u in ops.UNITS))
         self.require('no_active_jobs',not before['active_jobs'])
@@ -193,6 +211,7 @@ class Controller:
 
     def start_units(self,units):
         # Every initially stopped service is recorded before its potentially partial start.
+        self.op('dependencies')  # loaded Requires/Wants/BindsTo, including override-introduced app dependencies
         self.r['service_intents']=list(ops.UNITS);self.save()  # includes main's Wants/Requires app dependencies
         for unit in units:
             if unit not in ops.UNITS:raise ValueError('foreign service')
@@ -279,7 +298,8 @@ class Controller:
 
     def images(self):
         self.resources();before=self.acquire_original()
-        plan.verify_cache()  # compressed bytes and length independently rechecked before load
+        self.r['verified_image_archives']=plan.verify_cache()
+        self.save()  # compressed byte/length proof before the first load intent
         for ref,config in plan.IMAGE_IDS.items():
             if config in plan.ARCHIVES:
                 self.require('image_initially_absent',config not in before['images'])
@@ -304,7 +324,7 @@ class Controller:
                         child.terminate()
                         try:child.wait(timeout=5)
                         except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
-            actual=self.command('podman','image','inspect','sha256:'+config,'--format','{{.Id}}').decode().strip().removeprefix('sha256:')
+            actual=self.command('podman','image','inspect','sha256:'+config,'--format','{{.ID}}').decode().strip().removeprefix('sha256:')
             self.require('loaded_image_config_pin',actual==config)
             self.r['owned_images'].append(config);self.save()
         after=self.op('inventory')
@@ -339,6 +359,7 @@ class Controller:
         try:
             self.pause_timer();self.scope_instance();self.start_units(['n8n-postgres.service'])
             self.pg_ready();self.r['original_db']=self.op('snapshot',tag='original')
+            self.require('known_original_baseline_marker',self.sql('n8n',ops.MARKER_SQL) is True)
             self.r['original_secrets']=self.op('secrets');self.save()
             job=self.job('backup-start',{'apps':['n8n'],'encrypt':True,'include_images':False,
                          'note':'original n8n instance case full safety'},'full-safety')
@@ -577,7 +598,11 @@ with os.fdopen(fd,'w') as f:json.dump(values,f)
             self.require('original_authentication_values_returned',{k:v['value_sha256'] for k,v in current.items()}==
                          {k:v['value_sha256'] for k,v in self.r['original_secrets'].items()})
             self.r['fixture_intent']=False;self.r['baseline_restored']=True;self.save()
-        self.stop_units();self.restore_catalog();self.restore_timer()
+        self.stop_units()
+        # The ordinary archive can normalize file timestamps. Reapply protected
+        # original bytes and metadata after the job has exited and apps stopped.
+        self.op('restore_files');self.command('systemctl','--user','daemon-reload')
+        self.restore_catalog();self.restore_timer()
         self.require('original_durable_services_catalog_files',same_found(self.op('inventory'),self.r['before']))
         self.r['recovery_verified']=True;self.save()
         if self.r.get('upload_intent'):

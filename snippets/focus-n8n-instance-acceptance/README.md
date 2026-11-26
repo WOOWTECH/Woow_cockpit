@@ -3,8 +3,9 @@
 This is a **non-executing preparation packet**. No native case has run. The new
 preparer has no `--run` option or device transport. It produces source hashes,
 the exact proposed catalog entry, fixed helper requests, and reviewed fixture
-and probe code. The mutating controller must be reviewed and bound to the final
-coordinator source before a runtime lease can be granted.
+and probe code. The companion mutation controller is now implemented; see `controller-phases.md`
+and the replaced staged `lease-proposal.md`. It binds the frozen d09 source and
+still requires review and an explicit runtime lease. No device phase has run.
 
 Fresh worktree: `/tmp/parity-focus-n8n-instance-acceptance-20261127`, branch
 `focus/n8n-instance-acceptance-20261127`, integration base
@@ -117,19 +118,10 @@ SQL, HA job, or original-baseline restore was performed by this preparation.
    execution to success, and emits three verdicts only. Check the same execution
    exists in the clone and not the original DB. Restart the real n8n target and
    repeat endpoint, login, credential, manual action and outsider/role checks.
-10. **Witness forced rollback.** With the actual main running and endpoint proven,
-    insert the after-import rollback marker absent from the converted archive.
-    Pause scheduled writes through the real API if needed before exact snapshots;
-    don't compare a continuously changing execution table after restart. Record
-    a new exact full pre-restore snapshot. Create the unique one-shot MAIN service
-    drop-in and marker with intent recorded first; `failure_dropin` overrides
-    Restart=always with `Restart=no`. Run restore of the converted archive again.
-    Require marker consumption, terminal `rolled-back`, rolled_back=true, a new
-    safety ID, preserved after-import marker, full engine rollback/digest success,
-    unchanged original/outsider DB/role/ACL/extension state and working API/key.
-    A preflight refusal, failed job or simple healthy app does not prove rollback.
-    Remove only this case's drop-in/marker and daemon-reload in finally. Do not
-    disable a product preflight if it refuses this hook; retain failure evidence.
+10. **Witness forced rollback.** The implemented deterministic READONLY original-
+    marker hook supersedes the earlier one-shot proposal. See `controller-phases.md`
+    for exact persistent fail/allow semantics, all-row stability, both witness files
+    and required rolled-back/API/decryption proof. No new table is introduced.
 11. **Return the original baseline.** Wait every owned job/chain terminal and confirm
     no still-owned helper process. Stop the exact seven services; restore original
     raw unit/env bytes only if current hashes are the recorded case hashes or

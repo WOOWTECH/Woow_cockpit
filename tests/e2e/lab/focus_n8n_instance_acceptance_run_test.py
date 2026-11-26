@@ -27,7 +27,8 @@ BID='20261127T010102Z-abcdef02'
 def lease():
     return dict(granted=True,device=run.plan.DEVICE,case='n8n-instance-original',phases=list(run.PHASES),
                 driver_commit='a'*40,source_commit=run.FROZEN_PRODUCT,catalog_sha256=run.plan.FOUND_SHA,
-                name=NAME,image_policy='retain-for-case',expires_utc=datetime.fromtimestamp(2000,timezone.utc).isoformat())
+                name=NAME,image_policy='retain-for-case',expires_utc=datetime.fromtimestamp(2000,timezone.utc).isoformat(),
+                image_archives=run.IMAGE_ARCHIVES,bounds=run.BOUNDS)
 
 
 def inventory():
@@ -64,8 +65,12 @@ class LeaseTests(unittest.TestCase):
                                    source_commit=run.FROZEN_PRODUCT)
 
     def test_images_does_not_require_deploying_product_or_waking_app(self):
-        self.assertEqual(run.validate_lease(dict(lease(),source_commit='b'*40),'images',now=1000,
-                         driver_commit='a'*40,source_commit='c'*40),2000)
+        self.assertEqual(run.validate_lease(lease(),'images',now=1000,
+                         driver_commit='a'*40,source_commit=run.FROZEN_PRODUCT),2000)
+        for key,value in (('source_commit','b'*40),('image_archives',{}),('bounds',{})):
+            with self.subTest(key=key),self.assertRaises(ValueError):
+                run.validate_lease(dict(lease(),**{key:value}),'images',now=1000,
+                                   driver_commit='a'*40,source_commit=run.FROZEN_PRODUCT)
 
     def test_default_never_constructs_controller_or_device_transport(self):
         with patch.object(run,'Controller',side_effect=AssertionError('no device')), \
@@ -74,6 +79,15 @@ class LeaseTests(unittest.TestCase):
 
 
 class JournalTests(Fixture):
+    def test_device_diagnostic_accepts_only_fixed_class_and_never_raw_stderr(self):
+        self.wire.root=lambda *a,**kw:SimpleNamespace(returncode=1,stderr=b'{"error_class":"ValueError","raw":"private-fixture"}')
+        with self.assertRaises(RuntimeError):self.c.root_json('pass')
+        self.assertNotIn('private-fixture',self.c.path.read_text())
+        self.assertNotIn('device_error_class',self.c.r)
+        self.wire.root=lambda *a,**kw:SimpleNamespace(returncode=1,stderr=b'{"error_class":"ValueError"}')
+        with self.assertRaises(RuntimeError):self.c.root_json('pass')
+        self.assertEqual(self.c.r['device_error_class'],'ValueError')
+
     def test_receipt_atomic_private_and_old_record_survives_interrupted_temp(self):
         self.c.save();self.assertEqual(self.c.path.stat().st_mode&0o777,0o600)
         old=self.c.path.read_bytes();self.c.path.with_name('receipt.json.new').write_text('incomplete')
@@ -118,6 +132,13 @@ class JournalTests(Fixture):
 
 
 class ImageTests(Fixture):
+    def test_changed_reviewed_sidecar_refuses_before_original_copy_or_load(self):
+        before=inventory();calls=[]
+        self.c.op=lambda op,**kw:calls.append(op) or before
+        with patch.object(run.plan,'reviewed_baselines',return_value={'old':'changed-sidecar'}),self.assertRaises(RuntimeError):
+            self.c.acquire_original()
+        self.assertEqual(calls,['inventory']);self.assertEqual(self.c.r['image_intents'],[])
+
     def test_partial_image_cleanup_removes_only_proven_own_id_without_force_or_prune(self):
         before=inventory();config=next(iter(run.plan.ARCHIVES));now=dict(before,images=before['images']+[config])
         self.c.r.update(before=before,image_intents=[config]);commands=[]
@@ -140,7 +161,15 @@ class ImageTests(Fixture):
         before=inventory();self.c.resources=lambda:None
         self.c.acquire_original=lambda:before
         self.c.op=lambda *a,**k:dict(before,images=before['images']+list(self.c.r['owned_images']))
-        self.c.command=lambda *a,**k:a[3].encode()  # requested sha256:id
+        inspections=[]
+        def command(*args,**kwargs):
+            inspections.append(args)
+            # Podman ImageInspectReport exposes ID, not Docker's Id. Reject the
+            # actual invalid command rather than returning the requested ID for any argv.
+            self.assertEqual(args,('podman','image','inspect','sha256:'+self.c.r['image_intents'][-1],
+                                   '--format','{{.ID}}'))
+            return args[3].encode()
+        self.c.command=command
         seen=[]
         class Child:
             stdout=SimpleNamespace(close=lambda:None)
@@ -160,6 +189,7 @@ class ImageTests(Fixture):
                 self.assertEqual(argv[:4],[self.wire.LP,'exec','-i',run.plan.DEVICE])
                 self.assertEqual(argv[-2:],['podman','load'])
         self.assertTrue(self.c.r['images_ready'])
+        self.assertEqual(len(inspections),2)
 
 
 class FilesAndPredicateTests(Fixture):
@@ -168,13 +198,42 @@ class FilesAndPredicateTests(Fixture):
         store=ops.Store(NAME,parent=self.path/'cases',create=True);store.capture([str(source)])
         return source,store
 
-    def test_protected_bytes_restore_exact_mode_and_refuse_external_edit(self):
-        source,store=self.store();original=source.read_bytes();mode=source.stat().st_mode&0o777
+    def test_protected_bytes_restore_mode_owner_mtime_and_refuse_external_edit(self):
+        source,store=self.store();original=source.read_bytes();before=source.stat()
         store.replace(str(source),b'case\n');store.restore([str(source)])
-        self.assertEqual(source.read_bytes(),original);self.assertEqual(source.stat().st_mode&0o777,mode)
+        self.assertEqual(source.read_bytes(),original)
+        after=source.stat()
+        self.assertEqual((after.st_mode,after.st_uid,after.st_gid,after.st_mtime_ns),
+                         (before.st_mode,before.st_uid,before.st_gid,before.st_mtime_ns))
         source.write_bytes(b'operator-change\n')
         with self.assertRaises(ValueError):store.restore([str(source)])
         self.assertEqual(source.read_bytes(),b'operator-change\n')
+
+    def test_archive_and_per_id_json_sidecar_are_both_hashed_and_absence_preserved(self):
+        for bid,suffix in zip(ops.PROTECTED,('.tar','.woowbackup')):
+            (self.path/(bid+suffix)).write_bytes(b'protected archive')
+        bid=ops.PROTECTED[0];side=self.path/(bid+'.json');side.write_bytes(b'{"inspected":false}')
+        first=ops.protected_inventory(self.path)
+        self.assertEqual(first[bid]['archive']['sha256'],ops.digest(b'protected archive'))
+        self.assertEqual(first[bid]['sidecar']['sha256'],ops.digest(side.read_bytes()))
+        self.assertEqual(first[bid]['archive']['filename'],bid+'.tar')
+        self.assertEqual(first[bid]['sidecar']['filename'],bid+'.json')
+        self.assertIsNone(first[ops.PROTECTED[1]]['sidecar'])
+        side.write_bytes(b'{"inspected":true}')
+        self.assertNotEqual(first,ops.protected_inventory(self.path))
+        side.unlink()
+        self.assertNotEqual(first,ops.protected_inventory(self.path))
+
+    def test_protected_archive_rejects_symlink_duplicate_and_missing_archive(self):
+        for bid in ops.PROTECTED:(self.path/(bid+'.tar')).write_bytes(b'archive')
+        bid=ops.PROTECTED[0];other=self.path/(bid+'.woowbackup');other.write_bytes(b'duplicate')
+        with self.assertRaises(ValueError):ops.protected_inventory(self.path)
+        other.unlink();side=self.path/(bid+'.json');side.symlink_to(self.path/(bid+'.tar'))
+        with self.assertRaises(OSError):ops.protected_inventory(self.path)
+        side.unlink();archive=self.path/(bid+'.tar');archive.unlink();archive.symlink_to(other)
+        with self.assertRaises(OSError):ops.protected_inventory(self.path)
+        archive.unlink();side.write_bytes(b'{}')
+        with self.assertRaises(ValueError):ops.protected_inventory(self.path)
 
     def test_file_replacement_intent_survives_atomic_write_failure(self):
         source,store=self.store();real=ops.atomic
@@ -215,8 +274,55 @@ class FilesAndPredicateTests(Fixture):
         source=self.path/'file';source.write_text('private');link=self.path/'link';link.symlink_to(source)
         with self.assertRaises(OSError):ops.read_regular(link)
 
+    def test_foreign_loaded_dependency_refuses_before_any_service_start(self):
+        calls=[]
+        self.c.op=lambda op,**kwargs: (_ for _ in ()).throw(ValueError('foreign dependency'))
+        self.c.command=lambda *a,**kw:calls.append(a)
+        with self.assertRaises(ValueError):self.c.start_units(['n8n.service'])
+        self.assertEqual(calls,[])
+
+    def test_loaded_requires_wants_bindsto_are_checked_for_every_app_unit(self):
+        p=SimpleNamespace(returncode=0,stdout=b'LoadState=loaded\nRequires=other-app.service\nWants=\nBindsTo=\n')
+        with patch.object(ops,'owner',return_value=p),self.assertRaises(ValueError):
+            ops.dependencies({'quadlet':{'files':[]}})
+
 
 class RestoreTests(Fixture):
+    def safety_fixture(self):
+        before=inventory();before['images']=list(run.plan.IMAGE_IDS.values());self.c.r['before']=before;order=[]
+        snap={'database_names':['n8n','postgres'],'databases':{}}
+        self.c.resources=lambda:None;self.c.acquire_original=lambda:before;self.c.frozen_engine=lambda:None
+        self.c.op=lambda op,**kw: before if op=='inventory' else snap if op=='snapshot' else {}
+        def helper(command,request=None):
+            if command=='list':return {'backups':[],'ha_backups':[]}
+            if command=='inspect':return {'backup':{'encrypted':True}}
+            raise AssertionError(command)
+        self.c.helper=helper
+        self.c.pause_timer=lambda:order.append('pause')
+        self.c.scope_instance=lambda:order.append('scope')
+        self.c.start_units=lambda units:order.append('start-pg')
+        self.c.pg_ready=lambda:None;self.c.sql=lambda *a,**kw:True
+        self.c.stop_units=lambda:order.append('stop-all')
+        self.c.restore_catalog=lambda:order.append('catalog-back')
+        self.c.restore_timer=lambda:order.append('timer-back')
+        self.c.archive_probe=lambda bid:{'scope':'instance','ha_database':None,'globals_present':True,
+                                        'roles_count':1,'databases':[['n8n','n8n'],['postgres','n8n']]}
+        return order
+
+    def test_fresh_full_safety_stage_returns_services_catalog_and_timer(self):
+        order=self.safety_fixture()
+        self.c.job=lambda *a,**kw:{'state':'succeeded','result':{'backup_id':BID}}
+        self.c.safety()
+        self.assertEqual(order,['pause','scope','start-pg','stop-all','catalog-back','timer-back'])
+        self.assertEqual(self.c.r['full_safety'],BID);self.assertTrue(self.c.r['safety_verified'])
+
+    def test_safety_job_failure_still_returns_original_lifecycle(self):
+        order=self.safety_fixture()
+        self.c.job=lambda *a,**kw:(_ for _ in ()).throw(TimeoutError('no job started'))
+        with self.assertRaises(TimeoutError):self.c.safety()
+        self.assertEqual(order[-3:],['stop-all','catalog-back','timer-back'])
+        self.assertFalse(self.c.r['safety_verified'])
+
     def test_unconfigured_optional_digests_are_not_invented_and_any_real_failure_stops(self):
         job={'state':'succeeded','result':{'rolled_back':False,'safety_backup_id':BID,'health':[{'status':'ok'}]}}
         self.assertTrue(run.successful_restore(job))
@@ -237,6 +343,35 @@ class RestoreTests(Fixture):
         order=[];self.c.stop_units=lambda:order.append('stop');self.c.job=lambda *a,**k:order.append('restore')
         with self.assertRaises(RuntimeError):self.c.recover()
         self.assertNotIn('restore',order)
+
+    def test_recovery_restores_declared_file_mtime_after_product_archive_restore(self):
+        files=[self.path/'main.container',self.path/'runners.json']
+        for i,p in enumerate(files):
+            p.write_bytes(('original-'+str(i)).encode());os.utime(p,ns=(1000000000,1200000000+i))
+        store=ops.Store(NAME,parent=self.path/'cases',create=True);store.capture([str(p) for p in files])
+        def found():return dict(inventory(),files={str(p):ops.read_regular(p)[1] for p in files})
+        before=found();snapshot={'databases':{'n8n':'all-rows'}}
+        self.c.r.update(before=before,fixture_intent=True,safety_verified=True,full_safety=BID,
+                        original_db=snapshot,original_secrets={})
+        self.c.helper=lambda *a,**kw:{}
+        self.c.stop_units=lambda:None;self.c.start_units=lambda *a:None;self.c.pg_ready=lambda:None
+        self.c.restore_catalog=lambda:None;self.c.restore_timer=lambda:None;self.c.cleanup_owned=lambda:None
+        self.c.command=lambda *a,**kw:None
+        def operation(op,**kwargs):
+            if op=='inventory':return found()
+            if op=='restore_files':store.restore([str(p) for p in files]);return True
+            if op=='snapshot':return snapshot
+            if op=='secrets':return {}
+            raise AssertionError(op)
+        self.c.op=operation
+        def job(*a,**kw):
+            # Real archive restore can replace unchanged files with new mtimes.
+            for p in files:p.write_bytes(p.read_bytes());os.utime(p,ns=(3000000000,3000000000))
+            return {'state':'succeeded','result':{'rolled_back':False,'safety_backup_id':BID,
+                                                'health':[{'status':'ok'}]}}
+        self.c.job=job
+        with patch.object(run.plan,'preflight_ready',return_value=True):self.c.recover()
+        self.assertEqual(found(),before);self.assertTrue(self.c.r['recovery_verified'])
 
     def test_no_cleanup_with_cookie_scan_uncertainty(self):
         self.c.r.update(recovery_verified=True,upload_intent=True,secret_scan=False)
