@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // ONE real Cockpit page, current one-confirmation HA wizard. No mocked bridge.
 // Controller supplies private JSON on stdin; no secret in argv/log/trace.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
@@ -89,16 +89,22 @@ let context;
 let frame;
 const issued = new Set();
 const cookieObservations = [];
+let cookieObservationFailed = false;
+let finishing;
 let pageErrors = 0;
 let recording = false;
 let clicks = 0;
 let ticks = 0;
 let completed = false;
 let issuedScan = false;
+let issuedScanCounts = null;
 let stage = 'login';
 let failureKind = null;
 process.once('SIGTERM', async () => {
-  try { if (browser) await browser.close(); } finally { process.exit(124); }
+  completed = false;
+  failureKind ||= 'controller-timeout';
+  checks.push({ check: 'UI controller runtime stayed bounded', ok: false });
+  try { await finishBrowser(); } finally { process.exit(124); }
 });
 try {
   browser = await chromium.launch({ executablePath: config.chromium,
@@ -115,7 +121,7 @@ try {
         const value = first.slice(first.indexOf('=') + 1);
         if (value) issued.add(value);
       }
-    }));
+    }).catch(() => { cookieObservationFailed = true; }));
   });
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
@@ -207,33 +213,60 @@ try {
   failureKind = error?.name === 'TimeoutError' ? 'timeout' : 'check-or-browser-error';
   checks.push({ check: 'UI bounded flow completed', ok: false });
 } finally {
+  await finishBrowser();
+}
+
+async function finishBrowser() {
+  if (finishing) return finishing;
+  finishing = (async () => {
   recording = false;
   // Capture and scan before closing even when a preceding assertion failed.
   try {
     if (!context || !frame) throw new Error('authenticated frame unavailable');
-  stage = 'issued-value-scan';
-  // Cookies stay in this process. Scan device records/journal and our own text
-  // for these issued values through the real privileged bridge before close.
-  const observed = await Promise.allSettled(cookieObservations);
-  check('UI cookie observation completed without gaps', observed.every(x => x.status === 'fulfilled'));
-  for (const cookie of await context.cookies()) if (cookie.value) issued.add(cookie.value);
-  const values = [...issued];
-  check('UI Cockpit issued authenticated cookie values observed', values.length > 0);
-  const report = await frame.evaluate(async ({ script, values, since }) => {
-    const request = window.cockpit.spawn(['python3', '-I', '-c', script], { superuser: 'require', err: 'message' });
-    request.input(JSON.stringify({ values, since }));
-    return JSON.parse(await request);
-  }, { script: config.cookie_scan, values, since: config.since });
-  issuedScan = report.hits === 0 && report.scanned > 0;
-  check('UI issued Cockpit values absent from records and journal', issuedScan);
+    stage = 'issued-value-scan';
+    // Keep values in memory. Observe the jar even if one header callback failed;
+    // scan what was captured, then report incomplete coverage as a failed check.
+    const observed = await Promise.allSettled(cookieObservations);
+    for (const cookie of await context.cookies()) if (cookie.value) issued.add(cookie.value);
+    const values = [...issued];
+    if (!values.length) throw new Error('issued values unavailable');
+    const report = await frame.evaluate(async ({ script, values, since }) => {
+      const request = window.cockpit.spawn(['python3', '-I', '-c', script], { superuser: 'require', err: 'message' });
+      request.input(JSON.stringify({ values, since }));
+      return JSON.parse(await request);
+    }, { script: config.cookie_scan, values, since: config.since });
+    // Cookies are ASCII HTTP values; cover raw and JSON string escaping in all
+    // current private case files, including screenshots. The HA tar is data.
+    const needles = values.flatMap(value => [Buffer.from(value), Buffer.from(JSON.stringify(value).slice(1, -1))]);
+    let hostFiles = 0, hostHits = 0;
+    for (const entry of readdirSync(config.evidence, { withFileTypes: true })) {
+      if (!entry.isFile()) throw new Error('unexpected private evidence path');
+      const path = join(config.evidence, entry.name);
+      if (path === config.fixture) continue;
+      const data = readFileSync(path); hostFiles++;
+      for (const needle of needles) if (data.includes(needle)) hostHits++;
+    }
+    const complete = !cookieObservationFailed && observed.every(x => x.status === 'fulfilled');
+    issuedScanCounts = { observed_values: values.length, device_files: report.scanned,
+      archive_index_sidecars: report.archive_index_sidecars_scanned,
+      device_hits: report.hits, host_files: hostFiles, host_hits: hostHits, observations_complete: complete };
+    issuedScan = complete && report.hits === 0 && report.scanned > 0
+      && report.archive_index_sidecars_scanned > 0 && hostFiles > 0 && hostHits === 0;
+    checks.push({ check: 'UI cookie observation completed without gaps', ok: complete });
+    check('UI issued Cockpit values absent from records journal and private evidence', issuedScan);
   } catch {
     failureKind ||= 'issued-value-scan-error';
     checks.push({ check: 'UI issued-value scan completed before close', ok: false });
   }
-  if (browser) await browser.close();
+  if (browser) {
+    try { await browser.close(); }
+    catch { checks.push({ check: 'UI browser closed', ok: false }); }
+  }
   const result = { stage, failure_kind: failureKind, completed, issued_values_scanned: issuedScan, page_errors: pageErrors,
-    acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks };
+    issued_scan_counts: issuedScanCounts, acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks };
   writeFileSync(config.result, JSON.stringify(result, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  })();
+  return finishing;
 }
 console.log(`R8 UI ${checks.filter(x => x.ok).length}/${checks.length} ${checks.every(x => x.ok) ? 'PASS' : 'FAIL'}`);
 process.exit(checks.every(x => x.ok) ? 0 : 1);

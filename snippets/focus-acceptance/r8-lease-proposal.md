@@ -24,6 +24,63 @@ proof, not an acceptance pass. Dev-d mutex released for one R4 plain turn.
 Separate readiness-guard and retained-upload ownership changes will be proposed
 for review before any R8 replay, after that turn.
 
+## Replay proposal — committed diff and parent review required
+
+One actual browser replay after the R4 plain turn releases dev-d. Product source
+remains frozen `1adf4df2b548bff1626e21d1d84e677f9622e4bc`. No source deployment,
+image transfer, package repair, network change or extra fixture case is in this
+command. Stop if installed helper/modules/page differ from that source.
+
+From `/tmp/parity-focus-acceptance-20261127`:
+
+```sh
+HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock HEAVY_WAIT=600 /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/team/heavy.sh python3 -B -I tests/e2e/lab/services_a_capture.py --private=/tmp/parity-focus-20261127/acceptance-r8-attempt2.private.log tests/backup/evidence/focus-acceptance-20261127/r8-attempt2.json r8-real-cockpit-three-app -- python3 -B -I tests/e2e/lab/focus_acceptance_ui.py --run --source /tmp/parity-focus-r8-source-20261127 --recovery-proof /home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-recovery/20261127T070216/receipt.json --recovery-proof-sha256 2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824
+```
+
+The command is proposed for review and **has not run**. It requires the exact
+existing R8 lease with at least45minutes left after heavy admission; the current
+expiry is00:15:06UTC. Main browser budget20minutes, each job<=600seconds and
+recovery20minutes. Fresh host disk>=21GiB (13GiB reserve plus8GiB bounded writes),
+host MemAvailable>=1200MiB, dev-d4GiB cap/headroom>=1900MiB. Reuse all original
+installed image configs and existing Chromium/Playwright; zero additional
+image/package downloads. Fresh original markers, durable units, image configs,
+schedule and catalog must still equal the recovered attempt1 snapshots.
+
+The explicit private receipt path+SHA are mandatory for this failed-case route.
+The validator checks receipt scope/data recovery, the exact old guard/recovery/
+summary hashes, original-state facts, sidecar scan coverage and no active job;
+`acceptance_passed` remains false and old cookie coverage remains absent.
+Before setup mutation, a new private case stores the old guard bytes and proof
+provenance. The guard pointer is replaced only after fresh preconditions pass;
+the old failed case files/public captures are never rewritten. A precondition
+failure leaves the old pointer unchanged and records a separate stopped case.
+
+The six old archive IDs must be present in the starting inventory. They are
+protected existing backups, excluded from every new case-owned cleanup list.
+The old HA record must match its full recorded SHA. The actual page still uploads
+the derived file; normal product deduplication reuses the retained record.
+`ha_record_owned:false` prevents deletion of that record. Cleanup removes only
+newly created conversion/safety archives, the new derived host copy and the
+exact own temporary catalog entry after original baseline and hygiene proof.
+Final backup and HA inventories must equal the starting inventories, including
+all old retained records. Any uncertainty retains new recoveries too.
+
+Browser changes compute required issue keys from actual schema2 app/shared
+confirm issues (zero is valid), while still requiring one general checkbox and
+one import click. The browser finally block captures/scans observed cookie
+values before closing even after a failed assertion; controller SIGTERM shares
+that same teardown. Missing frame/values or incomplete capture remains a failed
+scan, never a substitute proof. Scan counts include device
+records/journal, actual archive JSON sidecars and private case files; enumeration
+errors fail the scan. These cookie changes are prepared only, not a claim about
+attempt1 or a substitute for the actual replay.
+
+Targeted offline gate: **16/16 Python tests**,0fail/error/skip/blocked/shim,
+`acceptance-r8-offline-05.log`; issue-key assertions **11/11** under globalheavy.
+Python default/embedded scanner and Node syntax pass. The real private receipt
+also validates locally at its reviewed SHA with old guard unchanged and no
+device probe. These are harness boundaries only; no second real attempt yet.
+
 ## Exact transport
 
 The controller binds a new ephemeral TCP listener to host **127.0.0.1 only**.

@@ -8,12 +8,14 @@ Installed source must already equal --source; no deploy/install/pull here.
 import argparse
 import ast
 import copy
+import datetime
 import fcntl
 import hashlib
 import inspect
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -31,6 +33,7 @@ APPS = ('emqx', 'omnigent', 'hermes')
 TIMER = 'woowtech-cockpit-backup-schedule.timer'
 LOCK = '/tmp/woowbk-dev-d-mutation.lock'
 STATE = LAB / 'run/focus_acceptance_ui.json'
+LEASE = Path('/tmp/parity-focus-20261127/lease-r8-dev-d.json')
 PLAYWRIGHT = Path('/home/woowtechopenclaw/Woow_cockpit/node_modules/playwright-core/index.mjs')
 CHROMIUM = Path.home() / '.cache/ms-playwright/chromium-1208/chrome-linux64/chrome'
 
@@ -142,10 +145,11 @@ for name in req.get("podman_secrets",[]):
 needles=secret_scan_needles(values)
 hits=scanned=index_sidecars=0
 base="/var/lib/woowtech-backup/"
+def walk_error(error): raise RuntimeError("scan enumeration failed") from None
 for root in [base+x for x in ("jobs","ha-backups","ha-imports.json","requests.json","archives","uploads","staging","pending","exports")]+["/run/woowtech-backup"]:
     if not os.path.exists(root) or os.path.islink(root): raise RuntimeError("scan root unsafe")
     paths=[root] if os.path.isfile(root) else []
-    for d,dirs,files in os.walk(root,followlinks=False):
+    for d,dirs,files in os.walk(root,onerror=walk_error,followlinks=False):
         if any(os.path.islink(os.path.join(d,x)) for x in dirs): raise RuntimeError("scan path unsafe")
         paths.extend(os.path.join(d,x) for x in files)
     for p in paths:
@@ -160,8 +164,64 @@ print(json.dumps({"scanned":scanned,"hits":hits,"journal_bytes":len(j),"archive_
 '''
 
 
+def verified_recovery(guard, proof, expected_sha, evidence_root=LAB/'evidence'):
+    """Read the reviewed independent receipt; never rewrite the failed case."""
+    if not re.fullmatch(r'[0-9a-f]{64}', expected_sha or ''):
+        raise ValueError('explicit reviewed recovery receipt SHA required')
+    proof = Path(proof)
+    if (proof.is_symlink() or proof.name != 'receipt.json'
+            or proof.parent.parent != evidence_root/'focus-acceptance-ui-recovery'
+            or proof.resolve() != proof.absolute()
+            or proof.stat().st_uid != os.getuid() or proof.stat().st_mode & 0o077):
+        raise ValueError('private independent recovery receipt path or mode invalid')
+    raw = proof.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError('independent recovery receipt SHA mismatch')
+    old = json.loads(guard)
+    facts = json.loads(raw)
+    case = Path(old['evidence_dir'])
+    if (case.parent != evidence_root/'focus-acceptance-ui' or case.resolve() != case.absolute()
+            or old.get('phase') != 'recovery-retained' or old.get('baseline_restored') is not True
+            or old.get('inflight') or len(set(old.get('created_backups', []))) != 6):
+        raise ValueError('failed case does not match recovery-only scope')
+    required = ('data_recovery_verified', 'original_markers_equal', 'original_units_equal',
+                'original_images_equal', 'original_timer_equal', 'original_catalog_equal',
+                'original_fixture_hash_equal', 'network_isolation_preserved', 'old_ha_retained',
+                'old_captures_unchanged', 'old_guard_unchanged', 'old_summary_unchanged',
+                'scan_covers_archive_index_sidecars', 'scan_covers_requests_pending_exports')
+    scan = facts.get('scan', {})
+    if (facts.get('scope') != 'r8-independent-recovery-only'
+            or any(facts.get(key) is not True for key in required)
+            or facts.get('acceptance_passed') is not False
+            or facts.get('guard_override_performed') is not False
+            or facts.get('cookie_coverage_of_old_attempt') is not False
+            or facts.get('old_cookie_coverage') != 'absent-not-retroactively-proved'
+            or facts.get('active_jobs') != 0 or facts.get('old_archives_retained') != 6
+            or scan.get('hits') != 0 or scan.get('scanned', 0) <= 0
+            or scan.get('archive_index_sidecars_scanned', 0) < 6
+            or facts.get('source_commit') != old.get('source_commit')
+            or facts.get('old_guard_sha256') != hashlib.sha256(guard).hexdigest()
+            or facts.get('old_receipt_sha256') != sha(case/'recovery.json')
+            or facts.get('old_summary_sha256') != sha(case/'summary.json')):
+        raise ValueError('independent data recovery facts do not match protected case')
+    return old, {'path': str(proof), 'sha256': expected_sha,
+                 'old_guard_sha256': facts['old_guard_sha256'], 'acceptance_passed': False}
 
-def run(source):
+
+def ha_record_owned(records, ha_id, digest, previous=None):
+    """A deduplicated retained upload is existing data, never this run's own."""
+    matches = [row for row in records if row.get('id') == ha_id]
+    if ha_id != 'ha-'+digest[:20] or len(matches) > 1:
+        raise ValueError('derived HA identity invalid')
+    if not matches:
+        return True
+    if (previous is None or previous.get('ha_id') != ha_id
+            or previous.get('derived_fixture_sha256') != digest
+            or matches[0].get('sha256') != digest):
+        raise ValueError('existing HA record lacks exact recovered ownership proof')
+    return False
+
+def run(source, recovery_proof=None, recovery_proof_sha256=None):
     sys.path.insert(0, str(HERE))
     import ha_import_e2e as h
     import ha_import_b1_e2e as b1
@@ -175,9 +235,25 @@ def run(source):
         os.close(fd)
         raise RuntimeError('dev-d mutation lock busy') from None
     os.umask(0o077)
-    if STATE.exists() and json.loads(STATE.read_text()).get('recovery_verified') is not True:
+    previous = provenance = None
+    prior_guard = STATE.read_bytes() if STATE.exists() else None
+    try:
+        lease = json.loads(LEASE.read_text())
+        pinned = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+        if (lease['device'] != h.DEVICE or Path(lease['source']).resolve() != source
+                or not pinned.startswith(lease['source_commit'])
+                or (datetime.datetime.fromisoformat(lease['expires'])-datetime.datetime.now(datetime.timezone.utc)).total_seconds() < 45*60):
+            raise ValueError('current exact R8 device/source lease needs45minutes for flow and recovery')
+        pending = prior_guard is not None and json.loads(prior_guard).get('recovery_verified') is not True
+        if pending:
+            if not recovery_proof:
+                raise ValueError('previous R8 recovery pending; explicit verified receipt required')
+            previous, provenance = verified_recovery(prior_guard, recovery_proof, recovery_proof_sha256)
+        elif recovery_proof or recovery_proof_sha256:
+            raise ValueError('independent recovery proof does not match a pending failed case')
+    except Exception:
         os.close(fd)
-        raise RuntimeError('previous R8 recovery pending; retain copies and review receipt')
+        raise
     secrets = b1.Secrets([LAB/'secrets/b1-creds.env', LAB/'secrets/ha-import-creds.env'], LAB/'secrets/dev-d-markers.json')
     secrets.redact_tree = secrets.redact_structure
     secrets.register('COCKPIT_PASSWORD', (LAB/'secrets/devadmin.pass').read_text().strip())
@@ -195,7 +271,7 @@ def run(source):
     ev = Evidence(secrets, 'focus-acceptance-ui')
     started = int(time.time()) - 1
     receipt = {'device': h.DEVICE, 'phase': 'preconditions', 'created_backups': [], 'ha_id': None,
-               'catalog_added': False, 'baseline_restored': False,
+               'ha_record_owned': False, 'catalog_added': False, 'baseline_restored': False,
                'driver_commit':subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()}
     before = {}
     before_backups = before_uploads = before_jobs = None
@@ -205,10 +281,20 @@ def run(source):
     timer_changed = False
     safe = False
     uploaded = False
+    state_armed = False
     recovery_deadline = None
+    if provenance:
+        receipt['previous_independent_recovery'] = provenance
+        receipt['protected_existing_backups'] = previous['created_backups']
+        # Preserve the pointer bytes in the NEW private case before any approved
+        # new state can replace it. Old case files remain byte-identical.
+        with (ev.dir/'previous-guard.json').open('xb') as handle:
+            handle.write(prior_guard)
 
     def save():
         ev.save('recovery.json', receipt)
+        if not state_armed:
+            return
         with os.fdopen(os.open(STATE,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600),'w') as handle:
             json.dump(dict(receipt,evidence_dir=str(ev.dir)),handle)
 
@@ -329,18 +415,30 @@ def run(source):
         original_catalog, original_units, original_images, original_timer = catalog(), units(), images(), timer()
         require('before: app services already active and image configs present', len(original_images) >= 8 and original_units and all(v[0]=='active' for k,v in original_units.items() if k.endswith('.service')))
         require('before: schedule inactive or failed', original_timer.get('ActiveState') in ('inactive','failed'))
+        if previous:
+            require('replay: original catalog units images and timer still match independent receipt',
+                    original_catalog == previous['original_catalog'] and original_units == previous['original_units']
+                    and original_images == previous['original_images'] and original_timer == previous['original_timer'])
         receipt.update(original_catalog=original_catalog, original_units=original_units, original_images=original_images, original_timer=original_timer,
                        source_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip())
         listing=ok('list')
         before_backups={x['id'] for x in listing.get('backups',[])}
         before_uploads={x['id'] for x in listing.get('ha_backups',[])}
+        if previous:
+            require('replay: all six old archives remain protected existing backups',set(previous['created_backups']) <= before_backups)
+            require('replay: old HA record retained at exact derived SHA',
+                    any(x['id'] == previous['ha_id'] and x.get('sha256') == previous['derived_fixture_sha256']
+                        for x in listing.get('ha_backups',[])))
         before_jobs={x['id'] for x in ok('jobs').get('jobs',[])}
         for app in APPS:
             before[app]=markers(app)
             have=b1.marker_names(before[app])
             require('before: exact original '+app+' marker baseline', have == b1.BASELINE_MARKERS[app])
+            if previous:
+                require('replay: exact recovered original '+app+' markers still match',before[app] == previous['before_markers'][app])
             ev.save('before-'+app+'.json',before[app])
         receipt['before_markers']=before
+        state_armed=True  # fresh originals proved; next phase may add own catalog
         save()
         for app,bid in BASELINES.items():
             pre=ok('inspect',{'backup_id':bid,'key':secrets['DEV_D_KIT']})
@@ -366,7 +464,9 @@ def run(source):
         receipt['ha_id']='ha-'+sha(derived)[:20]
         receipt['original_fixture_sha256']=FIXTURE_SHA
         receipt['derived_fixture_sha256']=sha(derived)
-        require('upload: this case derived HA record is new', receipt['ha_id'] not in before_uploads)
+        receipt['ha_record_owned']=ha_record_owned(listing.get('ha_backups',[]),receipt['ha_id'],receipt['derived_fixture_sha256'],previous)
+        require('upload: ownership is new or exact protected retained record',
+                receipt['ha_record_owned'] or (previous is not None and receipt['ha_id'] in before_uploads))
         save()
         config={'ha_id':receipt['ha_id'],'fixture':str(derived),'password':secrets['COCKPIT_PASSWORD'],
                 'key':secrets['HA_BACKUP_KEY'],'evidence':str(ev.dir),'result':str(ev.dir/'browser.json'),
@@ -395,6 +495,19 @@ def run(source):
     except Exception as error:
         ev.check('R8: bounded real page flow completed',False,type(error).__name__)
     finally:
+        if not state_armed:
+            ev.check('preconditions: old guard retained without device mutation',
+                     (STATE.read_bytes() if STATE.exists() else None) == prior_guard)
+            receipt['phase']='preconditions-stopped'
+            save()
+            ev.finish()
+            ev.save('summary.json',{'driver_commit':receipt['driver_commit'],'passed':sum(x['ok'] for x in ev.results),
+                                   'failed':sum(not x['ok'] for x in ev.results),'baseline_restored':False,
+                                   'recovery_verified':False,'previous_guard_unchanged':True,
+                                   'commercial_acceptance':'not-complete'})
+            os.close(fd)
+            print('R8 preconditions stopped; previous failed case retained')
+            return 1
         recovery_deadline=time.monotonic()+20*60
         try:
             # Adopt only new jobs for this exact derived HA. This works even if
@@ -453,7 +566,9 @@ def run(source):
             for p in ev.dir.iterdir():
                 if p.is_file() and p!=derived:
                     data=p.read_bytes(); host_hits+=sum(data.count(v) for v in needles)
-            require('leaks: registered and observed values absent from records journal and text evidence',report['hits']==0 and report['scanned']>0 and host_hits==0)
+            require('leaks: registered and observed values absent from records journal and text evidence',
+                    report['hits']==0 and report['scanned']>0 and host_hits==0
+                    and report['archive_index_sidecars_scanned'] >= len(before_backups)+len(receipt['created_backups']))
             browser_file=ev.dir/'browser.json'
             require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)
             after={x['id'] for x in ok('list').get('backups',[])}
@@ -469,11 +584,16 @@ def run(source):
             require('recovery: original catalog hashes returned',catalog()==original_catalog)
             for bid in receipt['created_backups']:
                 ok('delete',{'backup_id':bid})
-            if uploaded:
+            if uploaded and receipt['ha_record_owned']:
                 ok('ha-delete',{'ha_backup_id':receipt['ha_id'],'confirm':True})
             derived.unlink(missing_ok=True)
             h.scenario_cleanup(ev,None)
             require('cleanup: original backup inventory retained',{x['id'] for x in ok('list').get('backups',[])}==before_backups)
+            retained_uploads=ok('list').get('ha_backups',[])
+            require('cleanup: original HA inventory retained',{x['id'] for x in retained_uploads}==before_uploads)
+            if previous:
+                require('cleanup: protected old HA remains at exact derived SHA',
+                        any(x['id']==previous['ha_id'] and x.get('sha256')==previous['derived_fixture_sha256'] for x in retained_uploads))
         except Exception as error:
             safe=False
             ev.check('recovery: copies and receipt retained on uncertainty',False,type(error).__name__)
@@ -504,13 +624,15 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run',action='store_true')
     parser.add_argument('--source',type=Path,default=REPO)
+    parser.add_argument('--recovery-proof',type=Path)
+    parser.add_argument('--recovery-proof-sha256')
     args=parser.parse_args(argv)
     if not args.run:
         for p in (Path(__file__),HERE/'focus_acceptance_ui_relay.py'):
             compile(p.read_text(),str(p),'exec')
         print('R8 controller prepared: offline syntax PASS; review and dev-d lease required')
         return 0
-    return run(args.source.resolve())
+    return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256)
 
 
 if __name__=='__main__':

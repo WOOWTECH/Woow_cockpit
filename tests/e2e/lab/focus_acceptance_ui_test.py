@@ -1,6 +1,8 @@
 """Offline safety boundaries only; no browser, relay listener or lab device."""
 import importlib.util
 import io
+import hashlib
+import json
 from pathlib import Path
 import tarfile
 import tempfile
@@ -133,6 +135,88 @@ class CurrentPageContractTests(unittest.TestCase):
         self.assertIn('issued.append(token)', prepared)
         with self.assertRaises(ValueError):
             ui.marker_program('unreviewed_call()')
+
+
+class RecoveryReadinessTests(unittest.TestCase):
+    def proof(self, root):
+        case = root/'focus-acceptance-ui/old-case'
+        case.mkdir(parents=True)
+        (case/'recovery.json').write_text('{"phase":"recovery-retained"}')
+        (case/'summary.json').write_text('{"failed":3}')
+        old = {'evidence_dir':str(case),'phase':'recovery-retained','baseline_restored':True,
+               'inflight':None,'created_backups':['backup-%d'%i for i in range(6)],'source_commit':'frozen'}
+        guard = json.dumps(old).encode()
+        facts = dict.fromkeys(('data_recovery_verified','original_markers_equal','original_units_equal',
+                              'original_images_equal','original_timer_equal','original_catalog_equal',
+                              'original_fixture_hash_equal','network_isolation_preserved','old_ha_retained',
+                              'old_captures_unchanged','old_guard_unchanged','old_summary_unchanged',
+                              'scan_covers_archive_index_sidecars','scan_covers_requests_pending_exports'),True)
+        facts.update(scope='r8-independent-recovery-only',acceptance_passed=False,guard_override_performed=False,
+                     cookie_coverage_of_old_attempt=False,old_cookie_coverage='absent-not-retroactively-proved',
+                     active_jobs=0,old_archives_retained=6,scan={'hits':0,'scanned':30,'archive_index_sidecars_scanned':6},
+                     source_commit='frozen',old_guard_sha256=hashlib.sha256(guard).hexdigest(),
+                     old_receipt_sha256=ui.sha(case/'recovery.json'),old_summary_sha256=ui.sha(case/'summary.json'))
+        path = root/'focus-acceptance-ui-recovery/new-proof/receipt.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(facts)); path.chmod(0o600)
+        return guard,path,facts
+
+    def test_exact_independent_recovery_allows_readiness_without_acceptance_pass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); guard,path,_=self.proof(root)
+            before=path.read_bytes()
+            old,provenance=ui.verified_recovery(guard,path,ui.sha(path),root)
+            self.assertEqual(old['phase'],'recovery-retained')
+            self.assertFalse(provenance['acceptance_passed'])
+            self.assertEqual(provenance['old_guard_sha256'],hashlib.sha256(guard).hexdigest())
+            self.assertEqual(path.read_bytes(),before)
+
+    def test_wrong_proof_sha_or_changed_failed_files_do_not_allow_readiness(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); guard,path,_=self.proof(root)
+            with self.assertRaises(ValueError):ui.verified_recovery(guard,path,'0'*64,root)
+            with self.assertRaises(ValueError):ui.verified_recovery(guard+b' ',path,ui.sha(path),root)
+            old=json.loads(guard)
+            (Path(old['evidence_dir'])/'summary.json').write_text('changed')
+            with self.assertRaises(ValueError):ui.verified_recovery(guard,path,ui.sha(path),root)
+
+    def test_acceptance_claim_or_missing_index_coverage_cannot_replace_recovery_facts(self):
+        changes=({'acceptance_passed':True},{'original_catalog_equal':False},
+                 {'cookie_coverage_of_old_attempt':True},{'active_jobs':1},
+                 {'scan':{'hits':0,'scanned':30,'archive_index_sidecars_scanned':0}})
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                root=Path(folder); guard,path,facts=self.proof(root)
+                facts.update(change); path.write_text(json.dumps(facts))
+                with self.assertRaises(ValueError):ui.verified_recovery(guard,path,ui.sha(path),root)
+
+    def test_shared_or_symlinked_receipt_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); guard,path,_=self.proof(root)
+            path.chmod(0o644)
+            with self.assertRaises(ValueError):ui.verified_recovery(guard,path,ui.sha(path),root)
+            path.chmod(0o600)
+            target=path.with_name('target.json'); path.rename(target); path.symlink_to(target)
+            with self.assertRaises(ValueError):ui.verified_recovery(guard,path,ui.sha(path),root)
+
+
+class RetainedHAOwnershipTests(unittest.TestCase):
+    digest='1234567890abcdef'*4
+    ha_id='ha-'+digest[:20]
+
+    def test_absent_record_is_owned_but_exact_retained_record_is_never_owned(self):
+        self.assertTrue(ui.ha_record_owned([],self.ha_id,self.digest))
+        previous={'ha_id':self.ha_id,'derived_fixture_sha256':self.digest}
+        rows=[{'id':self.ha_id,'sha256':self.digest}]
+        self.assertFalse(ui.ha_record_owned(rows,self.ha_id,self.digest,previous))
+
+    def test_unproved_or_changed_existing_record_refuses_reuse(self):
+        row={'id':self.ha_id,'sha256':self.digest}
+        previous={'ha_id':self.ha_id,'derived_fixture_sha256':self.digest}
+        for rows,old in (([row],None),([dict(row,sha256='0'*64)],previous),
+                         ([row],dict(previous,derived_fixture_sha256='0'*64)),([row,row],previous)):
+            with self.subTest(rows=len(rows),old=old), self.assertRaises(ValueError):
+                ui.ha_record_owned(rows,self.ha_id,self.digest,old)
 
 
 if __name__ == '__main__':

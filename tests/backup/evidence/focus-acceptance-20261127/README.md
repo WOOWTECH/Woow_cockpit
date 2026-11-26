@@ -136,6 +136,14 @@ Public receipt SHA256
 The old guard was not overridden or rewritten. The mutex is released for the
 coordinator's one R4 plain turn; R8 readiness and replay need separate review.
 
+`r8-replay-preparation.json` records the later local-only readiness route and
+ownership fixes: exact immutable recovery receipt validation, fresh original
+state checks before guard replacement, six old archives protected as existing,
+and retained HA deduplication with `ha_record_owned:false`. Python16/16 and
+issue-key11/11 are offline checks; browser cookie capture/finally scan remains
+unproven until an actual reviewed replay. Exact bounded command and recovery
+are in the replay section of `snippets/focus-acceptance/r8-lease-proposal.md`.
+
 ### Original preparation scope
 
 The new `focus_acceptance_ui.py`, `focus_acceptance_ui_page.mjs` and
