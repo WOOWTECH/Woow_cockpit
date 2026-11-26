@@ -2,6 +2,8 @@
 
 Current parent-requested stopped-main lifecycle and four-field endpoint API: see [FOLLOWUP.md](FOLLOWUP.md). Historical two-field source freeze/test counts below are bound to their original commits; the follow-up preserves that read-only public projection.
 
+Latest conversion-side endpoint-to-catalog binding, using the parent-approved shared helper: [BACKEND_BINDING.md](BACKEND_BINDING.md).
+
 ## Change
 
 `Target` now selects the n8n database using the live n8n application's actual configuration. An instance catalog's `database=postgres` remains the maintenance database, and its user remains the trusted cluster bootstrap role. Server `POSTGRES_DB` never supplies an application database default. n8n's defaults are database `n8n`, user `postgres`.

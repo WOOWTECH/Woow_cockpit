@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from woowbackup import ha_n8n, ha_odoo, habackup, haissues, hatarget, jobs, tempctr
+from woowbackup import ha_instance_access, ha_n8n, ha_odoo, habackup, haissues, hatarget, jobs, tempctr
 from woowbackup.errors import BackupError
 from woowbackup.flows import Cancelled
 from woowbackup.haissues import Sink
@@ -761,9 +761,11 @@ def contextlib_patch(values):
 
 QUADLETS = {
     'n8n.container': b'[Container]\nContainerName=n8n\nImage=docker.io/n8nio/n8n:2.43.6\n'
+                     b'Network=n8n.network\nEnvironment=DB_POSTGRESDB_HOST=n8n-postgres\n'
                      b'Volume=n8n-data.volume:/home/node/.n8n\n',
     'n8n-postgres.container': b'[Container]\nContainerName=n8n-postgres\nImage=docker.io/library/postgres:16.15-alpine\n'
                               b'Environment=POSTGRES_USER=n8n\nEnvironment=POSTGRES_DB=n8n\n'
+                              b'Network=n8n.network\n'
                               b'Volume=n8n-pg.volume:/var/lib/postgresql/data\n',
     'n8n-valkey.container': b'[Container]\nContainerName=n8n-valkey\nImage=docker.io/valkey/valkey:8\n'
                             b'Volume=n8n-valkey.volume:/data\n',
@@ -877,7 +879,8 @@ def target_of(quadlets=None, app=None, runner=None):
     """(Target, the sink it told its findings to) for these Quadlet files and app settings."""
     quadlets = dict(QUADLETS if quadlets is None else quadlets)
     runner = runner or ConnectionRunner(ha_n8n.tempctr.quadlet_environment(
-        quadlets.get('n8n.container', b''), {'DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER'}))
+        quadlets.get('n8n.container', b''), {'DB_POSTGRESDB_DATABASE', 'DB_POSTGRESDB_USER',
+                                          'DB_POSTGRESDB_HOST', 'DB_POSTGRESDB_PORT'}))
     work = types.SimpleNamespace(quadlets=lambda _app: quadlets, runner=lambda _app: runner)
     sink = Sink('n8n')
     return ha_n8n.Target(work, app or n8n_app(), sink), sink
@@ -1362,7 +1365,7 @@ class World(fk.World):
         self.down, self.start_errors, self.service_dependencies = set(), {}, {}
         self.connection_error, self.probe_unready = None, False
         self.quadlets = {'n8n': dict(QUADLETS)}
-        self.connection_env = {}
+        self.connection_env = {'DB_POSTGRESDB_HOST': 'n8n-postgres'}
         self.version = b'2.43.6\n'
         self.tables, self.n8n_tables = {}, {}      # what HA's database holds / what the import made of it
         self.unpublished = False
@@ -1515,7 +1518,7 @@ class StoppedTargetTests(N8nCase):
                                      quadlets=lambda _app: self.world.quadlets['n8n'], temp=lambda _app: tmp)
         with tmp:
             endpoint = ha_n8n.prepare_app_endpoint(work, app)
-            self.assertEqual(endpoint, {'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': 5432})
+            self.assertEqual(endpoint, {'database': 'n8n', 'user': 'postgres', 'host': 'n8n-postgres', 'port': 5432})
             self.assertEqual(self.world.down, set())
             self.assertTrue(tmp._puts_back)
         self.assertEqual(self.world.down, self.initial)
@@ -1590,6 +1593,56 @@ class StoppedTargetTests(N8nCase):
         self.assertEqual(error.code, 'incompatible')
         self.assertEqual(self.world.down, self.initial)
         self.assertEqual(self.world.manifests, {})
+
+
+class TargetBackendTests(N8nCase):
+    """Conversion must bind the actual endpoint to catalog PG before any database snapshot or temporary import."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog['n8n'].postgres = [dict(PG, scope='instance', database='postgres')]
+
+    def test_remote_host_or_nonstandard_port_refuses_before_snapshot_or_conversion(self):
+        ha_id = self.upload_n8n()
+        for endpoint in ({'DB_POSTGRESDB_HOST': 'foreign-pg'},
+                         {'DB_POSTGRESDB_HOST': 'n8n-postgres', 'DB_POSTGRESDB_PORT': '6543'}):
+            self.world.connection_env = dict(endpoint, DB_POSTGRESDB_DATABASE='n8n')
+            with self.subTest(keys=sorted(endpoint)), mock.patch.object(
+                    Adapter, 'import_instance_database', create=True,
+                    side_effect=BackupError('internal-error', 'unexpected snapshot attempted')) as snapshot:
+                error = self.convert_stopped(ha_id)
+            self.assertEqual(error.code, 'incompatible')
+            self.assertEqual(error.issues[0].id, 'n8n.layout-unsupported')
+            snapshot.assert_not_called()
+            self.assertEqual(self.world.live_dumps, [])
+            self.assertEqual(self.world.runs, [])
+            self.assertEqual(self.world.manifests, {})
+            self.assertEqual(self.storage.list_backups(), [])
+
+    def test_local_container_name_and_declared_alias_are_accepted(self):
+        self.world.quadlets['n8n']['n8n-postgres.container'] += b'NetworkAlias=n8n-database\n'
+        for host in ('n8n-postgres', 'n8n-database'):
+            self.world.connection_env = {'DB_POSTGRESDB_HOST': host, 'DB_POSTGRESDB_PORT': '5432'}
+            with self.subTest(host=host):
+                row = self.check(self.upload_n8n(), ['n8n'])[0]
+                self.assertTrue(row['importable'])
+
+    def test_backend_binding_uses_unique_main_filename_when_worker_and_webhook_share_data(self):
+        quadlets = self.world.quadlets['n8n']
+        for role in ('worker', 'webhook'):
+            quadlets[f'n8n-{role}.container'] = (QUADLETS['n8n.container'].replace(b'ContainerName=n8n\n',
+                f'ContainerName=n8n-{role}\n'.encode()).replace(b'Network=n8n.network', b'Network=other.network')
+                + f'Exec={role}\n'.encode())
+        self.world.quadlets['n8n'] = {name: quadlets[name] for name in
+                                     ['n8n-worker.container', 'n8n-webhook.container',
+                                      *(name for name in quadlets if name not in ('n8n-worker.container', 'n8n-webhook.container'))]}
+        real = ha_instance_access.local_backend
+        with mock.patch.object(ha_instance_access, 'local_backend', wraps=real) as binding:
+            row = self.check(self.upload_n8n(), ['n8n'])[0]
+        self.assertTrue(row['importable'])
+        binding.assert_called_once()
+        self.assertEqual(binding.call_args.args[2], 'n8n.container')
+        self.assertEqual(binding.call_args.args[0]['host'], 'n8n-postgres')
 
 
 class CheckFlowTests(N8nCase):
@@ -1726,7 +1779,8 @@ class ConvertFlowTests(N8nCase):
         self.world.quadlets['n8n']['n8n.container'] += b'EnvironmentFile=%h/.config/n8n/db.env\n'
         self.world.files['.config/n8n/db.env'] = b'DB_POSTGRESDB_DATABASE=automation\nDB_POSTGRESDB_USER=n8n\n'
         # This is the effective environment Podman gives the existing application, not the PG server's environment.
-        self.world.connection_env = {'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'n8n'}
+        self.world.connection_env = {'DB_POSTGRESDB_DATABASE': 'automation', 'DB_POSTGRESDB_USER': 'n8n',
+                                     'DB_POSTGRESDB_HOST': 'n8n-postgres'}
         adapter, owner = conversion_adapter(app, app.postgres[0], 'n8n')
         owner.instance['automation'] = dict(owner.instance['n8n'], data=b'old automation rows')
         unrelated = dict(owner.instance['n8n'])

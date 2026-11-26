@@ -60,7 +60,7 @@ import time
 
 from pathlib import Path
 
-from . import habackup, haissues, hatarget, podman, tempctr, util
+from . import habackup, ha_instance_access, haissues, hatarget, podman, tempctr, util
 from .errors import BackupError
 from .ha_odoo import (EM_X86_64, PG_READY_TIMEOUT, FileTar, _Exact, _info, _int, check_volume_tar, host_elf_machine,
                       quadlet_container_name, quadlet_mounts)
@@ -1054,8 +1054,12 @@ class Target:
                                                                     'TZ', 'POSTGRES_INITDB_ARGS', 'POSTGRES_PASSWORD_FILE'})
         self.pg_env = env
         if self.instance:
+            from . import hacommon
             # An instance catalog normalizes its maintenance database to postgres; that is not n8n's database.
             endpoint = prepare_app_endpoint(work, app, quadlets=quadlets)
+            main = hacommon.container_file(quadlets, main_container(work.runner(app), quadlets))
+            if main is None or not ha_instance_access.local_backend(endpoint, quadlets, main, self.pg):
+                raise _layout(app, 'n8n 目前的資料庫主機或連接埠不是應用設定列出的本機 PostgreSQL，無法安全地轉換')
             self.connection = {key: endpoint[key] for key in ('database', 'user')}
             self.pg = dict(self.pg, database=self.connection['database'])
         self.pg_target = next((t for _n, t in sum(mounts.values(), []) if t.startswith('/var/lib/postgresql')),
