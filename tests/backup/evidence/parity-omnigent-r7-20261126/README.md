@@ -1,0 +1,9 @@
+# Omnigent R7, real HA backup on the current integration (2026-11-26)
+
+The x86 B1 HA backup ran through the product candidate, installation and rollback path on isolated dev-d at `67ff6a04` (product code is unchanged from `d0cfef06`). The source backup's recorded SHA-256 matched. The disposable target used real Omnigent 0.21.0 and PostgreSQL 16 images with three Quadlet units. Its version and Alembic revision came from the running target; the server was stopped immediately before the product's trusted-schema capture.
+
+The candidate converted to an encrypted backup. After installation and a service restart, the HA admin and member logged in, target-only credentials stayed distinct, and agent, task, session, attachment, cookie, runner identity and table-count checks passed. A second restore with an injected service start failure rolled back automatically; the imported state passed the same checks afterwards. Cleanup removed the disposable units, volumes, secret and private engine root. The journal and records scan found zero test-secret hits; dev-d's container, volume and secret inventory matched its pre-run inventory. The harness emitted `omnigent_real_ha: PASS` and verified `network=none` with no published port before and after. The private run output is `/tmp/omnigent-r7-current-x86-rerun-20261126.private.log`.
+
+The first attempt at `52190f51` stopped after conversion because the older harness intercepted `_prepare`, which the current product no longer calls. It cleaned up fully. Test commit `67ff6a04` moved the pause to `trusted_schema`, the current capture entry, and its 12 offline harness tests passed before the successful rerun.
+
+The real B1 database has no extra superuser-only object. O-15 remains `part`: a separate real PostgreSQL TOC and restricted-restore probe with such an object is still required. ARM was not imported in this run. `commercial_acceptance`: `not-complete`.
