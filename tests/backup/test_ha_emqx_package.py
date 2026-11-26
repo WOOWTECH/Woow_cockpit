@@ -121,3 +121,14 @@ class CountReadTests(unittest.TestCase):
         self.assertTrue(ha_emqx.check_counts(ha, seeded, lost_rows, loose=('emqx_retainer_message', 'emqx_acl')))
         fewer = dict(counts, emqx_retainer_message=4)
         self.assertTrue(ha_emqx.check_counts(ha, seeded, fewer, loose=('emqx_retainer_message',)))
+
+    def test_a_running_ticker_does_not_allow_extra_access_rows(self):
+        ha = {'emqx_retainer_message': 5, 'emqx_acl': 2, 'emqx_authn_mnesia': 3}
+        seeded = {table: 0 for table in ha}
+        counts = dict(ha, emqx_retainer_message=5 + ha_emqx.SYS_SLACK)
+        self.assertEqual(ha_emqx.check_counts(ha, seeded, counts, loose=tuple(ha)), [])
+        for table in ('emqx_acl', 'emqx_authn_mnesia'):
+            with self.subTest(table=table):
+                extra = dict(counts, **{table: ha[table] + 1})
+                problems = ha_emqx.check_counts(ha, seeded, extra, loose=tuple(ha))
+                self.assertTrue(any(problem.startswith(f'{table}（') for problem in problems), problems)

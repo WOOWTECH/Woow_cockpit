@@ -50,7 +50,8 @@ class BootstrapFlowTests(unittest.TestCase):
         notes = {}
         self.invoke(transport, notes)
         self.assertIn('import', transport.events)
-        self.assertEqual(notes['lost'], [PATH, PATH])   # the first look and the one at the end
+        self.assertEqual(notes['lost'], [PATH])
+        self.assertNotIn('bootstrap_file', transport.running_config['authentication'][0])
 
     def test_missing_duplicate_env_and_public_mode_are_said_and_the_import_goes_on(self):
         """E-49: a bootstrap file that is not one unique restricted mount cannot follow the import."""
@@ -78,6 +79,32 @@ class BootstrapFlowTests(unittest.TestCase):
                 self.invoke(transport, notes)
                 self.assertIn('export', transport.events)
                 self.assertEqual(notes['lost'][0], lost)
+
+    def test_a_lost_bootstrap_path_is_not_reattached_to_ha_authentication(self):
+        """E-48: the imported HA authenticator cannot revive this device's unsupported bootstrap path."""
+        class ImportWithoutBootstrap(BootstrapTransport):
+            def exec(self, role, command, **kwargs):
+                result = super().exec(role, command, **kwargs)
+                if command[:4] == ['emqx', 'ctl', 'data', 'import']:
+                    self.running_config['authentication'][0].pop('bootstrap_file', None)
+                    self.running_config['authentication'][0].pop('bootstrap_type', None)
+                return result
+
+        transport = ImportWithoutBootstrap()
+        transport.config['authentication'][0]['bootstrap_file'] = '../bootstrap.csv'
+        transport.running_config = copy.deepcopy(transport.config)
+        notes = {}
+        self.invoke(transport, notes)
+        self.assertIn('../bootstrap.csv', notes['lost'])
+        self.assertNotIn('bootstrap_file', transport.running_config['authentication'][0])
+
+        retained = BootstrapTransport()   # EMQX may merge HA's row without removing this device's file field.
+        retained.config['authentication'][0]['bootstrap_file'] = '../bootstrap.csv'
+        retained.running_config = copy.deepcopy(retained.config)
+        notes = {}
+        self.invoke(retained, notes)
+        self.assertIn('../bootstrap.csv', notes['lost'])
+        self.assertNotIn('bootstrap_file', retained.running_config['authentication'][0])
 
     def test_explicit_readonly_file_supported_but_shadowing_rejected(self):
         config = BootstrapTransport().config

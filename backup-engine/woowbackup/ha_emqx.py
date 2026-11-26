@@ -1505,6 +1505,12 @@ def access_roots(after, original, readings, lost_paths):
                         if (item['mechanism'], item['backend']) not in held]
     want = [dict(held[(item['mechanism'], item['backend'])]) for item in readings['authn']
             if (item['mechanism'], item['backend']) in held]
+    # The import can leave this device's file field in a merged authenticator. A path the candidate could not follow or
+    # read must be detached even if HA's import did not replace that row.
+    for row in want:
+        if row.get('bootstrap_file') in lost_paths:
+            row.pop('bootstrap_file', None)
+            row.pop('bootstrap_type', None)
     originals = original.get('authentication')
     for target in originals if isinstance(originals, list) else []:
         path = target.get('bootstrap_file') if isinstance(target, dict) else None
