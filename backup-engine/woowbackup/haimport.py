@@ -857,6 +857,7 @@ def _examine(work, app_id, app, member, problem, result):
     module = haapps.get(app_id).load()
     found = module.check(work, app)
     _preview_pauses(work, app, sink)
+    _preview_cold_odoo_databases(work, app, sink)
     result['target_version'] = found.get('target_version') or ''
     result[app_id] = found[app_id]  # the app's own section (CONTRACT section 7 HaCheck)
     return _collect(app_id, module, found, sink)
@@ -884,6 +885,34 @@ def _preview_pauses(work, app, sink):
                   '請先停止其中一部分，再重新檢查。')
     if units:
         sink.confirm('restore.pauses', PAUSES_TEXT, sorted({adapter.service_name(unit) for unit in units}))
+
+
+def _preview_cold_odoo_databases(work, app, sink):
+    """Show S4's cold Odoo cluster copy in the first confirmation, before conversion starts.
+
+    The restore checks the list again. If the names have changed, its confirmation key changes and the restore
+    refuses before touching the cluster; the customer can check and confirm the new list.
+    """
+    if app.id != 'odoo' or getattr(app, 'postgres', ()):  # only the cold-volume catalog has this gap
+        return
+    adapter = work.adapter(app)
+    derive = getattr(adapter, '_cold_odoo_pg', None)
+    if derive is None:  # a fixture adapter without a database service
+        return
+    previous = adapter.ha_import
+    adapter.ha_import = True
+    try:
+        pg = derive(adapter._read_owner_quadlets())
+    finally:
+        adapter.ha_import = previous
+    if pg is None:
+        return
+    states = adapter.unit_states([pg['unit']])
+    running = states[pg['unit']].get('ActiveState') == 'active'
+    found = adapter.undeclared(pg) if running else None
+    adapter.restore_issues = []
+    adapter._preflight_other_databases(pg, found, lambda *_args: None, running=running, cold=True)
+    sink.extend(adapter.restore_issues)
 
 
 def _collect(app_id, module, found, sink):
@@ -1160,6 +1189,7 @@ def _convert_apps(ctx, params, app_ids, sinks):
                     database = _only_database(work, app, importer.load())
                 work.database = database
             _preview_pauses(work, app, work.sink(app.id))
+            _preview_cold_odoo_databases(work, app, work.sink(app.id))
             values = {'odoo_database': database, 'test_mode': test_mode}
             data = importer.load().convert(work, app, *[values[name] for name in importer.convert_args], out_dir)
             converted[app.id] = data

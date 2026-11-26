@@ -13,7 +13,7 @@ from unittest import mock
 
 from woowbackup import cli, flows, haimport, jobs, kept, podman
 from woowbackup.errors import BackupError
-from woowbackup.haissues import Issue
+from woowbackup.haissues import Issue, Sink
 
 from . import test_strengthen as strength
 from .test_adapter import PODMAN, SYSTEMCTL, VOLUME_TAR, extract_entries
@@ -723,6 +723,21 @@ class ColdOdooKeptTests(AdapterKeptCase):
         self.assertEqual((issue.id, issue.level), ('restore.other-databases', 'confirm'))
         self.assertIn('nextcloud', issue.names)
         self.assertEqual(self.adapter.kept_pg_specs()[0]['data_volume'], 'woowbk-demo-pgdata')
+
+    def test_first_ha_check_and_restore_use_the_same_confirmation_key(self):
+        work = types.SimpleNamespace(adapter=lambda _app: self.adapter)
+        preview = Sink('odoo')
+        haimport._preview_cold_odoo_databases(work, self.app, preview)
+        (first,) = preview.found
+        self.adapter.preflight(self.manifest(), mode='inplace')
+        (restore,) = self.adapter.restore_issues
+        self.assertEqual(first.key('odoo'), restore.key('odoo'))
+        with self.assertRaises(BackupError) as caught:
+            haimport._preview_cold_odoo_databases(work, self.app, Sink('odoo', acknowledged=[]))
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        approved = Sink('odoo', acknowledged=[first.key('odoo')])
+        haimport._preview_cold_odoo_databases(work, self.app, approved)
+        self.assertEqual([line['id'] for line in approved.confirmed()], ['restore.other-databases'])
 
     def test_a_quadlet_volume_outside_the_catalog_refuses_before_restore(self):
         self.live.db_volume = 'a-volume-not-in-the-catalog'
