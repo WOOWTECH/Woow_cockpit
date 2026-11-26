@@ -101,3 +101,24 @@ Hermes105/105, Headscale96/96, OpenDesign85/85, code-server87/87 and Omnigent's
 derived-extra full flow are existing evidence, not reruns by this lane. R1's
 current chain record remains70/72 with two stale separate-unit assumptions;
 the independent same-unit memory check passed at29.3MiB. R1 is not blanket closed.
+
+## R8 prepared, not executed
+
+The new `focus_acceptance_ui.py`, `focus_acceptance_ui_page.mjs` and
+`focus_acceptance_ui_relay.py` are a single real Cockpit case, with a separate
+dev-d lease and driver review still required. Exact command, transport, resource
+needs and recovery are in `snippets/focus-acceptance/r8-lease-proposal.md`.
+`r8-preparation.json` records offline preparation only. No R8 listener/browser,
+catalog change, upload or import has run.
+
+The page uploads the derived real full HA fixture, checks three selected apps,
+shows corrupt EMQX blocked, and imports the other two with one acknowledgement.
+Current page semantics mean four import jobs plus an excluded EMQX result;
+the old direct-API five-job assumption is not used. The fixed private relay is
+host127.0.0.1:ephemeral -> labpodman exec stdio as devadmin -> device127.0.0.1:9090,
+with opaque TLS/WebSocket bytes and no published port or device network change.
+
+Offline targeted9/9 verifies defaults, fixed relay destination/user, original
+fixture protection and the four-job boundary. These are not real acceptance.
+Only the leased real page can prove Cockpit login, TLS/WebSocket transport,
+one-confirmation results and the independent application/baseline checks.
