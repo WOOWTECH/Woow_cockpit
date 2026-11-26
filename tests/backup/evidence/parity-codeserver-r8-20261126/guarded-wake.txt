@@ -1,0 +1,16 @@
+lab: == phase wake-loaded:code-server
+lab: wake:code-server: every installed unit's Image= is loaded
+inotify headroom: 10+ (cap 10, stop below 5)
+lab: ID-mapped copy for keep-id:uid=1000,gid=1000 made in 339s (throwaway container removed), lowest host free 16513 MiB
+inotify headroom: 10+ (cap 10, stop below 5)
+lab: wake:code-server: started code-server.service (1s, lowest host free 16513 MiB)
+lab: wake:code-server: started code-server-health.timer
+app woow-code-server: deployed=True state=running owner=appowner units=1 inactive=[] problems=[]
+health http://127.0.0.1:18443/healthz -> 200 (expects 200)
+unit code-server.service: active
+unit code-server-health.timer: active
+healthcheck code-server: healthy
+code-server: /healthz -> 200 (expects 200)
+failed user units: none
+lab: dev-e ready: code-server running and healthy
+lab: wake:code-server: ready 57s after its first unit started; host 16512 MiB free

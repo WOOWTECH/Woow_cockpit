@@ -1,0 +1,155 @@
+{
+  "measured_at": "2026-11-26T21:47:47.792346+08:00",
+  "scope": "host Podman image metadata; read only; sizes include shared layers and are not additive",
+  "images_total": 1102,
+  "container_image_references": 39,
+  "not_referenced_by_any_current_container": 1062,
+  "largest_candidates": [
+    {
+      "image_id": "e190aedd54ccc1668abbac78ffc396aa257d411410a7c429b43511e3b7980e86",
+      "names": [
+        "localhost/woowtechbot-podman-rc23-fcm-candidate:9172e6f"
+      ],
+      "reported_size_bytes": 7144037365,
+      "created": 1795695488,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "fa69383125f6b0b26df9d472f8c8373aaad0f756ac30e50f83a92b0026777772",
+      "names": [],
+      "reported_size_bytes": 7144037185,
+      "created": 1795695488,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "a3cca99623e4ea9204bf2f684f526ea52408bab26722fba08484909f773c3161",
+      "names": [],
+      "reported_size_bytes": 7144036283,
+      "created": 1795695487,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "84b28acb5019846479fa9675d8f77f5d8b8b2f4ffa61b944618bbbf7385ef18b",
+      "names": [],
+      "reported_size_bytes": 7144032983,
+      "created": 1795695484,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "54ee1aa36add39d00d6f5d354a90cf74dccd3e13ebcc295b54eba92037c986b2",
+      "names": [],
+      "reported_size_bytes": 7144013943,
+      "created": 1795695483,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "e5735cb4704b5c6a3ec3f9349de3c84354b95234e37dda787fcf756972e1e230",
+      "names": [
+        "localhost/woowtechbot-ha-rc23-candidate:9172e6f"
+      ],
+      "reported_size_bytes": 7143965636,
+      "created": 1795694825,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "05d60ffdc314d31ef6a3f184cd920f38ea8347434c31056dda760487fdfe0e5b",
+      "names": [],
+      "reported_size_bytes": 7143965460,
+      "created": 1795694825,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "3fa2266096c11da0f7734d9d7af14a1d027779fde8e9c6b20485d300e7e06ab9",
+      "names": [],
+      "reported_size_bytes": 7143964564,
+      "created": 1795694824,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "86c75fe07d7436edcb8eb0d0779f30cf8db6fd7396416740190602c0620d7251",
+      "names": [],
+      "reported_size_bytes": 7143963316,
+      "created": 1795694802,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "4a528618bed36ffe8bdd0eca4d7d94e77ae7612050a1ba53bd203bffba589e58",
+      "names": [],
+      "reported_size_bytes": 7143963139,
+      "created": 1795694802,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "b2a20df89b27e34badf8fbe6793a8d29699ccd3f0ceaf4822a6d735ce804fe0d",
+      "names": [],
+      "reported_size_bytes": 7143962414,
+      "created": 1795694801,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "6c30230521f167f18ec1e2587d36b4862a83b9280bb0cdf3f24f4c49614d45ea",
+      "names": [],
+      "reported_size_bytes": 7143961176,
+      "created": 1795694822,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "4bdcdc49490b9b470385823d2e3b298047fc43dfe2fb0bfe8779b3a7785d2077",
+      "names": [],
+      "reported_size_bytes": 7143959039,
+      "created": 1795694800,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "7fbdf62e9cdf61fabd2b2326f245f1335c4793f7f1fc8b80cdc089c4c186adb9",
+      "names": [],
+      "reported_size_bytes": 7143920636,
+      "created": 1795694822,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "cbfdc4e4091f6919232bb5d49fc9dd302f18a28b79d132a4a25efa536b455233",
+      "names": [],
+      "reported_size_bytes": 7143918511,
+      "created": 1795694799,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "ee590c658bf8172015403852c8cb5b93d7697d94f15525c7772c3cb43fdf83f0",
+      "names": [],
+      "reported_size_bytes": 7143515687,
+      "created": 1795695482,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "0ccc0f0e0b29b18094deb6f131f5328ceda1cfe2fe88def07d83e536c2de23d4",
+      "names": [
+        "localhost/woowtechbot-podman-candidate:0.1.7-rc.22-1"
+      ],
+      "reported_size_bytes": 7143497340,
+      "created": 1795668548,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "5e7d7855a87653df73685ec7b815dac16c1048c19aa5697bdf8f0dc22ca7a02d",
+      "names": [],
+      "reported_size_bytes": 7143497155,
+      "created": 1795668548,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "08536f31265d06a8d4b84e70e73ada8b61f63b464ba2a17d7e1648956034ca46",
+      "names": [],
+      "reported_size_bytes": 7143496700,
+      "created": 1795668546,
+      "requires_deployment_rollback_build_review": true
+    },
+    {
+      "image_id": "d86a81e903c109738b58594edf6669f6919e3247bcc29f705c9125ed2a0b7487",
+      "names": [],
+      "reported_size_bytes": 7143447046,
+      "created": 1795668544,
+      "requires_deployment_rollback_build_review": true
+    }
+  ]
+}
