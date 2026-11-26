@@ -1,0 +1,91 @@
+test_hostile_names_and_types (tests.backup.test_ha_backup.EntryTests.test_hostile_names_and_types)
+IN-29 to IN-33, IN-35 to IN-37: what could lead outside or cannot be read for sure stops the app. ... ok
+test_a_copy_for_every_other_caller (tests.backup.test_ha_backup.HardLinkTests.test_a_copy_for_every_other_caller) ... ok
+test_a_secret_is_never_copied (tests.backup.test_ha_backup.HardLinkTests.test_a_secret_is_never_copied)
+A second name must not hand out what is never read: a secret file, addon.json, what the caller excludes. ... ok
+test_copies_count (tests.backup.test_ha_backup.HardLinkTests.test_copies_count) ... ok
+test_links_to_nothing_are_listed (tests.backup.test_ha_backup.HardLinkTests.test_links_to_nothing_are_listed) ... ok
+test_links_to_what_is_not_taken (tests.backup.test_ha_backup.HardLinkTests.test_links_to_what_is_not_taken) ... ok
+test_the_notes_about_chains_are_bounded (tests.backup.test_ha_backup.HardLinkTests.test_the_notes_about_chains_are_bounded)
+What a link names is noted for the chains behind it, as many notes as MAX_LINK_COPIES: a crafted tar of millions of ... ok
+test_a_secrets_place (tests.backup.test_ha_backup.SkippedEntryTests.test_a_secrets_place)
+Never read: whatever stands in the place of a secret file, and whatever lies below it. ... ok
+test_addon_json_in_another_shape_stops_the_app (tests.backup.test_ha_backup.SkippedEntryTests.test_addon_json_in_another_shape_stops_the_app) ... ok
+test_device_nodes (tests.backup.test_ha_backup.SkippedEntryTests.test_device_nodes) ... ok
+test_files_too_large_for_the_caller (tests.backup.test_ha_backup.SkippedEntryTests.test_files_too_large_for_the_caller)
+IN-19: a caller that reads a whole file may leave a too large one out instead of stopping. ... ok
+test_log_lines_cannot_be_forged (tests.backup.test_ha_backup.SkippedEntryTests.test_log_lines_cannot_be_forged) ... ok
+test_names_no_file_can_have (tests.backup.test_ha_backup.SkippedEntryTests.test_names_no_file_can_have) ... ok
+test_they_still_obey_the_structure (tests.backup.test_ha_backup.SkippedEntryTests.test_they_still_obey_the_structure)
+A bad name hides nothing: absolute, `..`, twice, below a link -- the app is stopped. ... ok
+test_cs11_a_file_below_the_limit_is_read_as_before (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_a_file_below_the_limit_is_read_as_before) ... ok
+test_cs11_a_settings_file_too_large_to_read_not_confirmed_stops_only_this_app (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_a_settings_file_too_large_to_read_not_confirmed_stops_only_this_app) ... ok
+test_cs11_an_extension_list_too_large_leaves_the_extensions_of_ha_out_and_says_so (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_an_extension_list_too_large_leaves_the_extensions_of_ha_out_and_says_so) ... ok
+test_cs11_confirmed_goes_on_and_this_devices_own_file_stays (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_confirmed_goes_on_and_this_devices_own_file_stays) ... ok
+test_cs11_one_more_name_asks_again (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_one_more_name_asks_again) ... ok
+test_cs11_the_prompt_history_and_the_mcp_servers_of_ha_too_large_leave_this_devices_files (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_the_prompt_history_and_the_mcp_servers_of_ha_too_large_leave_this_devices_files) ... ok
+test_cs11_what_the_reader_leaves_out_of_the_share_folder_is_a_line_of_its_own (tests.backup.test_ha_codeserver.ParityConfirmTests.test_cs11_what_the_reader_leaves_out_of_the_share_folder_is_a_line_of_its_own) ... ok
+test_a_big_catalog_that_the_old_limit_refused_is_read (tests.backup.test_ha_common.LiveJsonTests.test_a_big_catalog_that_the_old_limit_refused_is_read) ... ok
+test_a_selected_special_entry_is_named_in_the_one_confirmation_and_checked_again_at_conversion (tests.backup.test_ha_emqx.CheckTests.test_a_selected_special_entry_is_named_in_the_one_confirmation_and_checked_again_at_conversion) ... ok
+test_a_big_backup_is_given_the_time_and_room_it_needs (tests.backup.test_ha_flows.OdooDatabaseTests.test_a_big_backup_is_given_the_time_and_room_it_needs)
+OD-28, OD-73: the exports, the module scan and the dump wait longer; the module list gets more room. ... ok
+test_a_link_in_the_live_data_dir_that_the_restore_would_refuse_is_left_out_and_confirmed_once (tests.backup.test_ha_flows.OdooDatabaseTests.test_a_link_in_the_live_data_dir_that_the_restore_would_refuse_is_left_out_and_confirmed_once)
+X-NS-08 for this importer's own live copies: found while converting, so it is the one re-confirmation of B7. ... ok
+test_what_the_reader_leaves_out_of_the_backup_is_one_line_to_confirm_again_at_the_conversion (tests.backup.test_ha_flows.OdooDatabaseTests.test_what_the_reader_leaves_out_of_the_backup_is_one_line_to_confirm_again_at_the_conversion)
+IN-27 and the other reading rows of READ, for this importer: a device file in a module is left out, listed, ... ok
+test_an_unusable_selected_link_is_named_before_import_and_needs_the_same_confirmation_in_conversion (tests.backup.test_ha_headscale.CheckTests.test_an_unusable_selected_link_is_named_before_import_and_needs_the_same_confirmation_in_conversion) ... ok
+test_a_version_of_this_device_that_cannot_be_read_is_a_notice_and_the_data_moves (tests.backup.test_ha_headscale.VersionTests.test_a_version_of_this_device_that_cannot_be_read_is_a_notice_and_the_data_moves) ... ok
+test_an_addon_version_the_table_does_not_know_is_a_notice_and_the_data_moves (tests.backup.test_ha_headscale.VersionTests.test_an_addon_version_the_table_does_not_know_is_a_notice_and_the_data_moves) ... ok
+test_a_version_of_this_device_that_cannot_be_read_is_a_notice_and_the_data_moves (tests.backup.test_ha_hermes.VersionTests.test_a_version_of_this_device_that_cannot_be_read_is_a_notice_and_the_data_moves) ... ok
+test_an_addon_version_the_table_does_not_know_is_a_notice_and_the_data_moves (tests.backup.test_ha_hermes.VersionTests.test_an_addon_version_the_table_does_not_know_is_a_notice_and_the_data_moves) ... ok
+test_unknown_version_and_skipped_link_need_only_the_links_confirmation (tests.backup.test_ha_hermes.VersionTests.test_unknown_version_and_skipped_link_need_only_the_links_confirmation) ... ok
+test_nothing_tells_it (tests.backup.test_ha_import.ImageVersionTests.test_nothing_tells_it) ... ok
+test_a_conversion_needs_the_confirmation (tests.backup.test_ha_issues.SkippedTests.test_a_conversion_needs_the_confirmation) ... ok
+test_a_long_list_is_counted_and_keyed_whole (tests.backup.test_ha_issues.SkippedTests.test_a_long_list_is_counted_and_keyed_whole) ... ok
+test_a_merged_list_is_read_only (tests.backup.test_ha_issues.SkippedTests.test_a_merged_list_is_read_only) ... ok
+test_nothing_skipped_nothing_asked (tests.backup.test_ha_issues.SkippedTests.test_nothing_skipped_nothing_asked) ... ok
+test_one_line_for_every_kind (tests.backup.test_ha_issues.SkippedTests.test_one_line_for_every_kind) ... ok
+test_only_the_kinds_asked_for (tests.backup.test_ha_issues.SkippedTests.test_only_the_kinds_asked_for) ... ok
+test_the_key_covers_every_name_of_every_kind (tests.backup.test_ha_issues.SkippedTests.test_the_key_covers_every_name_of_every_kind) ... ok
+test_the_readers_own_lists_work_too (tests.backup.test_ha_issues.SkippedTests.test_the_readers_own_lists_work_too) ... ok
+test_an_unknown_add_on_version_is_a_notice (tests.backup.test_ha_issues.VersionTests.test_an_unknown_add_on_version_is_a_notice) ... ok
+test_an_unreadable_version_here_is_a_notice (tests.backup.test_ha_issues.VersionTests.test_an_unreadable_version_here_is_a_notice) ... ok
+test_known_and_different_still_stops (tests.backup.test_ha_issues.VersionTests.test_known_and_different_still_stops) ... ok
+test_the_table_is_used_as_it_is (tests.backup.test_ha_issues.VersionTests.test_the_table_is_used_as_it_is) ... ok
+test_an_unknown_add_on_version_is_a_notice (tests.backup.test_ha_issues.VersionTests.test_an_unknown_add_on_version_is_a_notice) ... ok
+test_an_unreadable_version_here_is_a_notice (tests.backup.test_ha_issues.VersionTests.test_an_unreadable_version_here_is_a_notice) ... ok
+test_known_and_different_still_stops (tests.backup.test_ha_issues.VersionTests.test_known_and_different_still_stops) ... ok
+test_the_table_is_used_as_it_is (tests.backup.test_ha_issues.VersionTests.test_the_table_is_used_as_it_is) ... ok
+test_a_confirmed_line_goes_on_and_one_more_name_asks_again (tests.backup.test_ha_links.LeftOutLinksTests.test_a_confirmed_line_goes_on_and_one_more_name_asks_again) ... ok
+test_a_customers_link_out_of_a_live_volume_is_left_out_and_the_restore_takes_the_rest (tests.backup.test_ha_links.LeftOutLinksTests.test_a_customers_link_out_of_a_live_volume_is_left_out_and_the_restore_takes_the_rest) ... ok
+test_a_hard_link_to_a_file_that_does_not_move_is_copied (tests.backup.test_ha_links.LeftOutLinksTests.test_a_hard_link_to_a_file_that_does_not_move_is_copied) ... ok
+test_a_link_is_judged_as_the_restore_judges_it (tests.backup.test_ha_links.LeftOutLinksTests.test_a_link_is_judged_as_the_restore_judges_it) ... ok
+test_a_link_that_was_left_out_and_not_confirmed_stops_only_that_app (tests.backup.test_ha_links.LeftOutLinksTests.test_a_link_that_was_left_out_and_not_confirmed_stops_only_that_app) ... ok
+test_every_link_is_counted_and_twenty_are_shown (tests.backup.test_ha_links.LeftOutLinksTests.test_every_link_is_counted_and_twenty_are_shown) ... ok
+test_random_trees_lose_nothing_silently (tests.backup.test_ha_links.LeftOutLinksTests.test_random_trees_lose_nothing_silently)
+CM-11, X-NS-08 with the reader (READ): over random trees every hard link, symlink and file is either in the ... ok
+test_without_an_entry_to_copy_from_the_link_is_left_out_and_listed_not_half_moved (tests.backup.test_ha_links.LeftOutLinksTests.test_without_an_entry_to_copy_from_the_link_is_left_out_and_listed_not_half_moved) ... ok
+test_the_entries_the_reader_leaves_out_are_one_line_to_confirm (tests.backup.test_ha_litellm.RowTests.test_the_entries_the_reader_leaves_out_are_one_line_to_confirm) ... ok
+test_what_the_reader_leaves_out_of_the_add_on_is_one_line (tests.backup.test_ha_nextcloud.CheckTests.test_what_the_reader_leaves_out_of_the_add_on_is_one_line) ... ok
+test_what_the_reader_leaves_out_of_the_data_directory_is_one_line (tests.backup.test_ha_nextcloud.CheckTests.test_what_the_reader_leaves_out_of_the_data_directory_is_one_line) ... ok
+test_hard_links_in_has_database_folder_are_copied_as_files (tests.backup.test_ha_omnigent.RowTests.test_hard_links_in_has_database_folder_are_copied_as_files) ... ok
+test_op11_a_link_that_is_left_out_confirmed_goes_on (tests.backup.test_ha_opendesign.ParityLinksTests.test_op11_a_link_that_is_left_out_confirmed_goes_on) ... ok
+test_op11_a_link_that_is_left_out_not_confirmed_stops_only_this_app (tests.backup.test_ha_opendesign.ParityLinksTests.test_op11_a_link_that_is_left_out_not_confirmed_stops_only_this_app) ... ok
+test_op11_a_link_that_is_left_out_one_more_name_asks_again (tests.backup.test_ha_opendesign.ParityLinksTests.test_op11_a_link_that_is_left_out_one_more_name_asks_again) ... ok
+test_a_long_list_of_leftovers_is_read_not_refused (tests.backup.test_ha_tempctr.SweepListingTests.test_a_long_list_of_leftovers_is_read_not_refused) ... ok
+test_a_real_command_is_read_to_its_end_and_a_runaway_is_killed (tests.backup.test_podman.LineStreamTests.test_a_real_command_is_read_to_its_end_and_a_runaway_is_killed) ... ok
+test_however_the_stream_is_cut_the_lines_are_the_same (tests.backup.test_podman.LineStreamTests.test_however_the_stream_is_cut_the_lines_are_the_same) ... ok
+test_lines_are_handed_over_as_they_arrive (tests.backup.test_podman.LineStreamTests.test_lines_are_handed_over_as_they_arrive) ... ok
+test_the_memory_is_one_line_not_the_listing (tests.backup.test_podman.LineStreamTests.test_the_memory_is_one_line_not_the_listing) ... ok
+test_an_output_limit_never_gets_smaller_and_has_a_ceiling (tests.backup.test_podman.ScaledLimitTests.test_an_output_limit_never_gets_smaller_and_has_a_ceiling) ... ok
+
+----------------------------------------------------------------------
+Ran 70 tests in 18.527s
+
+OK
+
+BLOCKED: []
+SHIM_HITS: []
+RUN_NATIVE: absent
+SPAWNED: [('env', 3), ('python3', 54)]
+ELAPSED: 19
