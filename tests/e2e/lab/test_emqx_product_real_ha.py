@@ -317,9 +317,10 @@ class DecisionCTests(unittest.TestCase):
         self.assertEqual(self.failing('builtin', good), [])
         self.assertTrue(self.failing('builtin', self.result()))
 
-    def test_the_owners_text_is_the_products(self):
+    def test_the_current_owner_policy_brings_ha_access(self):
         from woowbackup import ha_emqx
-        self.assertEqual(real.OWNER_ACL_TEXT, ha_emqx.ACL_NEEDS_BUILTIN)
+        self.assertEqual(ha_emqx.ISSUES['emqx.access-from-ha'], 'auto')
+        self.assertNotIn('ACL_NEEDS_BUILTIN', vars(ha_emqx))
 
 
 class DraftTests(unittest.TestCase):
@@ -427,7 +428,7 @@ class DraftTests(unittest.TestCase):
 
 
 class RoundTests(unittest.TestCase):
-    """The failing restores: what each round checks can fail (no constant True)."""
+    """A failed start rolls back; a changed setting is reported without rollback (E-90)."""
 
     def setUp(self):
         from unittest import mock
@@ -474,14 +475,17 @@ class RoundTests(unittest.TestCase):
                     setattr(self, key, value)
 
     def test_the_readback_round(self):
-        good = {'code': 'job-failed', 'message': real.READBACK_DIFF + '，已停止；…'}
-        self.job = dict(self.job, error=good)
+        good = '提醒：' + real.READBACK_DIFF + '（通常是轉換之後這台 EMQX 的設定改過）；帳號、ACL 規則和金鑰都相同，所以沒有回復。'
+        self.job = {'state': 'succeeded', 'result': {'rolled_back': False}, 'error': None}
+        self.log = [{'message': good}]
         self.assertEqual(self.failing(real.readback_round), [])
         self.assertEqual(self.armed[0][0], real.TAMPER_FILES)
-        for change in ({'job': dict(self.job, error=dict(good, message='EMQX 還原後的設定（listeners、log）和轉換時核對的不同'))},
-                       {'job': dict(self.job, error=dict(good, message='EMQX 還原後的設定（log）、內建資料庫（emqx_admin）和轉換時核對的不同'))},
-                       {'job': dict(self.job, error=dict(good, message='無法啟動服務'))},
-                       {'job': dict(self.job, state='succeeded')}, {'log': [real.READBACK_LOG]},
+        for change in ({'log': [{'message': good.replace('設定（log）', '設定（listeners、log）')}]},
+                       {'log': [{'message': good.replace('設定（log）', '設定（log）、內建資料庫（emqx_admin）')}]},
+                       {'log': [{'message': good.replace('提醒：', '')}]},
+                       {'log': [{'message': good.replace('沒有回復', '已回復')}]},
+                       {'job': dict(self.job, state='rolled-back')}, {'job': dict(self.job, state='failed')},
+                       {'log': [{'message': real.READBACK_LOG}]},
                        {'left': {real.TAMPER_MARKER}}, {'removed': {f: 'absent' for f in real.TAMPER_FILES}}):
             with self.subTest(change=change):
                 saved = {k: getattr(self, k) for k in change}
@@ -611,7 +615,7 @@ class Sr5Tests(unittest.TestCase):
 
     def test_the_texts_are_the_products(self):
         from woowbackup import ha_emqx
-        self.assertEqual(real.SR5_PLAIN, ha_emqx.PLAIN_REFUSED)
+        self.assertIn('會照 HA 原樣匯入', ha_emqx.PLAIN_PASSWORDS)
         self.assertEqual(real.SR5_RESET, ha_emqx.RESET_HOW)
         texts = {'ha': 'bcrypt', 'mine': real.SR5_DEVICE_HASHING, 'names': 'woow'}
         self.assertEqual(real.SR5_WARNING.format(**texts), ha_emqx.ACCOUNTS_STOP.format(**texts))
