@@ -25,6 +25,24 @@ def load():
 flow = load()
 
 
+class ConfirmationGateTests(unittest.TestCase):
+    def test_a_notice_is_safe_but_a_confirmation_requires_review(self):
+        flow.require_reviewed_check({'ok': True, 'importable': True, 'issues': [
+            {'id': 'litellm.version-unknown', 'level': 'notice'}]})
+        with self.assertRaises(flow.Failed) as caught:
+            flow.require_reviewed_check({'ok': True, 'importable': True, 'issues': [
+                {'id': 'litellm.superuser-objects', 'level': 'confirm'}]})
+        self.assertIn('litellm.superuser-objects', str(caught.exception))
+
+    def test_a_refused_or_malformed_check_stops_the_real_run(self):
+        for result in ({}, {'ok': False, 'importable': True, 'issues': []},
+                       {'ok': True, 'importable': False, 'issues': []},
+                       {'ok': True, 'importable': True},
+                       {'ok': True, 'importable': True, 'issues': [{'id': 'odd'}]}):
+            with self.subTest(result=result), self.assertRaises(flow.Failed):
+                flow.require_reviewed_check(result)
+
+
 class DriverRules(unittest.TestCase):
     def test_lock_waits_while_emqx_main_asks_for_the_next_turn(self):
         with tempfile.TemporaryDirectory() as directory:
