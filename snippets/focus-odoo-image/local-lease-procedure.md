@@ -34,3 +34,19 @@ Root-protected proof root is a NEW `/var/lib/woowbk-odoo-pg16-proof-20261127-od2
 6. Remove only the proof's uniquely named smoke container in its new store (intent exists before run); assert target containers/volumes empty; re-inspect source and compare all fixed fields exactly; record public result.json and remaining free bytes. No original volumes/images/baselines are deleted. Keep proof artifacts/new stores for coordinator review and ONLY lease-scoped cleanup afterward.
 
 Expected public result: exact pinned config/arch/ref, official config+each ordered uncompressed layer verified, artifact size/SHA, trusted manifest SHA, preparation_loads1, bundle loads1, pulls0, PostgreSQL16.15, anonymous_volumes0, containers_remaining0, source fixed fields unchanged, free bytes >=13GiB. Actual result is pending; no all-service/commercial acceptance is implied.
+## Corrective retry after first real export
+
+First root `/var/lib/woowbk-odoo-pg16-proof-20261127-od23` is preserved. Its Docker export's pinned config SHA and
+all11 ordered layer diff_ids passed read-only checks, but11 unused legacy symlink aliases correctly triggered the
+fixed `source-archive-header-refused` / `unsafe-docker-member` rejection before any load. No original-store change.
+
+Retry ONLY in NEW `/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r2` using the existing70min lease and heavy/device
+mutex. Launcher rechecks lease expiry, committed tracked code, original lease root/suffix, host RAM>=1200MiB,
+device headroom>=512MiB, and both filesystems free>=17GiB. Retain13GiB throughout streaming phases.
+
+The source is now exported as OCI. The strict regular-only OCI adapter copies authenticated config/layer blobs into
+quarantine and runs production ordered-layer verification BEFORE ANY load. This link-free verified view loads into
+the NEW preparation store, where canonical tagging/export alone occurs. Export canonical OCI there, then run the
+real packager with `input_format='oci-archive'`, install_bundle, owner-load, offline smoke/reuse/cleanup checks.
+The original Docker archive and failed quarantine remain untouched. New result filenames include the proof root
+and use exclusive creation, preserving earlier attempts. No auth/host/network/pull/package/account changes.

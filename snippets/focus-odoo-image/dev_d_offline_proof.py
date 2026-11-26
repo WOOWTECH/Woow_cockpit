@@ -1,7 +1,7 @@
 """LEASE ONLY: remote body for run_dev_d_proof.py. Root on isolated dev-d, never on the host.
 
-Original images are only inspected/exported. A quarantined verification view normalizes one tag in small metadata;
-the production validator verifies official config SHA and EVERY ordered layer diff_id before any engine load.
+Original images are only inspected/exported as OCI (Docker export has forbidden legacy symlinks). A strict adapter
+copies regular blobs into quarantine; the production validator verifies config and EVERY ordered diff_id before load.
 Canonical tagging/export then happens in a new preparation store; the final bundle loads into a second empty store.
 """
 import argparse
@@ -22,8 +22,32 @@ RESERVE = 13 * 1024**3
 PHASE = 'preflight'
 
 
+def failure_reason(error):
+    """Public diagnostics contain only exact whitelisted constants, never exception/artifact contents."""
+    try:
+        from woowbackup import pg16_bundle as bundle, pg16_oci as oci
+    except ImportError:
+        return 'preflight-import-failed'
+    whitelist = {
+        bundle.ERROR_UNSAFE_MEMBER: 'unsafe-docker-member',
+        bundle.ERROR_LAYER_DIGEST: 'ordered-layer-digest-mismatch',
+        bundle.ERROR_CONFIG_IDENTITY: 'config-ref-pin-mismatch',
+        bundle.ERROR_ROOTFS: 'invalid-rootfs-digest-list',
+        oci.ERROR_LAYOUT: 'invalid-unsafe-oci-layout',
+        oci.ERROR_DESCRIPTOR: 'oci-descriptor-digest-size-mismatch',
+        oci.ERROR_IDENTITY: 'oci-config-ref-pin-mismatch',
+        'source-archive-header-refused': 'source-archive-header-refused',
+        'source-trailing-data': 'source-trailing-data',
+        'source-archive-truncated': 'source-archive-truncated',
+        'source-metadata-refused': 'source-metadata-refused',
+    }
+    if isinstance(error, (bundle.BundleError, ValueError)):
+        return whitelist.get(str(error), 'unclassified-fixed-failure')
+    return 'assertion-failed' if isinstance(error, AssertionError) else 'unclassified-fixed-failure'
+
+
 def canonical_archive(source, output, bundle, abort):
-    """Copy fixed headers/payload chunks; only the one tag in small manifest/repositories JSON changes.
+    """Legacy rejection reproducer, retained for regression tests; the real proof now uses strict OCI conversion.
 
     No extraction, source-store retag, extra image, PAX allocation, owner path, or layer/config rewrite. Output stays
     quarantined until the existing validator authenticates its config AND all uncompressed ordered layer contents.
@@ -102,9 +126,13 @@ def main():
     assert os.geteuid() == 0 and root.parent == Path('/var/lib') and root.name.startswith('woowbk-odoo-pg16-proof-')
     assert root.is_dir() and not root.is_symlink() and root.stat().st_uid == 0 and root.stat().st_mode & 0o777 == 0o755
     assert shutil.disk_usage(root).free >= RESERVE + 4 * 1024**3
+    free_start = shutil.disk_usage(root).free
+    memory_headroom_start = (int(Path('/sys/fs/cgroup/memory.max').read_text())
+                             - int(Path('/sys/fs/cgroup/memory.current').read_text()))
+    assert memory_headroom_start >= 512 * 1024**2
     import sys
     sys.path.insert(0, str(args.code_root / 'backup-engine'))
-    from woowbackup import ha_odoo, pg16_bundle as bundle, podman
+    from woowbackup import ha_odoo, pg16_bundle as bundle, pg16_oci as oci, podman
     from woowbackup.errors import BackupError
     assert bundle.architecture() == 'amd64'
     assert bundle.PINNED_REF.endswith('@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139')
@@ -145,16 +173,19 @@ def main():
     before = source_identity()
     assert before['id'].removeprefix('sha256:') == EXPECTED[7:]
     assert before['architecture'] == 'amd64' and before['os'] == 'linux' and before['repo_tags'] == [SOURCE_TAG]
-    export = root / 'original.docker.tar'
+    export = root / 'original.oci.tar'
     PHASE = 'source-export'
     with export.open('xb') as output:
-        source.podman('save', '--format', 'docker-archive', SOURCE_TAG, stdout=output,
+        source.podman('save', '--format', 'oci-archive', SOURCE_TAG, stdout=output,
                       timeout=1800, max_output=bundle.MAX_ARCHIVE, abort=guard)
         output.flush()
         os.fsync(output.fileno())
     PHASE = 'ordered-layer-verification'
-    canonical_archive(export, root / 'quarantined-verification-view.tar', bundle, guard)
-    # The copy preserved config/layer bytes exactly; ordered diff_id verification authenticated original bytes.
+    verified = root / 'quarantined-verification-view.tar'
+    with export.open('rb') as source_oci, verified.open('x+b') as output:
+        oci.convert_archive(source_oci, output, bundle, 'amd64', EXPECTED, expected_tag=SOURCE_TAG, abort=guard)
+        os.fsync(output.fileno())
+    # The strict regular-only copy preserved config/layer bytes; diff_ids authenticated original contents.
     # Make the actual canonical export with Podman in a NEW preparation store; never tag the original store.
     def isolated_owner(leaf):
         owned = root / leaf
@@ -171,17 +202,16 @@ def main():
         return IsolatedOwner('appowner', runner=execute)
     PHASE = 'disposable-canonical-export'
     preparation = isolated_owner('preparation-store')
-    with export.open('rb') as stream:
+    with verified.open('rb') as stream:
         preparation.podman('load', input=stream, timeout=1800, max_output=65536, abort=guard)
-    actual_id = preparation.podman('image', 'inspect', '--format', '{{.Id}}', SOURCE_TAG, timeout=60).stdout.decode().strip()
+    actual_id = preparation.podman('image', 'inspect', '--format', '{{.Id}}', EXPECTED, timeout=60).stdout.decode().strip()
     assert actual_id.removeprefix('sha256:') == EXPECTED[7:]
     preparation.podman('tag', EXPECTED, bundle.TAG, timeout=60, max_output=65536)
-    preparation.podman('untag', EXPECTED, SOURCE_TAG, timeout=60, max_output=65536)
     tags = preparation.podman('image', 'inspect', '--format', '{{json .RepoTags}}', EXPECTED, timeout=60).stdout
     assert json.loads(tags) == [bundle.TAG]
-    canonical = root / 'canonical.docker.tar'
+    canonical = root / 'canonical.oci.tar'
     with canonical.open('xb') as output:
-        preparation.podman('save', '--format', 'docker-archive', bundle.TAG, stdout=output,
+        preparation.podman('save', '--format', 'oci-archive', bundle.TAG, stdout=output,
                            timeout=1800, max_output=bundle.MAX_ARCHIVE, abort=guard)
         output.flush()
         os.fsync(output.fileno())
@@ -190,10 +220,10 @@ def main():
     package = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(package)
     PHASE = 'package-and-stage'
-    release = package.package(canonical, 'amd64', EXPECTED, root / 'release')
+    release = package.package(canonical, 'amd64', EXPECTED, root / 'release', input_format='oci-archive', abort=guard)
     install_root = root / 'install-root'
     install_root.mkdir(mode=0o755)
-    staged = bundle.install_bundle(root / 'release', release['manifest_sha256'], install_root)
+    staged = bundle.install_bundle(root / 'release', release['manifest_sha256'], install_root, abort=guard)
     bundle.INSTALLED_ROOT = install_root / bundle.INSTALL_REL  # Full default / trust chain remains enabled.
     owner = isolated_owner('owner-store')
     app = types.SimpleNamespace(id='odoo', name='Odoo', owner='appowner')
@@ -229,6 +259,7 @@ def main():
               'canonical_tag_created_only_in_disposable_preparation_store': True,
               'version': version.stdout.decode().strip(), 'anonymous_volumes': 0,
               'containers_remaining': 0, 'free_bytes_after': shutil.disk_usage(root).free,
+              'free_bytes_start': free_start, 'device_headroom_bytes_start': memory_headroom_start,
               'reserve_bytes': RESERVE, 'commercial_acceptance': 'not-complete'}
     (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, sort_keys=True))
@@ -238,5 +269,6 @@ if __name__ == '__main__':
     try:
         main()
     except Exception as error:
-        print(json.dumps({'status': 'failed', 'phase': PHASE, 'error_type': type(error).__name__, 'pulls': 0}))
+        print(json.dumps({'status': 'failed', 'phase': PHASE, 'error_type': type(error).__name__,
+                          'reason': failure_reason(error), 'pulls': 0}))
         raise SystemExit(1)

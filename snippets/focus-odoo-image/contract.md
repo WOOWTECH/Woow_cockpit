@@ -59,3 +59,20 @@ Only root can write the selected pin, manifest, archive, or ancestors. Symlinks 
 Odoo import keeps existing local image priority. Otherwise it chooses this machine's architecture, verifies the complete installed root trust chain, pin/manifest/artifact SHA, config ID, ref, OS and architecture, and passes the already-open verified file descriptor as stdin to the existing app-owner runner's `podman load`. It inspects loaded ID/OS/architecture, returns the config ID for subsequent `--pull=never` temporary containers, and does not rely on Docker save/load retaining RepoDigests. No root/global-store load or owner-writable archive path is used. A configured but invalid sidecar fails closed for Odoo; no sidecar retains existing pinned pull + retry. Job cancellation/storage failure propagates.
 
 Suggested coordinator docs/registry update: OD-23 now has opt-in installer/release packaging and owner-load implementation, focused synthetic proofs, and a pending real isolated-store artifact/load proof. Link focused test names from `tests/backup/test_pg16_bundle.py` and `tests/test_manage.py::OdooPg16BundleContract`. Do not mark actual artifact delivery proven by unit tests.
+## Podman OCI export correction (actual archive finding)
+
+Podman's Docker-save export includes redundant legacy symlink aliases. Every link remains refused by the default
+Docker validator and packager. Use a canonical-tagged **OCI export** and opt into strict conversion:
+
+```sh
+python3 scripts/package_odoo_pg16.py --input-format oci-archive --archive postgres16.oci.tar \
+  --architecture amd64 --image-id sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873 \
+  --output /trusted-release-root/odoo-pg16-amd64
+```
+
+The OCI adapter accepts one manifest, the expected canonical reference annotation (full reference or its OCI short
+tag), regular SHA256 blobs only, exact descriptor sizes/hashes, and no unrelated blobs. It copies config/layer bytes
+into a regular-only Docker-save archive, then runs the production config/architecture/ref/ordered diff_id verifier.
+No extraction, link following, pulls, image-store changes, or whole-image buffering occurs. Input and expanded layers
+remain bounded to2GiB with1MiB reads; optional abort callbacks cover conversion, packaging, and installation copies.
+Bundle schema/install/owner-load contracts are unchanged. The default input format remains strict Docker-save.

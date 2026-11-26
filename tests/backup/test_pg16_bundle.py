@@ -313,6 +313,15 @@ class ReleaseTests(BundleCase):
                 pass
         self.assertIs(caught.exception, stop)
 
+    def test_install_abort_preserves_previous_selection(self):
+        pin = self.install()
+        selected = Path(self.installed['path']).parent / 'active.sha256'
+        stop = BackupError('insufficient-space', 'proof-reserve-reached')
+        with self.assertRaises(BackupError) as caught:
+            bundle.install_bundle(self.output, pin, self.root, abort=lambda: stop)
+        self.assertIs(caught.exception, stop)
+        self.assertEqual(selected.read_text().strip(), pin)
+
     def test_200mib_stream_copy_never_requests_or_retains_the_whole_artifact(self):
         class Source:
             remaining, reads = 200 * 1024**2, []

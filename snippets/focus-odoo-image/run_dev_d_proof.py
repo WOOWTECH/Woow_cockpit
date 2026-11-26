@@ -6,6 +6,7 @@ No packages, host images, pulls, source retags, account/auth changes, or source-
 """
 import argparse
 import base64
+import datetime
 import fcntl
 import json
 from pathlib import Path
@@ -25,8 +26,17 @@ def main():
     assert root.parent == Path('/var/lib') and root.name.startswith('woowbk-odoo-pg16-proof-')
     assert shutil.disk_usage(REPO).free >= 17 * 1024**3
     assert not Path('/tmp/woowbk-dev-d-emqx-main-waiting').exists(), 'emqx-priority-waiter'
+    lease = json.loads(Path('/tmp/parity-focus-20261127/lease-odoo-dev-d.json').read_text())
+    assert datetime.datetime.now(datetime.timezone.utc) < datetime.datetime.fromisoformat(lease['expires'])
+    assert str(REPO) == lease['worktree']
+    leased_root = Path(lease['proof_root'])
+    suffix = root.name.removeprefix(leased_root.name + '-r')
+    assert root == leased_root or (root.name.startswith(leased_root.name + '-r') and suffix.isdigit())
+    assert subprocess.run(['git', 'diff', '--quiet', 'HEAD', '--'], cwd=REPO).returncode == 0
     with open('/tmp/woowbk-dev-d-mutation.lock', 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        memory = dict(line.split(':', 1) for line in Path('/proc/meminfo').read_text().splitlines())
+        assert int(memory['MemAvailable'].split()[0]) >= 1200 * 1024
         isolated = subprocess.run([str(LAB), 'inspect', 'woowbk-dev-d', '--format',
                                    '{{.State.Running}} {{.HostConfig.NetworkMode}} {{json .HostConfig.PortBindings}}'],
                                   capture_output=True, timeout=30)
@@ -43,6 +53,9 @@ root = pathlib.Path(PROOF_ROOT)
 assert os.geteuid() == 0 and root.parent == pathlib.Path('/var/lib')
 assert root.name.startswith('woowbk-odoo-pg16-proof-') and not root.exists() and not root.is_symlink()
 assert shutil.disk_usage('/var/lib').free >= 17 * 1024**3
+current = int(pathlib.Path('/sys/fs/cgroup/memory.current').read_text())
+limit = pathlib.Path('/sys/fs/cgroup/memory.max').read_text().strip()
+assert limit != 'max' and int(limit) - current >= 512 * 1024**2
 os.umask(0o022)
 root.mkdir(mode=0o755)
 code = root / 'code'
@@ -61,7 +74,12 @@ exec(compile(script.read_text(), str(script), 'exec'), {'__name__': '__main__', 
             report = json.loads(result.stdout)
         except (ValueError, UnicodeError):
             report = {'status': 'failed', 'exit': result.returncode, 'reason': 'no-fixed-result'}
-        (REPO / 'snippets/focus-odoo-image/dev-d-offline-proof-result.json').write_text(json.dumps(report, indent=2) + '\n')
+        report['proof_root'] = str(root)
+        report['host_ram_available_mib_start'] = int(memory['MemAvailable'].split()[0]) // 1024
+        report['source_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO).decode().strip()
+        destination = REPO / 'snippets/focus-odoo-image' / (root.name + '-result.json')
+        with destination.open('x') as output:
+            output.write(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report, sort_keys=True))
         return 0 if result.returncode == 0 and report.get('status') == 'passed' else 1
 

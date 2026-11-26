@@ -52,6 +52,14 @@ class CanonicalArchiveTests(BundleCase):
             proof.canonical_archive(self.archive, self.canonical, bundle, lambda: stop)
         self.assertIs(caught.exception, stop)
 
+    def test_failure_reason_is_fixed_whitelist_and_never_raw_artifact_text(self):
+        self.assertEqual(proof.failure_reason(ValueError('source-archive-header-refused')),
+                         'source-archive-header-refused')
+        self.assertEqual(proof.failure_reason(bundle.BundleError(bundle.ERROR_LAYER_DIGEST)),
+                         'ordered-layer-digest-mismatch')
+        self.assertEqual(proof.failure_reason(bundle.BundleError('private artifact contents')),
+                         'unclassified-fixed-failure')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -30,6 +30,10 @@ MAX_ARCHIVE = 2 * 1024**3
 HEX = re.compile(r'[0-9a-f]{64}\Z')
 ROOT_UID = 0
 TRUST_ANCHOR = Path('/')
+ERROR_UNSAFE_MEMBER = 'Unsafe Docker archive member.'
+ERROR_LAYER_DIGEST = 'Docker image layer differs from the pinned config rootfs digest.'
+ERROR_CONFIG_IDENTITY = 'Docker image ref/config ID differs from the release pin.'
+ERROR_ROOTFS = 'Invalid Docker config rootfs digest list.'
 
 
 class BundleError(ValueError):
@@ -184,7 +188,7 @@ def _verify_layers(stream, layers, positions, diff_ids, abort):
             if compressed:
                 source.close()
         if 'sha256:' + digest.hexdigest() != expected:
-            raise BundleError('Docker image layer differs from the pinned config rootfs digest.')
+            raise BundleError(ERROR_LAYER_DIGEST)
 
 
 def validate_archive(stream, arch, image_id, *, abort=None):
@@ -222,7 +226,7 @@ def validate_archive(stream, arch, image_id, *, abort=None):
                 or '\\' in name or len(name) > 255 or name in names or len(names) >= 4096
                 or info.type not in (tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE)
                 or info.size < 0 or (info.isdir() and info.size)):
-            raise BundleError('Unsafe Docker archive member.')
+            raise BundleError(ERROR_UNSAFE_MEMBER)
         names.add(name)
         if info.isfile():
             sizes[name] = info.size
@@ -242,7 +246,7 @@ def validate_archive(stream, arch, image_id, *, abort=None):
     if (not isinstance(manifest, list) or len(manifest) != 1 or not isinstance(manifest[0], dict)
             or manifest[0].get('Config') != config_name or manifest[0].get('RepoTags') != [TAG]
             or hashlib.sha256(config).hexdigest() != image_id[7:]):
-        raise BundleError('Docker image ref/config ID differs from the release pin.')
+        raise BundleError(ERROR_CONFIG_IDENTITY)
     config = _json(config)
     layers = manifest[0].get('Layers')
     if (not isinstance(config, dict) or config.get('architecture') != arch or config.get('os') != 'linux'
@@ -268,7 +272,7 @@ def validate_archive(stream, arch, image_id, *, abort=None):
     if (not isinstance(rootfs, dict) or rootfs.get('type') != 'layers' or not isinstance(diff_ids, list)
             or len(diff_ids) != len(layers)
             or not all(isinstance(d, str) and d.startswith('sha256:') and _hex(d[7:]) for d in diff_ids)):
-        raise BundleError('Invalid Docker config rootfs digest list.')
+        raise BundleError(ERROR_ROOTFS)
     _verify_layers(stream, layers, positions, diff_ids, abort)
     stream.seek(0)
 
@@ -313,21 +317,21 @@ def _write(path, data):
         os.fsync(target.fileno())
 
 
-def install_bundle(source, expected_sha256, root=Path('/')):
+def install_bundle(source, expected_sha256, root=Path('/'), *, abort=None):
     """Stage a verified immutable generation, then atomically select it. Never reads old archives into memory."""
-    with open_bundle(source, expected_sha256) as (record, raw, archive):
+    with open_bundle(source, expected_sha256, abort=abort) as (record, raw, archive):
         target = Path(root) / INSTALL_REL / record['architecture']
         with _directory(target, trusted=True, create=True, anchor=Path(root)) as dfd:
             generation = target / expected_sha256
             if generation.exists():
-                with open_bundle(generation, expected_sha256, trusted=True, trust_anchor=Path(root)) as _verified:
+                with open_bundle(generation, expected_sha256, trusted=True, trust_anchor=Path(root), abort=abort) as _verified:
                     pass
             else:
                 stage = Path(tempfile.mkdtemp(prefix='.stage-', dir=target))
                 try:
                     with open(stage / ARCHIVE, 'xb') as output:
                         os.fchmod(output.fileno(), 0o644)
-                        actual = copy_hash(archive, output)
+                        actual = copy_hash(archive, output, abort=abort)
                         output.flush()
                         os.fsync(output.fileno())
                     if actual != (record['archive_sha256'], record['archive_size']):
