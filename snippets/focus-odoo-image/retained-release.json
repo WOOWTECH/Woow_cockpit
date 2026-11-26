@@ -1,0 +1,11 @@
+{
+  "status": "retained-and-hash-verified",
+  "path": "/tmp/parity-focus-20261127/odoo-pg16-release-amd64",
+  "manifest_sha256": "f563a9bf4123af20f65247ab752169e4664c7e0d179806711c7957d70687f9aa",
+  "archive_sha256": "e2f6b112b442a4862cf472b5c9dd59de17db489dd5ba608001c9b1bbe700eeb2",
+  "archive_size": 297140736,
+  "image_id": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "reserve_bytes": 13958643712,
+  "host_free_bytes_after": 33937575936,
+  "redundant_owned_stores_removed": 2
+}
