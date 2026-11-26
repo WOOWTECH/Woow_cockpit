@@ -96,6 +96,8 @@ def run():
     success = False
     try:
         for name, step in (('setup', hr.step_setup), ('before', hr.step_before), ('check', hr.step_check)):
+            if time.monotonic() - started > hr.HOLD_BUDGET:
+                raise hr.Failed('hold budget reached before ' + name)
             hr.headroom()
             step(ev, args)
             if any(not result['ok'] for result in ev.results):
@@ -124,6 +126,8 @@ def run():
             if not equal:
                 raise hr.Failed('instance data changed at ' + phase)
 
+        if time.monotonic() - started > hr.HOLD_BUDGET:
+            raise hr.Failed('hold budget reached before instance import')
         hr.step_import(ev, args, 'x86-enc', on_verified=verify)
         success = not any(not result['ok'] for result in ev.results)
     finally:
@@ -155,6 +159,7 @@ def run():
             drv.save_state()
             ok = ev.finish()
             passed = sum(result['ok'] for result in ev.results)
+            hr.emit(f'RESULT {passed}/{len(ev.results)} passed')
             hr.emit(f'hermes instance full flow: {passed}/{len(ev.results)} ' + ('PASS' if success and ok else 'FAIL'))
     return 0 if success and ok else 1
 

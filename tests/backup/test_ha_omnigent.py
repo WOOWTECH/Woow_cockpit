@@ -3,6 +3,7 @@ podman answers like the lab's -- versions, HA's hardened cluster, the trusted sc
 one snapshot and proven unchanged; B1-01), only HA's data loaded by a role without privileges, the new cluster's
 schema and contents audited, this device's admin and runner accounts kept, test mode, the server volume with HA's
 artifacts and cookie key (CONTRACT section 9). Team E2."""
+import base64
 import contextlib
 import copy
 import gzip
@@ -580,7 +581,10 @@ class ConvertTests(OmnigentCase):
         # The trusted schema: this device's, from one snapshot with the live revision; read before and after.
         self.assertEqual(len(self.world.snapshots), 1)
         self.assertEqual(self.world.snapshots[0][0], ['--', 'omnigent', 'omnigent'])
-        self.assertIn(json.dumps([ALEMBIC]).encode(), self.world.snapshots[0][1])
+        revision = re.search(rb"convert_from\(decode\('([A-Za-z0-9+/=]+)', 'base64'\), 'UTF8'\)::jsonb",
+                             self.world.snapshots[0][1])
+        self.assertIsNotNone(revision, 'the expected revision is passed as a data literal')
+        self.assertEqual(json.loads(base64.b64decode(revision[1], validate=True)), [ALEMBIC])
         self.assertEqual(self.world.live_reads, 2, 'the live schema before and after the capture')
         # Three writes into the new cluster: this device's pre-data and post-data as the app role, HA's DATA (only the
         # entries of the -L list) as the role without privileges -- HA's archive never provides DDL.

@@ -568,12 +568,16 @@ class ReferenceHostTests(unittest.TestCase):
                 app = self.apps[app_id]
                 self.assertTrue(app['valid'])
                 self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
-        # (N8-01: n8n's import fills the cold entry, too; its instance entry stays refused, and so does Hermes' instance entry.)
-        for app_id, modes in (('n8n', ('instance',)), ('hermes', ('instance',))):
+        # n8n's converter still has no complete-instance output; Hermes now carries its entire unused instance.
+        for app_id, modes in (('n8n', ('instance',)),):
             for mode in modes:
-                with self.subTest(app=app_id, mode=mode), self.assertRaises(BackupError) as caught:
-                    self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
-                self.assertEqual(caught.exception.code, 'incompatible')
+                with self.subTest(app=app_id, mode=mode):
+                    with self.assertRaises(BackupError) as caught:
+                        self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
+                    self.assertEqual(caught.exception.code, 'incompatible')
+        instance = self.import_target('hermes', variant(self.apps['hermes'], 'instance')['entry'])
+        self.assertEqual([pg['scope'] for pg in instance.pgs], ['instance'])
+        self.assertEqual(instance.pgs[0]['database'], 'postgres')
         cold = variant(self.apps['n8n'], 'cold')['entry']
         n8n_target = self.import_target('n8n', cold)
         self.assertTrue(n8n_target.cold)

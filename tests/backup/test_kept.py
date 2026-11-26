@@ -11,7 +11,7 @@ import types
 import unittest
 from unittest import mock
 
-from woowbackup import cli, flows, haimport, jobs, kept, podman
+from woowbackup import cli, flows, haimport, jobs, kept, podman, util
 from woowbackup.errors import BackupError
 from woowbackup.haissues import Issue, Sink
 
@@ -358,7 +358,11 @@ class KeptCopyListAndDeleteTests(CliCase):
         self.copy = self.backup()['backup_id']
         self.storage.index[self.copy].update(type='safety', note=kept.NOTE_PREFIX + '示範（匯入前整個資料庫服務，含其他資料庫）')
         os.makedirs(self.paths.data, mode=0o700, exist_ok=True)
-        haimport.register(self.paths, self.source, ha_registry_row(), now=time.time())
+        # Pointer deletion is independent of aging. FakeStorage creates no real archive, so the registry's normal
+        # 24-hour missing-archive pruning needs the same clock as this fixed fixture, on every calendar date.
+        row = ha_registry_row()
+        self.registry_now = util.parse_iso_utc(row['created']).timestamp()
+        haimport.register(self.paths, self.source, row, now=self.registry_now)
         haimport.update_row(self.paths, self.source, kept=self.copy)
 
     def listed(self):
@@ -396,7 +400,7 @@ class KeptCopyListAndDeleteTests(CliCase):
         second_source = self.backup()['backup_id']
         second_copy = self.backup()['backup_id']
         self.storage.index[second_copy].update(type='safety', note=kept.NOTE_PREFIX + '另一份')
-        haimport.register(self.paths, second_source, ha_registry_row(), now=time.time())
+        haimport.register(self.paths, second_source, ha_registry_row(), now=self.registry_now)
         haimport.update_row(self.paths, second_source, kept=second_copy)
         self.assertNotIn('error', self.call(['delete'], {'backup_id': self.copy}))
         rows = haimport.load_registry(self.paths)
