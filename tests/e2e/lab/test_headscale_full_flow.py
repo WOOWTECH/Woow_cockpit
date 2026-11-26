@@ -56,6 +56,33 @@ def key(prefix='privkey'):
     return f'{prefix}:{secrets.token_hex(32)}'
 
 
+class ConfirmationGateTests(unittest.TestCase):
+    def test_the_old_lab_script_never_confirms_a_new_product_line_implicitly(self):
+        hsff.require_reviewed_check({'ok': True, 'importable': True, 'blockers': [], 'issues': [
+            {'id': 'headscale.api-keys-not-moved', 'level': 'notice'}]})
+        with self.assertRaises(hsff.Failed) as caught:
+            hsff.require_reviewed_check({'ok': True, 'importable': True, 'blockers': [], 'issues': [
+                {'id': 'headscale.api-keys-not-moved', 'level': 'notice'},
+                {'id': 'headscale.policy-replaced', 'level': 'confirm'},
+            ]})
+        self.assertIn('headscale.policy-replaced', str(caught.exception))
+
+    def test_a_missing_or_damaged_issue_list_is_not_treated_as_no_confirmation(self):
+        for result in ({}, {'ok': True, 'importable': True, 'issues': None},
+                       {'ok': True, 'importable': True, 'issues': [{}, None]},
+                       {'ok': True, 'importable': True, 'issues': [{'level': 'confirm'}]},
+                       {'ok': True, 'importable': True, 'issues': [{'id': 'wrong', 'level': None}]}):
+            with self.subTest(result=result), self.assertRaises(hsff.Failed):
+                hsff.require_reviewed_check(result)
+
+    def test_a_refusal_stops_before_the_lab_imports_anything(self):
+        for result in ({'ok': False, 'importable': True, 'blockers': [], 'issues': []},
+                       {'ok': True, 'importable': False, 'blockers': [], 'issues': []},
+                       {'ok': True, 'importable': True, 'blockers': ['test refusal'], 'issues': []}):
+            with self.subTest(result=result), self.assertRaises(hsff.Failed):
+                hsff.require_reviewed_check(result)
+
+
 class LabConfigTest(unittest.TestCase):
     def test_only_the_derp_block_changes(self):
         out = hsff.lab_config(DEV_D_CONFIG)
