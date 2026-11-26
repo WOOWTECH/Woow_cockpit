@@ -1,0 +1,12 @@
+{
+  "device": "woowbk-dev-e",
+  "scope": "read-only-before-image-recovery-and-wake",
+  "network_mode": "none",
+  "published_ports": 0,
+  "code_server_service": "inactive",
+  "code_server_health_timer": "inactive",
+  "schedule_timer_enabled": "enabled",
+  "schedule_timer_active": "failed",
+  "expected_image_config_id": "7999790230ec6267ae55b82ab0e8d725add734658d15a8ec7a139a6d4087b0a1",
+  "commercial_acceptance": "not-complete"
+}
