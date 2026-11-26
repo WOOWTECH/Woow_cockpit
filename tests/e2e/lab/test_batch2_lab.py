@@ -94,6 +94,73 @@ class Batch2ScriptsTest(unittest.TestCase):
             self.assertIn(f'phase_check_{app.replace("-", "_")}() {{', text)
 
 
+class ImageCopySpaceTest(unittest.TestCase):
+    """Run the real copy function with disk/device doubles; no image, save, load or device is used."""
+
+    def copy(self, before, after, compressed):
+        text = (HERE / 'deploy-batch2.sh').read_text()
+        function = text[text.index('\ncopy_image()'):text.index('\nphase_images()')]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            script = r'''
+set -eu
+GIB=1073741824 FLOOR_GIB=12 RESERVE_GIB=1
+VOLUME_HOME=$CASE_DIR
+XFER_HOST=
+LP=unused-lab-double NAME=unused-device
+die() { echo "$*" >&2; exit 1; }
+log() { echo "$*" >&2; }
+host_free() { if [ -f "$CASE_DIR/saved" ]; then echo "$AFTER_FREE"; else echo "$BEFORE_FREE"; fi; }
+device_id() { if [ -f "$CASE_DIR/loaded" ]; then echo "$IMAGE_ID"; fi; }
+podman() { if [ "$4" = '{{.Id}}' ]; then echo "$IMAGE_ID"; else echo 6442450944; fi; }
+owner() { :; }
+scan_owners() { :; }
+du() { printf '%s\t%s\n' "$COMPRESSED_SIZE" "$XFER_HOST"; }
+guarded() {
+    case " $* " in
+        *' podman save '*) mkdir -p "$XFER_HOST"; touch "$CASE_DIR/saved" ;;
+        *) touch "$CASE_DIR/loaded" ;;
+    esac
+}
+xfer_cleanup() { [ -z "$XFER_HOST" ] || rm -rf -- "$XFER_HOST"; XFER_HOST=; }
+trap xfer_cleanup EXIT
+'''
+            env = dict(os.environ, CASE_DIR=str(root), BEFORE_FREE=str(int(before * 1024**3)),
+                       AFTER_FREE=str(int(after * 1024**3)), COMPRESSED_SIZE=str(int(compressed * 1024**3)),
+                       IMAGE_ID='a' * 64)
+            result = subprocess.run(['bash', '-c', script + function + '\ncopy_image source test-image\n'],
+                                    env=env, capture_output=True, text=True, timeout=30)
+            return result, (root / 'saved').exists(), (root / 'loaded').exists(), list(root.glob('.woowbk-xfer/*'))
+
+    def test_save_is_refused_before_allocating_when_the_reserve_would_be_consumed(self):
+        result, saved, loaded, remaining = self.copy(18, 16, 2)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(saved or loaded)
+        self.assertEqual(remaining, [])
+
+    def test_measured_transfer_allows_a_copy_the_old_fixed_ratio_overestimated(self):
+        result, saved, loaded, remaining = self.copy(24, 22, 2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(saved and loaded)
+        self.assertEqual(remaining, [])
+
+    def test_actual_transfer_size_or_another_writer_can_refuse_load_and_remove_the_transfer(self):
+        for after, compressed in ((22, 4), (20, 2)):
+            with self.subTest(after=after, compressed=compressed):
+                result, saved, loaded, remaining = self.copy(24, after, compressed)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(saved)
+                self.assertFalse(loaded)
+                self.assertIn('13 GiB must stay free', result.stderr)
+                self.assertEqual(remaining, [])
+
+    def test_exact_reserve_boundary_is_allowed(self):
+        result, saved, loaded, remaining = self.copy(23, 21, 2)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(saved and loaded)
+        self.assertEqual(remaining, [])
+
+
 # Stand-ins for deploy-batch2.sh's rotate:APP and wake:APP: a labpodman that keeps dev-e's unit, container and image
 # state in a JSON file (starting a unit makes its containers, stopping removes them: quadlet's --rm), a host podman
 # that only answers `image inspect` for wake (rotate must not call it), and a df with a chosen free space.

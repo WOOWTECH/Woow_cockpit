@@ -26,7 +26,8 @@
 #           are `image inspect` and `save`; it never pulls. The compressed directory keeps the peak disk use at about
 #           2 x compressed + 1 x image (a `podman save | podman load` pipe needs about 3 x image: podman copies stdin to
 #           a temporary file and containers/image keeps a temporary copy of every blob until the image is committed).
-#           Before every image the host must keep FLOOR_GIB (12) + RESERVE_GIB (1) free after the estimated peak,
+#           Before saving, reserve the image's size for the compressed transfer; before loading, use the measured
+#           transfer size plus the image size and another transfer copy. Both checks retain FLOOR_GIB (12) + RESERVE_GIB (1).
 #           and a watchdog stops the copy and removes the transfer directory if free space falls to FLOOR_GIB + 0.25.
 #           Image IDs equal the host's (the ID is the config digest); manifest digests change on the way, so the app
 #           phases change the package copy's digest pins (quadlet/*.container Image=) to the loaded digests.
@@ -212,12 +213,12 @@ copy_image() {  # <host reference> <name in dev-e> [ignore-chown]
         return
     fi
     size=$(podman image inspect --format '{{.Size}}' "$src")
-    # Estimated peak: the compressed directory and containers/image's temporary copy of it (each at most 60 % of the
-    # image here, measured 43-45 %) plus the unpacked image.
-    need=$((size + 2 * size * 6 / 10))
+    # Stage the compressed transfer first. Loading has a separate preflight below, using the measured size rather
+    # than a fixed compression ratio. Reserve a whole unpacked image for the save and keep the live disk watchdog.
+    need=$size
     free=$(host_free)
     [ $((free - need)) -ge $(((FLOOR_GIB + RESERVE_GIB) * GIB)) ] ||
-        die "host disk: $((free >> 30)) GiB free; $name needs up to $((need >> 30)) GiB at its peak and $((FLOOR_GIB + RESERVE_GIB)) GiB must stay free"
+        die "host disk: $((free >> 30)) GiB free; saving $name reserves $((need >> 30)) GiB and $((FLOOR_GIB + RESERVE_GIB)) GiB must stay free"
     install -d -m 0755 "$VOLUME_HOME/.woowbk-xfer"
     XFER_HOST=$VOLUME_HOME/.woowbk-xfer/${id:0:12}
     xfer_dev=/home/.woowbk-xfer/${id:0:12}
@@ -226,6 +227,12 @@ copy_image() {  # <host reference> <name in dev-e> [ignore-chown]
     guarded 3600 nice -n 10 ionice -c3 podman save -q --format docker-dir --compress -o "$XFER_HOST" "$id" ||
         die "podman save of $src failed"
     compressed=$(du -sb "$XFER_HOST" | cut -f1)
+    # The transfer already occupies disk. Loading can add an unpacked image and containers/image's temporary copy
+    # of the compressed transfer; measure free space again so other writers are included in this decision.
+    need=$((size + compressed))
+    free=$(host_free)
+    [ $((free - need)) -ge $(((FLOOR_GIB + RESERVE_GIB) * GIB)) ] ||
+        die "host disk: $((free >> 20)) MiB free after saving; loading $name needs $((need >> 20)) MiB more and $((FLOOR_GIB + RESERVE_GIB)) GiB must stay free (transfer removed)"
     scan_owners "$name" "$flag"
     [ "$flag" != ignore-chown ] || load_opts=(--storage-opt ignore_chown_errors=true)
     guarded 3600 nice -n 10 "$LP" exec -i "$NAME" /usr/local/bin/woowbk-owner podman "${load_opts[@]}" load -q -i "$xfer_dev" \

@@ -474,8 +474,11 @@ rootless 容器（含巢狀）的用量全部算到同一個使用者，16:35 �
 映像保留。資料、單元、env、密鑰、目錄項目與基準備份都留著。喚醒用 `deploy-batch2.sh e wake:<應用>`：`images:<應用>`、確認每個已安裝單元的
 `Image=` 都已載入（否則不啟動任何東西）、code-server 先做 ID 對應複本、有上限的 inotify 探測（少於 5 個就停）、主機在第一次啟動的複本
 （OpenDesign 7 GiB、Nextcloud 3 GiB）之後仍要留 13 GiB，依序啟動單元（啟動時主機低於 12.25 GiB 就把該單元停掉）、健康網址回應後才啟動計時器，
-最後在 `WAKE_READY_S`（預設 1200 秒）內 `check:<應用>` 通過。磁碟需求（`images` 的守門：映像大小的 2.2 倍＋13 GiB）：code-server 喚醒開始時約需 24.5 GiB 可用、用掉約 10.6 GiB；
-OpenDesign 約需 26.7 GiB、用掉約 12.1 GiB；Nextcloud 約需 17 GiB、用掉約 6.1 GiB。
+最後在 `WAKE_READY_S`（預設 1200 秒）內 `check:<應用>` 通過。`images` 分兩次檢查空間：儲存壓縮副本前，預留一份完整映像大小＋13 GiB；
+存好後量實際壓縮大小，載入前重新讀可用空間，要求扣掉「完整映像＋壓縮副本的一份暫存」仍有 13 GiB。已存的壓縮副本已計入磁碟用量；
+空間不夠就刪除這份傳輸暫存，尚未載入或啟動應用。12.25 GiB 的即時停止線與第一次啟動的預留量照常檢查。
+先前用固定 2.2 倍映像大小估算時，code-server 喚醒開始約需 24.5 GiB、用掉約 10.6 GiB；OpenDesign 約需 26.7 GiB、用掉約 12.1 GiB；
+Nextcloud 約需 17 GiB、用掉約 6.1 GiB。這些是舊估算與既有實測值；目前會依實際副本大小判斷載入空間。
 
 **重設**：`tests/e2e/lab/reset.sh e --up` 刪除容器與三個資料卷，再照「建置」重跑。新的設備金鑰會覆寫 `dev-e-kit.txt`；`dev-e-markers.json` 保留。
 dev-e 的變更請以 `flock -w 3600 /tmp/woowbk-dev-e-mutation.lock <指令>` 包起來（與 dev-d 相同的規則）。
