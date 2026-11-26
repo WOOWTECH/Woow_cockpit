@@ -3091,8 +3091,15 @@ systemctl, owner runner and catalog; the two real x86 batch-2 backups were inspe
    a child that dropped to the account nobody on a copy of its own, never by the job process; symlinks below `nodes/`
    may climb (`..`) only before their names; a disk running full or a cancel stops a container step within seconds.
    Batch 1: every SQLite file of an HA backup (and the copy of the live Headscale database) is opened only by
-   `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements; databases containing virtual tables are refused before integrity checks), whose only
-   write is Headscale's `api_keys` on a database without triggers or views, and what it wrote is copied out with
+   `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements). Virtual tables
+   stop before integrity checks except Hermes's reviewed FTS layouts and Headscale's `rebuild_from=live.sqlite` on
+   `ha.sqlite`/`original.sqlite`. In the latter case, the child's private copy is rebuilt from this device's ordinary
+   table/index DDL; only corresponding ordinary rows are read, with strict UTF-8, equal column layouts, and exact
+   returned values/types. Row identities, autoincrement sequences and user_version are retained. No archived DDL,
+   virtual module, shadow-table contents, trigger or view is executed or carried over; original object names remain
+   in the check for confirmation. Incompatible ordinary data or an untrusted target layout still stops Headscale.
+   The child's other writes are Headscale's checked extra-object cleanup, API keys and policy rows on a database
+   without triggers or views. What it wrote is copied out with
    O_NOFOLLOW as a regular file with one link; Omnigent's HA data is loaded into this device's own schema (B1-01: HA's
    DDL, defaults, checks and domains never run; only its table data and sequence values, by a role without
    privileges, each entry naming a trusted table once; the new cluster's schema and contents audited); HA's EMQX data is opened by the live image without a

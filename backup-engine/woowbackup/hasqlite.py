@@ -19,7 +19,12 @@ itself.
 
 A spec is {db: name, check: 'quick'|'integrity'|None, schema: bool, counts: [table], queries: [QUERIES key],
 replace_api_keys_from: name|None, replace_policies_from: name|None, strip_extra_from: name|None,
-keep_tables: [table]}. The writes are Headscale's extra schema objects, API keys and its access
+keep_tables: [table], rebuild_from: live.sqlite|None, rebuild_tables: [table]}. A Headscale copy with virtual tables can
+be rebuilt from this device's ordinary table/index DDL. The child reads only corresponding ordinary columns, refuses
+generated/mismatched columns or changed values/types, retains row identities, sequences and user_version, and never
+loads or drops an archived virtual module. Its answer retains original_schema for the customer's confirmation.
+All other virtual tables still stop before integrity checks, except the narrow Hermes FTS case above.
+The writes are Headscale's extra schema objects, API keys and its access
 policies (the second, S3: a policy of this device's own database is kept when HA's database comes): the target database's
 `policies` rows are replaced by those of the source database in the same way as the API keys (same columns required, at most
 1000 rows, one transaction, WAL truncated). The target database's `api_keys` rows are
@@ -186,6 +191,83 @@ def identifier(name):
     if not isinstance(name, str) or not name or len(name) > 512 or "\x00" in name:
         raise ValueError("unsafe schema object name")
     return '"' + name.replace('"', '""') + '"'
+def rebuild_ordinary(conn, name, info, source, required):
+    # Never connect to, DROP or copy a virtual module. Only this device supplies executable DDL.
+    if len(info["virtual"]) + len(info["tables"]) + info["triggers"] + info["views"] > 1000:
+        raise ValueError("too many schema objects to rebuild")
+    other = connect(source)
+    fresh = None
+    temp = name + ".rebuilt"
+    try:
+        own = layout(other)
+        if own["virtual"] or own["triggers"] or own["views"] or checked(other, "integrity") != ["ok"]:
+            raise ValueError("this device's schema cannot supply a trusted rebuild")
+        all_tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if ((set(required) | set(own["tables"])) & all_tables) - set(info["tables"]):
+            raise ValueError("a required ordinary table is virtual or hidden by a virtual prefix")
+        if (set(required) & set(info["tables"])) - set(own["tables"]):
+            raise ValueError("this device lacks a required archived table")
+        kept = sorted((set(info["tables"]) & set(own["tables"])) -
+                      {t for t in info["tables"] if t.startswith("sqlite_")})
+        if not kept:
+            raise ValueError("no ordinary application data to rebuild")
+        conn.text_factory = other.text_factory = str  # Invalid UTF-8 must never turn into replacement data.
+        fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        os.close(fd)
+        fresh = connect(temp)
+        fresh.text_factory = str
+        fresh.execute("PRAGMA foreign_keys=OFF")
+        fresh.execute("BEGIN IMMEDIATE")
+        for table in kept:
+            quoted = identifier(table)
+            source_columns = conn.execute("PRAGMA table_xinfo(" + quoted + ")").fetchall()
+            target_columns = other.execute("PRAGMA table_xinfo(" + quoted + ")").fetchall()
+            shape = lambda cols: {r[1]: (str(r[2]).upper(), r[6]) for r in cols}
+            if (not source_columns or shape(source_columns) != shape(target_columns)
+                    or any(r[6] != 0 for r in source_columns + target_columns)):
+                raise ValueError("ordinary table columns cannot be preserved exactly")
+            sql = other.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()[0]
+            fresh.execute(sql)
+            names = [r[1] for r in target_columns]
+            if not re.search(r"\bWITHOUT\s+ROWID\s*$", sql, re.I):
+                rowid = next((n for n in ("_rowid_", "rowid", "oid") if n not in names), None)
+                if rowid is None:
+                    raise ValueError("ordinary table row identities cannot be preserved")
+                names = [rowid] + names
+            cols = ", ".join(identifier(n) for n in names)
+            insert = "INSERT INTO " + quoted + " (" + cols + ") VALUES (" + ", ".join("?" for _ in names) + ") RETURNING " + cols
+            for row in conn.execute("SELECT " + cols + " FROM " + quoted + " NOT INDEXED"):
+                written = fresh.execute(insert, row).fetchone()
+                if (written != row or tuple(type(v) for v in written) != tuple(type(v) for v in row)):
+                    raise ValueError("ordinary table data changed during rebuild")
+            for (sql,) in other.execute("SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,)):
+                fresh.execute(sql)
+        if "sqlite_sequence" in info["tables"]:
+            for table, seq in conn.execute("SELECT name, seq FROM sqlite_sequence"):
+                if table in kept:
+                    if not isinstance(seq, int) or seq < 0:
+                        raise ValueError("invalid ordinary table sequence")
+                    fresh.execute("DELETE FROM sqlite_sequence WHERE name=?", (table,))
+                    fresh.execute("INSERT INTO sqlite_sequence(name, seq) VALUES (?, ?)", (table, seq))
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        fresh.execute("PRAGMA user_version=" + str(int(version)))
+        fresh.execute("COMMIT")
+        if checked(fresh, "integrity") != ["ok"]:
+            raise ValueError("rebuilt ordinary database is damaged")
+        fresh.close()
+        fresh = None
+        conn.close()
+        for suffix in ("-wal", "-shm", "-journal"):
+            try:
+                os.unlink(name + suffix)
+            except FileNotFoundError:
+                pass
+        os.replace(temp, name)
+        return connect(name)
+    finally:
+        other.close()
+        if fresh is not None:
+            fresh.close()
 def strip_extra(conn, info, source, keep_tables):
     other = connect(source)
     try:
@@ -227,6 +309,13 @@ for spec in request["dbs"]:
     try:
         conn = connect(name)
         info = layout(conn)
+        if info["virtual"] and spec.get("rebuild_from"):
+            original = info
+            conn = rebuild_ordinary(conn, name, info, spec["rebuild_from"], spec["rebuild_tables"])
+            info = layout(conn)
+            doc["rebuilt"] = True
+            if spec.get("schema"):
+                doc["original_schema"] = original
         if info["virtual"] and not (spec.get("hermes_fts") and hermes_fts_ok(conn, info)):
             raise ValueError("virtual tables are not supported")
         if spec.get("check"):
@@ -349,6 +438,8 @@ def _spec(spec, names):
     source = spec.get('replace_api_keys_from')
     psource = spec.get('replace_policies_from')
     strip_source = spec.get('strip_extra_from')
+    rebuild_source = spec.get('rebuild_from')
+    rebuild_tables = list(spec.get('rebuild_tables') or [])
     keep_tables = list(spec.get('keep_tables') or [])
     counts = list(spec.get('counts') or [])
     queries = list(spec.get('queries') or [])
@@ -357,6 +448,11 @@ def _spec(spec, names):
             or (strip_source is not None and (strip_source not in names or strip_source == spec['db']
                                               or spec.get('hermes_fts') or spec['db'] != 'ha.sqlite'))
             or (strip_source is None and keep_tables)
+            or (rebuild_source is not None and (rebuild_source not in names or rebuild_source != 'live.sqlite'
+                    or spec['db'] not in ('ha.sqlite', 'original.sqlite') or spec.get('hermes_fts')))
+            or (rebuild_source is None and rebuild_tables)
+            or len(rebuild_tables) > 128
+            or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in rebuild_tables)
             or len(keep_tables) > 128 or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in keep_tables)
             or not all(isinstance(t, str) and IDENT_RE.fullmatch(t) for t in counts)
             or not all(q in QUERIES for q in queries)
@@ -367,6 +463,7 @@ def _spec(spec, names):
     return {'db': spec['db'], 'check': check, 'schema': spec.get('schema') is True, 'counts': counts,
             'queries': queries, 'replace_api_keys_from': source, 'replace_policies_from': psource,
             'strip_extra_from': strip_source, 'keep_tables': keep_tables,
+            'rebuild_from': rebuild_source, 'rebuild_tables': rebuild_tables,
             'hermes_fts': spec.get('hermes_fts') is True}
 
 

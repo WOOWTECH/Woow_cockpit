@@ -374,9 +374,11 @@ def records_conflict(config):
 
 # ====================================================================== analysis
 
-def _specs(*, replace, copy_policies=False, strip_extra=False):
+def _specs(*, replace, copy_policies=False, strip_extra=False, rebuild=False):
     ha = {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': sorted(TABLES),
           'queries': ['headscale.version', 'headscale.migrations', 'headscale.node_ips', 'headscale.api_key_prefixes']}
+    if rebuild:
+        ha.update(rebuild_from='live.sqlite', rebuild_tables=sorted(TABLES))
     if replace:
         ha['replace_api_keys_from'] = 'live.sqlite'
         if strip_extra:
@@ -421,7 +423,7 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
             sink.stop('headscale.db-unusable', f'HA 的 Headscale 資料庫已損毀或無法讀取（{haissues.clean(why, 120)}）。',
                       action='請在 HA 重新備份後再匯入 Headscale；這台的 Headscale 不會變。')
         else:
-            schema = answer.get('schema') or {}
+            schema = answer.get('original_schema') or answer.get('schema') or {}
             tables = set(schema.get('tables') or [])
             if not tables - {'sqlite_sequence'}:   # a database file with nothing in it: HA's Headscale never made its tables
                 sink.stop('headscale.no-database', 'HA 備份裡 Headscale 的資料庫是空的（沒有任何資料表），可能從來沒有啟動過；沒有可搬的資料，'
@@ -433,13 +435,15 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
                           action='請在 HA 重新備份後再匯入 Headscale；這台的 Headscale 不會變。')
             extra_tables = sorted(tables - known)
             triggers, views = list(schema.get('trigger_names') or []), list(schema.get('view_names') or [])
+            virtual = list(schema.get('virtual') or [])
             odd = ([f'資料表：{name}' for name in extra_tables]
                    + [f'觸發程序：{name}' for name in triggers]
-                   + [f'檢視表：{name}' for name in views])
+                   + [f'檢視表：{name}' for name in views]
+                   + [f'虛擬資料表：{name}' for name in virtual])
             if odd:   # HS-15: none of these objects belongs to the imported Headscale data
                 if (len(odd) > 1000 or schema.get('triggers') != len(triggers) or schema.get('views') != len(views)
                         or any(not isinstance(name, str) or not name or len(name) > 512 or '\x00' in name
-                               for name in [*extra_tables, *triggers, *views])):
+                               for name in [*extra_tables, *triggers, *views, *virtual])):
                     sink.stop('headscale.db-unusable', 'HA 的 Headscale 資料庫多出的結構太多或名稱不完整，無法安全地移除。',
                               action='請先在 HA 檢查資料庫，再重新備份後匯入；這台的 Headscale 不會變。')
                 elif ((live or {}).get('schema') or {}).get('triggers') or ((live or {}).get('schema') or {}).get('views'):
@@ -449,7 +453,8 @@ def judge(sink, src, answer, *, addon_version, version, ha_config, config, live=
                     plan.strip_extra = True
                     sink.confirm('headscale.db-extra-objects',
                                  f'HA 的 Headscale 資料庫有這台不使用的內容（{hacommon.names(odd, 5)}）；'
-                                 '匯入時只在轉換用的複本移除這些資料表、觸發程序或檢視表，其餘資料照搬。', odd)
+                                 '匯入時只在轉換用的複本移除這些資料表、觸發程序或檢視表；有虛擬資料表時，使用這台的結構重建普通資料，'
+                                 '不載入虛擬資料表的模組，其餘資料照搬。', odd)
             counts = answer.get('counts') or {}
             details.update({k: ha_odoo._int(counts.get(k)) for k in COUNTED})
             values = answer.get('values') or {}
@@ -739,10 +744,11 @@ def check(work, app):
     sink.skipped(src.report)   # the selected HA entries the reader left out are shown before import
     work.phase('check')
     answer = None
+    live_files, live, _noise = _read_live(work, app, target, staging, config)
     if src.db is not None:
-        answer = hasqlite.run(_specs(replace=False), _ha_files(src), staging / 'sqlite', checkpoint=work.checkpoint,
+        answer = hasqlite.run(_specs(replace=False, rebuild='live.sqlite' in live_files), {**_ha_files(src), **live_files},
+                              staging / 'sqlite', checkpoint=work.checkpoint,
                               what='Headscale 資料庫')['ha.sqlite']
-    _files, live, _noise = _read_live(work, app, target, staging, config)
     addon = work.addon_info(SLUG)
     details, plan = judge(sink, src, answer, addon_version=addon.version, version=version, ha_config=src.config, config=config,
                           live=live, edit_config=target.config_dir is not None)
@@ -765,16 +771,17 @@ def convert(work, app, test_mode, out_dir):
     work.phase('convert')
     addon = work.addon_info(SLUG)
     ha_answer = None
-    if src.db is not None:
-        ha_answer = hasqlite.run(_specs(replace=False), _ha_files(src), staging / 'sqlite-ha', checkpoint=work.checkpoint,
-                                 what='Headscale 資料庫')['ha.sqlite']
     live_files, live_answer, live_noise = _read_live(work, app, target, staging, config, key=True)
+    if src.db is not None:
+        ha_answer = hasqlite.run(_specs(replace=False, rebuild='live.sqlite' in live_files), {**_ha_files(src), **live_files},
+                                 staging / 'sqlite-ha', checkpoint=work.checkpoint,
+                                 what='Headscale 資料庫')['ha.sqlite']
     details, plan = judge(sink, src, ha_answer, addon_version=addon.version, version=version, ha_config=src.config, config=config,
                           live=live_answer, edit_config=target.config_dir is not None)
     files = {**_ha_files(src), **live_files}
     converted = staging / 'converted'
     converted.mkdir(mode=0o700)
-    answers = hasqlite.run(_specs(replace=True, copy_policies=plan.copy_policies, strip_extra=plan.strip_extra), files, staging / 'sqlite', outputs=('ha.sqlite',),
+    answers = hasqlite.run(_specs(replace=True, copy_policies=plan.copy_policies, strip_extra=plan.strip_extra, rebuild=True), files, staging / 'sqlite', outputs=('ha.sqlite',),
                            out_dir=converted, checkpoint=work.checkpoint, what='Headscale 資料庫')
     replaced = answers['ha.sqlite'].get('replaced') or {}
     live_keys = (answers['live.sqlite'].get('values') or {}).get('headscale.api_key_prefixes') or []
@@ -783,7 +790,8 @@ def convert(work, app, test_mode, out_dir):
                                      action='請再試一次；仍然不行時，請把作業紀錄交給工程人員。'), 'job-failed', app=app.id)
     db_file = answers[None]['ha.sqlite']
     verify_specs = _specs(replace=False)
-    verify_specs += [{'db': 'original.sqlite', 'check': 'integrity', 'counts': sorted(TABLES)},
+    verify_specs += [{'db': 'original.sqlite', 'check': 'integrity', 'counts': sorted(TABLES),
+                      'rebuild_from': 'live.sqlite', 'rebuild_tables': sorted(TABLES)},
                      {'db': 'live.sqlite', 'check': 'integrity', 'counts': ['policies'],
                       'queries': ['headscale.api_key_prefixes']}]
     verify_files = {'ha.sqlite': db_file, 'original.sqlite': src.db,

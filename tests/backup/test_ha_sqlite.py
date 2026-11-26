@@ -457,5 +457,112 @@ class StripExtraTests(unittest.TestCase):
             conn.close()
 
 
+class RebuildVirtualTests(StripExtraTests):
+    def add_virtual(self, *, unknown=False, wal=False):
+        conn = sqlite3.connect(self.root / 'ha')
+        if wal:
+            conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('CREATE VIRTUAL TABLE extra USING fts5(body)')
+        conn.execute("INSERT INTO extra VALUES ('unused content')")
+        conn.execute('CREATE TRIGGER foreign_trigger AFTER DELETE ON api_keys BEGIN DELETE FROM users; END')
+        conn.execute('CREATE VIEW foreign_view AS SELECT * FROM extra')
+        if unknown:
+            # This fixture declares a module the child cannot load; product code never writes schema metadata.
+            conn.execute('PRAGMA writable_schema=ON')
+            conn.execute("UPDATE sqlite_master SET sql='CREATE VIRTUAL TABLE extra USING unavailable_module(body)' "
+                         "WHERE name='extra'")
+        conn.execute('PRAGMA user_version=42')
+        conn.execute("UPDATE sqlite_sequence SET seq=91 WHERE name='users'")
+        conn.commit()
+        if wal:
+            return conn
+        conn.close()
+
+    def rebuild(self, *, extra_files=None, **overrides):
+        spec = {'db': 'ha.sqlite', 'check': 'integrity', 'schema': True, 'counts': ['users'],
+                'rebuild_from': 'live.sqlite', 'rebuild_tables': ['users', 'nodes', 'api_keys'],
+                'strip_extra_from': 'live.sqlite', 'replace_api_keys_from': 'live.sqlite'}
+        spec.update(overrides)
+        return hasqlite.run([spec], {'ha.sqlite': self.root / 'ha', 'live.sqlite': self.root / 'live',
+                                   **(extra_files or {})}, self.root / 'work',
+                           outputs=('ha.sqlite',), out_dir=self.root / 'out')
+
+    def test_unknown_module_is_not_loaded_and_only_trusted_schema_and_equal_rows_are_written(self):
+        import hashlib
+        self.add_virtual(unknown=True)
+        before = hashlib.sha256((self.root / 'ha').read_bytes()).hexdigest()
+        answers = self.rebuild()
+        answer = answers['ha.sqlite']
+        self.assertIsNone(hasqlite.problem(answer))
+        self.assertTrue(answer['rebuilt'])
+        self.assertEqual(answer['original_schema']['virtual'], ['extra'])
+        self.assertEqual(answer['schema']['virtual'], [])
+        self.assertEqual(answer['schema']['triggers'], 0)
+        self.assertEqual(answer['schema']['views'], 0)
+        self.assertEqual(answer['counts'], {'users': 1})
+        with sqlite3.connect(answers[None]['ha.sqlite']) as conn:
+            self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)])
+            self.assertEqual(conn.execute('SELECT prefix FROM api_keys').fetchall(), [('mine',)])
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0], 42)
+            self.assertEqual(conn.execute("SELECT seq FROM sqlite_sequence WHERE name='users'").fetchone()[0], 91)
+            self.assertFalse(conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'extra%'").fetchall())
+        self.assertEqual(hashlib.sha256((self.root / 'ha').read_bytes()).hexdigest(), before)
+
+    def test_virtual_data_in_a_wal_is_rebuilt_without_old_sidecars_in_the_output(self):
+        conn = self.add_virtual(wal=True)
+        try:
+            conn.execute("INSERT INTO users(name) VALUES ('in WAL')")
+            conn.commit()
+            answers = self.rebuild(extra_files={'ha.sqlite-wal': self.root / 'ha-wal'})
+            self.assertIsNone(hasqlite.problem(answers['ha.sqlite']))
+            with sqlite3.connect(answers[None]['ha.sqlite']) as result:
+                self.assertEqual(result.execute('SELECT name FROM users ORDER BY id').fetchall(),
+                                 [('alice',), ('in WAL',)])
+        finally:
+            conn.close()
+
+    def test_a_required_table_missing_from_the_device_schema_refuses(self):
+        self.add_virtual()
+        with sqlite3.connect(self.root / 'live') as conn:
+            conn.execute('DROP TABLE nodes')
+        self.assertIn('required archived table', self.rebuild()['ha.sqlite'].get('error', ''))
+
+    def test_a_column_difference_or_generated_column_refuses_instead_of_losing_data(self):
+        self.add_virtual()
+        with sqlite3.connect(self.root / 'ha') as conn:
+            conn.execute('ALTER TABLE users ADD COLUMN additional text')
+        self.assertIn('columns cannot be preserved', self.rebuild()['ha.sqlite'].get('error', ''))
+
+    def test_generated_archive_columns_are_never_evaluated_or_silently_omitted(self):
+        self.add_virtual()
+        for path in (self.root / 'ha', self.root / 'live'):
+            with sqlite3.connect(path) as conn:
+                conn.execute('ALTER TABLE users ADD COLUMN computed text GENERATED ALWAYS AS (lower(name)) VIRTUAL')
+        self.assertIn('columns cannot be preserved', self.rebuild()['ha.sqlite'].get('error', ''))
+
+    def test_a_target_trigger_is_not_used_as_a_trusted_schema(self):
+        self.add_virtual()
+        with sqlite3.connect(self.root / 'live') as conn:
+            conn.execute('CREATE TRIGGER unexpected AFTER INSERT ON users BEGIN DELETE FROM nodes; END')
+        self.assertIn('trusted rebuild', self.rebuild()['ha.sqlite'].get('error', ''))
+
+    def test_a_virtual_prefix_cannot_hide_and_discard_a_required_ordinary_table(self):
+        with sqlite3.connect(self.root / 'ha') as conn:
+            conn.execute('CREATE VIRTUAL TABLE api USING fts5(body)')
+        self.assertIn('hidden by a virtual prefix', self.rebuild()['ha.sqlite'].get('error', ''))
+
+    def test_invalid_text_refuses_instead_of_copying_replacement_characters(self):
+        self.add_virtual()
+        with sqlite3.connect(self.root / 'ha') as conn:
+            conn.execute("UPDATE users SET name=CAST(x'ff' AS TEXT)")
+        self.assertIsNotNone(hasqlite.problem(self.rebuild()['ha.sqlite']))
+
+    def test_rebuild_is_only_available_for_headscale_copies_and_the_live_schema(self):
+        for db, source in [('state.db', 'live.sqlite'), ('ha.sqlite', 'ha.sqlite'), ('ha.sqlite', 'other.sqlite')]:
+            with self.subTest(db=db, source=source), self.assertRaises(BackupError):
+                hasqlite.run([{'db': db, 'rebuild_from': source}],
+                             {db: self.root / 'ha', source: self.root / 'live'}, self.root / 'work')
+
+
 if __name__ == '__main__':
     unittest.main()

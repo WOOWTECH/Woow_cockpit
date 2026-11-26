@@ -510,6 +510,44 @@ class DatabaseTests(HeadscaleCase):
         self.assertTrue(checked['importable'], checked['issues'])
         self.assertNotIn('headscale.db-extra-objects', self.issues(checked))
 
+    def virtual_backup(self, names):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'ha.sqlite'
+            with sqlite3.connect(path) as conn:
+                populate(conn, prefixes=['ha'])
+                for name in names:
+                    conn.execute('CREATE VIRTUAL TABLE ' + name + ' USING fts5(body)')
+                    conn.execute('PRAGMA writable_schema=ON')
+                    conn.execute("UPDATE sqlite_master SET sql=? WHERE name=?",
+                                 ('CREATE VIRTUAL TABLE ' + name + ' USING unavailable_module(body)', name))
+            return self.upload_headscale(db=path.read_bytes())
+
+    def test_unknown_virtual_modules_require_confirmation_then_preserve_ordinary_data_and_live_keys(self):
+        ha_id = self.virtual_backup(['foreign_virtual'])
+        checked = self.checked(ha_id)
+        self.assertTrue(checked['importable'], checked['issues'])
+        line = self.issues(checked, 'confirm')['headscale.db-extra-objects']
+        self.assertEqual(line['items'], ['虛擬資料表：foreign_virtual'])
+        self.refused(ha_id, 'confirmation-required')
+        self.convert(ha_id, ['headscale'], acknowledged={'headscale': self.confirmations(checked)})
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'converted.sqlite'
+            path.write_bytes(self.volume('headscale-data')['db.sqlite'][1])
+            with sqlite3.connect(path) as conn:
+                self.assertEqual(conn.execute('SELECT name FROM users').fetchall(), [('alice',)])
+                self.assertEqual(conn.execute('SELECT prefix FROM api_keys ORDER BY id').fetchall(),
+                                 [('live-headplane',), ('live-mcp',)])
+                self.assertFalse(conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'foreign_virtual%'").fetchall())
+
+    def test_an_added_virtual_name_needs_a_new_confirmation(self):
+        first = self.checked(self.virtual_backup(['first_virtual']))
+        keys = self.confirmations(first)
+        second = self.virtual_backup(['first_virtual', 'second_virtual'])
+        changed = self.checked(second)
+        self.assertNotEqual(self.issues(first, 'confirm')['headscale.db-extra-objects']['key'],
+                             self.issues(changed, 'confirm')['headscale.db-extra-objects']['key'])
+        self.refused(second, 'confirmation-required', acknowledged={'headscale': keys})
+
     def test_a_backup_that_does_not_fit_stops_the_whole_job(self):   # HS-02: no size cap, the free space is still the limit
         ha_id = self.upload_headscale()
         with mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024), self.assertRaises(BackupError) as caught:
