@@ -558,9 +558,9 @@ MUTATIONS = (
      ("        if not any(v['id'] == preferred and v['valid'] for v in "
        'variants):\n'),
      "        if not any(v['id'] == preferred for v in variants):\n", 1, ('tests.backup.test_suggest',)),
-    ('S04', 'the draft of another installed mode says what to choose for an import', SG,
-     "            app['notes'].append(_warn('import-mode', f'已安裝的應用設定不是",
-     "            app['skipped'].append(_warn('import-mode', f'已安裝的應用設定不是", 1, ('tests.backup.test_suggest',)),
+    ('S04', 'an installed supported mode is retained so its existing backups remain usable', SG,
+     '                selected = wanted\n',
+     "                selected = 'cold'\n", 1, ('tests.backup.test_suggest',)),
     ('S05', "LiteLLM's drafted health check asks for readiness", SG,
      ("READY_PATHS = {('litellm', '/health/liveliness'): "
        "'/health/readiness'}\n"),
@@ -587,10 +587,9 @@ MUTATIONS = (
      ('        if container not in exported.values():\n            return '
        'item\n'),
      '', 1, ('tests.backup.test_suggest',)),
-    ('L03a', 'an entry that dumps the whole instance stops this app', LL,
-     ("        if any(isinstance(pg, dict) and pg.get('scope', 'database') "
-       "== 'instance' for pg in pgs):\n"),
-     '        if False:\n', 1),
+    ('L03a', 'a complete instance retains its mode independently of the application database', LL,
+     "        self.mode = pgs[0].get('scope', 'database') if pgs else 'cold'\n",
+     "        self.mode = 'database' if pgs else 'cold'\n", 1),
     ('L03b', 'an entry with two database items stops this app', LL,
      ('        if len(pgs) > 1:\n            raise _layout_stop(app, '
        'LAYOUT_MANY)\n'),

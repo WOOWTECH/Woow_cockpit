@@ -551,7 +551,7 @@ class ReferenceHostTests(unittest.TestCase):
                 for item in app['variants']:
                     self.assertEqual('（預設）' in item['label'], item['id'] == 'cold' and app_id not in needs)
 
-    def import_target(self, app_id, entry):
+    def import_target(self, app_id, entry, endpoint=None):
         """What the app's Home Assistant import says about this device with the entry installed."""
         from woowbackup import ha_hermes, ha_n8n, ha_odoo
         module = {'n8n': ha_n8n, 'hermes': ha_hermes, 'odoo': ha_odoo}[app_id]
@@ -560,7 +560,15 @@ class ReferenceHostTests(unittest.TestCase):
         quadlets = {name: (FIXTURES / 'quadlet' / name).read_bytes() for name in entry['quadlet']['files']}
         work = types.SimpleNamespace(quadlets=lambda _app: quadlets,
                                      runner=lambda _app: types.SimpleNamespace(home=str(self.home)))
-        return module.Target(work, app)
+        # This checks the proposed layout; live vendor/process resolution has its own tests.
+        with mock.patch.object(ha_n8n, 'prepare_app_endpoint', return_value=endpoint or {
+                'database': 'n8n', 'user': 'n8n', 'host': 'n8n-postgres', 'port': 5432}) as read:
+            target = module.Target(work, app)
+            if app_id == 'n8n' and any(pg.get('scope') == 'instance' for pg in app.postgres):
+                read.assert_called_once()
+            else:
+                read.assert_not_called()
+            return target
 
     def test_the_default_drafts_are_the_entries_the_imports_fill(self):
         for app_id in ('n8n', 'hermes', 'odoo'):
@@ -568,13 +576,9 @@ class ReferenceHostTests(unittest.TestCase):
                 app = self.apps[app_id]
                 self.assertTrue(app['valid'])
                 self.import_target(app_id, app['entry'])  # accepted as it is, without a hand edit
-        # n8n's converter still has no complete-instance output; Hermes now carries its entire unused instance.
-        for app_id, modes in (('n8n', ('instance',)),):
-            for mode in modes:
-                with self.subTest(app=app_id, mode=mode):
-                    with self.assertRaises(BackupError) as caught:
-                        self.import_target(app_id, variant(self.apps[app_id], mode)['entry'])
-                    self.assertEqual(caught.exception.code, 'incompatible')
+        n8n_instance = self.import_target('n8n', variant(self.apps['n8n'], 'instance')['entry'])
+        self.assertTrue(n8n_instance.instance)
+        self.assertEqual((n8n_instance.pg['scope'], n8n_instance.pg['database']), ('instance', 'n8n'))
         instance = self.import_target('hermes', variant(self.apps['hermes'], 'instance')['entry'])
         self.assertEqual([pg['scope'] for pg in instance.pgs], ['instance'])
         self.assertEqual(instance.pgs[0]['database'], 'postgres')
@@ -587,7 +591,7 @@ class ReferenceHostTests(unittest.TestCase):
         self.assertEqual(target.pgs, [])
         self.assertTrue(target.extra_volumes, 'the cold database volume')
 
-    def test_an_installed_cold_entry_keeps_its_mode_and_is_told_what_to_choose(self):
+    def test_an_installed_cold_entry_keeps_its_supported_mode(self):
         installed = [variant(self.apps[app_id], 'cold')['entry'] for app_id in ('n8n', 'hermes')]
         with tempfile.TemporaryDirectory() as base:
             result, _fake = run_suggest(base, self.home, installed=installed, linger=(OWNER,))
@@ -596,8 +600,14 @@ class ReferenceHostTests(unittest.TestCase):
             with self.subTest(app=app_id):
                 self.assertEqual(apps[app_id]['variant'], 'cold', 'changing it would strand the existing backups')
                 notes = [(n['level'], n['message']) for n in apps[app_id]['notes'] if n['code'] == 'import-mode']
-                self.assertEqual([level for level, _m in notes], ['warn'])
-                self.assertIn('請在這裡改選「單一資料庫」並安裝', notes[0][1])
+                self.assertEqual(notes, [])
+
+    def test_an_instance_draft_still_refuses_a_different_live_backend(self):
+        entry = variant(self.apps['n8n'], 'instance')['entry']
+        with self.assertRaises(BackupError) as caught:
+            self.import_target('n8n', entry, endpoint={
+                'database': 'n8n', 'user': 'n8n', 'host': 'different-server', 'port': 5432})
+        self.assertEqual(caught.exception.code, 'incompatible')
 
     def test_start_order_follows_the_dependencies(self):
         for app in self.result['apps']:
@@ -1252,7 +1262,15 @@ class LiteLLMPackageTests(unittest.TestCase):
         files = {name: text.encode() for name, text in (quadlets or LITELLM_PACKAGE).items()}
         work = types.SimpleNamespace(quadlets=lambda _app: files,
                                      runner=lambda _app: types.SimpleNamespace(home='/home/woowtechopenclaw'))
-        return ha_litellm.Target(work, self.app(entry))
+        app = self.app(entry)
+        with mock.patch.object(ha_litellm, 'prepare_app_connection', return_value={
+                'database': 'litellm', 'user': 'litellm', 'host': 'litellm-postgres', 'port': 5432}) as read:
+            target = ha_litellm.Target(work, app)
+            if any(pg.get('scope') == 'instance' for pg in app.postgres):
+                read.assert_called_once()
+            else:
+                read.assert_not_called()
+            return target
 
     def notes(self, app, code):
         return [(n['level'], n['message']) for n in app['notes'] if n['code'] == code]
@@ -1284,7 +1302,7 @@ class LiteLLMPackageTests(unittest.TestCase):
         self.assertIn('草稿已選「單一資料庫」', notes[0][1])
         self.assertTrue(any('/health/liveliness 只表示程式有回應；草稿改用 /health/readiness' in h for h in app['hints']))
 
-    def test_the_import_refuses_the_other_modes_of_the_same_draft(self):
+    def test_the_import_accepts_the_other_supported_modes_of_the_same_draft(self):
         from woowbackup import ha_litellm
         app = self.draft()
         self.assertEqual([v['id'] for v in app['variants']], ['cold', 'instance', 'database'])
@@ -1295,9 +1313,9 @@ class LiteLLMPackageTests(unittest.TestCase):
                 target = self.import_target(item['entry'])
                 self.assertEqual((target.mode, target.db_volume), ('cold', 'litellm-pgdata'))
                 continue
-            with self.subTest(mode=mode), self.assertRaises(BackupError) as caught:
-                self.import_target(item['entry'])
-            self.assertEqual(caught.exception.message, ha_litellm.LAYOUT_INSTANCE)
+            with self.subTest(mode=mode):
+                target = self.import_target(item['entry'])
+                self.assertEqual((target.mode, target.pg_id, target.connection['database']), ('instance', 'main', 'litellm'))
         self.assertEqual([v['id'] for v in app['variants'] if '（預設）' in v['label']], [], 'cold is not the default here')
 
     def test_an_installed_entry_keeps_its_mode_and_is_told_what_to_choose(self):
@@ -1307,9 +1325,7 @@ class LiteLLMPackageTests(unittest.TestCase):
                 self.assertEqual(app['variant'], mode, 'changing it would strand the existing backups')
                 self.assertEqual([level for level, _m in self.notes(app, 'installed-mode')], codes)
                 notes = self.notes(app, 'import-mode')
-                self.assertEqual([level for level, _m in notes], ['warn'])
-                for words in ('不是「單一資料庫」方式', '請在這裡改選「單一資料庫」並安裝', '無法以新設定還原'):
-                    self.assertIn(words, notes[0][1])
+                self.assertEqual(notes, [])
                 # what the note says works: the variant it names is installable and the import accepts it
                 chosen = variant(app, 'database')
                 self.assertTrue(chosen['valid'], chosen['problem'])

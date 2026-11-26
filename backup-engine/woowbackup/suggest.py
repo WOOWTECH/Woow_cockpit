@@ -70,14 +70,13 @@ MAX_HEALTH = 8
 # installed entry keeps its own checks but raises a shorter limit of these apps (`health-timeout` note).
 HEALTH_TIMEOUTS = {'litellm': 600}
 # The PostgreSQL mode a draft of an app that is not installed yet defaults to, instead of `cold`. litellm: its Home
-# Assistant import (ha_litellm.Target) fills exactly one single-database item and refuses the cold and the instance
-# entry, and it is the mode that suits the package (CONTRACT section 4 "Which mode a draft proposes"): its instance holds
+# Assistant import supports cold, single-database and complete-instance entries. Single-database remains the default
+# that suits the package (CONTRACT section 4 "Which mode a draft proposes"): its instance holds
 # exactly the app's database, owned by the image's bootstrap user (Woow_podman_litellm dd690ae
 # quadlet/litellm-postgres.container POSTGRES_USER=litellm, POSTGRES_DB=litellm). n8n and hermes: the same for their
 # imports (ha_n8n.Target, ha_hermes.Target) and their packages (Woow_podman_n8n 2ac1ae2 quadlet/n8n-postgres.container,
 # the hermes package's hermes-postgres.container: one database, one role). An installed entry keeps its mode
-# (changing it makes its backups unrestorable under the new entry); when that mode cannot be imported into, the
-# `import-mode` note says what to choose.
+# (changing it makes its backups unrestorable under the new entry). A missing usable PostgreSQL layout is still told.
 PREFERRED_MODES = {'litellm': 'database', 'n8n': 'database', 'hermes': 'database'}
 # A health path of an app's HealthCmd that says less than another one of the same server, with that one. litellm:
 # /health/liveliness answers without looking at the database, /health/readiness is 503 while its database cannot be
@@ -1883,14 +1882,8 @@ class Analyzer:
             app['notes'].append(_warn('import-mode', f'從 Home Assistant 匯入這個應用需要「{label}」方式，但這台沒有能用這個方式備份的 '
                                                      'PostgreSQL（資料要在具名資料卷中），所以不能從 Home Assistant 匯入。'))
         elif installed is None:
-            app['notes'].append(_warn('import-mode', f'草稿已選「{label}」：從 Home Assistant 匯入這個應用只支援這個方式，'
-                                                     '資料庫執行個體只有這個應用的資料庫時也最適合。改選其他方式仍能備份與還原，'
-                                                     '但不能從 Home Assistant 匯入。', level='info'))
+            app['notes'].append(_warn('import-mode', f'草稿已選「{label}」；請依要保存的資料範圍選擇備份方式。', level='info'))
             selected = preferred
-        else:
-            app['notes'].append(_warn('import-mode', f'已安裝的應用設定不是「{label}」方式，不能從 Home Assistant 匯入這個應用，草稿'
-                                                     f'沿用已安裝的方式。要匯入時，請在這裡改選「{label}」並安裝；這個應用之前的'
-                                                     '備份無法以新設定還原（需要時先裝回原本的設定），安裝後請再做一次備份。'))
         return selected
 
     def _installed_view(self, app, variants, selected):
