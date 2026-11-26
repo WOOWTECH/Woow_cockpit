@@ -27,8 +27,8 @@ none, HA's settings never used: ha_odoo.start_ha_cluster; every session pinned t
 catalogs are read first and a database holding anything beyond Nextcloud's own tables, sequences and indexes
 (functions, triggers, rules, views, operators, types, policies, CHECK constraints, generated columns, non-constant
 defaults...: SHAPE_SQL) is refused without reading its tables, except the functions, procedures, aggregates and triggers of
-other apps, which are left out of the restore and listed (one line to confirm; only what Memories makes again by itself is a
-notice); config.php is parsed strictly (never executed: arrays, single- and double-quoted texts without a variable, joined
+other apps, which are left out of the restore and listed (unknown identities require confirmation; the known Memories pair
+is rebuilt from reviewed fixed definitions and verified); config.php is parsed strictly (never executed: arrays, single- and double-quoted texts without a variable, joined
 by a dot, numbers, booleans, null and a few constants: NC-12); the data directory is walked (symlinks and `.htaccess` are left
 out and listed, hard links to a file that is not moved are copied, server-side encryption is one line to confirm, object
 storage is refused); counts, apps and storages are read.
@@ -73,7 +73,7 @@ import tarfile
 import time
 import xml.etree.ElementTree as ElementTree
 
-from . import habackup, hacommon, haissues, ha_odoo, hatarget, nested, tempctr
+from . import habackup, hacommon, haissues, ha_odoo, ha_nextcloud_memories, hatarget, nested, tempctr
 from .errors import BackupError
 
 SLUG = 'woow-nextcloud-office'
@@ -120,7 +120,7 @@ ISSUES = {
     'nextcloud.shape-unreadable': 'stop',         # NC-37
     'nextcloud.db-objects': 'stop',               # NC-38: objects that cannot be left out
     'nextcloud.db-objects-skipped': 'confirm',    # NC-38, NC-45: functions and triggers of other apps are left out
-    'nextcloud.db-objects-known': 'notice',       # NC-38, NC-45: ... and they are only those a known app (Memories) makes again by itself
+    'nextcloud.db-objects-known': 'notice',       # NC-38, NC-45: known Memories objects rebuilt from fixed definitions
     'nextcloud.extension-enabled': 'auto',        # NC-39: an extension this device's database image has is enabled
     'nextcloud.extension-missing': 'stop',        # NC-39: ... and one it has not
     'nextcloud.schemas-skipped': 'confirm',       # NC-40: only the schema public is moved
@@ -130,6 +130,7 @@ ISSUES = {
     'nextcloud.db-role-unusable': 'stop',         # NC-07: ... and config.php has no password to make it from
     'nextcloud.db-role-hand-over': 'auto',        # NC-08: a superuser role: loaded by a plain one, handed over
     'nextcloud.office-settings-unread': 'notice',  # NC-09
+    'nextcloud.catalog-recovered': 'notice',      # NC-09: required inventory recovered by separate catalog reads
     'nextcloud.settings-not-carried': 'notice',   # NC-49
     'nextcloud.storage-missing': 'stop',          # NC-41
     'nextcloud.storage-taken': 'stop',            # NC-42
@@ -192,7 +193,7 @@ OFFICE_COMMAND = 'podman exec -u www-data {container} php occ richdocuments:acti
 # Counted in HA's database and again after the restore (table -> key); optional tables only when they exist.
 COUNTED = (('oc_users', 'users'), ('oc_filecache', 'files'), ('oc_share', 'shares'), ('oc_authtoken', 'tokens'),
            ('oc_calendarobjects', 'calendar_objects'), ('oc_cards', 'contacts'), ('oc_storages', 'storages'),
-           ('oc_mounts', 'mounts'), ('oc_external_mounts', 'external_mounts'))
+           ('oc_mounts', 'mounts'), ('oc_external_mounts', 'external_mounts'), ('oc_memories', 'memories'))
 EXTENSIONS_OK = frozenset({'plpgsql'})
 # Client options of every session the engine opens in a cluster that holds HA's (untrusted) objects: HA's own
 # throwaway cluster, and the new cluster once HA's dump is restored into it. libpq's PGOPTIONS is a client setting
@@ -265,25 +266,23 @@ SELECT json_build_object(
 SKIPPABLE = ('functions', 'triggers')
 # pg_proc holds functions, procedures and aggregates (SHAPE_SQL counts all of them as `functions`); pg_dump lists them as three kinds
 SKIPPED_TOC = ('FUNCTION', 'PROCEDURE', 'AGGREGATE', 'TRIGGER')
-# The objects of an app this module knows, by the names OBJECTS_SQL gives. Memories (pulsejet/memories lib/Db/FilecacheTriggers.php,
-# read on 2026-11-25) makes one function and one trigger on oc_filecache. Without them it runs in its compatibility mode:
-# lib/Db/TimelineQueryDays.php joins the file cache when `memories.db.triggers.fcu` is false, which is its default, and HA's
-# value of that setting is not carried (merge_config). Its repair step (appinfo/info.xml: post-migration and install; the
-# `maintenance:repair` command runs the post-migration steps of the enabled apps) makes them again. Leaving exactly these
-# out loses nothing, so they alone are no line to confirm. They are NOT carried over as HA had them: code that comes out of
-# a backup is never restored, a known name or not (the vendor's own repair step is the way back).
-KNOWN_OBJECTS = {'Memories': frozenset({'public.memories_fcu_fun', 'oc_filecache.memories_fcu_trg'})}
-REPAIR_COMMAND = 'podman exec -u www-data {container} php occ maintenance:repair'
+# Known identities select only the reviewed definitions in ha_nextcloud_memories. Every archive program is still stripped;
+# after the hostile-object gate the plain loader rebuilds the known pair and its exact catalog definition is checked.
+KNOWN_OBJECTS = {'Memories': frozenset({'函式 public.memories_fcu_fun', '觸發程序 oc_filecache.memories_fcu_trg'})}
 OBJECTS_SQL = """WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'),
  ext AS (SELECT classid, objid FROM pg_depend WHERE deptype = 'e')
 SELECT json_build_object(
  'functions', (SELECT coalesce(json_agg(q.name ORDER BY q.name), '[]'::json) FROM (
-    SELECT n.nspname || '.' || p.proname AS name FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    SELECT quote_ident(n.nspname) || '.' || quote_ident(p.proname) || CASE WHEN p.pronargs = 0 AND p.prokind = 'f' THEN ''
+      ELSE '(' || pg_get_function_identity_arguments(p.oid) || ')' END AS name
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
     WHERE p.pronamespace IN (SELECT oid FROM ns) AND p.oid NOT IN (SELECT objid FROM ext WHERE classid = 'pg_proc'::regclass)
-    ORDER BY 1 LIMIT 100) q),
+    ORDER BY 1) q),
  'triggers', (SELECT coalesce(json_agg(q.name ORDER BY q.name), '[]'::json) FROM (
-    SELECT c.relname || '.' || t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
-    WHERE NOT t.tgisinternal ORDER BY 1 LIMIT 100) q))"""
+    SELECT CASE WHEN n.nspname = 'public' THEN '' ELSE quote_ident(n.nspname) || '.' END
+      || quote_ident(c.relname) || '.' || quote_ident(t.tgname) AS name
+    FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE NOT t.tgisinternal ORDER BY 1) q))"""
 SHAPE_LABELS = (('functions', '函式'), ('operators', '運算子'), ('types', '自訂資料型別'), ('triggers', '觸發程序'),
                 ('rules', '規則'), ('policies', '資料列安全原則'), ('event_triggers', '事件觸發程序'),
                 ('relations', '檢視表或其他特殊資料表'), ('checks', 'CHECK 等限制'), ('generated', '產生欄位'),
@@ -297,11 +296,8 @@ DEFAULT_RE = re.compile(rf"(?:nextval\('(?:public\.)?[a-z0-9_]{{1,63}}'::regclas
 MSG_SHAPE = 'HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立、這台也無法略過的資料庫物件（{kinds}），無法安全地搬過來。'
 MSG_SKIPPED = ('HA 的 Nextcloud 資料庫含有 Nextcloud 不會建立的程式（{kinds}）。它們不會搬過來，資料表和資料照搬；'
                '用到它們的應用匯入後如果不正常，請在這台更新或重新安裝那個應用，讓它自己把程式建回來。')
-# What a known app's objects need (NC-38, NC-45): nothing to confirm, a reminder after the import with the command.
-MSG_KNOWN_LEFT = ('HA 的 Nextcloud 資料庫有 {apps} 建立的函式與觸發程序。它們不會搬過來；沒有它們時 {apps} 會自動改用相容模式（查詢較慢），'
-                  '資料不受影響。匯入後執行一次 maintenance:repair，{apps} 就會把它們建回來。')
-MSG_REPAIR = ('HA 的 Nextcloud 資料庫裡 {apps} 建立的函式與觸發程序沒有搬過來；{apps} 目前改用相容模式（查詢較慢）。'
-              '要讓它建回來，請在匯入後執行一次：' + REPAIR_COMMAND)
+MSG_KNOWN_REBUILT = ('HA 的 Nextcloud 資料庫有 {apps} 建立的函式與觸發程序。匯入時會以已核對的固定定義在新的資料庫重建，'
+                     '並檢查定義與權限，讓應用在匯入後正常運作；不會執行備份中的程式。')
 MSG_LEFT_OUT = ('HA 的 Nextcloud 資料庫裡其他應用建立的程式（函式、觸發程序）沒有搬過來；如果有應用匯入後不正常，'
                 '請在這台更新或重新安裝那個應用，讓它自己把程式建回來。')
 MSG_SCHEMAS = ('HA 的 Nextcloud 資料庫除了 Nextcloud 用的 public 之外還有其他 schema（資料庫裡的分組）。'
@@ -1289,7 +1285,7 @@ def image_env(work, app, image, key):
     return None
 
 
-def live_db_sql(role, *, appconfig=True):
+def live_db_sql(role, *, appconfig=True, inventories=True):
     """What the import reads of the LIVE database, as its superuser: names resolve in pg_catalog only, so nothing the
     Nextcloud role could have created in `public` can stand in for a built-in. `appconfig` False: without the Office settings
     (NC-09: the part that can fail on its own)."""
@@ -1298,15 +1294,33 @@ def live_db_sql(role, *, appconfig=True):
     parts = [f""" 'role', (SELECT json_build_object('password', rolpassword, 'super', rolsuper, 'login', rolcanlogin,
           'createdb', rolcreatedb, 'createrole', rolcreaterole, 'replication', rolreplication,
           'bypassrls', rolbypassrls, 'connlimit', rolconnlimit) FROM pg_authid WHERE rolname = {lit(role)})""",
-             """ 'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_')""",
-             """ 'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension)""",
-             """ 'available', (SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions)""",
              """ 'datacl', (SELECT datacl::text FROM pg_database WHERE datname = current_database())""",
              """ 'nspacl', (SELECT nspacl::text FROM pg_namespace WHERE nspname = 'public')"""]
+    if inventories:
+        parts += [""" 'roles', (SELECT coalesce(json_agg(rolname ORDER BY rolname), '[]'::json) FROM pg_roles WHERE rolname !~ '^pg_')""",
+                  """ 'extensions', (SELECT coalesce(json_agg(extname ORDER BY extname), '[]'::json) FROM pg_extension)""",
+                  """ 'available', (SELECT coalesce(json_agg(name ORDER BY name), '[]'::json) FROM pg_available_extensions)"""]
     if appconfig:
         parts.append(f""" 'appconfig', (SELECT coalesce(json_agg(row_to_json(a) ORDER BY appid, configkey), '[]'::json)
                FROM public.oc_appconfig a WHERE {keys})""")
     return 'SET search_path = pg_catalog; SELECT json_build_object(\n' + ',\n'.join(parts) + ')'
+
+
+# NC-09: independent authoritative reads, without the optional app table / extension-control-file inventory. pg_roles
+# is a view of pg_authid; read the underlying catalog when that view or the combined query fails. Installed extensions
+# MUST come from pg_extension: pg_available_extensions omits installed extensions whose control file is missing.
+LIVE_ROLES_SQL = """SET search_path = pg_catalog;
+SELECT to_json(ARRAY(SELECT rolname FROM pg_authid WHERE rolname !~ '^pg_' ORDER BY rolname))"""
+LIVE_EXTENSIONS_SQL = """SET search_path = pg_catalog;
+SELECT to_json(ARRAY(SELECT extname FROM pg_extension ORDER BY extname))"""
+LIVE_AVAILABLE_SQL = """SET search_path = pg_catalog;
+SELECT to_json(ARRAY(SELECT name FROM pg_available_extensions ORDER BY name))"""
+
+
+def _catalog_names(value):
+    return (isinstance(value, list) and bool(value)
+            and all(isinstance(name, str) and 0 < len(name.encode('utf-8')) <= 63 for name in value)
+            and len(set(value)) == len(value))
 
 
 def scram_verifier(password, *, iterations=4096, salt=None):
@@ -1374,14 +1388,25 @@ def live_database(work, app, live, role, config, sink):
     """The live database's role `role` (verifier masked), roles, extensions, grants and kept app settings. A role that is not
     there, one without a usable password and a superuser one are no refusal (database_role, NC-07, NC-08); Office settings that
     cannot be read are a reminder, `appconfig` is then None (NC-09)."""
-    try:
-        doc = hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, live_db_sql(role))
-    except BackupError as error:
-        if error.code != 'job-failed' or haissues.is_job_wide(error):
-            raise
-        doc = hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, live_db_sql(role, appconfig=False))
-        doc = dict(doc, appconfig=None) if isinstance(doc, dict) else doc
+    def read(sql):
+        try:
+            return hacommon.live_json(work, app, live.db_container, live.db_user, live.db_name, sql)
+        except BackupError as error:
+            if error.code != 'job-failed' or haissues.is_job_wide(error):
+                raise
+            return None
+
+    doc = read(live_db_sql(role))
     if not isinstance(doc, dict):
+        doc = read(live_db_sql(role, appconfig=False, inventories=False))
+        if isinstance(doc, dict):
+            # Recover Office separately as well: an unreadable inventory must not discard a readable Office table.
+            lit = ha_odoo.sql_literal
+            keys = ' OR '.join(f'(appid = {lit(a)} AND configkey = {lit(k)})' for a, k in LIVE_APPCONFIG)
+            doc = dict(doc, appconfig=read("SET search_path = pg_catalog; SELECT coalesce(json_agg(row_to_json(a) "
+                                          f"ORDER BY appid, configkey), '[]'::json) FROM public.oc_appconfig a WHERE {keys}"))
+    if (not isinstance(doc, dict) or not all(key in doc for key in ('role', 'datacl', 'nspacl'))
+            or any(doc[key] is not None and not isinstance(doc[key], str) for key in ('datacl', 'nspacl'))):
         raise BackupError('job-failed', '無法讀取這台 Nextcloud 的資料庫設定。', app=app.id)
     rows = doc.get('appconfig')
     if rows is not None and not (isinstance(rows, list) and all(isinstance(r, dict) and isinstance(r.get('appid'), str)
@@ -1389,9 +1414,22 @@ def live_database(work, app, live, role, config, sink):
         doc['appconfig'] = rows = None
     if rows is None:
         office_unread(sink)
-    if not all(isinstance(doc.get(key), list) for key in ('roles', 'extensions')):
-        raise BackupError('job-failed', '無法讀取這台 Nextcloud 的資料庫設定。', app=app.id)
+    recovered = []
+    for key, label, sql in (('roles', '資料庫角色', LIVE_ROLES_SQL), ('extensions', '擴充功能', LIVE_EXTENSIONS_SQL)):
+        if not _catalog_names(doc.get(key)):
+            value = read(sql)
+            if not _catalog_names(value):
+                # No invented/empty baseline: the postcheck must still detect every unexpected archive role/extension.
+                raise BackupError('job-failed', f'無法從這台 Nextcloud 的 PostgreSQL 系統目錄讀取{label}清單，'
+                                  '無法核對轉換前後是否一致；請先修復資料庫的系統目錄讀取後再匯入。', app=app.id)
+            doc[key] = value
+            recovered.append(label)
+    if recovered:
+        sink.notice('nextcloud.catalog-recovered', '這台 Nextcloud 的資料庫清單已改由 PostgreSQL 系統目錄分別讀取，'
+                    '轉換後仍會逐項核對。', recovered)
     available = doc.get('available')
+    if not isinstance(available, list):
+        available = read(LIVE_AVAILABLE_SQL)
     doc['available'] = [name for name in available if isinstance(name, str)] if isinstance(available, list) else []
     return database_role(work, app, doc, role, config, sink)
 
@@ -1490,17 +1528,24 @@ def object_names(doc):
 
 def known_objects(names, shape):
     """(apps, others): the known apps (KNOWN_OBJECTS) whose objects are among `names` (object_names), and whether any other
-    object is left out as well (`others`). A list that is not whole (OBJECTS_SQL cuts it at 100 names; `shape` counts them all)
-    cannot say that nothing else is there: `others` is then True. Nothing a backup names can make something be restored."""
+    object is left out as well (`others`). An incomplete list cannot establish that nothing else is there. These names
+    select reviewed fixed definitions only; nothing a backup names can make its program text be restored."""
     count = sum(shape.get(key) for key in SKIPPABLE if isinstance(shape.get(key), int)) if isinstance(shape, dict) else None
     apps, others = set(), count is None or count != len(names)
     for name in names:
-        owner = next((app for app, objects in KNOWN_OBJECTS.items() if name.split(' ', 1)[-1] in objects), None)
+        owner = next((app for app, objects in KNOWN_OBJECTS.items() if name in objects), None)
         if owner is None:
             others = True
         else:
             apps.add(owner)
     return sorted(apps), others
+
+
+def complete_objects(names, shape):
+    """Every original program identity must be present, in the right object kind, before omitting or rebuilding any."""
+    return (isinstance(shape, dict) and len(set(names)) == len(names)
+            and all(sum(name.startswith(label + ' ') for name in names) == shape.get(key)
+                    for key, label in (('functions', '函式'), ('triggers', '觸發程序'))))
 
 
 def _counts_sql(tables):
@@ -1671,11 +1716,16 @@ def database_issues(sink, src, data, details, target):
             if split[0]:
                 names = details.get('skipped') or []
                 apps, others = known_objects(names, details.get('shape'))
-                if apps and not others:       # only what a known app makes again by itself: nothing is lost, nothing to confirm
-                    sink.notice('nextcloud.db-objects-known', MSG_KNOWN_LEFT.format(apps=hacommon.names(apps)), names)
-                else:
+                complete = complete_objects(names, details.get('shape'))
+                if not complete:
+                    sink.stop('nextcloud.shape-unreadable', '無法完整列出 HA 的函式與觸發程序名稱，無法逐項確認略過。')
+                elif apps:
+                    sink.notice('nextcloud.db-objects-known', MSG_KNOWN_REBUILT.format(apps=hacommon.names(apps)),
+                                [name for name in names if name in KNOWN_OBJECTS['Memories']])
+                if others and complete:
+                    unknown = [name for name in names if name not in KNOWN_OBJECTS['Memories']]
                     sink.confirm('nextcloud.db-objects-skipped', MSG_SKIPPED.format(kinds=hacommon.names(split[0])),
-                                 names or split[0])
+                                 unknown)
             extra = [e for e in details.get('extensions') or [] if e not in EXTENSIONS_OK]
             enable = [e for e in extra if e in target.db.get('available', ())]
             if enable:
@@ -1847,9 +1897,9 @@ def import_texts(data):
     if data.get('lists_differ'):
         reminders.append('HA 備份時有人在使用 Nextcloud，有些使用者的檔案清單和實際檔案不一致；匯入後請執行一次檔案掃描：'
                          + SCAN_COMMAND.format(container=data.get('app_container') or 'nextcloud-app'))
-    apps = [a for a in data.get('left_out_apps') or [] if a in KNOWN_OBJECTS]       # NC-38, NC-45: the programs left out
+    apps = [a for a in data.get('rebuilt_apps') or [] if a in KNOWN_OBJECTS]
     if apps:
-        reminders.append(MSG_REPAIR.format(apps=hacommon.names(apps), container=data.get('app_container') or 'nextcloud-app'))
+        notes.append(f'{hacommon.names(apps)} 的資料庫函式與觸發程序已用核對過的固定定義重建並檢查。')
     if data.get('left_out_others'):
         reminders.append(MSG_LEFT_OUT)
     if not data.get('office'):
@@ -2168,6 +2218,9 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     """The new cluster in the throwaway volume `nc-db` (stopped cleanly); returns the verified document."""
     live, db, role = target.live, target.db, target.role
     sink = _sink(work, app)
+    known, _others = known_objects(details.get('skipped') or [], details.get('shape'))
+    if known and not complete_objects(details.get('skipped') or [], details.get('shape')):
+        raise BackupError('incompatible', '無法完整核對 HA 的函式與觸發程序名稱，無法重建已知應用的物件。')
     # NC-08: a superuser role never loads HA's data: a plain role does and owns it until the fix-ups and the reads of the
     # tables are done, then everything goes to the role and the plain one is dropped
     plain = db['role'].get('super') is not True
@@ -2217,9 +2270,22 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     owner.script(fixup_sql(moves, new_root, remote, db['appconfig'], jobs='oc_jobs' in details['tables']), live.db_name)
     expected = dict(details['counts'])
     expected['files'] = expected.get('files', 0) - int(removed or 0)
+    if 'Memories' in known:
+        if admin.query_json(ha_nextcloud_memories.TABLES_SQL, live.db_name) is not True:
+            raise BackupError('incompatible', '無法用已核對的固定定義重建 Memories：資料表缺少 fileid 或 parent 整數欄位。')
+        owner.script(ha_nextcloud_memories.CREATE_SQL, live.db_name)
     doc = owner.query_json(data_verify_sql(new_root, moves, details['tables']), live.db_name)
     if not plain:
         admin.script(hand_over_sql(role), live.db_name)
+    if 'Memories' in known:
+        # The pre-rebuild shape gate above allowed NO archive program. Only after a proof of the exact trusted definition
+        # may these two objects be subtracted; every other shape restriction remains in force.
+        shape = admin.query_json(SHAPE_SQL, live.db_name)
+        if (admin.query_json(ha_nextcloud_memories.verify_sql(role), live.db_name) is not True
+                or admin.query_json(ha_nextcloud_memories.TABLES_SQL, live.db_name) is not True
+                or not isinstance(shape, dict) or shape.get('functions') != 1 or shape.get('triggers') != 1
+                or shape_problems(dict(shape, functions=0, triggers=0), converted=True) != []):
+            raise BackupError('job-failed', '重建後的 Memories 函式、觸發程序或資料庫結構檢查沒有通過。')
     catalog = admin.query_json(catalog_verify_sql(role), live.db_name)
     if isinstance(doc, dict) and isinstance(catalog, dict):
         doc = {**doc, **catalog}
@@ -2241,7 +2307,7 @@ def build_cluster(work, app, tmp, target, dump, *, details, old_root, new_root, 
     if not re.search(rb'Database cluster state:\s+shut down\s*$', state, re.M):
         raise BackupError('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')
     tmp.remove('nc-db')
-    return {'counts': doc['counts'], 'removed_cache_rows': int(removed or 0)}
+    return {'counts': doc['counts'], 'removed_cache_rows': int(removed or 0), 'rebuilt_apps': known}
 
 
 # -------------------------------------------------------------------- convert: the folders
@@ -2443,6 +2509,7 @@ def convert(work, app, test_mode, out_dir):
     built = build_cluster(work, app, tmp, target, dump, details=details, old_root=old_root, new_root=new_root,
                           moves=moves, remote=remote,
                           majors=(ha_odoo._ha_major(src), ha_odoo.target_pg_major(work, app, live.db_image)))
+    rebuilt = built.get('rebuilt_apps') or []
     dump.unlink()
     export = staging / 'nc-db.tar'
     with _private(export) as handle:
@@ -2457,6 +2524,9 @@ def convert(work, app, test_mode, out_dir):
 
     # config.php: the live one plus HA's identity and policy keys, parsed back by the live image's PHP.
     merged, carried, _skipped = merge_config(src.config, target.config)
+    merged.pop(ha_nextcloud_memories.CONFIG_KEY, None)
+    if 'Memories' in rebuilt:
+        merged[ha_nextcloud_memories.CONFIG_KEY] = True
     merged['data-fingerprint'] = data_fingerprint()  # what the package's restore does after a restore
     config_data = render_config(merged)
     php_check(tmp, live.app_image, config_data, merged)
@@ -2482,12 +2552,12 @@ def convert(work, app, test_mode, out_dir):
                         ('data', '使用者檔案資料夾')):
         check_dir_tar(paths[role], ids, label)
     moved = userfiles_moved(data)
-    left_apps, left_others = known_objects(details.get('skipped') or [], details.get('shape'))
+    _left_apps, left_others = known_objects(details.get('skipped') or [], details.get('shape'))
     left_any = bool((shape_objects(details.get('shape')) or ([], []))[0])      # programs were left out at all
     return {'dirs': {live.rels[role]: paths[role] for role in paths}, 'custom_apps': sorted(src.apps),
             'policy': carried, 'counts': built['counts'], 'datadir_files': data.files if moved else 0,
             'datadir_bytes': data.bytes if moved else 0, 'userfiles': moved,
-            'left_out_apps': left_apps if left_any else [], 'left_out_others': left_any and left_others,
+            'rebuilt_apps': rebuilt, 'left_out_others': left_any and left_others,
             'mail': any(isinstance(k, str) and k.startswith('mail_') for k in src.config),
             'office': 'richdocuments' in (details.get('enabled') or []),
             'office_cache': sorted(office_cache),

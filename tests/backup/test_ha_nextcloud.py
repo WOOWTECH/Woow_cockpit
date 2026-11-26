@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from woowbackup import ha_nextcloud as nc
-from woowbackup import habackup, haimport, haissues, jobs
+from woowbackup import habackup, haimport, haissues, jobs, flows
 from woowbackup.errors import BackupError
 from woowbackup.podman import CommandError, Result
 
@@ -285,6 +285,7 @@ class World(fk.World):
         self.catalog_changes = []
         self.shape = {'hapg': dict(CLEAN_SHAPE), 'nc-db': dict(CLEAN_SHAPE)}
         self.objects = {'functions': [], 'triggers': []}
+        self.memories_after_count = 2
         self.pg_major = 16              # PG_MAJOR of this device's database image
         self.restore_fails = False      # PostgreSQL refuses the restore of HA's dump (NC-32, NC-46)
         self.down = set()               # containers that are stopped until their unit is started (NC-04)
@@ -370,13 +371,18 @@ class World(fk.World):
         if sql == nc.HA_SQL:
             return self.ha_details
         if sql == nc.SHAPE_SQL:
-            return self.shape.get(role)
+            found = self.shape.get(role)
+            return found() if callable(found) else found
         if sql == nc.OBJECTS_SQL:
             return self.objects
         if sql == nc.FILES_SQL:
             return self.lists
+        if sql == nc.ha_nextcloud_memories.TABLES_SQL:
+            return 'oc_memories' in self.tables
+        if sql == nc.ha_nextcloud_memories.verify_sql('oc_admin'):
+            return True
         if sql.startswith("SELECT json_build_object('users'"):
-            return HA_COUNTS
+            return dict(HA_COUNTS, memories=2) if 'oc_memories' in self.tables else HA_COUNTS
         if sql.startswith("SELECT json_build_object(\n 'role'"):
             if self.office_unreadable and 'oc_appconfig' in sql:
                 raise CommandError('psql 執行失敗（結束碼 1）。', returncode=1, stderr=b'ERROR: relation does not exist')
@@ -386,7 +392,9 @@ class World(fk.World):
         if sql.startswith("SELECT json_build_object(\n 'counts'"):
             moved = re.search(r"'moved', \(SELECT count\(\*\) FROM public\.oc_storages WHERE id IN \((.*)\)\),", sql).group(1)
             return self.verify if self.verify is not None else {
-                'counts': {**HA_COUNTS, 'files': 298}, 'root': 1, 'moved': moved.count("'") // 2, 'old': 0,
+                'counts': {**HA_COUNTS, 'files': 298,
+                           **({'memories': self.memories_after_count} if 'oc_memories' in self.tables else {})},
+                'root': 1, 'moved': moved.count("'") // 2, 'old': 0,
                 'appconfig': LIVE_DB['appconfig']}
         if sql.startswith("SELECT json_build_object(\n 'owners'"):
             made = re.findall(r"PASSWORD '(SCRAM-SHA-256\$[^']+)'", '\n'.join(x for _db, x, _tx in self.psql['nc-db'].executed))
@@ -1344,8 +1352,13 @@ class CheckTests(NextcloudCase):
 
     def memories_world(self, *, more_functions=(), cut=False):
         """HA's database holds what Memories makes, and `more_functions` besides; `cut`: the list of names is shorter than the
-        number the shape counted (OBJECTS_SQL cuts it at 100)."""
+        number the shape counted (an incomplete catalog answer)."""
         functions = [self.MEMORIES[0], *more_functions]
+        self.world.tables = TABLES + ['oc_memories']
+        self.world.psql.pop('nc-db', None)
+        self.world.shape['nc-db'] = lambda: dict(CLEAN_SHAPE, functions=1, triggers=1) if any(
+            'CREATE TRIGGER memories_fcu_trg' in sql for _db, sql, _tx in self.world.psql['nc-db'].executed
+        ) else dict(CLEAN_SHAPE)
         self.world.shape['hapg'] = dict(CLEAN_SHAPE, functions=len(functions) + (1 if cut else 0), triggers=1)
         self.world.objects = {'functions': functions, 'triggers': [self.MEMORIES[1]]}
         self.world.toc = toc_of('201; 1259 16390 TABLE public oc_users nextcloud',
@@ -1357,15 +1370,14 @@ class CheckTests(NextcloudCase):
                                   for n, f in enumerate(more_functions)],
                                 '207; 0 16390 TABLE DATA public oc_users nextcloud')
 
-    def test_what_memories_makes_again_by_itself_is_left_out_without_a_question(self):
-        # NC-38, NC-45: its function and trigger are no code to carry over (the vendor's repair step makes them again, and
-        # without them Memories runs in its compatibility mode): a notice, no line to confirm, a reminder with the command
+    def test_known_memories_objects_are_rebuilt_without_a_question(self):
+        # NC-38, NC-45: discard archive programs, rebuild reviewed fixed definitions and activate the validated trigger.
         self.memories_world()
         row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
         issue = issue_of(row, 'nextcloud.db-objects-known')
         self.assertEqual((row['ok'], row['importable'], issue['level']), (True, True, 'notice'))
         self.assertEqual(issue['items'], ['函式 ' + self.MEMORIES[0], '觸發程序 ' + self.MEMORIES[1]])
-        for part in ('Memories', '相容模式', 'maintenance:repair', '不會搬過來'):
+        for part in ('Memories', '固定定義', '重建', '檢查定義與權限'):
             self.assertIn(part, issue['message'])
         self.assertLessEqual(len(issue['message']), 300, 'shown whole')
         self.assertIsNone(issue_of(row, 'nextcloud.db-objects-skipped'), 'nothing to confirm')
@@ -1376,27 +1388,24 @@ class CheckTests(NextcloudCase):
                          ['TABLE', 'TABLE'], 'the table and its data stay; the code of HA is not restored, a known name or not')
         self.assertNotIn('memories', listing)
         reminders = result['ha_import']['reminders_by_app']['nextcloud']
-        mine = [r for r in reminders if 'maintenance:repair' in r]
-        self.assertEqual(len(mine), 1)
-        for part in ('Memories', '相容模式', 'podman exec -u www-data nextcloud-app php occ maintenance:repair'):
-            self.assertIn(part, mine[0])
+        self.assertFalse([r for r in reminders if 'maintenance:repair' in r])
         self.assertFalse([r for r in reminders if r == nc.MSG_LEFT_OUT], 'nothing besides a known app was left out')
         self.assertEqual(sum(i['id'] == 'nextcloud.db-objects-known' for i in result['results'][0]['issues']), 1)
 
     def test_what_memories_makes_and_another_program_is_a_line_to_confirm(self):
-        # the other program is not known: the line is the one of NC-38 again, and both reminders come after the import
+        # Known objects rebuild automatically; the exact unknown identity alone needs confirmation.
         self.memories_world(more_functions=('public.other_f',))
         row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
-        self.assertIsNone(issue_of(row, 'nextcloud.db-objects-known'))
+        self.assertIsNotNone(issue_of(row, 'nextcloud.db-objects-known'))
         issue = issue_of(row, 'nextcloud.db-objects-skipped')
         self.assertEqual((row['ok'], issue['level']), (False, 'confirm'))
-        self.assertEqual(len(issue['items']), 3)
+        self.assertEqual(issue['items'], ['函式 public.other_f'])
         with self.assertRaises(BackupError) as caught:
             self.convert(self.upload_nextcloud(), ['nextcloud'])
         self.assertEqual(caught.exception.code, 'confirmation-required')
         result = self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=ack(row, 'nextcloud.db-objects-skipped'))
         reminders = result['ha_import']['reminders_by_app']['nextcloud']
-        self.assertTrue([r for r in reminders if 'maintenance:repair' in r])
+        self.assertFalse([r for r in reminders if 'maintenance:repair' in r])
         self.assertIn(nc.MSG_LEFT_OUT, reminders)
 
     def test_a_list_of_names_that_is_cut_or_a_name_that_only_looks_known_is_a_line_to_confirm(self):
@@ -1404,15 +1413,16 @@ class CheckTests(NextcloudCase):
         # only the exact names count (what matters in any case: nothing of HA's is restored)
         self.memories_world(cut=True)
         row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
-        self.assertEqual((issue_of(row, 'nextcloud.db-objects-known'), issue_of(row, 'nextcloud.db-objects-skipped')['level']),
-                         (None, 'confirm'))
-        for name in ('public.memories_fcu_fun2', 'other.memories_fcu_fun', 'public.Memories_fcu_fun'):
+        self.assertEqual(issue_of(row, 'nextcloud.shape-unreadable')['level'], 'stop')
+        self.assertIsNone(issue_of(row, 'nextcloud.db-objects-skipped'), 'cannot confirm unnamed objects')
+        for name in ('public.memories_fcu_fun2', 'other.memories_fcu_fun', 'public.Memories_fcu_fun',
+                     'public.memories_fcu_fun(integer)'):
             with self.subTest(name=name):
                 self.memories_world()
                 self.world.objects = {'functions': [name], 'triggers': [self.MEMORIES[1]]}
                 row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
-                self.assertIsNone(issue_of(row, 'nextcloud.db-objects-known'))
                 self.assertEqual(issue_of(row, 'nextcloud.db-objects-skipped')['level'], 'confirm')
+                self.assertEqual(issue_of(row, 'nextcloud.db-objects-skipped')['items'], ['函式 ' + name])
 
     def test_the_names_of_the_known_apps_are_found_only_in_the_whole_list(self):
         full = {'functions': 1, 'triggers': 1}
@@ -1423,8 +1433,88 @@ class CheckTests(NextcloudCase):
         self.assertEqual(nc.known_objects(['函式 public.x'], {'functions': 1, 'triggers': 0}), ([], True))
         self.assertEqual(nc.known_objects(names, None), (['Memories'], True), 'no shape: nothing is known to be whole')
         self.assertEqual(nc.known_objects([], {'functions': 0, 'triggers': 0}), ([], False))
-        # the reminders of a conversion that left nothing out say nothing about it
         self.assertFalse([r for r in nc.import_texts({})[1] if 'maintenance:repair' in r or r == nc.MSG_LEFT_OUT])
+
+    def test_memories_objects_are_rebuilt_before_the_converted_cluster_is_exported(self):
+        self.memories_world()
+        self.world.tables = TABLES + ['oc_memories']
+        converted = []
+        real = nc.convert
+
+        def capture(*args, **kwargs):
+            result = real(*args, **kwargs)
+            converted.append(result)
+            return result
+
+        with mock.patch.object(nc, 'convert', side_effect=capture):
+            result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(converted[0]['rebuilt_apps'], ['Memories'])
+        self.assertNotIn('left_out_apps', converted[0])
+        self.assertEqual(converted[0]['counts']['memories'], 2)
+        scripts = '\n'.join(sql for _db, sql, _tx in self.world.psql['nc-db'].executed)
+        self.assertIn('CREATE OR REPLACE FUNCTION public.memories_fcu_fun()', scripts)
+        self.assertIn('CREATE TRIGGER memories_fcu_trg', scripts)
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertNotIn('memories_fcu_fun', self.world.container_files.files[('nc-db', '/tmp/woowbk-nc.toc')].decode())
+        self.assertFalse([r for r in result['ha_import']['reminders_by_app']['nextcloud'] if 'maintenance:repair' in r])
+
+    def test_memories_row_loss_still_fails_after_rebuilding_the_pair(self):
+        self.memories_world()
+        self.world.memories_after_count = 1
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertIn('資料筆數和 HA 的不同', caught.exception.message)
+        self.assertEqual(self.world.dirs, {})
+
+    def test_rebuilt_memories_uses_the_plain_loader_even_for_a_superuser_target(self):
+        self.memories_world()
+        self.world.live_db = dict(LIVE_DB, role=dict(LIVE_DB['role'], super=True))
+        self.convert(self.upload_nextcloud(), ['nextcloud'])
+        creates = [s for s in self.world.sessions if 'CREATE OR REPLACE FUNCTION public.memories_fcu_fun()' in s['sql']]
+        self.assertEqual(len(creates), 1)
+        self.assertEqual(creates[0]['pg_user'], nc.LOADER)
+        self.assertEqual(creates[0]['env'].get('PGOPTIONS'), nc.PINNED_OPTIONS)
+        config = nc.parse_config(self.world.php[-1])
+        self.assertIs(config['memories.db.triggers.fcu'], True)
+
+    def test_rebuilt_memories_requires_its_tables_and_exact_final_definition(self):
+        for bad in ('missing-table', 'definition', 'extra-function', 'extra-trigger', 'policy', 'unreadable'):
+            with self.subTest(bad=bad):
+                self.memories_world()
+                answer = self.world.answer
+
+                def changed(role, sql, database):
+                    if role == 'nc-db':
+                        if bad == 'missing-table' and sql == nc.ha_nextcloud_memories.TABLES_SQL:
+                            return False
+                        if bad == 'definition' and sql == nc.ha_nextcloud_memories.verify_sql('oc_admin'):
+                            return False
+                        if sql == nc.SHAPE_SQL:
+                            shape = answer(role, sql, database)
+                            if shape.get('functions') == 1:  # the check after the trusted definitions were created
+                                return {'extra-function': dict(shape, functions=2), 'extra-trigger': dict(shape, triggers=2),
+                                        'policy': dict(shape, policies=1), 'unreadable': None}.get(bad, shape)
+                    return answer(role, sql, database)
+
+                self.world.answer = changed
+                with self.assertRaises(BackupError):
+                    self.convert(self.upload_nextcloud(), ['nextcloud'])
+                self.assertEqual(self.world.dirs, {}, 'failed validation never installs a converted directory')
+                self.world.answer = answer
+
+    def test_known_names_in_the_wrong_object_kind_remain_unknown(self):
+        names = ['函式 oc_filecache.memories_fcu_trg', '觸發程序 public.memories_fcu_fun']
+        self.assertEqual(nc.known_objects(names, {'functions': 1, 'triggers': 1}), ([], True))
+
+    def test_one_more_unknown_name_requires_confirmation_while_known_objects_rebuild(self):
+        self.memories_world(more_functions=('public.other_f',))
+        row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+        accepted = ack(row, 'nextcloud.db-objects-skipped')
+        self.memories_world(more_functions=('public.other_f', 'public.one_more'))
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'], acknowledged=accepted)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertFalse(self.runs('nc-db'))
 
     def test_procedures_and_aggregates_are_programs_too(self):
         # pg_proc holds functions, procedures and aggregates; the check counts them all as functions, the dump lists three kinds
@@ -1574,6 +1664,19 @@ class CheckTests(NextcloudCase):
 
 
 class ConvertTests(NextcloudCase):
+    def test_older_mocked_build_results_without_rebuilt_apps_are_compatible(self):
+        real = nc.build_cluster
+
+        def older(*args, **kwargs):
+            built = real(*args, **kwargs)
+            built.pop('rebuilt_apps')
+            return built
+
+        with mock.patch.object(nc, 'build_cluster', side_effect=older):
+            result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertNotIn('memories.db.triggers.fcu', nc.parse_config(self.world.php[-1]))
+
     def test_conversion_builds_the_four_folders(self):
         result = self.convert(self.upload_nextcloud(), ['nextcloud'])
         self.assertEqual(set(self.world.dirs), set(DIRS))
@@ -2171,6 +2274,93 @@ class LiveTargetTests(NextcloudCase):
         self.assertNotIn('DELETE FROM public.oc_appconfig WHERE (appid, configkey)', text, 'HA\'s settings are not taken out')
         self.assertNotIn('INSERT INTO public.oc_appconfig', text)
         self.assertEqual(sum(i['id'] == 'nextcloud.office-settings-unread' for i in result['results'][0]['issues']), 1)
+
+    def test_unreadable_role_and_extension_lists_are_recovered_and_still_verified(self):
+        answer = self.world.answer
+
+        def recover(role, sql, database):
+            if role == 'nextcloud-db':
+                if sql.startswith("SELECT json_build_object(\n 'role'"):
+                    return dict(LIVE_DB, roles=None, extensions=None)
+                if 'SELECT rolname FROM pg_authid' in sql:
+                    return LIVE_DB['roles']
+                if 'SELECT extname FROM pg_extension' in sql:
+                    return LIVE_DB['extensions']
+            return answer(role, sql, database)
+
+        self.world.answer = recover
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        for key, extra in (('roles', 'archive_role'), ('extensions', 'archive_extension')):
+            self.world.catalog = {key: LIVE_DB[key] + [extra]}
+            with self.subTest(key=key), self.assertRaises(BackupError) as caught:
+                self.convert(self.upload_nextcloud(), ['nextcloud'])
+            self.assertIn('和這台的不同', caught.exception.message)
+
+    def test_a_failed_combined_catalog_query_recovers_without_losing_readable_office_settings(self):
+        answer = self.world.answer
+        reads = []
+
+        def recover(role, sql, database):
+            if role == 'nextcloud-db':
+                reads.append(sql)
+                if sql.startswith("SELECT json_build_object(\n 'role'"):
+                    if 'pg_roles' in sql:
+                        raise CommandError('psql read failed', returncode=1, stderr=b'ERROR: catalog view unavailable')
+                    return {key: LIVE_DB[key] for key in ('role', 'datacl', 'nspacl')}
+                if 'SELECT rolname FROM pg_authid' in sql:
+                    return LIVE_DB['roles']
+                if 'SELECT extname FROM pg_extension' in sql:
+                    return LIVE_DB['extensions']
+                if 'SELECT name FROM pg_available_extensions' in sql:
+                    raise CommandError('psql read failed', returncode=1, stderr=b'ERROR: control files unavailable')
+                if 'FROM public.oc_appconfig a WHERE' in sql:
+                    return LIVE_APPCONFIG
+            return answer(role, sql, database)
+
+        self.world.answer = recover
+        result = self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        self.assertIsNone(issue_of(result['results'][0], 'nextcloud.office-settings-unread'))
+        self.assertEqual(issue_of(result['results'][0], 'nextcloud.catalog-recovered')['items'], ['資料庫角色', '擴充功能'])
+        self.assertTrue(any('INSERT INTO public.oc_appconfig' in sql for _db, sql, _tx in self.world.psql['nc-db'].executed))
+        self.assertTrue(any('SELECT extname FROM pg_extension' in sql for sql in reads))
+        self.assertFalse(any('installed_version' in sql for sql in reads), 'available control files are not installed inventory')
+
+    def test_catalogs_that_cannot_be_recovered_stop_before_reading_ha(self):
+        answer = self.world.answer
+        for key in ('roles', 'extensions'):
+            for value in (None, [], [None], ['duplicate', 'duplicate']):
+                with self.subTest(key=key, value=value):
+                    def unread(role, sql, database):
+                        if role == 'nextcloud-db':
+                            if sql.startswith("SELECT json_build_object(\n 'role'"):
+                                return dict(LIVE_DB, **{key: None})
+                            if 'SELECT rolname FROM pg_authid' in sql or 'SELECT extname FROM pg_extension' in sql:
+                                return value
+                        return answer(role, sql, database)
+
+                    self.world.answer = unread
+                    with self.assertRaises(BackupError) as caught:
+                        self.convert(self.upload_nextcloud(), ['nextcloud'])
+                    self.assertIn('系統目錄', caught.exception.message)
+                    self.assertFalse(self.runs('hapg'))
+                    self.assertFalse(self.runs('nc-db'))
+        self.world.answer = answer
+
+    def test_catalog_recovery_does_not_swallow_cancellation(self):
+        answer = self.world.answer
+
+        def cancelled(role, sql, database):
+            if role == 'nextcloud-db' and 'SELECT extname FROM pg_extension' in sql:
+                raise flows.Cancelled()
+            if role == 'nextcloud-db' and sql.startswith("SELECT json_build_object(\n 'role'"):
+                return dict(LIVE_DB, extensions=None)
+            return answer(role, sql, database)
+
+        self.world.answer = cancelled
+        with self.assertRaises(flows.Cancelled):
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
 
     def test_the_cached_collabora_answers_that_cannot_be_read_are_a_reminder_too(self):
         real = self.world.exec
