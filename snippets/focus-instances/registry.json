@@ -18,7 +18,10 @@
     "tests_remove": [
       "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_cannot_be_made_here_and_says_so"
     ],
-    "note": "Complete instance payload; selective HA import retains current outsiders, roles/passwords and app owners/ACLs. Trusted endpoint/future-input checks precede DROP; stopped-reader cleanup ends before restore. New object ambiguity refuses; installed extensions preseeded; current full safety rollback verified. Guarded source checks only; generated PG and saved real n8n flow remain separate gates."
+    "note": "Whole instance converts actual app DB; current outsiders/roles/passwords/access preserved. Endpoint/future-input checks and new-object refusal protect DROP. Installed extensions preseeded; current full safety rollback verified. Generated PG c04:87/87 on engine058; handover followup12/12. Saved real n8n full flow remains complementary.",
+    "evidence_add": [
+      "snippets/focus-instances/evidence/generated-pg-c-04.json"
+    ]
   },
   "L-03": {
     "status": "part",
@@ -38,6 +41,9 @@
       "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped",
       "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides"
     ],
-    "note": "Actual proxy URL bound to local litellm backend; salt/schema guards retained. Current outsiders, credentials and data-object access preserved; installed extensions preseeded. Ambiguous new objects refuse; stopped-reader cleanup scoped. Full current safety rollback remains. Base HaInstanceTests methods also run via LiteLlmInstanceTests inheritance. Generated PG and saved real flow remain separate."
+    "note": "Proxy URL/local litellm backend validated; salt/schema guards retained. Current outsiders/credentials/access preserved; full safety rollback verified. Generated PG c04:87/87 on engine058; handover followup12/12. Base HaInstanceTests refs run via LiteLlmInstanceTests inheritance. Saved real service flow remains complementary.",
+    "evidence_add": [
+      "snippets/focus-instances/evidence/generated-pg-c-04.json"
+    ]
   }
 }

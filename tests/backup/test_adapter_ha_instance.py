@@ -304,6 +304,15 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual(destination['status'], 'ok', destination)
         self.assertEqual(self.owner.units[unit], 'inactive', 'cleanup completes before safety/ordinary restore')
         self.assertFalse(self.owner.dropped)
+        # An originally stopped application can leave no units for the safety handover. The explicit receipt still
+        # makes the preflight endpoint authoritative: starting/re-probing after safety capture could introduce writes.
+        def no_late_probe(*_args):
+            self.fail('endpoint re-probed after empty safety handover')
+        self.adapter._read_ha_app_connection = no_late_probe
+        self.adapter.take_over([], None)
+        self.adapter.restore(manifest, folder, mode='inplace')
+        self.assertEqual(self.owner.instance[self.application_database]['data'], b'HA rows')
+        self.assertEqual(self.owner.units[unit], 'active', 'no deferred temporary-stop callback can stop restored app')
 
     def test_complete_payload_contains_every_database_and_all_current_roles(self):
         manifest, _folder, entries = self.converted()

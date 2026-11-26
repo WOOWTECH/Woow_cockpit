@@ -485,6 +485,7 @@ class QuadletPostgresAdapter(Adapter):
         self.timing = {}
         self.kept_stopped = []
         self._taken_over = []
+        self._ha_safety_handover = False
         self._data_bytes = 0      # size of the data the running restore put in place (the patient waits scale with it)
         self.restore_issues = []  # haissues.Issue lines of the last preflight() (see the class attribute)
         self.paused = []          # other services this restore paused (D10): started again by resume_paused()
@@ -653,6 +654,7 @@ class QuadletPostgresAdapter(Adapter):
         """The safety backup left `units` stopped for this restore (CONTRACT section 9); `first_stop` is when they
         stopped (monotonic), the start of the app's unavailability."""
         self._taken_over = [unit for unit in self.app.units if unit in set(units or ())]
+        self._ha_safety_handover = True  # an originally stopped app can hand over no units at all
         # Other services the pre-restore copy paused (D10) are this restore's to start again.
         for unit in units or ():
             if unit not in self.app.units and unit not in self.paused and UNIT_RE.fullmatch(str(unit)) \
@@ -3217,13 +3219,15 @@ class QuadletPostgresAdapter(Adapter):
         templates = self.read_templates() if mode == 'fresh' else None
         sources = templates if mode == 'fresh' else self._read_owner_quadlets()
         if ha_databases:
+            handed_over = self._ha_safety_handover
+            self._ha_safety_handover = False  # receipt is consumed only once, including a refusal below
             self._check_ha_instance_inputs(app_manifest, root, sources, files)
             for pg in app.postgres:
                 if pg['id'] in ha_databases:
                     checked = getattr(self, '_ha_live_connections', {}).get(pg['id'])
                     # Real safety backup stopped the writers. Reuse ONLY this adapter's preflight result after the
                     # existing trusted handover; next-start files/secrets were rechecked immediately above.
-                    connection = (checked[1] if checked and checked[0] == ha_databases[pg['id']] and self._taken_over
+                    connection = (checked[1] if checked and checked[0] == ha_databases[pg['id']] and handed_over
                                   else self._read_ha_app_connection(pg, sources))
                     if connection.get('database') != ha_databases[pg['id']]:
                         raise BackupError('incompatible', '應用目前使用的資料庫已改變，請套用目前設定後重新轉換備份。', app=app.id)

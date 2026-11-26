@@ -1,0 +1,229 @@
+{
+  "acceptance": "generated-PG adapter proof; original n8n/LiteLLM acceptance is complementary",
+  "checks": {
+    "bounded-0": true,
+    "bounded-1": true,
+    "bounded-2": true,
+    "bounded-3": true,
+    "bounded-4": true,
+    "bounded-5": true,
+    "bounded-6": true,
+    "bounded-7": true,
+    "catalog-and-quadlet-files-unchanged": true,
+    "completed": true,
+    "container-absent-2": true,
+    "container-absent-4": true,
+    "container-absent-6": true,
+    "container-absent-8": true,
+    "device-memory-headroom": true,
+    "durable-volumes-unchanged": true,
+    "engine-zip-hash": true,
+    "existing-pinned-image": true,
+    "litellm-actual-login-select-insert-migration": true,
+    "litellm-app-rows": true,
+    "litellm-complete-real-payload": true,
+    "litellm-current-owner": true,
+    "litellm-current-table-owner-acls-extension": true,
+    "litellm-failure-after-replacement": true,
+    "litellm-failure-outsiders-unchanged": true,
+    "litellm-full-current-safety-catalog-rows-owners-role-passwords": true,
+    "litellm-injection-valid-toc-broken-data": true,
+    "litellm-installed-untrusted-contrib-available": true,
+    "litellm-l38-omitted-schema-not-recreated": true,
+    "litellm-later-outside-rows-catalog-owners-passwords": true,
+    "litellm-new-column-actual-login-select-insert-migration": true,
+    "litellm-new-ha-column-imported": true,
+    "litellm-new-sequence-refused-before-drop": true,
+    "litellm-new-table-refused-before-drop": true,
+    "litellm-original-app-restored": true,
+    "litellm-real-pg-restore-failed": true,
+    "litellm-rotated-old-login-rejected": true,
+    "litellm-safety-unmarked": true,
+    "n8n-actual-login-select-insert-migration": true,
+    "n8n-app-rows": true,
+    "n8n-complete-real-payload": true,
+    "n8n-current-owner": true,
+    "n8n-current-table-owner-acls-extension": true,
+    "n8n-failure-after-replacement": true,
+    "n8n-failure-outsiders-unchanged": true,
+    "n8n-full-current-safety-catalog-rows-owners-role-passwords": true,
+    "n8n-injection-valid-toc-broken-data": true,
+    "n8n-installed-untrusted-contrib-available": true,
+    "n8n-later-outside-rows-catalog-owners-passwords": true,
+    "n8n-new-column-actual-login-select-insert-migration": true,
+    "n8n-new-ha-column-imported": true,
+    "n8n-new-sequence-refused-before-drop": true,
+    "n8n-new-table-refused-before-drop": true,
+    "n8n-original-app-restored": true,
+    "n8n-real-pg-restore-failed": true,
+    "n8n-rotated-old-login-rejected": true,
+    "n8n-safety-unmarked": true,
+    "new-container-woowbk-inst-proof-7e53b86d46ad-litellm": true,
+    "new-container-woowbk-inst-proof-7e53b86d46ad-n8n": true,
+    "new-volume-woowbk-inst-proof-7e53b86d46ad-litellm": true,
+    "new-volume-woowbk-inst-proof-7e53b86d46ad-n8n": true,
+    "outer-isolation-preserved": true,
+    "own-label-0": true,
+    "own-label-1": true,
+    "own-label-2": true,
+    "own-label-3": true,
+    "own-label-4": true,
+    "own-label-5": true,
+    "own-label-6": true,
+    "own-label-7": true,
+    "own-mounts-0": true,
+    "own-mounts-1": true,
+    "own-mounts-2": true,
+    "own-mounts-3": true,
+    "own-mounts-4": true,
+    "own-mounts-5": true,
+    "own-mounts-6": true,
+    "own-mounts-7": true,
+    "probe-filesystem-reserve": true,
+    "volume-absent-2": true,
+    "volume-absent-4": true,
+    "volume-absent-6": true,
+    "volume-absent-8": true,
+    "volume-label-2": true,
+    "volume-label-4": true,
+    "volume-label-6": true,
+    "volume-label-8": true
+  },
+  "container_churn_count": 0,
+  "device": "woowbk-dev-c",
+  "engine_sha256": "357b749542f3acf945cfa7098b73744a36edd5a9afc5b563dbd00cf539a82691",
+  "failure_step": null,
+  "failure_type": null,
+  "image": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "owned_resources": [
+    {
+      "id": "7d4c22738f938603efc4d9b35e371dc36dc0035b298d2beac0e4b2bbf283e0e4",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-n8n-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-n8n",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-n8n-data"
+    },
+    {
+      "id": "7d4c22738f938603efc4d9b35e371dc36dc0035b298d2beac0e4b2bbf283e0e4",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-n8n-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-n8n",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-n8n-data"
+    },
+    {
+      "id": "c26dae37d84077d7a1d7e7c388af2c5246df001569eb96f30963b8dc053154b1",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-n8n-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-n8n",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-n8n-data"
+    },
+    {
+      "id": "c26dae37d84077d7a1d7e7c388af2c5246df001569eb96f30963b8dc053154b1",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-n8n-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-n8n",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-n8n-data"
+    },
+    {
+      "id": "7ed033c8a0d6a0cb786aa426e5b897257a38a3892be1ef226b87656a72b35e2f",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-litellm-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-litellm",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-litellm-data"
+    },
+    {
+      "id": "7ed033c8a0d6a0cb786aa426e5b897257a38a3892be1ef226b87656a72b35e2f",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-litellm-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-litellm",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-litellm-data"
+    },
+    {
+      "id": "8d2e3e0a86cbdf0645cb3cc3217e676ff0f9a4a08cb4f2e8e57d384c2bced1f6",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-litellm-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-litellm",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-litellm-data"
+    },
+    {
+      "id": "8d2e3e0a86cbdf0645cb3cc3217e676ff0f9a4a08cb4f2e8e57d384c2bced1f6",
+      "mounts": [
+        {
+          "Destination": "/var/lib/postgresql/data",
+          "Name": "woowbk-inst-proof-7e53b86d46ad-litellm-data",
+          "Type": "volume"
+        }
+      ],
+      "name": "woowbk-inst-proof-7e53b86d46ad-litellm",
+      "volume": "woowbk-inst-proof-7e53b86d46ad-litellm-data"
+    }
+  ],
+  "private_run_root": null,
+  "proofs": {
+    "litellm": {
+      "after_rollback": "0c1f1df0888391a9aed22a5d72f3ec8fd30f8d0c10e0b73c35181cb05d90a64c",
+      "before": "0c1f1df0888391a9aed22a5d72f3ec8fd30f8d0c10e0b73c35181cb05d90a64c",
+      "database_count": 4,
+      "installed_untrusted_extension": {
+        "name": "pgstattuple",
+        "trusted": false,
+        "version": "1.4"
+      },
+      "new_objects": "table/sequence refused before DROP; new column uses current table-wide grants",
+      "outside_after_import": "28fbc88d61e87faadbe57cf158c328373b54a6746011150661107139795c3409",
+      "outside_before": "28fbc88d61e87faadbe57cf158c328373b54a6746011150661107139795c3409",
+      "role_count": 22
+    },
+    "n8n": {
+      "after_rollback": "fe9160d9c9da64bda10b1ff9ae4ea734042a30402e863724ab0ca6ae7e43ef4a",
+      "before": "fe9160d9c9da64bda10b1ff9ae4ea734042a30402e863724ab0ca6ae7e43ef4a",
+      "database_count": 4,
+      "installed_untrusted_extension": {
+        "name": "pgstattuple",
+        "trusted": false,
+        "version": "1.4"
+      },
+      "new_objects": "table/sequence refused before DROP; new column uses current table-wide grants",
+      "outside_after_import": "36e2fc1dbcb56cd450aff28948790a45f46ee8c5d710cbbb16821524daf13af0",
+      "outside_before": "36e2fc1dbcb56cd450aff28948790a45f46ee8c5d710cbbb16821524daf13af0",
+      "role_count": 22
+    }
+  },
+  "run_id": "7e53b86d46ad",
+  "source_commit": "9561769609929d0100eb9df4935fba79f61906aa"
+}
