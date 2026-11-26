@@ -1967,11 +1967,16 @@ def convert(work, app, test_mode, out_dir):
         with open(dump, 'rb') as handle:  # a full read: every data block decompresses (adapter._pg_dump, lab H3)
             tmp.exec('ll-db', ['pg_restore', '-f', '/dev/null'], user='postgres', input=handle, timeout=DUMP_TIMEOUT,
                      max_output=1024 * 1024)
+        instance_extensions = pg.query_json(
+            "SELECT coalesce(json_agg(json_build_array(e.extname,e.extversion,n.nspname) ORDER BY e.extname),'[]'::json) "
+            "FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace "
+            "WHERE e.extname<>'plpgsql' AND n.nspname IN ('public','woow_platform')", DATABASE) if target.mode == 'instance' else None
         tmp.stop('ll-db', timeout=120)
         tmp.remove('ll-db')
         tmp.remove_volume('ll-db')
         postgres = {target.pg_id: {'database': DATABASE, 'server_version': server_version, 'major': major, 'file': dump}}
         if target.mode == 'instance':
+            postgres[target.pg_id]['ha_extensions'] = instance_extensions
             postgres[target.pg_id] = work.adapter(app).import_instance_database(app.postgres[0], postgres[target.pg_id], out_dir)
     salt_path = write_secret(out_dir / 'ha-secrets' / SALT_SECRET, src.salt())
     users = key_users(work, app)

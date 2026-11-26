@@ -496,6 +496,27 @@ class HaInstanceMarkerTests(unittest.TestCase):
             del value['apps'][0]['postgres'][-1]['ha_database']
             self.assertIs(archive.validate_manifest(value), value)
 
+    def test_access_plan_requires_valid_app_marker_and_data_object_facts(self):
+        from .test_adapter_ha_instance import access_plan
+        for app_id in ('n8n', 'litellm'):
+            value = self.manifest(app_id)
+            item = value['apps'][0]['postgres'][-1]
+            item['ha_access'] = access_plan()
+            archive.validate_manifest(value)
+            for mutation in ('missing marker', 'programs', 'omitted schema', 'bad grant'):
+                bad = copy.deepcopy(value)
+                candidate = bad['apps'][0]['postgres'][-1]
+                if mutation == 'missing marker':
+                    del candidate['ha_database']
+                elif mutation == 'programs':
+                    candidate['ha_access']['programs'] = ['untrusted SQL']
+                elif mutation == 'omitted schema':
+                    candidate['ha_access']['schemas'].append(['unmoved', 'notes', []])
+                else:
+                    candidate['ha_access']['database'][1].append(['app', 'SUPERUSER', False])
+                with self.subTest(app_id=app_id, mutation=mutation), self.assertRaises(BackupError):
+                    archive.validate_manifest(bad)
+
     def test_malformed_missing_foreign_and_template_markers_are_rejected(self):
         def item(value):
             return value['apps'][0]['postgres'][-1]
@@ -530,14 +551,17 @@ class HaInstanceMarkerTests(unittest.TestCase):
 
     @needs_age
     def test_encrypted_marker_roundtrip(self):
+        from .test_adapter_ha_instance import access_plan
         ws = Workspace(self)
         value = self.manifest()
+        value['apps'][0]['postgres'][-1]['ha_access'] = access_plan()
         value['key_id'] = ws.key.key_id
         payloads = {e['path']: b'instance marker payload' for e in value['entries']}
         value['apps'][0]['verify_digests'][0]['digest'] = hashlib.sha256(b'instance marker payload').hexdigest()
         dest, _result, _entries = ws.write(payloads, value)
         restored = archive.extract_archive(dest, ws.keys.identities(), ws.dest())
         self.assertEqual(restored['apps'][0]['postgres'][-1]['ha_database'], 'notes')
+        self.assertEqual(restored['apps'][0]['postgres'][-1]['ha_access'], access_plan())
 
 
 class DataDirManifestTests(unittest.TestCase):

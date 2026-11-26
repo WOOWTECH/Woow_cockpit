@@ -490,11 +490,18 @@ def _postgres_instance(item, w, app_id, ref):
     # `bootstrap_user` (2026-11-14, review F5): the instance's bootstrap superuser at backup time; optional (archives
     # written before it have none).
     _obj(item, w, ('id', 'scope', 'database', 'server_version', 'major', 'entry', 'databases', 'roles'),
-         ('bootstrap_user', 'ha_database'))
+         ('bootstrap_user', 'ha_database', 'ha_access'))
     if 'ha_database' in item:
         _need(app_id in ('n8n', 'litellm'), f'{w}.ha_database invalid app')
         _str(item['ha_database'], f'{w}.ha_database', PG_DB_RE, max_len=63)
         _need(app_id != 'litellm' or item['ha_database'] == 'litellm', f'{w}.ha_database invalid')
+    if 'ha_access' in item:
+        from . import ha_instance_access
+        _need('ha_database' in item, f'{w}.ha_access requires HA database')
+        try:
+            ha_instance_access.validate(item['ha_access'], app_id)
+        except (ValueError, TypeError, UnicodeError):
+            _need(False, f'{w}.ha_access invalid')
     if 'bootstrap_user' in item:
         _printable(item['bootstrap_user'], f'{w}.bootstrap_user', max_len=63)
     _str(item['database'], f'{w}.database', PG_DB_RE, max_len=63)

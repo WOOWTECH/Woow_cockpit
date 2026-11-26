@@ -47,7 +47,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from .. import digests, haissues, nested
+from .. import digests, haissues, nested, ha_instance_access
 from ..archive import Entry, carried_settings_problem
 from ..catalog import DB_NAME_RE, digest_target, paths_overlap
 from ..errors import BackupError
@@ -2395,6 +2395,15 @@ class QuadletPostgresAdapter(Adapter):
             raise BackupError('incompatible', f'目前的執行個體沒有應用資料庫 {name}，已停止匯入。', app=self.app.id)
         if database.get('template'):
             raise BackupError('incompatible', f'應用資料庫 {name} 是範本資料庫，已停止匯入。', app=self.app.id)
+        access = self._capture_ha_instance_access(pg, name)
+        if 'ha_extensions' in converted:
+            actual = dict(access, extensions=converted['ha_extensions'])
+            self._validate_ha_instance_access(actual)
+            if {(e[0], e[2]) for e in actual['extensions']} != {(e[0], e[2]) for e in access['extensions']}:
+                raise BackupError('incompatible', '轉換後的應用擴充功能和這台不同，已停止匯入。', app=self.app.id)
+            access = actual  # L-40: record the version the trusted converted cluster actually used.
+        dump['ha_access'] = access
+        database['extensions'] = [{'name': n, 'version': v} for n, v, _schema in access['extensions']]
         database['file'] = converted['file']
         dump['ha_database'] = name
         return dump
@@ -2445,6 +2454,7 @@ class QuadletPostgresAdapter(Adapter):
     def _instance_manifest(self, dump, entry):
         marker = self._ha_instance_database({'scope': 'instance'}, dump)
         return {**({'ha_database': marker} if marker is not None else {}),
+                **({'ha_access': dump['ha_access']} if 'ha_access' in dump else {}),
                 'id': dump['id'], 'scope': 'instance', 'database': dump['database'],
                 'server_version': dump['server_version'], 'major': dump['major'],
                 'bootstrap_user': dump['bootstrap_user'],
@@ -3169,6 +3179,11 @@ class QuadletPostgresAdapter(Adapter):
         ha_databases = {}
         for pg in app.postgres:
             marker = self._ha_instance_database(pg, found['postgres'][pg['id']])
+            access = found['postgres'][pg['id']].get('ha_access')
+            if access is not None:
+                self._validate_ha_instance_access(access)
+            if marker is not None and self.ha_import and mode == 'fresh' and access is None:
+                raise BackupError('incompatible', 'HA 執行個體備份缺少應用權限資訊，請重新轉換後再進行全新還原。', app=app.id)
             if marker is not None and rollback:
                 raise BackupError('incompatible', '自動回復必須使用還原前完整備份，不能使用 HA 轉換後的資料。', app=app.id)
             if marker is not None and self.ha_import and mode == 'inplace' and not rollback:
@@ -3301,7 +3316,7 @@ class QuadletPostgresAdapter(Adapter):
                     self._restore_ha_instance_database(pg, db, path)
                 elif pg['scope'] == 'instance':
                     marker = self._ha_instance_database(pg, found['postgres'][pg['id']]) if self.ha_import else None
-                    options = {'ha_database': marker} if marker is not None else {}
+                    options = {'ha_database': marker, 'ha_access': found['postgres'][pg['id']].get('ha_access')} if marker is not None else {}
                     self._restore_instance(pg, *instances[pg['id']], removed_at=removed_at.get(pg['id']), **options)
                 else:
                     self._ensure_database(pg)
@@ -3473,7 +3488,7 @@ class QuadletPostgresAdapter(Adapter):
         if out.rstrip(b'\n').rsplit(b'\n', 1)[-1] != mark.encode('ascii'):
             raise BackupError('job-failed', INCOMPLETE_SQL, app=self.app.id)
 
-    def _restore_instance(self, pg, databases, globals_path, *, removed_at=None, ha_database=None):
+    def _restore_instance(self, pg, databases, globals_path, *, removed_at=None, ha_database=None, ha_access=None):
         """Instance mode into the fresh cluster the image just initialized (CONTRACT section 9): the cluster must be
         newer than the removal of the data volume, extension preflight, the roles (the bootstrap superuser reconciled,
         never recreated; it must stay a superuser that can log in), then every database of the backup created as it
@@ -3518,7 +3533,9 @@ class QuadletPostgresAdapter(Adapter):
                 self._psql_command(container, user, maint, f'DROP DATABASE "{name}"')
             self.log(f'還原資料庫 {pg["id"]}：{name}（擁有者 {db.get("owner", "?")}）')
             if name == ha_database:
-                self._load_ha_instance_database(pg, db, path, db['owner'])
+                access = self._validate_ha_instance_access(ha_access)
+                toc, extensions = self._prepare_ha_instance_load(pg, db, path, access)
+                self._load_ha_instance_database(pg, db, path, db['owner'], access, toc, extensions)
                 continue
             with open(path, 'rb') as handle:
                 self.runner.podman('exec', '-i', container, 'pg_restore', '--create', '--exit-on-error',
@@ -3540,11 +3557,86 @@ class QuadletPostgresAdapter(Adapter):
         """Only reached for a validated HA n8n/LiteLLM inplace conversion; safety rollback stays a full instance restore."""
         name = db['name']
         owner = self._ha_database_owner(pg, name)
+        access = self._capture_ha_instance_access(pg, name)
+        toc, extensions = self._prepare_ha_instance_load(pg, db, path, access)
         self.log(f'匯入 HA 應用資料庫 {name}（保留目前擁有者；其他資料庫與角色維持目前內容）')
         self._psql_command(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB, f'DROP DATABASE "{name}"')
-        self._load_ha_instance_database(pg, db, path, owner)
+        self._load_ha_instance_database(pg, db, path, owner, access, toc, extensions)
 
-    def _load_ha_instance_database(self, pg, db, path, owner):
+    def _validate_ha_instance_access(self, plan):
+        try:
+            return ha_instance_access.validate(plan, self.app.id)
+        except (ValueError, TypeError, UnicodeError):
+            raise BackupError('incompatible', 'HA 應用資料庫的權限資訊不完整或不受支援，已停止匯入。', app=self.app.id) from None
+
+    def _capture_ha_instance_access(self, pg, name):
+        plan = self._psql_json(pg['container'], pg['user'], name, ha_instance_access.capture_sql(self.app.id),
+                               'HA 應用資料庫權限')
+        return self._validate_ha_instance_access(plan)
+
+    def _prepare_ha_instance_load(self, pg, db, path, access):
+        """All refusal checks before DROP: trusted installed controls/versions, current roles, and a bounded TOC.
+
+        Preseeding extensions is the ONLY administrator setup of definitions. The dump itself is always loaded with
+        --role, suppressing its ownership/ACL/comment/security-label commands. No HA SQL is promoted to administrator.
+        """
+        expected = {e['name']: e['version'] for e in db['extensions']}
+        if not set(expected) <= {r[0] for r in access['extensions']}:
+            raise BackupError('incompatible', '轉換資料需要的應用擴充功能不在可信任的結構描述中，已停止匯入。', app=self.app.id)
+        access['extensions'] = [[n, expected.get(n, v), s] for n, v, s in access['extensions']]
+        self._validate_ha_instance_access(access)
+        rows = self._psql_json(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB,
+            "SELECT coalesce(json_agg(json_build_array(name,version,schema,requires) ORDER BY name,version),'[]'::json) "
+            "FROM pg_available_extension_versions", 'HA 應用擴充功能')
+        if not isinstance(rows, list) or not all(isinstance(r, list) and len(r) == 4 for r in rows):
+            raise BackupError('incompatible', '無法確認這台已安裝的擴充功能定義，已停止匯入。', app=self.app.id)
+        available = {(r[0], r[1]): r for r in rows if isinstance(r[0], str) and isinstance(r[1], str)}
+        pending = {r[0]: r for r in access['extensions']}
+        ordered, done = [], {'plpgsql'}
+        while pending:
+            ready = []
+            for name, row in pending.items():
+                control = available.get((name, row[1]))
+                if control is None or (control[2] is not None and control[2] != row[2]):
+                    raise BackupError('incompatible', f'這台沒有應用擴充功能 {name} 的指定版本或結構描述，已停止匯入。', app=self.app.id)
+                requires = control[3] or []
+                if not isinstance(requires, list) or not all(isinstance(v, str) for v in requires):
+                    raise BackupError('incompatible', '擴充功能相依資訊不受支援，已停止匯入。', app=self.app.id)
+                if set(requires) <= done:
+                    ready.append(name)
+            if not ready:
+                raise BackupError('incompatible', '應用擴充功能的相依版本不完整，已停止匯入。', app=self.app.id)
+            for name in sorted(ready):
+                ordered.append(pending.pop(name))
+                done.add(name)
+        roles = self._psql_json(pg['container'], pg['user'], INSTANCE_MAINTENANCE_DB,
+            "SELECT coalesce(json_agg(rolname ORDER BY rolname),'[]'::json) FROM pg_roles", 'HA 應用角色')
+        required = {access['database'][0]}
+        for row in [access['database'], *access['schemas'], *access['relations']]:
+            required.add(row[-2])
+            required.update(g[0] for g in row[-1] if g[0] is not None)
+        required.update(g[0] for row in access['columns'] for g in row[-1] if g[0] is not None)
+        if not isinstance(roles, list) or not required <= set(roles):
+            raise BackupError('incompatible', '應用資料庫目前需要的角色不存在，已停止匯入。', app=self.app.id)
+        with open(path, 'rb') as handle:
+            toc = self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '--list', input=handle,
+                                      timeout=RESTORE_TIMEOUT, max_output=SMALL_OUTPUT).stdout
+        lines, extensions = [], set()
+        preseed_schemas = {r[2] for r in ordered}
+        for line in toc.decode('utf-8').splitlines():
+            match = re.match(r'^\d+; \d+ \d+ EXTENSION - (\S+)\s*$', line)
+            if match:
+                extensions.add(match[1])
+                continue
+            match = re.match(r'^\d+; \d+ \d+ SCHEMA - (public|woow_platform)(?:\s|$)', line)
+            if match and match[1] in preseed_schemas:
+                continue
+            lines.append(line)
+        if not extensions <= {r[0] for r in ordered}:
+            raise BackupError('incompatible', '轉換資料的擴充功能和可信任的應用設定不一致，已停止匯入。', app=self.app.id)
+        return ('\n'.join(lines) + '\n').encode(), ordered
+
+    def _load_ha_instance_database(self, pg, db, path, owner, access, toc, extensions):
         name = db['name']
         locale = ['-E', db['encoding'], '--lc-collate', db['collate'], '--lc-ctype', db['ctype']]
         if db.get('locale_provider') in ('icu', 'builtin'):
@@ -3552,10 +3644,43 @@ class QuadletPostgresAdapter(Adapter):
             locale += [f'--locale-provider={provider}', f'--{provider}-locale', db['icu_locale'] or db['collate']]
         self.runner.podman('exec', pg['container'], 'createdb', '-w', '-U', pg['user'], '-T', 'template0',
                            '-O', owner, *locale, '--', name, timeout=SHORT_TIMEOUT)
-        with open(path, 'rb') as handle:
-            self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '--exit-on-error', '--single-transaction',
-                               '--no-owner', '--no-privileges', '--no-tablespaces', f'--role={owner}',
-                               '-w', '-U', pg['user'], '-d', name, input=handle, timeout=RESTORE_TIMEOUT)
+        setup = []
+        for schema in sorted({r[2] for r in extensions} - {'public'}):
+            setup.append(f'CREATE SCHEMA {ha_instance_access.ident(schema)} AUTHORIZATION {ha_instance_access.ident(owner)};')
+        for ext, version, schema in extensions:
+            setup.append(f'CREATE EXTENSION {ha_instance_access.ident(ext)} WITH SCHEMA '
+                         f'{ha_instance_access.ident(schema)} VERSION {ha_instance_access.literal(version)};')
+        if setup:
+            self._run_sql(pg['container'], pg['user'], name, '\n'.join(setup) + '\n')
+        # A private TOC removes only installed extension definitions (and schemas created for them). In particular,
+        # COMMENT ON EXTENSION would fail under an ordinary DB owner after trusted admin preseed, so suppress comments.
+        toc_path = '/tmp/woowbk-ha-' + secrets.token_hex(12) + '.list'
+        try:
+            self.runner.podman('exec', '-i', pg['container'], 'sh', '-ec',
+                               'umask 077; set -C; cat > "$1"', 'woowbk-ha-toc', toc_path,
+                               input=toc, timeout=SHORT_TIMEOUT, max_output=0)
+            with open(path, 'rb') as handle:
+                self.runner.podman('exec', '-i', pg['container'], 'pg_restore', '--exit-on-error', '--single-transaction',
+                                   '--no-owner', '--no-privileges', '--no-comments', '--no-security-labels',
+                                   '--no-tablespaces', '--use-list=' + toc_path, f'--role={owner}',
+                                   '-w', '-U', pg['user'], '-d', name, input=handle, timeout=RESTORE_TIMEOUT)
+        finally:
+            self.runner.podman('exec', pg['container'], 'rm', '-f', '--', toc_path, timeout=SHORT_TIMEOUT, max_output=0)
+        present = self._capture_ha_instance_access(pg, name)
+        self._run_sql(pg['container'], pg['user'], name, ha_instance_access.restore_sql(access, present, name))
+        after = self._capture_ha_instance_access(pg, name)
+        if ha_instance_access.comparable(access, present) != ha_instance_access.comparable(after, access):
+            raise BackupError('job-failed', '匯入後應用資料庫的擁有者、權限或擴充功能不同，已停止並會自動回復。', app=self.app.id)
+        reads = []
+        for schema, table, kind, _table_owner, grants in access['relations']:
+            if kind != 'S' and (schema, table, kind) in {tuple(r[:3]) for r in present['relations']}:
+                for role, privilege, _grantable in grants:
+                    if role is not None and privilege == 'SELECT':
+                        reads.extend([f'SET LOCAL ROLE {ha_instance_access.ident(role)};',
+                            f'SELECT 1 FROM {ha_instance_access.ident(schema)}.{ha_instance_access.ident(table)} LIMIT 0;',
+                            'RESET ROLE;'])
+        if reads:
+            self._run_sql(pg['container'], pg['user'], name, '\n'.join(reads) + '\n')
         if self._ha_database_owner(pg, name) != owner:
             raise BackupError('job-failed', '匯入後應用資料庫的擁有者不同，已停止並會自動回復。', app=self.app.id)
 

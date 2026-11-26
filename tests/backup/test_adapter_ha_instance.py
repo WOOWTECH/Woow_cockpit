@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 
-from woowbackup import catalog, flows, haimport, podman
+from woowbackup import catalog, flows, haimport, podman, ha_instance_access as access
 from woowbackup.adapters import quadlet_postgres as qp
 from woowbackup.errors import BackupError
 
@@ -23,6 +23,19 @@ def encoded(name, info):
     return dump_of(name, json.dumps(body, sort_keys=True).encode())
 
 
+def access_plan(owner='notes', *, table_owner=None, app_role=None, extension=False):
+    grants = lambda role, kind: [[role, p, False] for p in sorted(access.PRIVILEGES[kind])]
+    plan = {'database': [owner, grants(owner, 'database') + [[None, 'CONNECT', False], [None, 'TEMPORARY', False]]],
+            'schemas': [['public', owner, grants(owner, 'schema') + [[None, 'USAGE', False]]]],
+            'relations': [], 'columns': [], 'extensions': [['pgstattuple', '1.5', 'public']] if extension else []}
+    if table_owner:
+        plan['relations'] = [['public', 'marker', 'r', table_owner, grants(table_owner, 'r')]]
+    if app_role:
+        plan['schemas'][0][-1].append([app_role, 'CREATE', False])
+        plan['relations'][0][-1] += [[app_role, p, False] for p in ('SELECT', 'INSERT', 'UPDATE', 'DELETE')]
+    return plan
+
+
 class InstanceOwner(StrengthOwner):
     application_database = 'notes'
     def __init__(self):
@@ -31,6 +44,15 @@ class InstanceOwner(StrengthOwner):
                              'password': hashlib.sha256(name.encode()).hexdigest()}
                       for name in ('notes', 'oc_admin', 'readonly')}
         self.fail_import_once = False
+        self.extension_controls = [['pgstattuple', '1.5', None, None]]
+        self.preseeded = []
+        self.toc_files = {}
+
+    def access(self, database):
+        info = self.instance[database]
+        default = access_plan(info['owner'])
+        default['extensions'] = [[n, v, 'public'] for n, v in info['extensions']]
+        return copy.deepcopy(info.get('access', default))
 
     def reinit(self):
         super().reinit()
@@ -43,6 +65,50 @@ class InstanceOwner(StrengthOwner):
                   hashlib.md5(row['password'].encode()).hexdigest()] for name, row in sorted(self.roles.items())], []]
 
     def psql_file(self, database, sql, stdout):
+        if sql.startswith("SELECT json_build_object('database',"):
+            return self.json(self.access(database), stdout)
+        if 'FROM pg_available_extension_versions' in sql:
+            return self.json(self.extension_controls, stdout)
+        if sql == "SELECT coalesce(json_agg(rolname ORDER BY rolname),'[]'::json) FROM pg_roles":
+            return self.json(sorted([*self.roles, 'pg_database_owner']), stdout)
+        if sql.startswith('BEGIN;\n') and any(s in sql for s in ('CREATE EXTENSION ', 'REVOKE ALL ON ', 'SELECT 1 FROM ')):
+            state = self.instance[database]
+            plan = state.setdefault('access', self.access(database))
+            statements = sql.split(';')
+            for statement in statements:
+                statement = statement.strip()
+                ext = re.fullmatch(r'CREATE EXTENSION "([^"]+)" WITH SCHEMA "([^"]+)" VERSION \'([^\']+)\'', statement)
+                if ext:
+                    name, schema, version = ext.groups()
+                    plan['extensions'].append([name, version, schema])
+                    state['extensions'].append([name, version])
+                    self.preseeded.append(name)
+                owner = re.fullmatch(r'ALTER (SCHEMA|TABLE|SEQUENCE) "([^"]+)"(?:\."([^"]+)")? OWNER TO "([^"]+)"', statement)
+                if owner:
+                    kind, schema, name, role = owner.groups()
+                    row = next(r for r in plan['schemas'] if r[0] == schema) if kind == 'SCHEMA' else next(
+                        r for r in plan['relations'] if r[:2] == [schema, name])
+                    old_owner = row[-2]
+                    row[-1] = [[role if g == old_owner else g, p, grantable] for g, p, grantable in row[-1]]
+                    row[-2] = role
+                privilege = re.fullmatch(r'(REVOKE ALL|GRANT (\w+)) ON (DATABASE|SCHEMA|TABLE|SEQUENCE) '
+                    r'"([^"]+)"(?:\."([^"]+)")? (?:FROM|TO) (PUBLIC|"[^"]+")( WITH GRANT OPTION)?', statement)
+                if privilege:
+                    action, permission, kind, first, second, role, grantable = privilege.groups()
+                    role = None if role == 'PUBLIC' else role[1:-1]
+                    row = plan['database'] if kind == 'DATABASE' else (next(r for r in plan['schemas'] if r[0] == first)
+                        if kind == 'SCHEMA' else next(r for r in plan['relations'] if r[:2] == [first, second]))
+                    row[-1] = [g for g in row[-1] if g[0] != role or (action != 'REVOKE ALL' and g[1] != permission)]
+                    if action != 'REVOKE ALL':
+                        row[-1].append([role, permission, bool(grantable)])
+                read = re.fullmatch(r'SELECT 1 FROM "([^"]+)"\."([^"]+)" LIMIT 0', statement)
+                if read:
+                    role = re.findall(r'SET LOCAL ROLE "([^"]+)"', sql[:sql.index(statement)])[-1]
+                    row = next(r for r in plan['relations'] if r[:2] == list(read.groups()))
+                    if role != row[-2] and [role, 'SELECT', False] not in row[-1]:
+                        return podman.Result(1, b'', b'permission denied for actual app role')
+            mark = sql.rsplit('\\echo ', 1)[1].strip()
+            return self.out(0, (mark + '\n').encode(), stdout)
         if sql.startswith('SELECT json_build_array(r.rolname) FROM pg_database'):
             name = re.search(r"d.datname='([^']+)'", sql)[1]
             info = self.instance.get(name, {})
@@ -73,6 +139,17 @@ class InstanceOwner(StrengthOwner):
                     return podman.Result(1, b'', b'owner role is missing')
                 self.instance[args[-1]] = {'owner': owner, 'data': b'', 'extensions': []}
                 return podman.Result(0, b'', b'')
+            if args[args.index('exec') + 1:][:1] == ['rm'] or 'rm' in args:
+                self.toc_files.pop(args[-1], None)
+                return podman.Result(0, b'', b'')
+            if 'woowbk-ha-toc' in args:
+                self.toc_files[args[-1]] = data
+                return podman.Result(0, b'', b'')
+            if 'pg_restore' in args and '--list' in args:
+                _name, raw = data.split(b':', 2)[1:]
+                info = json.loads(raw)
+                toc = ''.join(f'{i}; 3079 100 EXTENSION - {n} \n' for i, (n, _v) in enumerate(info['extensions'], 1))
+                return self.out(0, toc.encode(), stdout)
             if 'pg_restore' in args and '-f' not in args:
                 name, raw = data.split(b':', 2)[1:]
                 info = json.loads(raw)
@@ -80,6 +157,18 @@ class InstanceOwner(StrengthOwner):
                 for arg in args:
                     if arg.startswith('--role='):
                         info['owner'] = arg.split('=', 1)[1]
+                if '--single-transaction' in args:
+                    current = self.instance[name.decode()]
+                    if info['extensions'] and not all(n in self.preseeded for n, _v in info['extensions']):
+                        return podman.Result(1, b'', b'untrusted extension requires administrator setup')
+                    if info['extensions'] and '--no-comments' not in args:
+                        return podman.Result(1, b'', b'must be owner of extension')
+                    loaded = access_plan(info['owner'])
+                    loaded['relations'] = [[s, n, k, info['owner'], [[info['owner'], p, False] for p in sorted(access.PRIVILEGES[k])]]
+                        for s, n, k, _o, _grants in info.get('access', {}).get('relations', [])]
+                    loaded['extensions'] = current.get('access', {}).get('extensions', [])
+                    info['access'] = loaded
+                    info['extensions'] = current['extensions']
                 self.instance[name.decode()] = info
                 if self.fail_import_once and '--single-transaction' in args:
                     self.fail_import_once = False
@@ -133,7 +222,7 @@ class HaInstanceTests(StrengthCase):
         name = name or self.application_database
         (self.staging / 'postgres').mkdir(exist_ok=True)
         converted = self.root / 'converted.dump'
-        converted.write_bytes(encoded(name, {'owner': 'notes', 'data': b'HA rows', 'extensions': []}))
+        converted.write_bytes(encoded(name, dict(self.owner.instance[name], data=b'HA rows')))
         dump = self.adapter.import_instance_database(self.app.postgres[0], {'database': name, 'file': converted}, self.staging)
         files = self.root / 'files.tar'
         files.write_bytes(VOLUME_TAR)
@@ -162,6 +251,11 @@ class HaInstanceTests(StrengthCase):
         self.owner.roles['new_owner'] = {'superuser': False, 'login': True, 'password': 'new-password-hash'}
         self.owner.instance['new_db'] = {'owner': 'new_owner', 'data': b'new rows', 'extensions': []}
         self.owner.instance[self.application_database]['owner'] = 'new_owner'
+        if 'access' in self.owner.instance[self.application_database]:
+            plan = self.owner.instance[self.application_database]['access']
+            old_owner = plan['database'][0]
+            plan['database'][0] = 'new_owner'
+            plan['database'][1] = [['new_owner' if r == old_owner else r, p, g] for r, p, g in plan['database'][1]]
 
     def test_complete_payload_contains_every_database_and_all_current_roles(self):
         manifest, _folder, entries = self.converted()
@@ -175,6 +269,68 @@ class HaInstanceTests(StrengthCase):
             wire = json.loads(contents[db['entry']].split(b':', 2)[2])
             self.assertEqual(base64.b64decode(wire['data']), expected)
         self.assertNotIn('verify_digests', manifest, 'conversion never claims a digest of the later live instance')
+
+    def test_ordinary_owner_installed_untrusted_extension_and_separate_app_access(self):
+        name = self.application_database
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login', extension=True)
+        self.owner.instance[name].update(owner='db_owner', extensions=[['pgstattuple', '1.5']], access=plan)
+        (self.staging / 'postgres').mkdir(exist_ok=True)
+        converted = self.root / 'ordinary-owner.dump'
+        converted.write_bytes(encoded(name, dict(self.owner.instance[name], data=b'HA rows')))
+        item = self.adapter.import_instance_database(self.app.postgres[0], {'database': name, 'file': converted}, self.staging)
+        db = next(d for d in item['databases'] if d['name'] == name)
+        self.adapter._restore_ha_instance_database(self.app.postgres[0], db, converted)
+        self.assertEqual(self.owner.instance[name]['data'], b'HA rows')
+        self.assertEqual(self.owner.preseeded, ['pgstattuple'])
+        self.assertEqual(access.comparable(self.owner.access(name), plan), access.comparable(plan, plan))
+        self.assertFalse(self.owner.roles['db_owner']['superuser'])
+        self.assertEqual(self.owner.toc_files, {})
+
+    def test_missing_installed_extension_version_refuses_before_app_drop(self):
+        name = self.application_database
+        self.owner.instance[name]['access'] = access_plan(extension=True)
+        manifest, folder, _entries = self.converted()
+        self.owner.extension_controls = []
+        with self.assertRaises(BackupError):
+            self.adapter.restore(manifest, folder, mode='inplace')
+        self.assertFalse(self.owner.dropped)
+
+    def test_fresh_restore_replays_captured_app_ownership_and_access_after_extension_setup(self):
+        name = self.application_database
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login', extension=True)
+        self.owner.instance[name].update(owner='db_owner', extensions=[['pgstattuple', '1.5']], access=plan)
+        self.owner.available.append('pgstattuple')
+        manifest, folder, _entries = self.converted()
+        self.adapter.restore(manifest, folder, mode='fresh')
+        self.assertEqual(self.owner.instance[name]['data'], b'HA rows')
+        self.assertEqual(access.comparable(self.owner.access(name), plan), access.comparable(plan, plan))
+
+    def test_old_marker_without_access_requires_reconversion_for_fresh_restore(self):
+        manifest, folder, _entries = self.converted()
+        del manifest['postgres'][0]['ha_access']
+        count = len(self.owner.argvs())
+        with self.assertRaises(BackupError):
+            self.adapter.restore(manifest, folder, mode='fresh')
+        self.assertEqual(len(self.owner.argvs()), count)
+
+    def test_converted_extension_version_is_recorded_and_checked_against_installed_controls(self):
+        name = self.application_database
+        self.owner.instance[name]['extensions'] = [['pgstattuple', '1.5']]
+        (self.staging / 'postgres').mkdir(exist_ok=True)
+        converted = self.root / 'version.dump'
+        converted.write_bytes(encoded(name, dict(self.owner.instance[name], data=b'HA rows')))
+        dump = self.adapter.import_instance_database(self.app.postgres[0],
+            {'database': name, 'file': converted, 'ha_extensions': [['pgstattuple', '1.6', 'public']]}, self.staging)
+        db = next(d for d in dump['databases'] if d['name'] == name)
+        self.assertEqual(db['extensions'], [{'name': 'pgstattuple', 'version': '1.6'}])
+        self.assertEqual(dump['ha_access']['extensions'], [['pgstattuple', '1.6', 'public']])
+        with self.assertRaises(BackupError):
+            self.adapter._restore_ha_instance_database(self.app.postgres[0], db, converted)
+        self.assertFalse(self.owner.dropped, 'only 1.5 control is installed; 1.6 must stop before DROP')
 
     def test_later_outside_writes_databases_owners_and_passwords_are_preserved(self):
         manifest, folder, _entries = self.converted()
@@ -264,6 +420,11 @@ class HaInstanceTests(StrengthCase):
         self.assertEqual(len(self.owner.argvs()), count)
 
     def test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest(self):
+        self.owner.roles.update({r: {'superuser': False, 'login': r == 'app_login', 'password': 'live-hash'}
+                                 for r in ('db_owner', 'table_owner', 'app_login')})
+        self.owner.instance[self.application_database].update(owner='db_owner', extensions=[['pgstattuple', '1.5']],
+            access=access_plan('db_owner', table_owner='table_owner', app_role='app_login', extension=True))
+        self.owner.available.append('pgstattuple')
         manifest, _folder, entries = self.converted()
         self.later_changes()
         original, roles = copy.deepcopy(self.owner.instance), copy.deepcopy(self.owner.roles)

@@ -255,6 +255,9 @@ class World(fk.World):
             return {'hapg': self.ha_major, 'll-db': self.new_major}.get(role)
         if "current_setting('server_version')" in sql:
             return '17.11 (Debian)'
+        if 'FROM pg_extension e JOIN pg_namespace n ON n.oid=e.extnamespace' in sql:
+            return [r for r in (self.restored_signature or self.live_signature).get('extensions', [])
+                    if r[0] != 'plpgsql' and r[2] in ha_litellm.SCHEMAS]
         if sql == ha_litellm.COLUMNS_SQL:
             if role == 'll-db' and self.new_columns is not None:
                 return self.new_columns
