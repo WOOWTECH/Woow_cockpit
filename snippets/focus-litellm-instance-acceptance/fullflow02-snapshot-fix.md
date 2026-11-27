@@ -24,3 +24,14 @@ Fullflow02 remains FAIL. Its complete cleanup/zero jobs/no safety/backups/leak
 and original8 strict-return evidence is retained; old case/credentials/results
 must stay immutable. Separate bounded operation-diagnostic preservation and a
 new-case image-adoption proposal follow before another runtime lease.
+
+Operation diagnostics now persist before cleanup: host receipt records the
+operation before dispatch; on failure the device writes a case-private bounded
+record before replying, and the host writes its own immutable record before
+unwinding. Both retain fixed exception class/errno/returncode and up to16KiB
+stderr (base64/private), never argv, SQL results, request values or exception
+messages. Host command captures are capped too. Root diagnostic files survive
+package cleanup and a lost reply. A one-method offline regression covers real
+nonzero-command stderr and PermissionError errno13, checks durable root/host
+records before cleanup, and confirms they remain afterward. It is separate
+from the accepted snapshot test, which was not repeated for this delta.

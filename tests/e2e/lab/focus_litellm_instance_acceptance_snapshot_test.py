@@ -1,9 +1,11 @@
 """Snapshot wire contract and retained failures; no PostgreSQL/device process."""
 import base64
 import json
+import errno
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -51,6 +53,46 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(len(role_queries),2) # actual adapter exercised roles=True
             self.assertEqual(json.loads((store.path/'state.json').read_text())['snapshots']['original'],result)
             self.assertEqual(len(list(store.path.glob('original-*.digest'))),2)
+
+    def test_failed_operation_is_retained_on_device_and_host_before_cleanup(self):
+        for denied in (False,True):
+            with self.subTest(errno=denied),tempfile.TemporaryDirectory() as root:
+                store=ops.Store('woowbk_focus_litellm_012345abcdef',parent=Path(root)/'device',create=True)
+                secret_message='private exception message must not be serialized'
+                stderr=b'fixed test error\n'+b'x'*40000
+                def dispatch(q):
+                    if q['op']=='snapshot':
+                        if denied:raise PermissionError(errno.EACCES,secret_message)
+                        # Run the actual nonzero subprocess boundary too.
+                        with patch.object(ops.subprocess,'run',return_value=SimpleNamespace(
+                                returncode=7,stdout=b'discarded SQL data',stderr=stderr)):
+                            return ops.call(['fixed-test-psql'])
+                    self.assertEqual(q['op'],'cleanup_owned_package')
+                    self.assertEqual(len(list(store.path.glob('operation-error-*.json'))),1)
+                    self.assertEqual(len(list(Path(root).glob('case.private.json.operation-error-*'))),1)
+                    return True
+                def transport(*_args,input,**_kwargs):
+                    with patch.object(ops,'dispatch',side_effect=dispatch),patch.object(ops,'Store',return_value=store):
+                        code,result=ops.run_request(json.loads(input))
+                    return SimpleNamespace(returncode=code,stdout=json.dumps(result).encode(),stderr=b'')
+                args=SimpleNamespace(receipt=Path(root)/'case.private.json')
+                lease={'name':store.name,'expires_utc':'2026-11-27T04:00:00+00:00'}
+                c=driver.Controller(args,lease,SimpleNamespace(drv=SimpleNamespace(root=transport)))
+                with self.assertRaises(subprocess.CalledProcessError):c.op('snapshot',tag='original')
+                device=json.loads(next(store.path.glob('operation-error-*.json')).read_text())
+                host=json.loads(next(Path(root).glob('case.private.json.operation-error-*')).read_text())
+                self.assertEqual(device['operation'],'snapshot')
+                self.assertEqual(device['errno'],errno.EACCES if denied else None)
+                self.assertEqual(device['class'],'PermissionError' if denied else 'CalledProcessError')
+                self.assertEqual(host['device_error'],device)
+                if not denied:
+                    self.assertEqual(device['returncode'],7)
+                    self.assertEqual(base64.b64decode(device['stderr_b64']),stderr[:16384])
+                    self.assertTrue(device['stderr_truncated'])
+                self.assertNotIn(secret_message,json.dumps(device))
+                self.assertNotIn('discarded SQL data',json.dumps(device))
+                c.op('cleanup_owned_package')
+                self.assertEqual(len(c.r['operation_failures']),1)
 
 
 if __name__=='__main__':unittest.main()
