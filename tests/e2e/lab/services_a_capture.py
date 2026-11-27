@@ -77,7 +77,7 @@ def json_event(line):
     except ValueError:
         return False
     return (isinstance(doc, dict) and isinstance(doc.get('stage'), str)
-            and re.fullmatch(r'[a-z_]{1,40}', doc['stage']) is not None
+            and re.fullmatch(r'[a-z0-9_]{1,40}', doc['stage']) is not None
             and all(re.fullmatch(r'[a-z_0-9]{1,60}', k) and _safe_value(v) for k, v in doc.items()))
 
 

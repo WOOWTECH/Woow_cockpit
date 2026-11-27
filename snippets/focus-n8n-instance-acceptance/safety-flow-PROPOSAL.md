@@ -1,5 +1,10 @@
 # Original n8n instance path — source-bound SAFETY and vendor-flow proposal
 
+**Actual SAFETY attempt1 stopped before writes on TWO preexisting old safety
+pairs. The current executable packet is `safety-preservation-PROPOSAL.md`.
+It preserves and returns both pairs byte-for-byte; the zero-old-safety
+admission/cleanup assumptions below describe the earlier b5c5b1a1 proposal.**
+
 Existing executable: tests/e2e/lab/focus_n8n_instance_acceptance_run.py. Use the clean committed flow-preparation checkout
 /tmp/parity-focus-n8n-instance-flow-20261127. The external final binding JSON
 records the exact commit containing this proposal for BOTH SAFETY and flow. Product remains clean frozen

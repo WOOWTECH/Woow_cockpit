@@ -120,14 +120,14 @@ class Store:
     def save(self):
         atomic(self.path/'state.json', json.dumps(self.state).encode(), uid=os.geteuid(), gid=os.getegid())
 
-    def capture(self, paths):
+    def capture(self, paths, *, limit=1024*1024, copy_mtime=False):
         if self.state:
             raise ValueError('original capture already exists')
         self.state = {'original': {}, 'allowed': {}, 'hook': False}
         for i, path in enumerate(paths):
-            data, meta = read_regular(path)
+            data, meta = read_regular(path, limit)
             key = 'original-' + str(i)
-            atomic(self.path/key, data)
+            atomic(self.path/key, data, mtime_ns=meta['mtime_ns'] if copy_mtime else None)
             self.state['original'][path] = dict(meta, copy=key)
             self.state['allowed'][path] = [meta['sha256']]
         self.save()
@@ -342,6 +342,9 @@ def dispatch(q):
     if os.geteuid()!=0: raise ValueError('device root required')
     op = q['op']; name = q['case']
     if not BASE.fullmatch(name): raise ValueError('invalid case name')
+    if op.startswith('preserved_safety_'):
+        from types import SimpleNamespace
+        return sys.modules['focus_n8n_instance_acceptance_safeties'].operate(q,SimpleNamespace(**globals()))
     if op=='inventory': return inventory()
     if op=='hashes': return engine_hashes()
     if op=='dependencies':return dependencies(json.loads(read_regular(CATALOG)[0]))
