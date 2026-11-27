@@ -126,11 +126,8 @@ def case_sql(database):
                           'FROM public.kept_marker),(SELECT pg_get_userbyid(datdba) FROM pg_database '
                           "WHERE datname=current_database()),(SELECT pg_get_userbyid(relowner) FROM "
                           "pg_class WHERE oid='public.kept_marker'::regclass));"),
-        'roles_private_hash': ("SELECT md5(coalesce(string_agg(rolname||':'||rolsuper||':'||rolinherit||':'||"
-                               "rolcreaterole||':'||rolcreatedb||':'||rolcanlogin||':'||rolreplication||':'||"
-                               "rolbypassrls||':'||rolconnlimit||':'||coalesce(rolvaliduntil::text,'')||':'||"
-                               "coalesce(rolconfig::text,'')||':'||coalesce(rolpassword,''),E'\\n' ORDER BY rolname),'')) "
-                               'FROM pg_authid;'),
+        # Actual full role/password/settings capture is ops.role_state(), with
+        # the exact real-PG16-tested queries and independent settings hash.
     }
 
 
