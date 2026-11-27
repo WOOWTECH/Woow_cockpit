@@ -169,8 +169,9 @@ class SafetyTests(unittest.TestCase):
 class ApiProbeTests(unittest.TestCase):
     VERDICT = ('login', 'credential_visible', 'manual_action')
 
-    def execute(self, extra_node=False, fail=None, executions=None, credentials=None):
-        """`fail` = (path, HTTP status or exception) for the fake vendor API; `executions` = the answers of GET /rest/executions."""
+    def execute(self, extra_node=False, fail=None, executions=None, credentials=None, error_body=None):
+        """`fail` = (path, HTTP status or exception) for the fake vendor API; `executions` = the answers of GET /rest/executions;
+        `error_body` = the bytes n8n answers with when `fail` is an HTTP status."""
         requests = []
         answers = list(executions or [{'workflowId':'fixture123','finished':True,'status':'success'}])
         def open_request(request, timeout):
@@ -178,7 +179,8 @@ class ApiProbeTests(unittest.TestCase):
             path = request.full_url.removeprefix('http://127.0.0.1:15678')
             if fail and path == fail[0]:
                 if isinstance(fail[1], int):
-                    raise urllib.error.HTTPError(request.full_url, fail[1], 'private message that must never leave', {}, None)
+                    body = error_body if error_body is not None else json.dumps({'code': 0, 'message': 'Cannot read properties of undefined'}).encode()
+                    raise urllib.error.HTTPError(request.full_url, fail[1], 'private message that must never leave', {}, io.BytesIO(body))
                 raise fail[1]
             nodes = [{'name':'Start','type':'n8n-nodes-base.manualTrigger'},
                      {'name':'Set','type':'n8n-nodes-base.set'}]
@@ -259,6 +261,33 @@ class ApiProbeTests(unittest.TestCase):
         self.assertFalse(login['login'])
         later, _ = self.execute(fail=('/rest/workflows/fixture123/run', 400))
         self.assertTrue(later['login']);self.assertTrue(later['credential_visible'])
+
+    def test_the_vendor_error_text_is_kept_short_and_scrubbed(self):
+        message = ("Cannot read properties of undefined (reading 'x') for fixture@example.invalid with do-not-publish and token "
+                   "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF \x07 bell 一些中文 " + 'y' * 400)
+        result, _ = self.execute(fail=('/rest/workflows/fixture123/run', 500),
+                                 error_body=json.dumps({'code': 0, 'message': message}).encode())
+        text = result['error_message']
+        self.assertTrue(text.startswith("Cannot read properties of undefined (reading 'x') for <masked> with <masked> and token <masked>"))
+        self.assertLessEqual(len(text), 160)
+        for forbidden in ('fixture@example.invalid', 'do-not-publish', 'abcdefghijklmnopqrstuvwxyz', '\x07'):
+            self.assertNotIn(forbidden, text)
+        self.assertEqual((result['stage'], result['http'], result['error']), ('run', 500, 'HTTPError'))
+
+    def test_a_missing_or_non_json_error_body_adds_no_message_and_still_reports_where_it_stopped(self):
+        for label, body in (('empty', b''), ('html', b'<html>502</html>'), ('list', b'[1,2]'), ('no message', b'{"code":1}'),
+                            ('message is not text', b'{"message":{"a":1}}'), ('only control characters', b'{"message":"\\u0007\\u0008"}')):
+            with self.subTest(label):
+                result, _ = self.execute(fail=('/rest/workflows/fixture123/run', 500), error_body=body)
+                self.assertNotIn('error_message', result)
+                self.assertEqual((result['stage'], result['http']), ('run', 500))
+
+    def test_every_request_carries_the_ui_style_push_ref(self):
+        result, requests = self.execute()
+        refs = {r.headers.get('Push-ref') for r in requests}
+        self.assertEqual(len(refs), 1)
+        self.assertRegex(refs.pop(), r'woow[0-9a-f]{10}\Z')
+        self.assertTrue(all(r.headers.get('Browser-id') == 'woow-focus-instance' for r in requests))
 
     def test_credential_counts_decide_visibility_and_are_reported(self):
         for label, credentials, matches, visible in (('none', [], 0, False), ('one', [{'name':'HA probe header'}], 1, True),

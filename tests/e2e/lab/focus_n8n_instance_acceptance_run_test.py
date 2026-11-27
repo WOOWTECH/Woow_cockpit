@@ -510,7 +510,7 @@ class ProbeReportTests(Fixture):
     def test_only_fixed_fact_names_with_plain_values_reach_the_receipt(self):
         found={'login':True,'credential_visible':False,'manual_action':False,'stage':'run','error':'HTTPError','http':400,
                'credential_total':3,'credential_matches':1,'workflow_total':3,'workflow_matches':1,'polls':2,
-               'execution_status':'error','execution_finished':None,
+               'execution_status':'error','execution_finished':None,'error_message':'Cannot read properties of undefined',
                'node_types':['n8n-nodes-base.manualTrigger','n8n-nodes-base.set'],
                'password':'do-not-keep','cookie':'do-not-keep','message':'free text does not belong here'}
         report=run.safe_probe_report(found)
@@ -524,6 +524,12 @@ class ProbeReportTests(Fixture):
         self.assertEqual(run.safe_probe_report(found),{})
         self.assertEqual(run.safe_probe_report({'node_types':['x']*11}),{})
         self.assertEqual(run.safe_probe_report({'stage':'中文'}),{})
+
+    def test_a_short_plain_error_text_is_kept_and_anything_riskier_is_dropped(self):
+        ok="Cannot read properties of undefined (reading 'x') <masked> 一些中文"
+        self.assertEqual(run.safe_probe_report({'error_message':ok}),{'error_message':ok})
+        for bad in ('x'*161,'abcdefghijklmnopqrstuvwxyz0123456789','bell \x07','line\nbreak','',5,None,['a'],{'a':1}):
+            with self.subTest(repr(bad)[:30]):self.assertEqual(run.safe_probe_report({'error_message':bad}),{})
 
     def test_a_missing_or_foreign_answer_is_recorded_as_such(self):
         for value in (None,[],'text',5):self.assertEqual(run.safe_probe_report(value),{'answer':'not-a-dict'})
@@ -559,6 +565,58 @@ class ProbeReportTests(Fixture):
             with self.subTest(answer=answer):
                 self.api_fixture(answer)
                 with self.assertRaises(RuntimeError):self.c.api()
+
+
+class ApiLogTests(Fixture):
+    SECRETS=['owner-secret-value','credential-secret-value','ha-key-secret-value']
+
+    def setUp(self):
+        super().setUp()
+        self.calls=[]
+        self.c.credentials=lambda:{'N8N_OWNER_PW':self.SECRETS[0],'N8N_CREDENTIAL_VALUE':self.SECRETS[1],'HA_BACKUP_KEY':self.SECRETS[2]}
+        self.c.private_api=lambda program:self.found
+        self.c.h=SimpleNamespace(CREDENTIAL_PROBE='/tmp/woowbk-creds.json',CREDENTIAL='HA probe header')
+        self.c.root_json=lambda *a,**k:{'found':True,'match':True}
+        self.c.sql=lambda *a,**k:True
+        self.log=(b'INFO started\nError: Cannot read properties of undefined (reading id) for ha-probe@probe.invalid\n'
+                  b'    at WorkflowExecutionService.executeManually (/usr/local/lib/node_modules/n8n/dist/x.js:1:2)\n'
+                  b'warn password owner-secret-value token abcdefghijklmnopqrstuvwxyz0123456789 \x07 bell\nINFO fine line\n')
+        def command(*argv,**kw):
+            self.calls.append(argv)
+            if argv[:3]==('podman','logs','--tail'):return self.log
+            return b''
+        self.c.command=command
+
+    def test_a_failed_action_keeps_n8ns_scrubbed_error_lines_before_it_judges(self):
+        self.found={'login':True,'credential_visible':True,'manual_action':False,'stage':'run','http':500,'error':'HTTPError'}
+        with self.assertRaisesRegex(RuntimeError,'real_owner_api_credential_action'):self.c.api()
+        self.assertEqual(self.calls,[('podman','logs','--tail','300','n8n')])
+        lines=self.c.r['api_probe_log']
+        self.assertEqual(len(lines),3)          # the error, its stack frame and the warning; the two INFO lines are dropped
+        text=' | '.join(lines)
+        for forbidden in ('ha-probe@probe.invalid',*self.SECRETS,'abcdefghijklmnopqrstuvwxyz','\x07','INFO'):
+            self.assertNotIn(forbidden,text)
+        self.assertIn('Cannot read properties of undefined (reading id) for <masked>',text)
+        saved=json.loads((self.path/'receipt.json').read_text());self.assertEqual(saved['api_probe_log'],lines)
+
+    def test_a_good_action_takes_no_log(self):
+        self.found={'login':True,'credential_visible':True,'manual_action':True}
+        self.c.api()
+        self.assertFalse(any(c[:2]==('podman','logs') for c in self.calls));self.assertNotIn('api_probe_log',self.c.r)
+
+    def test_a_log_capture_that_fails_never_hides_the_real_failure(self):
+        self.found={'login':True,'credential_visible':True,'manual_action':False}
+        def broken(*argv,**kw):raise RuntimeError('fixed service/image command failed; raw output withheld')
+        self.c.command=broken
+        with self.assertRaisesRegex(RuntimeError,'real_owner_api_credential_action'):self.c.api()
+        self.assertEqual(self.c.r['api_probe_log'],['log capture failed: RuntimeError'])
+
+    def test_scrub_log_keeps_only_a_bounded_number_of_short_plain_lines(self):
+        text='\n'.join('error line %d %s'%(i,'x'*400) for i in range(100))
+        lines=run.scrub_log(text,[])
+        self.assertEqual(len(lines),40);self.assertTrue(all(len(x)<=240 for x in lines));self.assertTrue(lines[-1].startswith('error line 99'))
+        self.assertEqual(run.scrub_log('nothing interesting\nall fine',[]),[])
+        self.assertEqual(run.scrub_log('error short',['sh']),['error short'])          # secrets under 4 characters are never substituted
 
 
 if __name__=='__main__':unittest.main()

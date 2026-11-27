@@ -139,9 +139,12 @@ def successful_restore(job):
 
 PROBE_KINDS={'login':'bool','credential_visible':'bool','manual_action':'bool','execution_finished':'bool-or-null',
              'credential_total':'count','credential_matches':'count','workflow_total':'count','workflow_matches':'count',
-             'polls':'count','http':'count','stage':'word','execution_status':'word','error':'word','node_types':'words'}
+             'polls':'count','http':'count','stage':'word','execution_status':'word','error':'word','node_types':'words',
+             'error_message':'message'}
 PROBE_FACTS=tuple(PROBE_KINDS)
 PROBE_WORD=re.compile(r'[A-Za-z0-9_.@-]{1,80}\Z')
+PROBE_MESSAGE=re.compile(r'[\x20-\x7e\u4e00-\u9fff]{1,160}\Z')
+LONG_TOKEN=re.compile(r'[A-Za-z0-9+/=_-]{24,}')
 
 
 def safe_probe_report(found):
@@ -157,9 +160,29 @@ def safe_probe_report(found):
         elif kind=='bool-or-null' and (value is None or isinstance(value,bool)):out[key]=value
         elif kind=='count' and isinstance(value,int) and not isinstance(value,bool) and 0<=value<=100000:out[key]=value
         elif kind=='word' and isinstance(value,str) and PROBE_WORD.fullmatch(value):out[key]=value
+        elif (kind=='message' and isinstance(value,str) and PROBE_MESSAGE.fullmatch(value)
+              and not LONG_TOKEN.search(value)):out[key]=value
         elif (kind=='words' and isinstance(value,list) and len(value)<=10
               and all(isinstance(x,str) and PROBE_WORD.fullmatch(x) for x in value)):out[key]=list(value)
     return out
+
+
+LOG_HOT=re.compile(r'error|exception|cannot|undefined|typeerror|stack|^\s+at |\b500\b|failed|warn',re.I)
+EMAIL=re.compile(r'[^\s@<>"\']+@[^\s@<>"\']+')
+
+
+def scrub_log(text,secrets,*,keep=40):
+    """The error-ish lines of a container log, safe to keep: only lines that look like errors, every registered secret value, every
+    e-mail address and every long token-like run replaced, anything but plain printable text dropped, each line cut short."""
+    out=[]
+    for line in text.splitlines():
+        if not LOG_HOT.search(line):continue
+        for secret in secrets:
+            if isinstance(secret,str) and len(secret)>=4:line=line.replace(secret,'<masked>')
+        line=LONG_TOKEN.sub('<masked>',EMAIL.sub('<masked>',line))
+        line=re.sub(r'[^\x20-\x7e\u4e00-\u9fff]+',' ',line).strip()[:240]
+        if line:out.append(line)
+    return out[-keep:]
 
 
 def recording_api_program(program, path):
@@ -560,13 +583,25 @@ class Controller:
         self.r['cookie_intent']=False;self.save()
         return result
 
+    def api_log(self):
+        """n8n's own account of a failed owner API action, taken BEFORE recovery stops the container: the last error-ish log lines,
+        scrubbed (best effort: a failure here never hides the real failure)."""
+        try:
+            s=self.credentials()
+            secrets=[s[k] for k in ('N8N_OWNER_PW','N8N_CREDENTIAL_VALUE','HA_BACKUP_KEY')]
+            raw=self.command('podman','logs','--tail','300','n8n',timeout=60).decode('utf-8','replace')
+            self.r['api_probe_log']=scrub_log(raw,secrets);self.save()
+        except Exception as error:
+            self.r['api_probe_log']=['log capture failed: '+type(error).__name__];self.save()
+
     def api(self):
         s=self.credentials()
         found=self.private_api(plan.API_ACTION_PROBE)
         # dev-c FLOW3 stopped here and the receipt could not say which of the three steps: keep where the probe stopped.
         self.r['api_probe']=safe_probe_report(found);self.save()
-        self.require('real_owner_api_credential_action',isinstance(found,dict) and
-                     all(found.get(k) is True for k in ('login','credential_visible','manual_action')))
+        verdict=isinstance(found,dict) and all(found.get(k) is True for k in ('login','credential_visible','manual_action'))
+        if not verdict:self.api_log()
+        self.require('real_owner_api_credential_action',verdict)
         target='/tmp/'+self.name+'-creds.json'
         self.command('podman','exec','n8n','test','!','-e',target)
         decrypted=self.root_json(self.h.CREDENTIAL_PROBE.replace('/tmp/woowbk-creds.json',target),
