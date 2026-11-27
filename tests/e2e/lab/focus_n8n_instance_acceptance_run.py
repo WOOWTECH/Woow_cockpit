@@ -30,7 +30,10 @@ import focus_n8n_instance_acceptance_ops as ops
 PHASES = ('images','images-recover','safety','flow','recover')
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
-FROZEN_PRODUCT = 'd09f4fe8e06305aff6a1150f41d6de719e7b7f6a'
+# d09f4fe8 plus two one-file n8n fixes found by the real flow: 8e18f842 (the probe must not read its own process entry) and
+# bfe7b914 (advance PostgreSQL sequences after import:entities: every new execution collided with an imported id). The engine
+# on dev-c is moved commit by commit with focus_engine_patch (each time exactly ha_n8n.py, hashes checked before and after).
+FROZEN_PRODUCT = 'bfe7b91439851dce9f2851e790ad500b5f2ff88b'
 IMAGE_ARCHIVES = {config:{'compressed_sha256':sha,'compressed_bytes':size}
                   for config,(sha,size) in plan.ARCHIVES.items()}
 BOUNDS = {'host_available_mib':1200,'host_reserve_gib':13,'host_write_budget_gib':8,
@@ -81,6 +84,9 @@ def validate_lease(lease, phase, *, now, driver_commit, source_commit):
         raise ValueError('lease expired or exceeds bounded window')
     if lease.get('image_policy') not in ('retain-for-case','remove-own-after-case'):
         raise ValueError('explicit image recovery policy required')
+    attempt = lease.get('attempt', 1)
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or not 1 <= attempt <= 99:
+        raise ValueError('lease attempt must be an integer from 1 to 99')
     return expires
 
 
@@ -100,11 +106,27 @@ def save_receipt(path, value):
         temp.unlink(missing_ok=True)
 
 
+FOUND_KEYS=('catalog','files','protected','units','timer','volumes','running','retention_sha256')
+
+
 def same_found(current, original, *, images=False):
     """Durable state, not transient container IDs. No untracked field omission."""
-    keys=('catalog','files','protected','units','timer','volumes','running','retention_sha256')
+    keys=FOUND_KEYS
     return (all(current.get(k)==original.get(k) for k in keys)
             and not current.get('active_jobs') and (not images or current['images']==original['images']))
+
+
+def difference_paths(current, original, *, limit=40):
+    """WHERE the durable state still differs, by field name only: never a value."""
+    out=[]
+    def walk(a,b,path):
+        if len(out)>=limit or a==b:return
+        if isinstance(a,dict) and isinstance(b,dict):
+            for key in sorted(set(a)|set(b),key=str):walk(a.get(key),b.get(key),path+'.'+str(key))
+        else:out.append(path)
+    for key in FOUND_KEYS:walk(current.get(key),original.get(key),key)
+    if current.get('active_jobs'):out.append('active_jobs')
+    return out
 
 
 def successful_restore(job):
@@ -114,6 +136,65 @@ def successful_restore(job):
     return (job.get('state')=='succeeded' and result.get('rolled_back') is False
             and bool(result.get('safety_backup_id')) and health and all(x.get('status')=='ok' for x in health)
             and all(x.get('match') is True for x in checks))
+
+
+PROBE_KINDS={'login':'bool','credential_visible':'bool','manual_action':'bool','execution_finished':'bool-or-null',
+             'credential_total':'count','credential_matches':'count','workflow_total':'count','workflow_matches':'count',
+             'polls':'count','http':'count','stage':'word','execution_status':'word','error':'word','node_types':'words',
+             'error_message':'message'}
+PROBE_FACTS=tuple(PROBE_KINDS)
+PROBE_WORD=re.compile(r'[A-Za-z0-9_.@-]{1,80}\Z')
+PROBE_MESSAGE=re.compile(r'[\x20-\x7e\u4e00-\u9fff]{1,160}\Z')
+LONG_TOKEN=re.compile(r'[A-Za-z0-9+/=_-]{24,}')
+
+
+def safe_probe_report(found):
+    """What the receipt may keep of the owner API probe's answer: only the fixed fact names, each only in its own plain form
+    (boolean, small count, identifier-like word such as a stage, class, status or node type name). Never a free-form string,
+    a value of the wrong kind or anything nested."""
+    if not isinstance(found,dict):return {'answer':'not-a-dict'}
+    out={}
+    for key,kind in PROBE_KINDS.items():
+        if key not in found:continue
+        value=found[key]
+        if kind=='bool' and isinstance(value,bool):out[key]=value
+        elif kind=='bool-or-null' and (value is None or isinstance(value,bool)):out[key]=value
+        elif kind=='count' and isinstance(value,int) and not isinstance(value,bool) and 0<=value<=100000:out[key]=value
+        elif kind=='word' and isinstance(value,str) and PROBE_WORD.fullmatch(value):out[key]=value
+        elif (kind=='message' and isinstance(value,str) and PROBE_MESSAGE.fullmatch(value)
+              and not LONG_TOKEN.search(value)):out[key]=value
+        elif (kind=='words' and isinstance(value,list) and len(value)<=10
+              and all(isinstance(x,str) and PROBE_WORD.fullmatch(x) for x in value)):out[key]=list(value)
+    return out
+
+
+LOG_HOT=re.compile(r'error|exception|cannot|undefined|typeerror|stack|^\s+at |\b500\b|failed|warn',re.I)
+EMAIL=re.compile(r'[^\s@<>"\']+@[^\s@<>"\']+')
+
+
+def scrub_log(text,secrets,*,keep=40):
+    """The error-ish lines of a container log, safe to keep: only lines that look like errors, every registered secret value, every
+    e-mail address and every long token-like run replaced, anything but plain printable text dropped, each line cut short."""
+    out=[]
+    for line in text.splitlines():
+        if not LOG_HOT.search(line):continue
+        for secret in secrets:
+            if isinstance(secret,str) and len(secret)>=4:line=line.replace(secret,'<masked>')
+        line=LONG_TOKEN.sub('<masked>',EMAIL.sub('<masked>',line))
+        line=re.sub(r'[^\x20-\x7e\u4e00-\u9fff]+',' ',line).strip()[:240]
+        if line:out.append(line)
+    return out[-keep:]
+
+
+def secret_difference(current,kept):
+    """WHICH n8n secret differs and HOW ('<name>:id', '<name>:value', '<name>:missing'), never an id or a value."""
+    out=[]
+    for name in sorted(set(current or {})|set(kept or {})):
+        a,b=(current or {}).get(name),(kept or {}).get(name)
+        if not isinstance(a,dict) or not isinstance(b,dict):out.append(name+':missing');continue
+        if a.get('id')!=b.get('id'):out.append(name+':id')
+        if a.get('value_sha256')!=b.get('value_sha256'):out.append(name+':value')
+    return out
 
 
 def recording_api_program(program, path):
@@ -200,6 +281,18 @@ class Controller:
         self.results.append({'check':label,'ok':bool(condition)})
         print(json.dumps({'stage':label,'ok':bool(condition)}),flush=True)
         if not condition:raise RuntimeError(label)
+
+    def require_original_state(self,label,*,wait=90):
+        """The durable state equals the original. Stopping services and returning a timer can settle a moment after their commands
+        return, so a short bounded wait is allowed; a lasting difference is recorded by field NAME before the check fails."""
+        end=min(self.deadline,self.clock()+wait)
+        while True:
+            found=self.op('inventory')
+            if same_found(found,self.r['before']):return self.require(label,True)
+            if self.clock()>=end:break
+            self.sleep(3)
+        self.r['original_state_difference']=difference_paths(found,self.r['before']);self.save()
+        self.require(label,False)
 
     def budget(self,*,reserve=0):
         if self.clock()+reserve>=self.deadline:raise TimeoutError('lease recovery reserve reached')
@@ -339,14 +432,25 @@ class Controller:
         self.r['last_job_id']=jid;self.r['pending']=None;self.save()
         return job
 
+    def request_id(self,tag):
+        # The engine deduplicates request ids for 24 h and answers a repeated id with the EARLIER job: SAFETY4 was handed the
+        # failed SAFETY3 job that way and never started a backup. Attempt 1 keeps the historical id; every retry of the same
+        # tag needs a new lease attempt number.
+        attempt=self.lease.get('attempt',1)
+        return self.name+'-'+tag+('' if attempt==1 else '-a%d'%attempt)
+
     def job(self,command,request,tag):
         if self.r.get('pending'):raise RuntimeError('previous job unresolved')
         self.budget(reserve=0 if self.recovering else 600)
         if command=='restore-start':self.op('preserved_safety_copies')
-        request=dict(request,request_id=self.name+'-'+tag)
+        request=dict(request,request_id=self.request_id(tag))
         self.r['pending']={'command':command,'request_id':request['request_id'],'tag':tag}
         self.save()  # never store request keys/passwords in the receipt
         response=self.helper(command,request)
+        if response['job_id'] in self.r.get('jobs',{}):
+            # The engine replayed a job this receipt already settled: nothing new is in flight, so nothing stays pending.
+            self.r['pending']=None;self.save()
+            raise RuntimeError('engine answered a new request with an earlier job; use a new lease attempt number')
         self.r['pending']['job_id']=response['job_id'];self.save()
         return self.settle()
 
@@ -406,6 +510,7 @@ class Controller:
         self.resources();self.acquire_original();self.frozen_engine()
         self.require('no_previous_safety',not self.r['full_safety'])
         self.require('all_exact_images',set(plan.IMAGE_IDS.values())<=set(self.op('inventory')['images']))
+        self.require_image_references()
         protected=self.op('preserved_safety_prepare')
         self.r['preserved_old_safeties']=protected;self.save()
         self.require('old_pairs_private_copy_verified',protected.get('private_copy_verified') is True and protected.get('private_files')==4)
@@ -434,8 +539,15 @@ class Controller:
         finally:
             # Never race uncertain helper startup/active jobs. A failure retains copies.
             self.settle();self.stop_units();self.restore_catalog();self.restore_timer()
-            self.require('safety_stage_returns_original_services',same_found(self.op('inventory'),self.r['before']))
+            self.require_original_state('safety_stage_returns_original_services')
             self.op('preserved_safety_check')
+
+    def require_image_references(self):
+        for ref,config in plan.IMAGE_IDS.items():
+            self.r['last_image_reference']=ref;self.save()
+            p=self.h.owner('podman','image','inspect',ref,'--format','{{.ID}}',timeout=30)
+            self.require('catalog_image_reference_pin',p.returncode==0 and
+                p.stdout.decode().strip().removeprefix('sha256:')==config)
 
     def sql(self,database,query,*,json_result=True):
         if database not in ('n8n','postgres',self.name,self.name+'_outside'):
@@ -483,10 +595,25 @@ class Controller:
         self.r['cookie_intent']=False;self.save()
         return result
 
+    def api_log(self):
+        """n8n's own account of a failed owner API action, taken BEFORE recovery stops the container: the last error-ish log lines,
+        scrubbed (best effort: a failure here never hides the real failure)."""
+        try:
+            s=self.credentials()
+            secrets=[s[k] for k in ('N8N_OWNER_PW','N8N_CREDENTIAL_VALUE','HA_BACKUP_KEY')]
+            raw=self.command('podman','logs','--tail','300','n8n',timeout=60).decode('utf-8','replace')
+            self.r['api_probe_log']=scrub_log(raw,secrets);self.save()
+        except Exception as error:
+            self.r['api_probe_log']=['log capture failed: '+type(error).__name__];self.save()
+
     def api(self):
         s=self.credentials()
         found=self.private_api(plan.API_ACTION_PROBE)
-        self.require('real_owner_api_credential_action',found=={'login':True,'credential_visible':True,'manual_action':True})
+        # dev-c FLOW3 stopped here and the receipt could not say which of the three steps: keep where the probe stopped.
+        self.r['api_probe']=safe_probe_report(found);self.save()
+        verdict=isinstance(found,dict) and all(found.get(k) is True for k in ('login','credential_visible','manual_action'))
+        if not verdict:self.api_log()
+        self.require('real_owner_api_credential_action',verdict)
         target='/tmp/'+self.name+'-creds.json'
         self.command('podman','exec','n8n','test','!','-e',target)
         decrypted=self.root_json(self.h.CREDENTIAL_PROBE.replace('/tmp/woowbk-creds.json',target),
@@ -499,11 +626,19 @@ class Controller:
             'SELECT to_json(count(*)>0) FROM execution_entity e JOIN workflow_entity w ON e."workflowId"=w.id '
             "WHERE w.name='WOOW 匯入測試 - 手動' AND e.status='success';") is True)
 
-    def kept(self,tag):
+    def kept(self,tag,*,ids_may_change=False):
         expected=self.r['kept_state']
         now=self.op('snapshot',tag=tag,databases=list(expected['databases']))
         self.require('original_outside_rows_types_access_roles',now==expected)
-        self.require('retained_current_secret_ids_values',self.op('secrets')==self.r['kept_secrets'])
+        changed=secret_difference(self.op('secrets'),self.r['kept_secrets'])
+        if changed:self.r.setdefault('secret_differences',{})[tag]=changed;self.save()
+        if ids_may_change:
+            # A rollback is a COMPLETE restore of the instance from its own fresh safety, so the engine may recreate the app's
+            # podman secrets from it (new ids); their names and values must be exactly the ones kept. The selective import
+            # above is checked strictly: it must not touch them at all. dev-c FLOW6 stopped here with the ids-and-values check.
+            self.require('rolled_back_secret_names_values_kept',all(x.endswith(':id') for x in changed))
+        else:
+            self.require('retained_current_secret_ids_values',not changed)
         return now
 
     def flow(self):
@@ -590,13 +725,16 @@ class Controller:
         found=self.root_json(plan.ENDPOINT_PROBE)
         self.require('mismatch_has_actual_other_database',found.get('database')=='n8n' and found.get('local') is True)
         before=self.op('snapshot',tag='mismatch_before')
-        rid=self.name+'-mismatch'
-        self.r['negative_request_intent']=rid;self.save()
-        rc,response=self.h.helper('restore-start',{'backup_id':self.r['converted'],'apps':['n8n'],'confirm':True,
-                                           'request_id':rid},timeout=180)
-        error=response.get('error') or {}
-        self.require('mismatch_refuses_before_job',rc!=0 and '重新轉換' in error.get('message','') and
-                     self.op('intent',request_id=rid) is None)
+        # The engine accepts this request and refuses INSIDE the job: its compatibility preflight (flows._preflight) runs before
+        # any safety backup. Real flow attempt 2 on dev-c: a job that failed 'incompatible' within 4 s, changed nothing. The job is
+        # tracked like every other one (own request id per lease attempt, receipt entry), so recovery can never begin while it
+        # still runs; the earlier untracked request raced the recovery's no-active-job check.
+        job=self.job('restore-start',{'backup_id':self.r['converted'],'apps':['n8n'],'confirm':True},'mismatch')
+        refusal=job.get('error') or {};result=job.get('result') or {}
+        self.require('mismatch_refused_by_the_compatibility_check_without_change',
+                     job.get('state')=='failed' and refusal.get('code')=='incompatible' and '重新轉換' in refusal.get('message','')
+                     and result.get('changed') is False and result.get('rolled_back') is False
+                     and not result.get('safety_backup_id'))
         self.require('mismatch_no_database_change',self.op('snapshot',tag='mismatch_after')==before)
         self.stop_units();self.op('fixture',database=self.name);self.command('systemctl','--user','daemon-reload')
 
@@ -620,7 +758,7 @@ class Controller:
             after=self.op('snapshot',tag='after_forced')
             equal=after==self.r['before_forced']
             self.require('deterministic_hook_failed_and_allowed',witness['refused'] is True and witness['allowed'] is True)
-            self.app_ready();self.endpoint();self.kept('after_rollback');self.api()
+            self.app_ready();self.endpoint();self.kept('after_rollback',ids_may_change=True);self.api()
             self.require('automatic_full_rollback_proven',plan.rollback_proven(job,consumed=witness['refused'],
                          marker=marker,digests=equal,application=True))
         finally:
@@ -654,8 +792,9 @@ class Controller:
         # original bytes and metadata after the job has exited and apps stopped.
         self.op('restore_files');self.command('systemctl','--user','daemon-reload')
         self.restore_catalog();self.restore_timer()
-        self.require('original_durable_services_catalog_files',same_found(self.op('inventory'),self.r['before']))
+        self.require_original_state('original_durable_services_catalog_files')
         returned=self.op('preserved_safety_return',jobs=list(self.r['jobs']),full_safety=self.r.get('full_safety'),
+                         recover_request_id=self.request_id('recover'),
                          baseline_restored=self.r.get('baseline_restored') is True)
         self.require('preserved_old_pairs_returned',returned.get('all_preexisting_files_exact') is True)
         self.r['preserved_old_safeties_return']=returned;self.save()
