@@ -789,6 +789,13 @@ CONNECTION_HARNESS = r"""
 const nativeFS = require('node:fs');
 const moduleAPI = require('node:module');
 const fixture = JSON.parse(nativeFS.readFileSync(0, 'utf8'));
+if (fixture.self_cmdline) {
+    // A real container lists the probe itself: it runs as `node -e <its whole source>`, so its OWN command line is far
+    // longer than any n8n start command. Model that entry before any file-system override below is installed.
+    const own = fixture.root + '/proc/' + process.pid;
+    nativeFS.mkdirSync(own, {recursive: true});
+    nativeFS.writeFileSync(own + '/cmdline', Buffer.alloc(fixture.self_cmdline, 0x61));
+}
 const factories = new Map(), metadata = new WeakMap();
 Reflect.defineMetadata = (kind, type, target, key) => {
     let fields = metadata.get(target); if (!fields) metadata.set(target, fields = new Map()); fields.set(key, type);
@@ -837,9 +844,9 @@ moduleAPI.createRequire = file => {
 class ConnectionRunner:
     home = '/home/appowner'
 
-    def __init__(self, env=None, *, exec_env=None, files=None, processes=1, command=None):
+    def __init__(self, env=None, *, exec_env=None, files=None, processes=1, command=None, self_cmdline=None):
         self.env, self.exec_env, self.files = env or {}, exec_env or {}, files or {}
-        self.processes, self.command = processes, command
+        self.processes, self.command, self.self_cmdline = processes, command, self_cmdline
         self.calls = []
 
     def podman(self, *args, **kwargs):
@@ -866,7 +873,7 @@ class ConnectionRunner:
             if not self.processes:
                 (root / 'proc').mkdir()
             fixture = {'root': folder, 'vendor': str(VENDOR_CONFIG / 'decorators.ts'),
-                       'dotenv': str(VENDOR_CONFIG / 'dotenv/lib/main.js')}
+                       'dotenv': str(VENDOR_CONFIG / 'dotenv/lib/main.js'), 'self_cmdline': self.self_cmdline}
             result = subprocess.run([shutil.which('node'), '--disable-warning=ExperimentalWarning', '-e', CONNECTION_HARNESS + args[-1]],
                                     input=json.dumps(fixture).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     env={'PATH': os.defpath, 'LANG': 'C.UTF-8', **self.exec_env}, timeout=10)
@@ -892,6 +899,19 @@ class ConnectionTests(unittest.TestCase):
 
     def endpoint(self, env=None, **kwargs):
         return ha_n8n.read_app_endpoint(ConnectionRunner(env, **kwargs), QUADLETS)
+
+    def test_probe_ignores_its_own_huge_command_line_in_the_process_list(self):
+        # dev-c, real n8n 2.43.6: the probe runs as `node -e <its whole source>`, so its OWN /proc entry has a command line
+        # far above the 4096-byte read limit. Reading it threw 'oversized input' and every readiness poll failed for 300 s.
+        for size in (5000, 70000):
+            with self.subTest(self_cmdline=size):
+                self.assertEqual(self.endpoint(self_cmdline=size),
+                                 {'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': 5432})
+
+    def test_a_foreign_oversized_command_line_still_fails_closed(self):
+        # Only the probe itself is exempt: another process with an oversized command line is an anomaly, not a candidate.
+        with self.assertRaises(BackupError):
+            self.endpoint(processes=2, command=b'n8n\0' + b'a' * 5000)
 
     def test_endpoint_defaults_and_exact_two_field_projection(self):
         self.assertEqual(self.endpoint(), {'database': 'n8n', 'user': 'postgres', 'host': 'localhost', 'port': 5432})

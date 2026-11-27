@@ -786,6 +786,9 @@ try {
     if (pids.length > 256) throw new Error('too many processes');
     const candidates = [];
     for (const pid of pids) {
+        // The probe runs as `node -e <this whole program>`: its own command line is far above the read limit below and it can
+        // never be the n8n process. Never read or select its own entry (real n8n 2.43.6 on dev-c failed every poll on it).
+        if (pid === String(process.pid)) continue;
         let args;
         try { args = read('/proc/' + pid + '/cmdline', 4096).split('\0').filter(Boolean); }
         catch (error) { if (error.code === 'ENOENT' || error.code === 'ESRCH') continue; throw error; }
