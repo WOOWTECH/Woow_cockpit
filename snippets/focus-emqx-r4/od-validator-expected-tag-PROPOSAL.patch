@@ -2,12 +2,12 @@
 +++ b/backup-engine/woowbackup/pg16_bundle.py
 @@ -191,7 +191,7 @@
              raise BundleError(ERROR_LAYER_DIGEST)
- 
- 
+
+
 -def validate_archive(stream, arch, image_id, *, abort=None):
 +def validate_archive(stream, arch, image_id, *, abort=None, expected_tag=None):
      """Inspect bounded Docker-save metadata without extraction, layer buffering, or tar extension allocations.
- 
+
      USTAR/GNU regular headers only; PAX, sparse files, links, devices, duplicate/absolute/traversing paths are refused.
 @@ -202,6 +202,10 @@
      stream.seek(0, os.SEEK_END)
@@ -47,8 +47,8 @@
 +++ b/backup-engine/woowbackup/pg16_docker_dir.py
 @@ -13,10 +13,11 @@
  ERROR_PIN = 'PG16 Docker directory config differs from the release pin.'
- 
- 
+
+
 -def convert_directory(path, target, bundle, arch, image_id, *, abort=None):
 +def convert_directory(path, target, bundle, arch, image_id, *, abort=None, expected_tag=None):
      def require(ok, reason=ERROR_DIRECTORY):

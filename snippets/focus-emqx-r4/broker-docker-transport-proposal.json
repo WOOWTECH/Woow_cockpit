@@ -22,7 +22,7 @@
     "https://raw.githubusercontent.com/containers/podman/v6.1.1/vendor/go.podman.io/image/v5/docker/internal/tarfile/writer.go"
   ],
   "product_files_modified": false,
-  "proposal_patch_sha256": "107664ba75d1eba68e9867689930ea3e83d2d7798a267ca81fb9aa352800cabf",
+  "proposal_patch_sha256": "2a2fc67241066e065b73cba0d4172067dd05b93cda89e58cb5433f95c20b1b99",
   "recommended": "docker-dir-to-regular-docker-archive",
   "shared_api_patch_base": "b8a8e21d7ac985d327451cafbd12d05dc7aefb37",
   "shared_api_patch_state": "unapplied; git apply --check passes; no behavior gate yet",
