@@ -30,9 +30,10 @@ import focus_n8n_instance_acceptance_ops as ops
 PHASES = ('images','images-recover','safety','flow','recover')
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
-# d09f4fe8 plus the one-file n8n probe fix 8e18f842 (the probe must not read its own process entry). The safety and recover
-# phases ran at d09f4fe8; the engine on dev-c is moved to this commit by focus_n8n_instance_acceptance_engine_patch.
-FROZEN_PRODUCT = '8e18f84222a3963ddbee37a43292b2a507bea2ea'
+# d09f4fe8 plus two one-file n8n fixes found by the real flow: 8e18f842 (the probe must not read its own process entry) and
+# bfe7b914 (advance PostgreSQL sequences after import:entities: every new execution collided with an imported id). The engine
+# on dev-c is moved commit by commit with focus_engine_patch (each time exactly ha_n8n.py, hashes checked before and after).
+FROZEN_PRODUCT = 'bfe7b91439851dce9f2851e790ad500b5f2ff88b'
 IMAGE_ARCHIVES = {config:{'compressed_sha256':sha,'compressed_bytes':size}
                   for config,(sha,size) in plan.ARCHIVES.items()}
 BOUNDS = {'host_available_mib':1200,'host_reserve_gib':13,'host_write_budget_gib':8,
