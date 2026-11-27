@@ -21,8 +21,15 @@ an actual successful pruning event, and scans every sidecar actually present.
 The historical exception is additionally bound to the exact two creation and
 pruning file hashes. Thirty guarded offline boundaries passed after this
 correction, including unknown/manual/baseline loss, failed deletion events and
-changed proof files. A new recovery run is still required. Old cookie coverage
-remains absent, and the original R8 attempt remains **57/60 FAIL**.
+changed proof files. Actual coordinator recovery02 then passed all 26 fixed
+checks, exit0 in27.7 seconds. It scanned both actual JSON roots and every actual
+archive index sidecar with zero registered-value hits, proved original markers,
+units, images, timer and fixture, removed only the exact own catalog entry and
+preserved the old guard, failed captures and current archive inventories.
+`r8-attempt3-independent-recovery.json` binds a new immutable private receipt;
+the actual replay validator accepts its accounting for 10 retained test archives.
+Old cookie coverage remains absent, and the original R8 attempt remains
+**57/60 FAIL**. A new real page proof is still required.
 
 The independent DESIGN G4 R3 D10 case passed **71/71** on real source
 `5209c402b846ab00ae4453c5e4ca80447ed75030`, exit0 in314.6seconds.
