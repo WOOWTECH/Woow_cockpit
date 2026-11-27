@@ -1,0 +1,11 @@
+{
+  "stage": "attempt1_setup_recovery",
+  "independent_baseline_passed": true,
+  "baseline_output_sha256": "34b004cff5492dfc252c21e748847c0a21f32f288ecf391110c2a1a947897d2c",
+  "owned_unit_files_removed": true,
+  "owned_converted_backup_removed": true,
+  "owned_upload_removed": true,
+  "schedule_unmasked": true,
+  "no_application_restore_happened": true,
+  "commercial_acceptance": "not-complete"
+}

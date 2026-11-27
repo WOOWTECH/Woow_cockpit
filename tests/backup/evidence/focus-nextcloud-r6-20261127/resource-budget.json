@@ -1,0 +1,50 @@
+{
+  "status": "offline-budget-only",
+  "observed_free_bytes": 33807986688,
+  "recovery": {
+    "images_total_bytes": 3918402521,
+    "sequential_phases": [
+      {
+        "image_bytes": 1969012061,
+        "compressed_cap_bytes": 1985789277,
+        "additional_peak_bytes": 6477461527
+      },
+      {
+        "image_bytes": 1329397778,
+        "compressed_cap_bytes": 1346174994,
+        "additional_peak_bytes": 6527630739
+      },
+      {
+        "image_bytes": 446255297,
+        "compressed_cap_bytes": 463032513,
+        "additional_peak_bytes": 5207601074
+      },
+      {
+        "image_bytes": 119464062,
+        "compressed_cap_bytes": 136241278,
+        "additional_peak_bytes": 4673482666
+      },
+      {
+        "image_bytes": 54273323,
+        "compressed_cap_bytes": 71050539,
+        "additional_peak_bytes": 4597374511
+      }
+    ],
+    "wake_additional_peak_bytes": 7676498905,
+    "additional_peak_bytes": 7676498905,
+    "minimum_start_free_bytes": 21635142617,
+    "reserve_bytes": 13958643712,
+    "device_memory_cap_bytes": 3221225472
+  },
+  "historical_case_estimate": {
+    "upload_and_convert_peak_bytes": 7322477388,
+    "restore_with_retained_safety_peak_bytes": 6406923084,
+    "additional_peak_bytes": 7859348300,
+    "minimum_after_wake_free_bytes": 21817992012,
+    "reserve_bytes": 13958643712,
+    "extra_original_fixture_copy_bytes": 0
+  },
+  "remaining_after_recovery_and_case_bytes": 18272139483,
+  "live_recalculation_required": true,
+  "mutations": 0
+}

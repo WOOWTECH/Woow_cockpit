@@ -1,0 +1,16 @@
+# Appended to n8n.container only when EXECUTIONS_MODE=queue.
+[Unit]
+Requires=n8n-valkey.service
+After=n8n-valkey.service
+
+[Container]
+Environment=EXECUTIONS_MODE=queue
+Environment=QUEUE_BULL_REDIS_HOST=n8n-valkey
+Environment=QUEUE_BULL_REDIS_PORT=6379
+Environment=QUEUE_BULL_REDIS_PASSWORD_FILE=/run/secrets/n8n-valkey-password
+Environment=N8N_DEFAULT_BINARY_DATA_MODE=database
+Environment=N8N_EVENTBUS_LOGWRITER_LOGFULLPATH=/home/node/.n8n/n8nEventLog-main.log
+Secret=n8n-valkey-password,type=mount,target=n8n-valkey-password
+
+[Service]
+ExecStartPre=/usr/bin/timeout 120 /bin/sh -c 'until /usr/bin/podman healthcheck run n8n-valkey >/dev/null 2>&1; do sleep 2; done'

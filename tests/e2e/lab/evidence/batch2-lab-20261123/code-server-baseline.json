@@ -1,0 +1,63 @@
+{
+ "schema_version": 1,
+ "kind": "lab-baseline",
+ "device": "woowbk-dev-e (lab, network none)",
+ "app": "code-server (catalog woow-code-server)",
+ "when": "2026-11-23 20:12:19-20:15:38 Asia/Taipei",
+ "command": "python3 -I tests/e2e/lab/batch2_baseline.py code-server",
+ "source_commit": "6d1ad05",
+ "engine_commit": "79c0f8d (deploy-batch2.sh cockpit, 20:08:59)",
+ "exit_code": 0,
+ "elapsed_seconds": 199,
+ "passed": 16,
+ "total": 16,
+ "status_lines": [
+  "20:12:26 PASS code-server: baseline markers present before the backup",
+  "20:12:40 PASS code-server: real login before the backup (session cookie, workbench page, wrong password refused)",
+  "20:12:56 PASS code-server: host disk keeps the 12 GiB floor + 1 GiB reserve after the backup",
+  "20:13:35 PASS code-server: encrypted backup succeeded",
+  "20:13:45 PASS code-server: backup 20261123T121327Z-74c471c6 is encrypted with the device key, without images",
+  "20:13:58 PASS code-server: inspect preflight ok, in-place restorable",
+  "20:14:08 PASS code-server: host disk keeps the 12 GiB floor + 1 GiB reserve after the restore",
+  "20:14:16 PASS code-server: \"after\" marker present before the restore",
+  "20:15:13 PASS code-server: in-place restore succeeded",
+  "20:15:13 PASS code-server: restore made a safety backup, not rolled back, every health check ok",
+  "20:15:15 PASS code-server: baseline markers survived the restore",
+  "20:15:15 PASS code-server: baseline file content unchanged by the restore (sha256)",
+  "20:15:15 PASS code-server: \"after\" marker is gone after the restore",
+  "20:15:19 PASS code-server: engine status running, no problems, after the restore",
+  "20:15:26 PASS code-server: catalog health URLs answer as expected after the restore",
+  "20:15:38 PASS code-server: real login after the restore (session cookie, workbench page, wrong password refused)",
+  "20:15:38 RESULT 16/16 checks passed; evidence in /home/woowtechopenclaw/.woowbk-lab/evidence/batch2-lab/20261123T201220-baseline"
+ ],
+ "stdout_sha256": "b3be4cfa9aca7f42d5902af627f4240cedad0860b79737262d6b3fa6db01ad83",
+ "backup_id": "20261123T121327Z-74c471c6",
+ "backup_size_bytes": 40960,
+ "backup_wall_seconds": 33.2,
+ "backup_downtime_seconds": 9,
+ "restore_wall_seconds": 53.1,
+ "safety_backup_id": "20261123T121439Z-ad62aa09",
+ "markers": [
+  "files:woowbk-lab-baseline.txt",
+  "skills:woowbk-lab-baseline",
+  "snippets:woowbk-lab-baseline.code-snippets"
+ ],
+ "markers_note": "byte for byte the DEVICE_MARKERS of lane codeserver-import's harness (codeserver_full_flow.py), so its run seeds none of them",
+ "login_check": "before the backup and after the restore: POST /login 302 + code-server-session cookie; GET / with the cookie 302 ./?folder=/workspace; that page 200 with the workbench; GET / without cookie 302 ./login; a wrong password gets no cookie",
+ "earlier_attempt": {
+  "when": "20:10:30-20:10:46",
+  "source_commit": "b029f96",
+  "exit_code": 1,
+  "status_lines": [
+   "20:10:41 PASS code-server: baseline markers present before the backup",
+   "20:10:45 FAIL code-server: real login before the backup (session cookie, workbench page, wrong password refused)",
+   "20:10:45 RESULT 1/2 checks passed; evidence in /home/woowtechopenclaw/.woowbk-lab/evidence/batch2-lab/20261123T201030-baseline"
+  ],
+  "cause": "the login check expected 200 for GET / with the cookie; code-server answers 302 to the default folder (fixed in 6d1ad05); nothing but the baseline markers was written"
+ },
+ "leak_scan": "the code-server password (lab-generated, read inside dev-e) checked in the private evidence of both attempts, the lane logs and the lab scripts: 0 hits",
+ "private_evidence": "~/.woowbk-lab/evidence/batch2-lab/20261123T201220-baseline/ (0700)",
+ "commercial_acceptance": "not-complete",
+ "what_this_is": "the lab baseline of the freshly deployed production-like code-server (Cockpit engine of this branch): markers in the IDE volume, the agents' volume and the workspace folder, encrypted backup with the dev-e device key, after-markers, in-place restore, real login before and after",
+ "what_this_is_not": "not an HA import; no HA backup is involved; commercial acceptance needs the real HA -> Podman import (lane codeserver-import)"
+}

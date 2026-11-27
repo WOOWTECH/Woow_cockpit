@@ -1,0 +1,17 @@
+{
+  "source_commit": "668d11249f1096930cb1f37757c3e9d08d46c925",
+  "scope": "actual fixed public pinned image vendor ACL only; no real source or target broker",
+  "real_source_executed": false,
+  "restore_executed": false,
+  "exit": 0,
+  "receipt": {
+    "image": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+    "path": "/opt/emqx/etc/acl.conf",
+    "bytes": 6763,
+    "sha256": "970449f3515ffe63683de4eebac29f6c4cc93f11660cbb3f5bcb0b39df5a4aa0",
+    "complete": true,
+    "regular": true
+  },
+  "native_term_values_observed": true,
+  "elapsed_seconds": 2.1236223420128226
+}

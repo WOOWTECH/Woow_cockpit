@@ -1,0 +1,562 @@
+{
+ "attempt": "t14b-fix",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "python3 -I t14b_export_shapes.py fix",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 97.2,
+ "exit_code": 0,
+ "harness_commit": "501a603e975dc4aab95980010f38eae187254033",
+ "iteration": 6,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "as_expected": 22,
+  "cases": {
+   "absolute-name": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 /emqx-export-2026-11-24-00-00-00.000/mnesia/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "bom-data-only": {
+    "differential": {
+     "binary": "error",
+     "equal": false,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": null
+   },
+   "bom-root": {
+    "differential": {
+     "binary": "error",
+     "equal": false,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "char-device-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "cr-only-root": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "crlf-root": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "data-root-twice": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "declared-size-over-limit": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "dot-segment-cluster-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/cluster.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "double-slash-cluster-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/cluster.hocon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "fifo-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "folder-other-case": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/MNESIA/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "gnu-long-name": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/aaaaaaaaaaaaaaaaa），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "hard-link-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/emqx_acl），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "include-required": {
+    "differential": {
+     "binary": "error",
+     "equal": true,
+     "files": "error",
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": "refuse"
+   },
+   "include-word-in-comment": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "include-word-in-string": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "retainer",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "retainer",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "pass",
+    "message": "",
+    "want": "pass"
+   },
+   "pax-path-cluster-hocon": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "pax-path-other-table": {
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（檔案 emqx-export-2026-11-24-00-00-00.000/mnesia/other_table），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "quoted-dotted-key": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon.os"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon.os"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon.os），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "slash-comment-root": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "t14-document-in-braces": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-healthy": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "pass",
+    "message": "",
+    "want": null
+   },
+   "t14-include-directive": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": null
+   },
+   "t14-not-hocon": {
+    "differential": {
+     "binary": "error",
+     "equal": true,
+     "files": "error",
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料在匯入前無法檢查，已停止，這台沒有任何改變。",
+    "want": null
+   },
+   "t14-root-after-quote-in-comment": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-after-triple-quote-in-comment": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-colon": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-dotted": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-nbsp": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-plain": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-quoted": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "t14-root-same-line": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "retainer",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "retainer",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": null
+   },
+   "tab-root": {
+    "differential": {
+     "binary": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "equal": true,
+     "files": [
+      "authentication",
+      "authorization",
+      "rule_engine",
+      "sysmon"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 sysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   },
+   "unicode-escape-quoted-key": {
+    "differential": {
+     "binary": [
+      "\\u0073ysmon",
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "equal": true,
+     "files": [
+      "\\u0073ysmon",
+      "authentication",
+      "authorization",
+      "rule_engine"
+     ],
+     "ran": true
+    },
+    "got": "refuse",
+    "message": "EMQX 不能搬過來：HA 匯出的資料含有不屬於這次匯入的內容（設定 \\u0073ysmon），已在匯入前停止，這台沒有任何改變；請在 HA 停止 EMQX 附加元件後重新備份再匯入。",
+    "want": "refuse"
+   }
+  },
+  "check": "check_export",
+  "codebase": "fix",
+  "differential_equal": 22,
+  "differential_ran": 24,
+  "differential_total": 24,
+  "elapsed_s": 96.7,
+  "files_sees_more_roots": [
+   "bom-data-only",
+   "bom-root"
+  ],
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T14b more archive shapes for check_export + hocon:binary vs hocon:files differential",
+  "total": 35,
+  "with_expectation": 22
+ },
+ "source_commit": "dd3ae49247f7cfa1dd3faa6f2e79a04d3c013ea6",
+ "started": "2026-11-24T15:22:32+0800",
+ "status_lines": [],
+ "stdout_sha256": "77fd6909d5b9c7ef827bf467c92308bbfa65bcce836a14700f346b1f23c494b5",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

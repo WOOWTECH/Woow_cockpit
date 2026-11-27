@@ -1,0 +1,36 @@
+{
+ "attempt": "t12-merged",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "command": "python3 -I t12_exhook.py merged",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 290.2,
+ "exit_code": 0,
+ "iteration": 3,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "merged",
+  "containers_left": 0,
+  "conversion": "REFUSED: EMQX 不能搬過來：HA 的 EMQX 設定有ExHook，它會收到每個連線用戶端的帳號與密碼（包括這台自己服務的帳號）；搬過來會把這台的帳號密碼送到 HA 設定的伺服器，為保護這台的帳號已停止。目前只支援「內建資料庫」帳號驗證，且不能有啟用的 ExHook；請先在 HA 移除或停用它們，再重新備份後匯入。",
+  "dangling_volumes_new": {
+   "empty": 0,
+   "emqx": 0,
+   "other": 0
+  },
+  "elapsed_s": 289.5,
+  "ha_hocon_sha256": "34dc1aad03b4f5649d0c73880c142cea60894fee290249d6aa3008a98776a72e",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "refused_naming_exhook": true,
+  "store": "labpodman (separate --root)",
+  "test": "T12 migrated ExHook server (SR-7) through the conversion body"
+ },
+ "source_commit": "cd66230 (sec/emqx-secreview3-trial-20261124: product 5786ae4 + abff1a0 + the 8613ffa tempctr patch)",
+ "started": "2026-11-24T08:18:25+0800",
+ "status_lines": [
+  "{\"test\": \"T12 migrated ExHook server (SR-7) through the conversion body\", \"codebase\": \"merged\", \"image\": \"docker.io/emqx/emqx:5.8.9\", \"network\": \"none\", \"store\": \"labpodman (separate --root)\", \"ha_hocon_sha256\": \"34dc1aad03b4f5649d0c73880c142cea60894fee290249d6aa3008a98776a72e\", \"conversion\": \"REFUSED: EMQX 不能搬過來：HA 的 EMQX 設定有ExHook，它會收到每個連線用戶端的帳號與密碼（包括這台自己服務的帳號）；搬過來會把這台的帳號密碼送到 HA 設定的伺服器，為保護這台的帳號已停止。目前只支援「內建資料庫」帳號驗證，且不能有啟用的 ExHook；請先在 HA 移除或停用它們，再重新備份後匯入。\", \"refused_naming_exhook\": true, \"dangling_volumes_new\": {\"emqx\": 0, \"empty\": 0, \"other\": 0}, \"containers_left\": 0, \"elapsed_s\": 289.5}"
+ ],
+ "stdout_sha256": "70b9cadf91e519aa0dfbd285f11b3f1143ac400710878e10402af75d69617e06",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "ignore_image_volumes": false,
+    "mounts": [
+      {
+        "Type": "volume",
+        "Name": "842a1b279c23047cae5ea350b7eb87074dd8a97673dce1daed5d7592da819bef",
+        "Destination": "/var/lib/postgresql/data"
+      },
+      {
+        "Type": "volume",
+        "Name": "woowbk-omni-mount-69c22581-pi",
+        "Destination": "/data/pi-agent"
+      }
+    ]
+  },
+  {
+    "ignore_image_volumes": true,
+    "mounts": [
+      {
+        "Type": "volume",
+        "Name": "woowbk-omni-mount-69c22581-pi",
+        "Destination": "/data/pi-agent"
+      }
+    ]
+  }
+]

@@ -1,0 +1,3 @@
+iteration 2: guard.py --b1 (reads the lab key in process, never printed): tests.backup.test_ha_b1_real + tests.backup.test_ha_hermes.RealHermesTests, real lab backups of 2026-11-19, no device:
+ELAPSED: 57
+tests=6 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=57 (printed by units.sh at 22:5x)

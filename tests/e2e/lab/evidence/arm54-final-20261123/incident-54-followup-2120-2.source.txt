@@ -1,0 +1,50 @@
+
+import json, os, re, subprocess, time
+def run(a, t=30):
+    try:
+        p = subprocess.run(a, capture_output=True, timeout=t)
+        return p.returncode, p.stdout.decode('utf-8', 'replace')
+    except subprocess.TimeoutExpired:
+        return 'timeout', ''
+def rd(p):
+    try:
+        return open(p).read().strip()
+    except OSError:
+        return None
+out = {'read_only': True}
+out['utc'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+out['uptime_s'] = float(rd('/proc/uptime').split()[0])
+out['kernel'] = os.uname().release
+out['tainted'] = int(rd('/proc/sys/kernel/tainted'))
+out['modules'] = {m: [rd('/sys/module/%s/initstate' % m), rd('/sys/module/%s/refcnt' % m)]
+                  for m in ('nft_masq', 'xt_MASQUERADE', 'nf_nat', 'nf_conntrack', 'nft_chain_nat', 'veth', 'bridge')}
+rc, ps = run(['ps', '-eo', 'stat='])
+out['d_state_processes'] = sum(1 for s in ps.split() if s.startswith('D'))
+rc, dm = run(['dmesg'])
+out['hung_task_reports'] = len(re.findall(r'blocked for more than|hung_task', dm))
+out['oops_count'] = len(re.findall(r'Internal error: Oops', dm))
+block = dm.split('Unable to handle kernel NULL pointer dereference', 1)[-1].split('end trace', 1)[0]
+out['oops_trace'] = re.findall(r'\]\s+((?:pc|lr) : [A-Za-z0-9_.]+\+0x[0-9a-f]+/0x[0-9a-f]+|[A-Za-z0-9_.]+\+0x[0-9a-f]+/0x[0-9a-f]+(?: \[[a-z_0-9]+\])?)', block)[:14]
+m = re.search(r'Code: ([0-9a-f ()]+)', block)
+out['oops_code_words'] = m.group(1).strip() if m else None
+t0 = time.monotonic()
+try:
+    p = subprocess.run(['timeout', '5', 'cat', '/sys/class/net/eth0/speed'], capture_output=True, timeout=10)
+    out['rtnl_trylock_probe'] = {'path': '/sys/class/net/eth0/speed', 'exit': p.returncode,
+                                 'value': p.stdout.decode().strip(), 'seconds': round(time.monotonic() - t0, 3)}
+except subprocess.TimeoutExpired:
+    out['rtnl_trylock_probe'] = {'exit': 'timeout'}
+rc, cs = run(['podman', 'ps', '--format', '{{.Names}} {{.StartedAt}}'])
+out['containers'] = sorted(' '.join(l.split()[:2]) for l in cs.splitlines() if l.strip())
+rc, ha = run(['curl', '-s', '-m', '5', '-o', '/dev/null', '-w', '%{http_code}', 'http://127.0.0.1:8123/'])
+out['ha_http_8123'] = ha
+out['services'] = {u: run(['systemctl', 'is-active', u])[1].strip() for u in ('tailscaled.service', 'ssh.service')}
+rc, fu = run(['systemctl', '--failed', '--plain', '--no-legend'])
+out['failed_units'] = sorted(l.split()[0] for l in fu.splitlines() if l.strip())
+st = os.statvfs('/')
+out['root_free_bytes'] = st.f_bavail * st.f_frsize
+out['mem_available_kib'] = int(re.search(r'MemAvailable:\s+(\d+)', rd('/proc/meminfo')).group(1))
+out['workspaces'] = sorted(n for n in os.listdir('/var/tmp') if n.startswith('woow-'))
+out['test_owner_exists'] = run(['id', 'woowbk54t'])[0] == 0
+out['uidmap_installed'] = run(['dpkg-query', '-W', '-f', '${Status}', 'uidmap'])[1].strip() == 'install ok installed'
+print(json.dumps(out, sort_keys=True))

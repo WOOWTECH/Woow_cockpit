@@ -145,6 +145,62 @@ def header_offsets(data):
     return found
 
 
+# ---------------------------------------------------------------- raw tar blocks (dialects tarfile does not write)
+
+USTAR, GNU, V7 = b'ustar\x0000', b'ustar  \x00', bytes(8)
+
+
+def raw_header(name, *, typeflag=b'0', size=0, linkname=b'', magic=USTAR, mode=0o644, uid=0, gid=0, mtime=0,
+               prefix=b''):
+    """One 512-byte tar header with a valid checksum; `name`, `linkname` and `prefix` are bytes or text."""
+    def raw(value):
+        return value if isinstance(value, bytes) else value.encode('utf-8', 'surrogateescape')
+
+    def octal(value, width):
+        return b'%0*o\0' % (width - 1, value)
+    body = (raw(name).ljust(100, b'\0') + octal(mode, 8) + octal(uid, 8) + octal(gid, 8) + octal(size, 12)
+            + octal(mtime, 12) + b' ' * 8 + typeflag + raw(linkname).ljust(100, b'\0') + magic
+            + bytes(80) + raw(prefix).ljust(155, b'\0'))
+    return fix_checksum(body.ljust(512, b'\0'))
+
+
+def padded(data):
+    return data + bytes(-len(data) % 512)
+
+
+def raw_member(name, data=b'', *, size=None, **header):
+    """Header and padded data of one member (`size`: what the header says, default the data's)."""
+    return raw_header(name, size=len(data) if size is None else size, **header) + padded(data)
+
+
+def pax_records(records):
+    """The data of a PAX extended header: {key: value} (bytes or text)."""
+    parts = []
+    for key, value in records.items():
+        body = b' ' + (key if isinstance(key, bytes) else key.encode()) + b'=' \
+               + (value if isinstance(value, bytes) else value.encode('utf-8', 'surrogateescape')) + b'\n'
+        length = len(body) + 1
+        while len(str(length)) + len(body) != length:
+            length = len(str(length)) + len(body)
+        parts.append(str(length).encode() + body)
+    return b''.join(parts)
+
+
+def pax_member(records, *, typeflag=b'x', name='PaxHeader'):
+    return raw_member(name, pax_records(records) if isinstance(records, dict) else records, typeflag=typeflag)
+
+
+END = bytes(1024)
+
+
+def two_addons(odoo=None, n8n=None, *, doc=None, extra=(), **kwargs):
+    """An HA backup of two add-ons; `odoo`/`n8n`: their member's bytes (default: good ones)."""
+    odoo = addon_member() if odoo is None else odoo
+    n8n = addon_member('woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64') if n8n is None else n8n
+    return outer_bytes([(f'{ODOO}.tar.gz', odoo), (f'{N8N}.tar.gz', n8n), *extra],
+                       ha_doc([ODOO, N8N]) if doc is None else doc, **kwargs)
+
+
 def fix_checksum(block):
     block = bytearray(block)
     block[148:156] = b' ' * 8
@@ -180,3 +236,21 @@ def v3_encrypt(plaintext, password=PASSWORD, *, tags=None, chunks=None, declared
     size = len(plaintext) if declared_size is None else declared_size
     return (b'SecureTar' + bytes([3]) + bytes(6) + struct.pack('!Q8x', size) + root_salt + validation_salt
             + _subkey(root, validation_salt) + derivation_salt + stream_header + body)
+
+
+# ---------------------------------------------------------------- a pg_restore -l listing (HAOS parity, ODOO lane)
+
+def toc_listing(lines, *, hidden=5, declared=None):
+    """What `pg_restore -l` prints for an archive whose objects are the lines `lines` (bytes or text, one per entry, as
+    pg_restore lists them: `<id>; <oid> <oid> <kind> ...`): the header with the `TOC Entries:` count (the entries plus the
+    `hidden` ones that a plain listing keeps back; `declared` overrides the count) and then the lines. The default is what
+    a REAL PostgreSQL 16.15 listing shows (the Nextcloud lane's probe of 2026-11-24: 1131 entry lines under `TOC Entries:
+    1136`): the settings ENCODING, STDSTRINGS and SEARCHPATH and two more entries. Simulated format (no
+    PostgreSQL tool is on the host): the header text is pg_restore's."""
+    texts = [line.decode() if isinstance(line, bytes) else line for line in lines]
+    count = len(texts) + hidden if declared is None else declared
+    head = (';\n; Archive created at 2026-11-25 10:00:00 UTC\n;     dbname: woowtest\n'
+            f';     TOC Entries: {count}\n;     Compression: gzip\n;     Dump Version: 1.15-0\n;     Format: CUSTOM\n'
+            ';     Integer: 4 bytes\n;     Offset: 8 bytes\n;     Dumped from database version: 16.15\n'
+            ';     Dumped by pg_dump version: 16.15\n;\n;\n; Selected TOC Entries:\n;\n')
+    return (head + ''.join(line.rstrip('\n') + '\n' for line in texts)).encode()

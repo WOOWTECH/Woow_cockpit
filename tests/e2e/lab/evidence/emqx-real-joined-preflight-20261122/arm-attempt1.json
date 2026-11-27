@@ -1,0 +1,13 @@
+{
+  "source_commit": "e2107fcd23a12df22f6b54d268500dd6f3e2cf3d",
+  "scope": "real encrypted ARM HA source and actual fresh target joined preflight; no candidate or restore",
+  "exit": 1,
+  "elapsed_seconds": 101.5882906941697,
+  "stdout_sha256": "f6ef98e306aed72b459edbd02f6eab164fbac16e52f07b006df380528cc67bcc",
+  "fixed_status": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stdout_bytes": 43,
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}

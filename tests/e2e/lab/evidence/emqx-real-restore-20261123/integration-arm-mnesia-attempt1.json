@@ -1,0 +1,25 @@
+{
+  "source_commit": "d81269942fa71502b9fe49f9626c5f573a1b8ec4",
+  "variant_flag": "--real-restore-mnesia-acl",
+  "target_mode": "imported-mnesia-acl",
+  "source_arch": "arm",
+  "rule_delivery_round": "required",
+  "scope": "integration-2: R-COCKPIT integration tree d812699 (b2f63ce lanes + R-EMQX ab9e4da + Odoo mail reminder + services-b LiteLLM); real ARM encrypted cold HA EMQX backup -> dev-d, imported Mnesia ACL target with real rule delivery; internal-candidate path (public HA EMQX import still blocked)",
+  "started_at": "2026-11-23T18:13:59+0800",
+  "ended_at": "2026-11-23T18:31:36+0800",
+  "exit": 0,
+  "elapsed_seconds": 1057.142,
+  "stdout_sha256": "6a289ca5d193e91cd258081090243fe73fc64011082c0b1f8ac0302863a62de4",
+  "fixed_status": [
+    "REAL OWNER RESTORE ROLLBACK PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "dev_d_lock_seen_held_by_this_run": true,
+  "head_unchanged_during_run": true,
+  "source_repo": "R-COCKPIT WOOWTECH/Woow_cockpit (local)",
+  "source_branch": "integration/ha-import-batch1-20261123",
+  "emqx_line_merged": "R-EMQX feat/ha-import-batch1 ab9e4da via merge 90613fc",
+  "harness": "tests/e2e/lab/run_emqx_real_owner.sh (from the integration worktree)",
+  "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,56 @@
+{
+  "before_free": 21731565568,
+  "scope": "stopped isolated lab dev-c image cache only",
+  "archived": [
+    {
+      "image_id": "c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb",
+      "tags": [
+        "docker.io/n8nio/n8n:2.43.6"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb.tar.gz",
+      "archive_sha256": "0a7352186122520e86fa3b22d0239ab611387e61bb863d082410c38e71f62ccb",
+      "archive_bytes": 296256084,
+      "format": "oci-archive",
+      "config_and_all_layers_verified": true,
+      "removed": true
+    },
+    {
+      "image_id": "28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb",
+      "tags": [
+        "docker.io/n8nio/runners:2.43.6"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb.tar.gz",
+      "archive_sha256": "7fa274ed6a93924cf90420433d5e0928d72183029ea80437fdf4ebc89e70580f",
+      "archive_bytes": 196625268,
+      "format": "oci-archive",
+      "config_and_all_layers_verified": true,
+      "removed": true
+    },
+    {
+      "image_id": "1616522ef3185fc8bd7522224877cd8542ad99090a7507a824e7c203f54bb26d",
+      "tags": [
+        "localhost/woow-odoo-substitute:18.0-20260926"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/1616522ef3185fc8bd7522224877cd8542ad99090a7507a824e7c203f54bb26d.docker.tar.gz",
+      "archive_sha256": "e25a71103a8b9a54588c56607cb552f51810c042dd0c8bbd33c9d4216621a71f",
+      "archive_bytes": 745325613,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true,
+      "superseded_oci_removed_bytes": 699101065
+    },
+    {
+      "image_id": "17a06c0a60bf6fb548a8493b8f6057dc830b791bbbe1f1ab706ca4b9d97c8180",
+      "tags": [
+        "localhost/woow-odoo-pg17-substitute:0.8.6"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/dev-c-images/17a06c0a60bf6fb548a8493b8f6057dc830b791bbbe1f1ab706ca4b9d97c8180.docker.tar.gz",
+      "archive_sha256": "0c97991d0c110ebad7a08c043621c74b5f0d935d40678de3f6461fca0c4fe049",
+      "archive_bytes": 169831835,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
+    }
+  ],
+  "after_free": 25863827456
+}

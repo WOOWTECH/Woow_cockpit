@@ -1,0 +1,13 @@
+{
+  "source_commit": "cff9faa29e8b645cb8cefb1552a2b60f39b37902",
+  "scope": "real ARM same-target restore preserving fixed inner build refusal phase",
+  "exit": 1,
+  "elapsed_seconds": 218.06894962699153,
+  "stdout_sha256": "4d230faee5aead43060ba70a6ab06be907478e9b71003b9d2620968165346dbc",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_BUILD_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

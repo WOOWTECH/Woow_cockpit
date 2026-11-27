@@ -1,0 +1,10 @@
+{
+  "base_commit": "b885925820a051297e6f0edb01595e9a3d4e241a",
+  "python": "3.12.3",
+  "zlib": "1.3",
+  "sha256": {
+    "tests/backup/bounded_large_archive.py": "ad8168a8728f79342e8406d6a0e9c2a002470066261af5a15864ca6bdeca9ae4",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/haimport.py": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec"
+  }
+}

@@ -188,8 +188,10 @@ class EncryptionChoiceCliTests(FlowCase):
         self.assertEqual(inspected['manifest']['encryption'], 'none')
         warn = [c for c in inspected['preflight']['checks'] if c['id'] == 'unauthenticated']
         self.assertEqual(warn[0]['status'], 'warn')
-        self.assertEqual(self.call(['inspect'], {'backup_id': backup_id, 'key': 'AGE-SECRET-KEY-1' + 'Q' * 58})
-                         ['error']['code'], 'invalid-request')
+        # X-PF-05 (HAOS parity 2026-11-25): a key that comes with a backup that is not encrypted is left out, not refused.
+        kept = self.call(['inspect'], {'backup_id': backup_id, 'key': 'AGE-SECRET-KEY-1' + 'Q' * 58})
+        self.assertNotIn('error', kept)
+        self.assertEqual(kept['manifest']['encryption'], 'none')
         base = {'backup_id': backup_id, 'apps': ['woowbk-demo'], 'confirm': True}
         refused = self.call(['restore-start'], dict(base, request_id='req-00000006'))
         self.assertEqual(refused['error']['details']['field'], 'accept_unauthenticated')

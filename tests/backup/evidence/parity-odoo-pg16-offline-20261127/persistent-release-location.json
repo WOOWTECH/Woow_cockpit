@@ -1,0 +1,11 @@
+{
+  "status": "retained-in-persistent-user-release-directory",
+  "previous_temporary_path": "/tmp/parity-focus-20261127/odoo-pg16-release-amd64",
+  "path": "/home/woowtechopenclaw/.woowbk-lab/releases/odoo-pg16-amd64-f563a9bf4123af20",
+  "operation": "same-filesystem-rename",
+  "manifest_sha256": "f563a9bf4123af20f65247ab752169e4664c7e0d179806711c7957d70687f9aa",
+  "archive_sha256": "e2f6b112b442a4862cf472b5c9dd59de17db489dd5ba608001c9b1bbe700eeb2",
+  "archive_size": 297140736,
+  "original_retention_receipt": "retained-release.json",
+  "published": false
+}

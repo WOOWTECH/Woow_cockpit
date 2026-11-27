@@ -1,0 +1,8 @@
+iteration 2 (691d39e)  ustar words                      answer=False cpu=  5.58s for 64 MiB =   89.3 s per GiB
+iteration 2 (691d39e)  a word in every block, bad sum   answer=False cpu=  4.28s for 64 MiB =   68.4 s per GiB
+iteration 2 (691d39e)  zeros                            answer=False cpu=  0.11s for 64 MiB =    1.7 s per GiB
+iteration 2 (691d39e)  random                           answer=False cpu=  0.11s for 64 MiB =    1.7 s per GiB
+iteration 3            ustar words                      answer=False cpu=  0.28s for 64 MiB =    4.5 s per GiB
+iteration 3            a word in every block, bad sum   answer=False cpu=  1.16s for 64 MiB =   18.5 s per GiB
+iteration 3            zeros                            answer=False cpu=  0.14s for 64 MiB =    2.3 s per GiB
+iteration 3            random                           answer=False cpu=  0.15s for 64 MiB =    2.3 s per GiB

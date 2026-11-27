@@ -1,0 +1,52 @@
+{
+ "what": "v4c honest trusted sequence (positive path of SR-3): HARNESS FAILED, no result: labpodman container inspect timed out after 120 s (host load average 164 at 21:36); not retried to spare the loaded host",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "4d1a59b (product code = 3e7837d)",
+ "exit_code": 1,
+ "elapsed_s": 265.0,
+ "stdout_sha256": "e1a24f4a10d07850f2f454691aca54d0246d7a1f7a547c9d3a89e7553e827428",
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers by tempctr.TempObjects (--network none); never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-23T21:31:28+0800",
+  "variants": [],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "lab_left_after_cleanup": [],
+  "elapsed_s": 265.0
+ }
+}

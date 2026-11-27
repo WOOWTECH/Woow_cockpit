@@ -16,10 +16,15 @@ read (e.g. written by a newer engine) is never replaced by an `uploaded` one (re
 times out and cockpit-bridge terminates it (SIGTERM is ignored meanwhile), and a second `upload-finish` of the
 same upload waits for the first and then returns its result (review finding HD-08).
 
-A Home Assistant backup (habackup.looks_like_ha: a member backup.json with `supervisor_version`) is recognised before
-the Cockpit formats would answer not-a-backup, checked strictly (habackup.describe), hashed and moved into its own
-store `ha-backups/` (hastore.py) with the same safety as a Cockpit upload; it never enters archives/ or the index
-(CONTRACT sections 3 and 7, branch feat/ha-import).
+`upload-begin` takes any file name (it is only shown: `display_filename`), and when MAX_PENDING_UPLOADS uploads are
+unfinished it first drops the one that has been idle the longest (STALE_UPLOAD_AGE at least; never one that is being
+written or finished).
+
+A Home Assistant backup (habackup.looks_like_ha: a member backup.json of an HA backup) is recognised before the Cockpit
+formats would answer not-a-backup, described (habackup.describe: an add-on that cannot be read is listed with its
+problem, only a file without a usable backup.json is refused), hashed and moved into its own store `ha-backups/`
+(hastore.py) with the same safety as a Cockpit upload; it never enters archives/ or the index (CONTRACT sections 3 and
+7, branch feat/ha-import).
 """
 import contextlib
 import datetime
@@ -63,6 +68,7 @@ META_REQUIRED = ('id', 'type', 'created', 'note', 'apps', 'size', 'sha256', 'key
 META_OPTIONAL = ('uploaded_at', 'format', 'encrypted')
 MAX_SIDECAR = 256 * 1024
 MAX_PENDING_UPLOADS = 4
+STALE_UPLOAD_AGE = 3600       # an unfinished upload nobody wrote to for this long makes room for a new one
 MIN_UPLOAD = 64
 MAX_UPLOAD = 2 * 1024 ** 4
 
@@ -135,6 +141,12 @@ def _valid_meta(rec, backup_id=None):
     if 'uploaded_at' in rec and not util.is_iso_utc(rec['uploaded_at']):
         return False
     return True
+
+
+def display_filename(filename):
+    """The name of an uploaded file as it is kept and shown (never a path anybody opens): cleaned, at most 255
+    characters, '' when nothing is left."""
+    return habackup.clean_text(filename, 255)
 
 
 def unauthenticated(rec):
@@ -442,17 +454,63 @@ class Storage:
         except FileNotFoundError:
             return []
 
-    def begin_upload(self, filename, size):
+    def _upload_files(self, upload_id):
+        """Every file of an upload: the placeholder or uploaded file, its record and cockpit's temp files."""
+        part, info = self._upload_paths(upload_id)
+        files = [part, info]
+        with contextlib.suppress(FileNotFoundError):
+            for name in os.listdir(self.paths.uploads):
+                match = BRIDGE_TEMP_RE.match(name)
+                if match and match.group(1) == upload_id:
+                    files.append(Path(self.paths.uploads) / name)
+        return files
+
+    def _last_write(self, upload_id):
+        """When anything of an upload was written last (None: it has no file any more)."""
+        times = []
+        for path in self._upload_files(upload_id):
+            with contextlib.suppress(FileNotFoundError):
+                times.append(os.lstat(path).st_mtime)
+        return max(times, default=None)
+
+    def _drop_stale_upload(self, now):
+        """Remove the unfinished upload that has been idle the longest, at least STALE_UPLOAD_AGE seconds; True when one
+        went. One that is being finished holds its lock (`_upload_lock`) and stays, whatever its age: hashing a large
+        file writes nothing."""
+        idle = []
+        for upload_id in self._pending_uploads():
+            last = self._last_write(upload_id)
+            if last is not None and now - last >= STALE_UPLOAD_AGE:
+                idle.append((last, upload_id))
+        for _last, upload_id in sorted(idle):
+            _part, info = self._upload_paths(upload_id)
+            try:
+                fd = os.open(info, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            except OSError:
+                continue
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                last = self._last_write(upload_id)  # nothing was written while this looked
+                if last is not None and now - last >= STALE_UPLOAD_AGE and self.abort_upload(upload_id):
+                    return True
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
+        return False
+
+    def begin_upload(self, filename, size, *, now=None):
         """Space check and placeholder; returns {'upload_id', 'path', 'max_size'}."""
-        if (not isinstance(filename, str) or not 1 <= len(filename) <= 255
-                or any(ord(c) < 32 or ord(c) == 127 for c in filename)):
+        if not isinstance(filename, str):
             raise BackupError('invalid-request', '檔案名稱不正確。')
         if not isinstance(size, int) or isinstance(size, bool) or not MIN_UPLOAD <= size <= MAX_UPLOAD:
             raise BackupError('invalid-request', '檔案大小不正確或不是有效的備份檔。')
+        filename = display_filename(filename)
         self.ensure_layout()
         self.cleanup_uploads()
-        if len(self._pending_uploads()) >= MAX_PENDING_UPLOADS:
-            raise BackupError('busy', '同時進行中的上傳過多，請稍後再試。')
+        while len(self._pending_uploads()) >= MAX_PENDING_UPLOADS:
+            if not self._drop_stale_upload(time.time() if now is None else now):
+                raise BackupError('busy', '同時進行中的上傳過多，請稍後再試。')
         free = self.free_bytes()
         max_size = max(0, free - self.paths.reserve_bytes)
         if size > max_size:
@@ -628,9 +686,9 @@ class Storage:
         return rec
 
     def _finish_ha_upload(self, upload_id, part, info_path, info, fd, st):
-        """A Home Assistant backup: strict outer check (no key needed; the members are read by the HA jobs), sha256 of
-        every byte, then into ha-backups/ (hastore.publish: sidecar, rename, (dev, ino) re-check). The same file again
-        returns its record and drops the upload."""
+        """A Home Assistant backup: its outer tar and backup.json (no key needed; the members are read by the HA jobs),
+        sha256 of every byte, then into ha-backups/ (hastore.publish: sidecar, rename, (dev, ino) re-check). The same
+        file again returns its record and drops the upload."""
         summary = habackup.describe(fd).summary()
         os.lseek(fd, 0, os.SEEK_SET)
         sha256, size = util.sha256_fd(fd)
@@ -683,19 +741,11 @@ class Storage:
         return adopted
 
     def abort_upload(self, upload_id):
-        part, info = self._upload_paths(upload_id)
         removed = False
-        for target in (part, info):
+        for target in self._upload_files(upload_id):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(target)
                 removed = True
-        with contextlib.suppress(FileNotFoundError):
-            for name in os.listdir(self.paths.uploads):
-                match = BRIDGE_TEMP_RE.match(name)
-                if match and match.group(1) == upload_id:
-                    with contextlib.suppress(FileNotFoundError):
-                        os.unlink(Path(self.paths.uploads) / name)
-                        removed = True
         return removed
 
     def cleanup_uploads(self, max_age_seconds=86400):

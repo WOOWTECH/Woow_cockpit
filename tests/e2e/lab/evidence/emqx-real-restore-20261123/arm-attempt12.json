@@ -1,0 +1,13 @@
+{
+  "source_commit": "a017992e37deea1957868c8851d030c111997ec9",
+  "scope": "real ARM raw policy omission preservation and exact per-gate diagnostics",
+  "exit": 1,
+  "elapsed_seconds": 245.99671874009073,
+  "stdout_sha256": "d3bc4c13ae848705decbc325dc0e53a96145ee3d5b6a0bac1dc32dee9596a27c",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ACL_PROFILE_FILE_PATH_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

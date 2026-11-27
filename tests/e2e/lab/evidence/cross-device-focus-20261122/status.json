@@ -1,0 +1,962 @@
+{
+  "scope": [
+    "large backups",
+    "single member above 8GiB",
+    "native ARM Podman target",
+    "cross-physical-device restore",
+    "final integrated-version acceptance"
+  ],
+  "large_data": {
+    "host_free_approx_gib": 25,
+    "minimum_reserve_gib": 12,
+    "worker": "01a200bc-f470-7471-b021-d7966700900b",
+    "status": "actual8193MiB plain and encrypted roundtrips passed; actual2GiB encrypted late corruption, truncation and mid-extract cancellation passed",
+    "actual_single_file_bytes": 8590983168,
+    "compressed_archive_bytes": 111493120,
+    "evidence": "tests/backup/evidence/large-single-file-8193mib.json",
+    "integration_commit": "53ac6dc",
+    "not_covered": [
+      "incompressible outer archive above8GiB",
+      "ARM large service restore"
+    ],
+    "encrypted_evidence": "tests/backup/evidence/large-encrypted-8193mib.json",
+    "encrypted_integration_commit": "36d13a9",
+    "negative_evidence": "tests/backup/evidence/large-failure-2gib.json",
+    "negative_integration_commit": "28e1572",
+    "update_20261123": {
+      "branch": "test/large-archive-final-20261123",
+      "status": "actual8193MiB encrypted late corruption (flip and truncate last ciphertext byte, verify and extract) refused corrupt-archive late; real job-cancel (jobs.cancel_job + FlowContext checkpoint) mid-stream in restore decrypt and backup package windows raised flows.Cancelled; children reaped, partial output, staged temp archive and recipient file removed, no identity copy",
+      "negative_8193_evidence": "tests/backup/evidence/large-negatives-8193mib.stdout.json",
+      "negative_8193_source_commit": "1e91626",
+      "cli_cancel_8193_evidence": "tests/backup/evidence/large-negatives-cli-cancel-8193mib.stdout.json",
+      "cli_cancel_8193_source_commit": "2bfe810",
+      "cli_cancel_result": "real job-cancel CLI command in a separate process returned ok/state cancelled in restore decrypt and backup package windows; engine cleanup as above",
+      "ciphertext_bytes": 34503003,
+      "harness_storage_measures": "sliding-window source and hole-punched truncate-extract output (stated in large-negatives-README.txt); cancel-extract 4.0GiB really allocated",
+      "incompressible_outer_status": "blocked: host disk shortfall 752646453 bytes at 2026-11-23T01:33:46Z (required free 21856942389, free 21104295936; attempt 1 shortfall 326506805); probe refused before generating anything; 128MiB real smoke passed",
+      "incompressible_outer_evidence": "tests/backup/evidence/large-incompressible-outer-8193mib.attempt.json",
+      "commercial_acceptance": "not-complete"
+    }
+  },
+  "integration_20261123": {
+    "as_of": "2026-11-24 23:58 Asia/Taipei",
+    "branch": "integration/ha-import-batch1-20261123 (R-COCKPIT, local only, not pushed, no PR)",
+    "last_merge_commit": "0b36e83",
+    "merged": [
+      {
+        "lane": "hasqlite fail-closed",
+        "branch": "fix/hasqlite-netns-fail-closed-20261123",
+        "tip": "10fe446",
+        "merge_commit": "7790cf8",
+        "by": "integration-1"
+      },
+      {
+        "lane": "large-archive",
+        "branch": "test/large-archive-final-20261123",
+        "tip": "e415fc4",
+        "merge_commit": "a8b7a04",
+        "by": "integration-1"
+      },
+      {
+        "lane": "odoo-n8n",
+        "branch": "test/odoo-n8n-final-20261123",
+        "tip": "e2515f8",
+        "merge_commit": "1bd5dcc",
+        "by": "integration-1"
+      },
+      {
+        "lane": "services-a",
+        "branch": "test/services-a-final-20261123",
+        "tip": "5ab3249",
+        "merge_commit": "110b881",
+        "by": "integration-1"
+      },
+      {
+        "lane": "R-EMQX real-backup line (EMQX real restores, emqx-gaps)",
+        "branch": "emqx/real-backup-line-20261123 (= R-EMQX feat/ha-import-batch1)",
+        "tip": "ab9e4da",
+        "merge_commit": "90613fc",
+        "by": "integration-2"
+      },
+      {
+        "lane": "odoo mail reminder (owner decision A)",
+        "branch": "feat/odoo-import-mail-reminder-20261123",
+        "tip": "ae5b0d4",
+        "merge_commit": "7c87560",
+        "by": "integration-2"
+      },
+      {
+        "lane": "services-b (LiteLLM real HA backup harness)",
+        "branch": "test/services-b-final-20261123",
+        "tip": "cde33c2",
+        "merge_commit": "d812699",
+        "by": "integration-2"
+      },
+      {
+        "lane": "hermes-real",
+        "branch": "test/hermes-real-20261123",
+        "tip": "e52ffd5",
+        "merge_commit": "1072954",
+        "by": "integration-3"
+      },
+      {
+        "lane": "services-a-2 (Headscale full product flow)",
+        "branch": "test/services-a2-20261123",
+        "tip": "1214226",
+        "merge_commit": "315ec8b",
+        "by": "integration-3"
+      },
+      {
+        "lane": "opendesign-import",
+        "branch": "feat/ha-import-opendesign-20261123",
+        "tip": "13c83f3",
+        "merge_commit": "ae5420d",
+        "by": "integration-3"
+      },
+      {
+        "lane": "codeserver-import",
+        "branch": "feat/ha-import-code-server-20261123",
+        "tip": "f20ac84",
+        "merge_commit": "88e7e6b",
+        "by": "integration-3"
+      },
+      {
+        "lane": "batch2-lab (dev-e code-server and Nextcloud records)",
+        "branch": "lab/batch2-dev-e-20261123",
+        "tip": "8de186d",
+        "merge_commit": "fb284b8",
+        "by": "integration-3"
+      },
+      {
+        "lane": "showcase-nc-share (+ showcase source-backup evidence)",
+        "branch": "evidence/ha-b2-nc-share-20261123",
+        "tip": "24a045e",
+        "merge_commit": "3579716",
+        "by": "integration-3"
+      },
+      {
+        "lane": "nextcloud-import (at its iteration-2 hand-off)",
+        "branch": "feat/ha-import-nextcloud-20261123",
+        "tip": "aaed6cf",
+        "merge_commit": "17c81b8",
+        "by": "integration-3"
+      },
+      {
+        "lane": "batch2-lab again (dev-e verify, wake/rotate, journal cleanup)",
+        "branch": "lab/batch2-dev-e-20261123",
+        "tip": "472705c",
+        "merge_commit": "ce6d652",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview (EMQX import security review: SR-1/2/3/6/7 fixes, evidence, harness)",
+        "branch": "sec/emqx-secreview-20261123",
+        "tip": "cad50dd",
+        "merge_commit": "f8e0c1d",
+        "by": "integration-3"
+      },
+      {
+        "lane": "litellm-product (owner decision 1: LiteLLM product path; contains review/litellm-secreview-fix2-20261124@7844157, real run 69/69 on the final code)",
+        "branch": "feat/ha-import-litellm-product-20261123",
+        "tip": "033f2f7",
+        "merge_commit": "d72ae5f",
+        "by": "integration-3"
+      },
+      {
+        "lane": "litellm-product again (LiteLLM health checks 600 s, owner decision 2026-11-23 23:28; real attempt 10 on the same product code 73/73 in the lane)",
+        "branch": "feat/ha-import-litellm-product-20261123",
+        "tip": "a0475c5",
+        "merge_commit": "ba637b7",
+        "by": "integration-3"
+      },
+      {
+        "lane": "omnigent-product (owner decision 1: Omnigent product path; security review iterations 1+2, real runs 112/112 and 118/118 test mode)",
+        "branch": "feat/ha-import-omnigent-product-20261123",
+        "tip": "cd96340",
+        "merge_commit": "97c22c9",
+        "by": "integration-3"
+      },
+      {
+        "lane": "litellm-product again (final evidence: real attempt 10 73/73, negative flow 58/58; evidence and lab harness only)",
+        "branch": "feat/ha-import-litellm-product-20261123",
+        "tip": "db9455a",
+        "merge_commit": "fdc922f",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product (owner decisions 1 and C: EMQX product path, engine tree 865c930f = the tree the security review declared DONE)",
+        "branch": "feat/ha-import-emqx-product-20261124",
+        "tip": "c6435b4",
+        "merge_commit": "9bf8f5e",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iterations 2 and 3 (evidence, harness, README only)",
+        "branch": "sec/emqx-secreview2-20261124",
+        "tip": "5f93f6b",
+        "merge_commit": "bca3d65",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product separate fix (catalog-suggest proposes the EMQX Dashboard, not the container-only /readyz)",
+        "branch": "fix/emqx-health-suggest-20261124",
+        "tip": "4ec3174",
+        "merge_commit": "66c1142",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview again (unit record)",
+        "branch": "sec/emqx-secreview2-20261124",
+        "tip": "28c6d97",
+        "merge_commit": "4539aec",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product again (attempts 23 and 24, README, status)",
+        "branch": "feat/ha-import-emqx-product-20261124",
+        "tip": "d8c6d1b",
+        "merge_commit": "7165235",
+        "by": "integration-3"
+      },
+      {
+        "lane": "omnigent-product iteration 5 (a unit test and a mutation for every protection; tests and one docstring)",
+        "branch": "fix/omnigent-test-gaps-20261124",
+        "tip": "01b36b4",
+        "merge_commit": "d6cbb33",
+        "by": "integration-3"
+      },
+      {
+        "lane": "litellm-product iteration 5 (catalog-suggest drafts the entry the import fills; a test and a one-place mutation for every protection)",
+        "branch": "fix/litellm-test-gaps-20261124",
+        "tip": "ccfe201",
+        "merge_commit": "0562c55",
+        "by": "integration-3"
+      },
+      {
+        "lane": "arm54-2: catalog-suggest import modes (NEW n8n and Hermes drafts default to single-database; main said yes 12:59)",
+        "branch": "fix/suggest-import-modes-20261124",
+        "tip": "d528653",
+        "merge_commit": "10b9594",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product corrected health fix (proposes /api/v5/error_codes; replaces the mapping of 66c1142, which attempt-30 proved wrong with HTTP 406)",
+        "branch": "fix/emqx-health-suggest-20261124",
+        "tip": "575f2fd",
+        "merge_commit": "431201e",
+        "by": "integration-3"
+      },
+      {
+        "lane": "omnigent-product iteration 5 final evidence (mutation list, full suite, READMEs)",
+        "branch": "fix/omnigent-test-gaps-20261124",
+        "tip": "ea6a07f",
+        "merge_commit": "9ebb2bf",
+        "by": "integration-3"
+      },
+      {
+        "lane": "nextcloud-import (hardened database, private user files, Office after the import, Team folders; share attempt 7 113/113 on the integrated engine)",
+        "branch": "feat/ha-import-nextcloud-20261123",
+        "tip": "7e969f0",
+        "merge_commit": "31c83e2",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product again (attempt-32: the corrected health fix proven on the real device, 109/109)",
+        "branch": "fix/emqx-health-suggest-20261124",
+        "tip": "3891601",
+        "merge_commit": "2b5fee1",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview product fix (the export is checked with the vendor parsers before the data import, B1-03 defence in depth)",
+        "branch": "fix/emqx-export-members-20261124",
+        "tip": "dd3ae49",
+        "merge_commit": "ff16d6b",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iterations 4 to 6 (README, evidence, harness; SR-10 fixed here by 65d8a51/97c994f, the SR-5 clear-text claim disproven by real runs)",
+        "branch": "sec/emqx-secreview4-20261124",
+        "tip": "8c40a8c",
+        "merge_commit": "a51d754",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview final README (iteration 6; cites attempt-35 as the dev-d product-flow proof of the export check)",
+        "branch": "sec/emqx-secreview4-20261124",
+        "tip": "501a603",
+        "merge_commit": "ba9f734",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-product FINAL (evidence only: attempts 33 153/153 and 34 99/99 = lab-made input S7 on the earlier engine 45db404c; 35 95/95 and 36 106/106 = the real x86 cold backup on the export-check engine f6dfa9c4; README, status, integrated unit record)",
+        "branch": "fix/emqx-health-suggest-20261124",
+        "tip": "568e6f8",
+        "merge_commit": "3697d35",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview T14b (the export check against 35 archive shapes and the hocon differential: clean)",
+        "branch": "sec/emqx-secreview4-20261124",
+        "tip": "b939534",
+        "merge_commit": "8844851",
+        "by": "integration-3"
+      },
+      {
+        "lane": "litellm-product FINAL (tests only + evidence: test_r15 closes the one mutation the full sweep missed, 175/175 with the rerun; full tests/backup of the lane 1745 OK)",
+        "branch": "fix/litellm-test-gaps-20261124",
+        "tip": "ef2e7bc",
+        "merge_commit": "ae932f7",
+        "by": "integration-3"
+      },
+      {
+        "lane": "nextcloud-import FINAL (evidence only: Team folders probe 2 8/8 = synthetic data on a real Nextcloud 35, not a whole import; refusal attempt 4 34/34 = a real device run; one run of all 88 importer mutants 88/88 = unit level with fakes)",
+        "branch": "feat/ha-import-nextcloud-20261123",
+        "tip": "b2eaa2e",
+        "merge_commit": "13051d0",
+        "by": "integration-3"
+      },
+      {
+        "lane": "arm54-2 (ARM64 Podman test machine: product fixes 868894f/a351cd2 volume top directory, a7f32e9 Podman in /usr/local/bin, 98410bd /run/secrets tmpfs, ee5a3cc native code by this device's processor, 0316d7e importable Headscale draft; harness and evidence) SQUASHED as one commit, its history not merged (early lane commits hold the test password literal); the test machine's tailnet IPv4 masked in 67 inventory snapshots",
+        "branch": "test/arm54-integrated-20261124",
+        "tip": "f5cd781",
+        "merge_commit": "4353892",
+        "by": "integration-3 (squash, main 16:23)"
+      },
+      {
+        "lane": "emqx-sr5 (owner decision SR-5 = C: the check warns and names this device's MQTT accounts a different HA hashing breaks; HA plain refused at the check and in the conversion; dev-d lab-made inputs: plain 43/43, bcrypt 91/91, cleanup 23/23)",
+        "branch": "fix/emqx-sr5-hash-warning-20261124",
+        "tip": "3c857c3",
+        "merge_commit": "3723667",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iteration 7 (narrow SR-5 re-review DONE; SR-11 Low fixed by 9665533: plain in an MQTT listener or gateway database and rows still in clear text are refused at the check and before HA's export; lab-store real runs T15/T5/T5b/T11 x86+ARM)",
+        "branch": "sec/emqx-secreview7-20261124",
+        "tip": "3369a9c",
+        "merge_commit": "bcb4a2c",
+        "by": "integration-3"
+      },
+      {
+        "lane": "emqx-secreview iteration 8 (SR-12 Low fixed by a1f1947: every MQTT row not in the exact stored form of its hashing is refused at the check and before HA's export; O-2 hacommon.names hides format characters (display only); O-3 DB_OFF warning; O-4 documented; lab-store real brokers, 34 Erlang mutants killed, real batch-1 x86 + ARM not refused)",
+        "branch": "sec/emqx-secreview8-20261124",
+        "tip": "6b5c97e",
+        "merge_commit": "61e7226",
+        "by": "integration-3"
+      },
+      {
+        "lane": "final-verify (interim, at its 23:55 offer: the real re-verification evidence of the integrated version and 2 lab-only harness fixes, 70bcf6f headscale_full_flow and 0718f77 odoo_capture; product diff vs FINAL-2 ccc3ed7 empty; the dev-e runs and the final README get merged again)",
+        "branch": "test/final-verify-20261124",
+        "tip": "0f9c74f",
+        "merge_commit": "0b36e83",
+        "by": "integration-3"
+      }
+    ],
+    "open": [
+      {
+        "item": "KNOWN LIMIT (owner decision 2026-11-24 15:57, option A): Nextcloud with the Memories app",
+        "reason": "an HA Nextcloud that had the Memories app is refused and stays refused (no allowlist): its database holds the function memories_fcu_fun and the trigger memories_fcu_trg; disabling or removing Memories does not drop them (Memories 11.1.4 has no uninstall step; Nextcloud 35.0.1 app:disable runs only uninstall steps, app:remove only deletes the app folder); no safe customer step exists, so such an HA Nextcloud cannot be imported yet (PR text, docs/backup.md)"
+      },
+      {
+        "item": "public-safe PR branch",
+        "reason": "to be REBUILT once from the final tip after final-verify's hand-off (the merge of its evidence branch), then scanned again and committed as ONE local commit; the current local pr/ha-import-batch1-20261124 = a92a3bc (one commit on origin/main bb23531, not pushed, no PR) is stale (no arm54 squash, no SR-5/SR-11/SR-12) and is kept as pr/ha-import-batch1-20261124-a92a3bc at the rebuild; staged rehearsals: from ccc3ed7 (tree 703e1011, the whole GitHub validate workflow wf5 green: CI form 2032 = 2024 ok + 6 skipped + 2 host-guard refusals, tests/backup b1 1876, backup-ui 108/108) and from ccc3ed7 + final-verify 44f6c65 (tree cf0a944e = 703e1011 + the summary doc + 4 lab harness files; lab values 0/35, testpw2 0 quoted, 0 backup hashes, the 2 changed lab modules 39 OK); push and PR are the owner's decision"
+      },
+      {
+        "item": "final real re-verification of the integrated version",
+        "reason": "RUNNING in lane final-verify (real devices; harness totals; failed attempts kept): LiteLLM 80/80, Hermes 90/90, Omnigent 112/112 on 4353892 (its engine differs from FINAL-2 only in ha_emqx.py and the display-only hacommon.names); Headscale RPi5 99/101 kept (lab precondition) + 101/101 after a harness-only fix (70bcf6f); EMQX on the FINAL-2 tip ccc3ed7 with the real RPi5 cold backup: import 101/101 (SR-5 counts: 0 blockers, 2 warnings, every password-storage marker 0) and rollback/cleanup 101/101 (pre-final a1b690f also 101/101 twice); Odoo/n8n x86 full 94/94 and failure/rollback 40/40 on 4353892; Odoo/n8n RPi5 full 126/130 on 4353892 (3 = the ARM row comparison: an Odoo signup reminder of the 5-day-old backup and an old source capture, harness input; 1 = the Odoo known issue below), new RPi5 source capture 205/205 (harness 0718f77), RPi5 rerun on 0718f77 (new source capture) 133/133 (1c1a274; the 3 ARM row checks and the db2 convert pass); Nextcloud, code-server, OpenDesign on dev-e deferred by host disk; evidence branch test/final-verify-20261124 MERGED (interim) at 0f9c74f -> 0b36e83 (23:55); Nextcloud share run on dev-e RUNNING since 23:33, then code-server and OpenDesign if the host has the disk (26.5 / 28.7 GB free needed); their evidence and the final README get merged again"
+      },
+      {
+        "item": "KNOWN ISSUE (found by final-verify 2026-11-24 21:53; fix = follow-up PR unless the owner picks B): Odoo convert under heavy host load",
+        "reason": "real RPi5 full run, db2 convert: conmon logged a failed container stdin write at the exec that writes the pg_restore list (ha_odoo.py Cluster.write_file, no read-back), pg_restore ran 0.39 s, the settings psql exited 3: fails closed (no converted backup) with a misleading message; the same step passed on 11-23, in the x86 final run and in the RPi5 rerun r2 (1c1a274); root cause not proven (conmon retries unwritten bytes, so the warning alone does not prove loss); fix lane pg-stdin-fix (fix/pg-stdin-verify-20261124 from ccc3ed7: write_file read-back with retries, BEGIN/COMMIT scripts with an end mark) is merged only on main's word (READY and verified 23:55 at 6aece91; caveats: the end mark catches only a lost tail, the read-back tools are proven only in postgres:17.11-alpine; same-class follow-ups F1 adapters/quadlet_postgres.py:2876 role script, F2 ha_litellm.py:1322 COPY data, F3 rewrite records (retries) not in the job log, F4 pg_restore -l output not cross-checked); evidence tests/e2e/lab/evidence/odoo-n8n-final-20261123/final-verify-20261124-arm-full.json (9a910db)"
+      },
+      {
+        "item": "KNOWN OPEN RISK: LiteLLM SR-7 (deferred by the owner 2026-11-24 07:22, not closed)",
+        "reason": "os.environ/ references in HA model rows make this device's LiteLLM send its own secrets (its master key in the dev-d probe) to the host the row names; the import neither refuses nor warns; wip/litellm-sr7-prep-20261124 is NOT merged"
+      },
+      {
+        "item": "KNOWN OPEN RISK: LiteLLM ssl_verify-type settings",
+        "reason": "a stored litellm_settings key without a branch ends in setattr(litellm, key, value) (vendor source only, not probed); e.g. ssl_verify false turns off TLS verification of outbound provider calls and the check shows nothing"
+      },
+      {
+        "item": "Omnigent owner item",
+        "reason": "a real (not test-mode) move keeps HA's active schedules active on this device (the page reminds): pause them too?; optional hardening of the shared throwaway HA cluster (noexec /tmp, memory limit) not done"
+      },
+      {
+        "item": "EMQX owner items",
+        "reason": "DECIDED 2026-11-24 15:26: SR-5 = option C (implemented: 3723667, widened by the review fix SR-11 in bcb4a2c; the owner may rule on that widening) and the Dashboard-edited ACL file = option A (stays refused at the conversion, known limitation; customer step from the owner: reset the device's rule file to the default or tidy the rules on the HA side, then import; not lab-tested). Human item: the boot-time loaders of HA's throwaway broker (stopped by a safety classifier, not retried), with the review's two points: a crafted allowed-table file can write rows of other tables into the candidate before the refusal, and cluster_rpc_mfa rows are replayed at boot. The owner may rule on the strictness of SR-12 (rows of an older hashing that can no longer verify are refused too) and on the widening of option C by SR-11 and SR-12; O-1 (name the bootstrap accounts first) not done"
+      },
+      {
+        "item": "changed default to show the owner",
+        "reason": "the NEW catalog drafts of n8n (a released app), Hermes and LiteLLM default to the single-database mode their imports need (10b9594, the main session decided yes at 12:59); installed entries are not touched"
+      },
+      {
+        "item": "release step",
+        "reason": "VERSION is still 2026.11.19.2 (scripts/check_source.py ENGINE_MODULES lists every importer module since f2c9e03)"
+      },
+      {
+        "item": "incidents",
+        "reason": "two production incidents on 2026-11-23 caused by the test work (20:13/20:18 Headscale restarted twice by a backquoted command in a commit message; 21:35 LiteLLM killed for memory, back 21:41) and one kernel oops on the ARM64 test machine (21:02, rebooted 2026-11-24 07:23 on the owner's instruction); they are in the PR text draft"
+      },
+      {
+        "item": "commercial acceptance",
+        "reason": "owner; every lab result here stays not-complete"
+      }
+    ],
+    "public_guards_on_this_branch": "no blanket public import guard is left (owner decision 1): Omnigent SECURITY_BLOCKER -> enforced product path in 97c22c9, LiteLLM -> product module ha_litellm in d72ae5f (the lab candidate keeps its GUARD and is not registered), EMQX PRESERVATION_BLOCKER -> enforced product path in 9bf8f5e; the per-app check and conversion refusals stay, and every replaced guard assertion is listed in those merge messages",
+    "unit_tests_latest": "integration-3: at ae5420d tests/backup 1471 (12 not-ok = test_ha_omnigent 7 SECURITY_BLOCKER + test_litellm_lab_runner 5 guard false positive, 6/6 with --exe-only), backup-ui 100/100, lab 1090 started / 1043 ok (73 not-ok records = run_native refused + 2 stale persisted_values); at fb284b8: backup-ui 101/101, tests/backup 1488 = 1475 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, lab 1097 started / 1050 ok with the same 73 records; at 17c81b8 (nextcloud): affected modules 101/101, backup-ui 101/103 (timeout + 320 px overflow, both 2/2 alone); at f8e0c1d (batch2-lab again + EMQX security review): tests/backup 1525 = 1512 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 103/103, EMQX + import + flows modules 177/177, test_batch2_lab + test_dev_d_guard 43/43; at d72ae5f (litellm-product): tests/backup 1574 = 1561 ok, 1 skipped, the same 12 not-ok ids, RealBackupTests 1/1, backup-ui 105/105, 54 HA/LiteLLM modules 803 (only the 7 Omnigent), lab LiteLLM 20/20; at 97c22c9 (litellm 600 s + omnigent-product): tests/backup 1604 = 1598 ok, 1 skipped, 5 not-ok (only the litellm_lab_runner guard false positive, 6/6 with --exe-only; the 7 Omnigent SECURITY_BLOCKER not-ok are gone), RealBackupTests 1/1, backup-ui 105/105, 17 Omnigent/shared modules 317/317, lab Omnigent 31/31. Evidence: tests/e2e/lab/evidence/integration-20261123/unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json. At 4539aec (step 3g): tests/backup 1664 = 1658 ok, 1 skipped, 5 not-ok (the same litellm_lab_runner guard refusals), RealBackupTests 1/1, backup-ui 105/105. At 2b5fee1 (step 3h): the CI's unit command 1925 run = 1911 ok, 6 skipped, 8 not-ok (7 refusals of this lane's host guard in its default mode, 1 digest test that fails only under the harness umask 077 and passes under the CI runner's umask 022; test file unchanged since origin/main), tests/backup 1769 = 1763 ok, 1 skipped, 5 not-ok (the same guard refusals), RealBackupTests 1/1, backup-ui 107/107; targeted runs on every staged merge since: 523/523 (export check, 31 modules), 69/69 (review branch). Evidence: unit-tests-step3g.json, unit-tests-step3h.json. At ae932f7 (step 3i, FINAL; the tip 13051d0 adds evidence only): the CI's unit command in the CI runner's form (umask 022, --exe-only) 1946 = 1938 ok, 6 skipped, 2 DriverTests refused by the host guard (unchanged since origin/main), check_source and node --check pass; tests/backup with the real batch-1 backups 1790 = 1784 ok, 1 skipped, 5 default-mode guard refusals (pass in the CI form); RealBackupTests 1/1; backup-ui 107/107; the public-safe PR tree gives the same numbers. The CI command had failed on this branch (three large-archive test modules left the process umask at 077): fixed in the tests by 0d83f8b. Evidence: unit-tests-step3i.json. At bcb4a2c (step 3j, FINAL code; after the arm54 squash 4353892 and the SR-5 merges 3723667 and bcb4a2c): EVERY run: step of .github/workflows/validate.yml and pi-web-validation.yml (install steps skipped: the host has the pinned tools) passed except the 2 DriverTests the host guard refuses (unchanged since origin/main): unittest discover in the CI form 2016 = 2008 ok, 6 skipped, 2 refused; check_source, bash -n, 12 node --check, node --test stack-plans 3/3, pi-web tests 13/13 (both workflows), managed-owners 4/4, preview, brand-browser (both brands; services 10/10 and backup-ui 108/108 per brand), pwa-brands; extra: tests/backup with the real batch-1 backups 1860 = 1854 ok, 1 skipped, the same 5 default-mode guard refusals; RealBackupTests 1/1; backup-ui 108/108. The same run on 4353892 (wf1): 1974 / 1818 / 107, same not-ok ids. Targeted: 414/414 + lab 101/101 at 4353892, 329/329 + lab 39/39 at bcb4a2c. Evidence: unit-tests-step3j.json. At 61e7226 (step 3k, FINAL code: + emqx-secreview iteration 8): 56 modules (every test_ha_*, every hacommon user, test_suggest) 907 = 906 ok, 1 skipped; lab EMQX 39/39; wf4 = the whole validate workflow again: unittest CI form 2032 = 2024 ok, 6 skipped, the same 2 refused DriverTests; every other workflow step passed (brand-browser services 10/10 + backup-ui 108/108 per brand); tests/backup b1 1876 = 1870 ok, 1 skipped, the same 5 guard refusals; RealBackupTests 1/1; backup-ui 108/108. Evidence: unit-tests-step3k.json. At 0b36e83 (final-verify interim merge, evidence + lab harness only; product code = 61e7226 = ccc3ed7): lab units test_headscale_full_flow + test_odoo_capture 39/39 under the host guard (blocked 0), so wf4/wf5 stand.",
+    "evidence": "tests/e2e/lab/evidence/integration-20261123/README.md (integration-1/2/3 sections), unit-tests.json, unit-tests-step2.json, unit-tests-step3.json, unit-tests-step3b.json, unit-tests-step3c.json, unit-tests-step3d.json, unit-tests-step3e.json, unit-tests-step3f.json, unit-tests-step3g.json, unit-tests-step3h.json, unit-tests-step3i.json, unit-tests-step3j.json",
+    "commercial_acceptance": "not-complete"
+  },
+  "final_version": {
+    "worker": "01a200bc-fdfc-7813-b6d3-10d8413281a7",
+    "status": "32/32 focused local private dispatch methods passed; final source bindings independently audited; ARM lifecycle six checks across initial and completion attempts",
+    "integration_commit": "5e6f965",
+    "dispatch_integration_commit": "7566d44",
+    "transport_limits": "service/PG/owner simulated in32 tests; real ARM lifecycle separately evidenced",
+    "evidence_audit": "tests/backup/evidence/final-acceptance-delta-20261122/README.md",
+    "audit_scope": "local committed-artifact integrity and secret-pattern scan only; no remote rerun or commercial acceptance"
+  },
+  "cross_physical_restore": {
+    "archive_roundtrip": "passed x86 to native ARM to x86, entry and nested payload hashes equal",
+    "service_restore": "Headscale: real RPi5 HA backup 45670371 (bytes attested on .34) -> unmodified product check/convert (+hasqlite libc fallback 5595e3c) -> native ARM Headscale on .54 passed (attempt6 f67e718, 38/38); rootful private store, not OwnerRunner. EMQX/Omnigent/Odoo/n8n not done on .54.",
+    "payload_bytes": 8396860,
+    "synthetic_only": false,
+    "real_source": {
+      "host": "192.168.2.34",
+      "slug": "45670371",
+      "sha256": "1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4",
+      "provenance_evidence": "tests/e2e/lab/evidence/arm54-final-20261123/source-provenance-34.json"
+    }
+  },
+  "commercial_acceptance": false,
+  "integrated_version": "32090a0",
+  "previous_arm_probe": {
+    "host": "192.168.2.34:22",
+    "architecture": "aarch64",
+    "ssh_environment": "Alpine 3.24.2 with ha CLI",
+    "podman_in_path": false,
+    "free_gib": 8.6,
+    "read_only": true,
+    "limitation": "Historical .34 SSH add-on probe only; superseded as target by authorized .54",
+    "required": "authorized ARM Linux test target with Podman-compatible OS and sufficient storage"
+  },
+  "arm_target_probe": {
+    "host": "192.168.2.54:22",
+    "architecture": "aarch64",
+    "os": "Armbian Debian 12",
+    "podman": "6.1.1",
+    "minimum_free_gib": 16.166,
+    "private_storage": true,
+    "runtime_network": "none",
+    "published_ports": false,
+    "original_inventory_preserved": true,
+    "integration_commit": "3fe2ff3",
+    "evidence": "tests/e2e/lab/evidence/arm54-native-20261122/README.md",
+    "service_blocker": null,
+    "next": "OwnerRunner/rootless on .54 needs uidmap (owner decision); EMQX and Omnigent cross-physical restores on .54; encrypted-source run needs python3-nacl on the target",
+    "service_evidence": "tests/e2e/lab/evidence/arm54-service-20261122/README.md",
+    "service_integration_commit": "fe30094",
+    "service_passed": [
+      "synthetic HA backup conversion",
+      "private volume restoration",
+      "native service startup",
+      "gRPC CLI source-user data check",
+      "real TempObjects lifecycle with explicitly injected removal refusal",
+      "realVPN control registration",
+      "restored sameVPN ID/IPv4/IPv6",
+      "fresh authorized control/netmap after restart without authkey"
+    ],
+    "service_not_covered": [
+      "two-client VPN payload/DERP traffic",
+      "public installer/rollback",
+      "rootless OwnerRunner deployment",
+      "real original backups",
+      "Headplane UI",
+      "host reboot persistence"
+    ],
+    "image_provenance": "locally built unmodified official package recipe, binary equals pinned upstream; not shipped image",
+    "lifecycle_provenance": "Initial exit1/ValueError after three checks; completion exit0 inherits those three and executes three more. Removal failure is an injected return125 before transport; residue check and retry use real Podman.",
+    "runner_scope": "RootfulRunner direct namespace reads/stat on owned paths, otherwise real private-store Podman; not production OwnerRunner.",
+    "vpn_integration_commit": "32090a0",
+    "vpn_evidence": "tests/e2e/lab/evidence/arm54-vpn-20261122/README.md",
+    "vpn_test_condition": "TS_ASSUME_NETWORK_UP_FOR_TEST=true in harness only because networknone has no active non-loopback interface; no external runtime connectivity"
+  },
+  "arm54_final_20261123": {
+    "branch": "test/arm54-integrated-20261124 (since iteration 6; contains the earlier lane branch test/arm54-final-20261123 and item D test/arm54-emqx-20261123); product-only twin fix/arm54-product-20261124",
+    "evidence": "tests/e2e/lab/evidence/arm54-final-20261123/README.md",
+    "passed_commits": {
+      "attempt3": "b290054",
+      "attempt4": "e4251de",
+      "attempt6_run_of_record": "f67e718"
+    },
+    "ssh_255_cause": "askpass without ARMHA_PW in the command environment -> empty password -> Permission denied",
+    "vpn_root_cause": "Tailscale pauses control while no up interface has a usable address (network none = lo only); one unrouted TUN interface fixes it; no TS_ASSUME_NETWORK_UP_FOR_TEST",
+    "vpn_continuity": "real b1-ts-alice keeps node 2, 100.64.0.2/fd7a:115c:a1e0::2 and node key after restore, server/client restart and re-point (tailscale down first)",
+    "inventory": "cycle-2 audit identical (24 keys); final vs original identical (22 keys); workspace and private store removed",
+    "runner_scope": "rootful private store (items A, B, D) and the production OwnerRunner rootless flow (items C, iterations 6-7) with owner-approved uidmap + a temporary linger account, removed after every cycle",
+    "not_done": [
+      "x86 HA -> ARM for Omnigent/n8n/Odoo (not run)",
+      "Odoo with the product images (no arm64 build; substitute images only)",
+      "public installer, Cockpit page, published public ports, Pi agent pairing, long-duration traffic, a second physical client"
+    ],
+    "commercial_acceptance": "not-complete",
+    "hasqlite_python311": "os.unshare missing on Python < 3.12: b2f63ce child kept host network on .54; a9d8643 refuses (attempt5 failed); 5595e3c libc unshare fallback isolated and fail-closed; attempt6 passed",
+    "open_product_item": "none from this lane: ha_n8n SQLITE_CHILD fixed (92d7c5b = 10fe446, in the integration); the .54 product fixes wait for the main session squash-merge",
+    "iteration2": {
+      "omnigent_cross_physical": "passed 72/72: real RPi5 backup 45670371 (attempt 3, 54c4dd9, run of record) and encrypted a2dc9bfd (attempt 4, 71eac64); unmodified product check (only blocker SECURITY_BLOCKER) + internal candidate after live discovery from the running arm64 Omnigent 0.21.0 target; HA admin/member logins with HA passwords, kept target admin, data, cookie, restart, rollback",
+      "headscale_encrypted": "passed 38/38 with encrypted a2dc9bfd (attempt 7, 5e06669); same VPN continuity as attempt 6",
+      "encrypted_on_54": "PyNaCl 1.5.0 + cffi 1.17.1 pinned PyPI aarch64 wheels inside the 0700 workspace only; no system package",
+      "store_driver": "overlay with skip_mount_home for the Omnigent cycles (vfs would not fit the 12 GiB reserve)",
+      "product_fix": "92d7c5b ha_n8n SQLITE_CHILD libc unshare fallback + NO_NETNS fail-closed; probe on .54: b2f63ce child CONNECTED to host loopback, fixed child isolated",
+      "inventory": "every iteration-2 cycle identical to its baseline (24 keys) and to the first workspace baseline baseline-before, started 08:49:26 (22 keys)",
+      "provenance": ".34 re-attested after iteration 2: identical (source-provenance-34-post2)",
+      "runner_scope": "rootful private store; production OwnerRunner/rootless still blocked (uidmap, test owner: owner decision)",
+      "not_done": [
+        "EMQX on .54 (R-EMQX candidate still failing in later rounds on dev-d)",
+        "Odoo/n8n ARM on .54 (20261119-arm backups no longer on .34: provenance)",
+        "OwnerRunner/rootless, flows.run_restore with systemd user units, public installer",
+        "real Omnigent runner image + Pi agent pairing (placeholder used)"
+      ],
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_item_a": {
+      "result": "passed",
+      "evidence": "tests/e2e/lab/evidence/arm54-final-20261123/large-outer-8193mib-54-attempt1.*",
+      "source_commit": "a212d1b",
+      "elapsed_seconds": 1144.2,
+      "payload_bytes": 8590983168,
+      "archive_bytes": 8593295360,
+      "archive_sha256": "04a3f4cb6373a1810ba8f55a6280c737a04a2e8d3638fb7605df2e2279560403",
+      "ciphertext_member_bytes": 8593278426,
+      "outer_pax_size_record": true,
+      "verify_seconds": 148.7,
+      "late_tail": "corrupt-archive after 8587047936 B; reverted bit-exact",
+      "owner_floor_bytes": 4294967296,
+      "min_free_bytes": 9902174208,
+      "tools": "Debian bookworm arm64 age 1.1.1-1+b3, zstd 1.5.4+dfsg2-5 (gpgv chain), workspace + private mount ns",
+      "inventory": "identical (24 keys vs large-baseline-before; 22 vs baseline-before)",
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_item_b": {
+      "n8n": {
+        "result": "passed",
+        "run_of_record": "n8n-real-attempt6",
+        "source_commit": "ef4462e",
+        "checks": "38/38",
+        "elapsed_seconds": 560.3,
+        "source_backup": "20261119-arm woow-arm-plain 8e51e2ed sha256 546aecf3...",
+        "provenance": "owner-accepted 2026-11-19 records (arm-provenance-20261119)",
+        "scope": "rootful private store, harness unit order, main process only, plain backup",
+        "inventory": "identical after cycles 1-3 (24 keys) and vs baseline-before (22 keys)"
+      },
+      "product_fix": {
+        "commits": [
+          "868894f",
+          "follow-up (keep the replaced volume root)"
+        ],
+        "finding": "Podman 6.1.1: volume import ignores the tar root entry, export writes none, no first-mount chown after import -> restored n8n EACCES",
+        "tests": "test_volume_root 6 OK; 692 backup tests OK (1 skip)"
+      },
+      "odoo": {
+        "result": "blocked",
+        "need": "arm64 builds of woow-odoo-tenant-ha (paas-odoo-ci 51856b0) and paas-postgres:17.11, or owner acceptance of substitute images"
+      },
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_item_c": {
+      "runner": "production OwnerRunner rootless (runuser + Podman 6.1.1 rootless + systemd --user), product CLI + run-job, real RPi5 backup 45670371",
+      "headscale": {
+        "result": "passed",
+        "run_of_record": "owner-headscale-attempt9",
+        "source_commit": "5140be3",
+        "checks": "55/55",
+        "elapsed_seconds": 185.7,
+        "jobs": {
+          "check": 9.6,
+          "convert": 18.6,
+          "restore": 43.2,
+          "rollback": 45.5
+        },
+        "client": "b1-ts-alice keeps node 2 / 100.64.0.2 / fd7a:115c:a1e0::2 / key: original URL, re-point, server restart, client restart"
+      },
+      "omnigent": {
+        "result": "passed",
+        "run_of_record": "owner-omnigent-attempt2",
+        "source_commit": "88d1ca4",
+        "checks": "90/90",
+        "elapsed_seconds": 693.2,
+        "public_guard": "asserted closed (check blocker + convert refusal = SECURITY_BLOCKER)",
+        "conversion": "internal candidate haimport._run_omnigent_candidate in jobs.run_job with production deps, quiesced server",
+        "jobs": {
+          "check": 22.2,
+          "public_convert_refused": 2.5,
+          "candidate_convert": 74.1,
+          "restore": 142.2,
+          "rollback": 149.8
+        }
+      },
+      "product_fixes": {
+        "98410bd": "tempctr: /run/secrets tmpfs for read-only throwaway containers with mounted secrets (rootless Podman 6.1.1 + runc 1.5.1 exit 126)",
+        "a7f32e9": "podman: /usr/local/bin/podman when /usr/bin/podman is absent"
+      },
+      "findings": [
+        "unchanged suggest draft of Headscale package 0afdfa4 not importable (read-only config dir drafted as data_dirs; ha_headscale.Target refuses data_dirs)",
+        "import packaging needs every quadlet image; localhost/woow-headplane:0.7.1-woow2 has no arm64 build (stand-in, never started)"
+      ],
+      "cleanup": {
+        "uidmap": "purged",
+        "test_account": "deleted (userdel -r), linger + drop-in gone, account files byte-equal",
+        "workspace": "removed",
+        "audit": "identical except modules (+nft_masq): 27/28 vs baseline-before-owner-cycle1, 21/22 vs baseline-before"
+      },
+      "incident": {
+        "what": "modprobe -r nft_masq in owner-cleanup-cycle1 oopsed .54 kernel 6.18.38-ophub (NULL pointer in nf_nat_masquerade_inet_unregister_notifiers)",
+        "evidence": "incident-54-kernel-oops-nft-masq",
+        "state": "nft_masq stuck going, kernel tainted 1152 (C+D); .54 services running, HA 200",
+        "needs_owner": "reboot of .54 (restarts HA/Matter/gateway); until then no new podman bridge network or masquerade rule on .54",
+        "harness_change": "4ca92b5 never unload modules"
+      },
+      "not_done": [
+        "n8n through the OwnerRunner flow",
+        "encrypted backups through the OwnerRunner flow"
+      ],
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_iteration_3": {
+      "when": "2026-11-23 21:15-22:30 Asia/Taipei",
+      "device_state": "not rebooted after the 21:02 kernel oops (incident-54-followup-2120-2): tainted 1152, nft_masq going/-1, 0 D-state tasks, 0 hung-task reports, rtnl free (trylock sysfs read 8 ms), HA 200, own services unchanged",
+      "lane_rule": "network-none containers and internal Podman networks in a private netns may run (no masquerade, no conntrack helper, no module unload); runs gate on the kernel state; masquerade networks wait for the reboot",
+      "netprobe": {
+        "result": "passed",
+        "run": "netprobe-internal-c4",
+        "source_commit": "2923a5b",
+        "checks": "11/11"
+      },
+      "n8n_encrypted": {
+        "result": "passed",
+        "run_of_record": "n8n-enc-real-attempt1",
+        "source_commit": "2923a5b",
+        "checks": "38/38",
+        "elapsed_seconds": 575.2,
+        "source": "RPi5 2026-11-19 encrypted backup 4f5c7337, sha256 a5fb6268... (owner-accepted provenance)",
+        "runner": "rootful private store (not OwnerRunner)",
+        "audit": "n8n-enc-inventory-after-c4: 27/28 identical, only modules (+veth)"
+      },
+      "odoo_substitute": {
+        "result": "passed",
+        "label": "substitute images, not the product service (owner decision 3A)",
+        "run_of_record": "odoo-real-attempt1",
+        "source_commit": "ca4ec25",
+        "checks": "38/38",
+        "elapsed_seconds": 404.7,
+        "source": "RPi5 2026-11-19 backup 8e51e2ed, sha256 546aecf3... (owner-accepted provenance), database woowtest",
+        "images": "odoo:18.0-20260926 arm64 (index 60eb1b50...) + pgvector 0.8.6-pg17 = PostgreSQL 17.11 arm64 (index cf134a76...); PG16 for HA: pgvector 0.8.6-pg16",
+        "strict_compare": "205 tables: 204 identical, ir_config_parameter differs only in web.base.url, web.base.url.freeze, woow_paas_platform.upgrade_done; 26 installed modules with HA versions; filestore 17 files / 109,586 B equal by sha256",
+        "clients": "HA admin + ha-probe logins with HA passwords, target admin refused, ha-probe.txt reads back, woow_import_probe record; restart; rollback to the pre-import tenant",
+        "simulated": "fresh tenant emulated (role odoo, -i base, admin password, upgrade-gate marker written by the harness); pod network none (db_host 127.0.0.1); no gateway/health timers/published port",
+        "audit": "odoo-inventory-after-c5: 28/28 identical; vs 08:49 baseline 21/22 comparable keys identical, only modules (+nft_masq going, +veth)"
+      },
+      "waiting": [
+        "n8n through the OwnerRunner flow (package network n8n-network is a bridge with masquerade: needs the .54 reboot)",
+        "EMQX on .54 (harness not written yet)"
+      ],
+      "commercial_acceptance": "not-complete",
+      "odoo_substitute_test_mode": {
+        "result": "passed",
+        "label": "substitute images, not the product service (owner decision 3A)",
+        "run_of_record": "odoo-real-attempt3-testmode",
+        "source_commit": "2b17137",
+        "checks": "41/41",
+        "elapsed_seconds": 407.7,
+        "failed_attempt_kept": "odoo-real-attempt2-testmode (60550bf): my assertion expected 0 active mail servers; corrected per odoo base/data/neutralize.sql:4-11 (image 18.0-20260926, sha256 9dcfa35d...)",
+        "neutralised": "no active real mail server (HA 1), 1 active dummy, 0 stored mail credentials, 0 active crons but autovacuum (HA 13), is_neutralized, new database.uuid",
+        "audit": "odoo-inventory-after-c6: 28/28 identical"
+      }
+    },
+    "arm54_2_item_d": {
+      "when": "2026-11-23 23:00 - 2026-11-24 Asia/Taipei",
+      "branch": "test/arm54-emqx-20261123 (worktree /tmp/ha-arm54-emqx-20261123) = test/arm54-final-20261123 + --no-ff merges of feat/ha-import-emqx-product-20261123 @ 92e306b (c98a198) and @ e62b0a5 (931818d); the emqx-product merge lives only on this branch",
+      "product_under_test": "feat/ha-import-emqx-product-20261123 @ e62b0a5 (owner instance EP-OWNER-2045; security review SR-1..SR-7; 28e9492 awaiting that lane's short security re-review) + this lane's fixes 868894f a351cd2 a7f32e9 98410bd 5595e3c 92d7c5b + 8613ffa (= c8df1f2 tempctr top entry); ha_emqx.py byte-identical to e62b0a5; no guard changed by this lane",
+      "device_state": ".54 not rebooted (owner approved 23:28; the reboot command was denied by the Claude Code auto-mode classifier); item D is network-free (broker network none, own netns, no podman network, no module load/unload) and kernel-state gated",
+      "image": "product image docker.io/emqx/emqx:5.8.9 index 35b46f7a, arm64 manifest c455c60f (emqx-build-c7)",
+      "package": "Woow_podman_emqx ea5886c (emqx-package-ea5886c)",
+      "attempt1": {
+        "run": "emqx-real-arm-attempt1",
+        "source_commit": "8ed40d9",
+        "exit": 1,
+        "elapsed_seconds": 755.2,
+        "checks_before_failure": "24/24",
+        "result": "decision C refusal proven on ARM; conversion stopped: candidate exited at boot (Podman 6.1.1 ignores the volume tar's '.' entry -> EACCES)"
+      },
+      "volume_probe": {
+        "run": "emqx-volume-probe-c7",
+        "source_commit": "21ece9f",
+        "exit": 0,
+        "elapsed_seconds": 76.5,
+        "result": "top dir 0 0 755 after import; broker exits 1 (EACCES) as is, starts in 30.3 s with the entry applied"
+      },
+      "product_fix": "c8df1f2 (lane) = 8613ffa (item-D branch) fix(tempctr): volume_import applies the tar's top-directory entry",
+      "anonymous_volume_leak": "confirmed on .54: the product's throwaways left 4 anonymous volumes (image VOLUME paths) in attempt1; counted and removed by the harness",
+      "commercial_acceptance": "not-complete",
+      "attempt2": {
+        "run": "emqx-real-arm-attempt2",
+        "source_commit": "931818d",
+        "exit": 1,
+        "elapsed_seconds": 798.1,
+        "checks_before_failure": "24/24",
+        "result": "candidate boots (tempctr fix); product refused 「EMQX 候選啟動後設定與目標不一致，已停止。」"
+      },
+      "attempt3": {
+        "run": "emqx-real-arm-attempt3-bootdiag",
+        "source_commit": "73866db",
+        "exit": 1,
+        "elapsed_seconds": 798,
+        "result": "observer on ha_emqx.boot_form: 44 roots each; ONLY dashboard.listeners.http/https.num_acceptors differ (device 4, candidate 1); vendor emqx_dashboard_schema.erl:125-131 default = schedulers_online; the candidate ran with --cpus 1"
+      },
+      "product_finding_cpu": "the product's job runner gives throwaways --cpus = half the CPUs (tempctr.default_cpus, owner with cpu delegation) -> the same boot-form mismatch on multi-core production devices (conversion refused; verify_restored would roll back); relayed to emqx-product 2026-11-24 00:35; ha_emqx not changed by this lane",
+      "attempt4": {
+        "run": "emqx-real-arm-attempt4",
+        "source_commit": "62cf40f",
+        "exit": 1,
+        "elapsed_seconds": 754,
+        "checks_before_failure": "24/24",
+        "result": "throwaways with the job runner's CPU default: boot forms equal (44 roots); HA data imported; product refused at restore_target_settings 「EMQX 匯入後未能保留目標有效設定，已停止。」"
+      },
+      "attempt5": {
+        "run": "emqx-real-arm-attempt5-settingsdiag",
+        "source_commit": "e4bab99",
+        "exit": 1,
+        "elapsed_seconds": 756,
+        "result": "observer on preserved_settings: restore_target_settings' final comparison differs ONLY in authorization.sources[1].max_rules (candidate 100, device absent: the Dashboard-added source is stored without defaults, emqx_config.erl:341,345)"
+      },
+      "cleanup": {
+        "cleanup": "emqx-cleanup-c7 passed (store empty, image removed, workspace gone)",
+        "audit": "emqx-inventory-after-c7: 28/28 identical vs emqx-baseline-before-c7"
+      },
+      "result": "NOT passing yet: decision C refusal proven on ARM; Podman 6.1.1 top-entry defect fixed (c8df1f2/8613ffa); two product comparison defects diagnosed (num_acceptors schedulers_online default vs --cpus; restore_target_settings max_rules runtime default) and relayed to emqx-product; restore/clients/restart/rollback and the x86 variant wait for their fixes"
+    },
+    "arm54_2_iteration_4": {
+      "when": "2026-11-23 23:00 - 2026-11-24 Asia/Taipei",
+      "reboot": {
+        "owner_decision": "2026-11-23 23:28 「兩個都照建議去做」: reboot .54 at a clean point",
+        "before_state": "incident-54-reboot-20261123-before, incident-54-reboot-20261123-units-before (read-only)",
+        "result": "NOT done: the reboot command (systemd-run --on-active=5 systemctl reboot over the askpass SSH) was denied by the Claude Code auto-mode classifier [Destructive or Unwanted Actions]; nothing ran on .54; not retried",
+        "needs": "the owner, or the main session under the user's own permission, reboots 192.168.2.54; then this lane records the after-state and audit and runs the n8n OwnerRunner flow"
+      },
+      "item_d": "on branch test/arm54-emqx-20261123 (needs the emqx-product merge); see its README section 'arm54-2 item D' and status key arm54_2_item_d",
+      "product_fix": "c8df1f2 fix(tempctr): TempObjects.volume_import applies a tar's top-directory entry after podman volume import (Podman 6.1.1 ignores it; the product's EMQX candidate exited at boot with EACCES on .54)",
+      "test_fix": "1daf803 test(podman): the relay path test never names or starts Podman (host-test guard safe)",
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_iteration_6": {
+      "reboot_54": {
+        "when": "2026-11-24 07:23:03",
+        "by": "the main session over SSH on the owner's explicit instruction (this lane's own attempt on 2026-11-23 about 23:30 was denied by auto mode and not retried)",
+        "after_state": "tainted 1024 (oops bit gone), nft_masq not loaded, HA 200, Matter 200, gateway/tailscaled/ssh active by themselves",
+        "audit": "incident-54-reboot-20261123-audit-after vs baseline-before-owner-cycle1: 22/28 keys identical, modules identical; the 6 differing keys are boot facts (container ids, start times, empty libpod_parent cgroup)",
+        "record": "arm54-final-20261123/incident-54-reboot-20261123-record.json"
+      },
+      "cycle_c9": "killed at 03:33 after emqx-real-x86-attempt1 (79/79) was committed; workspace removed after the reboot by the harness (--after-reboot)",
+      "production_incident_by_this_lane": "commit messages of 5140be3 (2026-11-23 20:13) and afcae0d (20:18) executed a backquoted user-systemd restart of headscale.service on the HOST: production Headscale restarted twice (about 10 s and 13 s); not intended; history not rewritten; text only through quoted heredocs since then",
+      "commercial_acceptance": "not-complete",
+      "item_c_n8n_owner_runner": {
+        "what": "real RPi5 backups of 2026-11-19 (owner-accepted provenance) through the production OwnerRunner rootless flow on .54 into the Woow n8n package 2ac1ae2 in queue mode (six containers) under the owner's user systemd",
+        "plain": {
+          "evidence": "owner-n8n-attempt2",
+          "source_commit": "ee5a3cc",
+          "checks": "112/112",
+          "seconds": 883.7
+        },
+        "encrypted_and_automatic_rollback": {
+          "evidence": "owner-n8n-attempt3-enc",
+          "source_commit": "3cdf8c1",
+          "checks": "134/134",
+          "seconds": 1123.6
+        },
+        "arm64_native_code": {
+          "evidence": "owner-n8n-attempt4-native",
+          "source_commit": "0ff3a99",
+          "checks": "138/138",
+          "seconds": 1125.7
+        },
+        "stopped_attempt": "owner-n8n-attempt1 (ddbd6d3): LogDriver=journald of the package cannot work on .54 (podman-static conmon without journald)",
+        "simulated": "private network namespace + memory cap of the owner user manager, generated test secrets, ExecStartPre podman path, k8s-file log driver; no public route, no Cockpit page",
+        "cleanup": "owner-cleanup-cycle2 + owner-cycle2-cleanup passed; audit owner-cycle2-inventory-after 27/28 identical (modules: 8 networking modules loaded by the kernel on demand, not unloaded)"
+      },
+      "product_fix_native_arch": "ed3758e on fix/ha-native-arch-20261124 (= ee5a3cc on the lane branch): native code of Odoo modules and n8n community nodes is checked against this device's processor, not always x86-64"
+    },
+    "arm54_2_emqx_owner_runner": {
+      "what": "final product EMQX import (emqx-product e08f8a1 merged, engine tree 865c930f + this lane Podman fixes) through the production OwnerRunner rootless flow on .54 (ARM64, Podman 6.1.1), package ea5886c with entrance",
+      "arm": {
+        "evidence": "owner-emqx-arm-attempt1",
+        "source_commit": "1a73067",
+        "backup": "RPi5 cold b6cbc980",
+        "checks": "164/164",
+        "seconds": 1778.6
+      },
+      "x86": {
+        "evidence": "owner-emqx-x86-attempt1",
+        "source_commit": "365c618",
+        "backup": "x86 HA cold 5fb6f348",
+        "checks": "164/164",
+        "seconds": 1790.7
+      },
+      "proved": "decision C refusal, customer Dashboard step, check, convert, inspect in place, restore + product readback, dev-d probe unchanged + acceptance 21/21 after restore/restart/automatic rollback/readback rollback, manual rollback digest equal, no throwaway or anonymous volume, --env-file on Podman 6.1.1 (abff1a0)",
+      "finding": "catalog-suggest drafts health /readyz which answers 403 from the host (relayed to emqx-product 09:18)",
+      "simulated": "private network namespace + memory cap of the owner user manager, generated test secrets, health entry of the draft removed (dev-d has none either)",
+      "commercial_acceptance": "not-complete"
+    },
+    "arm54_2_integrated_20261124": {
+      "branch": "test/arm54-integrated-20261124 (integration e92e8ae + this lane + item D + fix/ha-headscale-config-dir-20261124 + the EMQX health fix + the Odoo OwnerRunner harness)",
+      "product_only_branch": "fix/arm54-product-20261124 @ db4efdc (base 6592c76): the same product, documentation and unit-test bytes as one commit per fix, no harness, no evidence",
+      "engine_difference_to_integration": "exactly the .54 product fixes 868894f a351cd2 (volume top directory), a7f32e9 (Podman in /usr/local/bin), 98410bd (/run/secrets tmpfs), ee5a3cc (native code by the device processor), 0316d7e (drafted Headscale entry), plus comment-only 8040b17, two unit-test fixes (1daf803, 2221061), the bounded >8 GiB probe options (e3f0667) and CONTRACT notes",
+      "runs": {
+        "emqx-real-x86-attempt2": {
+          "evidence": "emqx-real-x86-attempt2",
+          "exit": 0,
+          "status": "passed",
+          "checks": "81/81",
+          "seconds": 1116.3,
+          "source_commit": "e7d1e5b",
+          "tree_dirty": false,
+          "stdout_sha256": "f95670a07888"
+        },
+        "owner-headscale-attempt10": {
+          "evidence": "owner-headscale-attempt10",
+          "exit": 0,
+          "status": "passed",
+          "checks": "55/55",
+          "seconds": 186.5,
+          "source_commit": "fb1adfb",
+          "tree_dirty": false,
+          "stdout_sha256": "400c79bf393d"
+        },
+        "owner-headscale-attempt11": {
+          "evidence": "owner-headscale-attempt11",
+          "exit": 0,
+          "status": "passed",
+          "checks": "66/66",
+          "seconds": 299.2,
+          "source_commit": "04a8400",
+          "tree_dirty": false,
+          "stdout_sha256": "9cb33e2eae22"
+        },
+        "owner-omnigent-public-attempt1": {
+          "evidence": "owner-omnigent-public-attempt1",
+          "exit": 1,
+          "status": "failed",
+          "checks": "34/35",
+          "seconds": 162.5,
+          "source_commit": "bd9b3f6",
+          "tree_dirty": false,
+          "stdout_sha256": "b7a82573b220"
+        },
+        "owner-omnigent-public-attempt2": {
+          "evidence": "owner-omnigent-public-attempt2",
+          "exit": 0,
+          "status": "passed",
+          "checks": "137/137",
+          "seconds": 881.7,
+          "source_commit": "f1bce2b",
+          "tree_dirty": false,
+          "stdout_sha256": "63e74a75fa10"
+        },
+        "owner-omnigent-public-attempt3-enc": {
+          "evidence": "owner-omnigent-public-attempt3-enc",
+          "exit": 0,
+          "status": "passed",
+          "checks": "137/137",
+          "seconds": 883.4,
+          "source_commit": "99f583f",
+          "tree_dirty": false,
+          "stdout_sha256": "aad806ef288c"
+        },
+        "owner-omnigent-public-attempt4": {
+          "evidence": "owner-omnigent-public-attempt4",
+          "exit": 0,
+          "status": "passed",
+          "checks": "157/157",
+          "seconds": 1085.0,
+          "source_commit": "664da04",
+          "tree_dirty": false,
+          "stdout_sha256": "ba2113df79a7"
+        },
+        "owner-odoo-attempt1": {
+          "evidence": "owner-odoo-attempt1",
+          "exit": 1,
+          "status": "failed",
+          "checks": "27/28",
+          "seconds": 200.4,
+          "source_commit": "207001e",
+          "tree_dirty": false,
+          "stdout_sha256": "4c3306c3c39d"
+        },
+        "owner-odoo-attempt2": {
+          "evidence": "owner-odoo-attempt2",
+          "exit": 0,
+          "status": "passed",
+          "checks": "95/95",
+          "seconds": 903.7,
+          "source_commit": "69d43fa",
+          "tree_dirty": false,
+          "stdout_sha256": "42c92b631daf"
+        },
+        "owner-emqx-arm-attempt2": {
+          "evidence": "owner-emqx-arm-attempt2",
+          "exit": 0,
+          "status": "passed",
+          "checks": "186/186",
+          "seconds": 2186.7,
+          "source_commit": "629a6d7",
+          "tree_dirty": false,
+          "stdout_sha256": "d8f9858b2f9c"
+        },
+        "owner-n8n-attempt5": {
+          "evidence": "owner-n8n-attempt5",
+          "exit": 0,
+          "status": "passed",
+          "checks": "147/147",
+          "seconds": 1362.3,
+          "source_commit": "0f98ada",
+          "tree_dirty": false,
+          "stdout_sha256": "6f88a89946a5"
+        },
+        "owner-emqx-arm-attempt3": {
+          "evidence": "owner-emqx-arm-attempt3",
+          "exit": 0,
+          "status": "passed",
+          "checks": "186/186",
+          "seconds": 2192.3,
+          "source_commit": "01ecbcb",
+          "tree_dirty": false,
+          "stdout_sha256": "14a77c44abae"
+        }
+      },
+      "cycles": {
+        "emqx-inventory-after-c10-2": "28/28 keys identical",
+        "owner-cycle3-inventory-after": "28/28 keys identical",
+        "owner-cycle4-inventory-after": "28/28 keys identical",
+        "owner-cycle5-inventory-after": "28/28 keys identical",
+        "owner-cycle6-inventory-after": "28/28 keys identical"
+      },
+      "product_fixes": {
+        "0316d7e": "the drafted Headscale entry is importable (its configuration folder is carried live); branch fix/ha-headscale-config-dir-20261124",
+        "d528653": "new drafts of n8n and Hermes default to the single-database mode their imports need; merged into the integration as 10b9594 by main"
+      },
+      "earlier_omnigent_runs": "72/72 (plain, encrypted) and 90/90 were made while the public import was held (internal candidate); the public path ran on ARM for the first time in owner-omnigent-public-attempt2/-3-enc/-4",
+      "odoo_label": "substitute images, not the product service (owner decision 3A)",
+      "not_run": "x86 HA -> ARM for Omnigent/n8n/Odoo (iteration-6 extra plan, not in the main session's final list); x86 -> ARM is proven for EMQX only",
+      "transient_pull_failures": [
+        "owner-images-odoo-cycle4",
+        "owner-images-n8n-cycle5"
+      ],
+      "owner_approval": "uidmap + ONE temporary linger account per cycle (owner-approved 2026-11-23), both removed at the end of every cycle; .54 has neither now",
+      "commercial_acceptance": "not-complete",
+      "merged_integration_tip": "e92e8ae (merge b6444b2): the EMQX export check (ff16d6b, B1-03) ran on ARM64/Podman 6.1.1 for the first time in owner-emqx-arm-attempt3",
+      "units_on_merge": {
+        "commit": "b6444b2",
+        "result": "tests=722 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+      }
+    }
+  }
+}

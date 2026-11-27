@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-20",
+  "supervision_id": "eight-watch-20261120T080608Z-72fa69ff",
+  "candidate_base": "7e3ef35",
+  "scope": "Real isolated EMQX and Mosquitto with synthetic data; not HA converter acceptance",
+  "broker_image": "3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "broker_version": "5.8.9",
+  "broker_source": "a8319fe2390169e1f2483e3ec80dd01a6cdb233d",
+  "client_image": "93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3",
+  "outer_isolation": {
+    "network": "none",
+    "ports": {}
+  },
+  "nested_isolation": {
+    "network": "none",
+    "ports": {}
+  },
+  "failed_attempts": [
+    {
+      "attempt": 1,
+      "stage": "mqtt_allowed",
+      "reason": "Assertion accepted RC0 only"
+    },
+    {
+      "attempt": 2,
+      "stage": "mqtt_allowed",
+      "client_exit": 0,
+      "puback_reason": 16,
+      "reason": "No matching subscribers; assertion corrected and real subscriber added"
+    }
+  ],
+  "final_exit": 0,
+  "passed_stages": [
+    "isolated_startup",
+    "effective_config_and_bootstrap_mount",
+    "mqtt_publish_subscribe_allowed",
+    "mqtt_publish_denied",
+    "synthetic_export",
+    "synthetic_import",
+    "restore_and_effective_readback",
+    "restart_config_and_mqtt_policy"
+  ],
+  "publish_reason_codes": {
+    "allowed": 16,
+    "denied": 135
+  },
+  "subscriber_payload_verified": true,
+  "cleanup": {
+    "containers_remaining": 0,
+    "volumes_remaining": 0,
+    "secrets_remaining": 0
+  },
+  "not_tested": [
+    "Full HA backup converter",
+    "Complete settings roots and references",
+    "Denied MQTT subscription",
+    "External clients or production data",
+    "Omnigent, Hermes, Headscale"
+  ],
+  "public_guard": "unchanged"
+}

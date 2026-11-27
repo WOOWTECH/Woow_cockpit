@@ -1,0 +1,4 @@
+Source: https://github.com/WOOWTECH/Woow_podman_n8n commit 2ac1ae2a3ba8b5bafe8d85d0bf7cd972b96f0669 (2026-11-09, the host package commit named by deploy-prodlike.sh)
+Fetched 2026-11-23 with gh api repos/WOOWTECH/Woow_podman_n8n/tarball/<commit>: tarball sha256 524e645f0e6ace9df7557e9452acd8872ce2993b000ef57a2dbe7e5bfdeb3951
+Files copied unchanged: quadlet/{*.container,*.volume,*.network,render-vars,queue/*,optional/*}, config/{start-valkey.sh,n8n.env.example,n8n-task-runners.json}
+Added 2026-11-24 from the same tarball, unchanged: systemd/n8n.target (item C, production OwnerRunner flow)

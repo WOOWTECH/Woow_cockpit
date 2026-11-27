@@ -1,0 +1,28 @@
+{
+ "no_match": "allow",
+ "deny_action": "ignore",
+ "sources": [
+  {
+   "type": "built_in_database",
+   "enable": true,
+   "keys": [
+    "enable",
+    "max_rules",
+    "type"
+   ]
+  },
+  {
+   "type": "file",
+   "enable": true,
+   "keys": [
+    "enable",
+    "path",
+    "type"
+   ],
+   "path": "data/authz/acl.conf",
+   "rules_len": null,
+   "rules_sha256_head": null,
+   "rules_equal_device_file": false
+  }
+ ]
+}

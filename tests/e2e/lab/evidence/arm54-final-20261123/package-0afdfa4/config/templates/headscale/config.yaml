@@ -1,0 +1,71 @@
+# Headscale 0.29.4 server configuration. Rendered by scripts/install.sh to
+# ~/.config/headscale/headscale/config.yaml and bind-mounted read-only at
+# /etc/headscale/config.yaml. Do not edit the installed copy: edit
+# ~/.config/headscale/headscale.env and run scripts/install.sh again.
+#
+# The listen addresses below are inside the container's network namespace and are therefore
+# constants. What the host exposes is decided by PublishPort= in quadlet/headscale.container,
+# which defaults to loopback only.
+server_url: @@HEADSCALE_SERVER_URL@@
+
+listen_addr: "0.0.0.0:8080"
+metrics_listen_addr: "0.0.0.0:9090"
+
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+disable_check_updates: true
+
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+
+prefixes:
+  v4: @@HEADSCALE_IPV4_PREFIX@@
+  v6: @@HEADSCALE_IPV6_PREFIX@@
+  allocation: sequential
+
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+    wal_autocheckpoint: 1000
+
+derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 24h
+
+node:
+  expiry: "@@HEADSCALE_NODE_EXPIRY@@"
+  ephemeral:
+    inactivity_timeout: 30m
+
+dns:
+  magic_dns: @@HEADSCALE_MAGIC_DNS@@
+  base_domain: @@HEADSCALE_BASE_DOMAIN@@
+  override_local_dns: true
+  nameservers:
+    global: [@@HEADSCALE_DNS_NAMESERVERS_YAML@@]
+    split: {}
+  search_domains: []
+  extra_records_path: /var/lib/headscale/extra_records.json
+
+policy:
+  mode: @@HEADSCALE_POLICY_MODE@@
+  path: /etc/headscale/policy.json
+
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+
+log:
+  level: @@HEADSCALE_LOG_LEVEL@@
+  format: text
+
+logtail:
+  enabled: false
+
+taildrop:
+  enabled: true

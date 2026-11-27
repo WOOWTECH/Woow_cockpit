@@ -1,0 +1,597 @@
+"""Lane arm54-2 item D: the HA EMQX import on .54 (ARM64, Armbian Debian 12, Podman 6.1.1), real B1 HA backups.
+
+Source: a real HA backup the B1 batch made on 2026-11-19 with HA's own EMQX add-on (woow-emqx 5.9.1 = EMQX 5.8.9) STOPPED
+(cold): the RPi5's b6cbc980 (sha256 b6eb257c..., attested against the RPi5 today: source-provenance-34) or the x86 HA's
+5fb6f348 (sha256 0a53e938..., the B1 record b1-source/backups.json). The recorded B1 facts (b1-source summary, machine
+arm/x86, emqx part: user names, ACL counts, retained topics, rules, banned client, Dashboard users; no credential) are
+what the restored broker must hold.
+
+Product: the FINAL product HA EMQX import of feat/ha-import-emqx-product-20261123 (owner instance EP-OWNER-2045, security
+review SR-1..SR-7, owner decision C), merged into this item-D branch, plus this lane's Podman 6.1.1 fixes (868894f,
+a351cd2, a7f32e9, 98410bd, c8df1f2 = 8613ffa here). Unmodified product calls: ha_emqx.check and ha_emqx.convert (target preflight, HA's broker,
+the candidate with this device's settings, row counts, readback), the adapter's own volume restore
+(QuadletPostgresAdapter._recreate_volume) and the restore-time comparison haimport.verify_import ->
+ha_emqx.verify_restored. This lane changes no guard and no product check.
+
+Target: the product package Woow_podman_emqx ea5886c (evidence emqx-package-ea5886c: emqx.container, emqx-data.volume,
+emqx-log.volume, emqx.network, base.hocon, acl.conf, emqx.env.example values) with the product image itself
+(docker.io/emqx/emqx:5.8.9 by its index digest, arm64 manifest, arm54_final_emqx_build.py), translated to `podman run`
+in a rootful private store. Generated device credentials (Dashboard admin, node cookie, MQTT user woow + its bootstrap CSV
+exactly as install.sh derives it) live only in podman secrets of the private store and in memory.
+Stated deviations: network none instead of emqx.network (lane rule after the .54 oops: no masquerade); no published
+ports; no entrance (nginx) container, so the probe uses the Dashboard's own listener 18093 and HA's HTTP action (which
+calls 127.0.0.1:18083) fails, as on dev-d; no systemd/quadlet units and no health timers (readiness polled here; a
+stop = `podman stop` + `podman rm` like quadlet's --rm); memory caps; the restore runs the adapter's data methods with
+the broker stopped instead of flows.run_restore with a package (no Cockpit install, no job store on .54).
+
+Steps (one run, one source): device before -> decision C refusal on the product default target (sources = [file]):
+the check names exactly the owner's text, the conversion refuses `incompatible` with it, nothing changed -> the customer's
+step from that text (Dashboard API: add the built-in database source, move it after the file source) -> check (no
+blocker) -> convert -> cold safety copies -> restore -> verify_import -> clients (the dev-d product harness's own probe
+and its own acceptance function, emqx_product_real_ha.PROBE / evaluate_imported @ 92e306b, read from the source and
+changed only where this device differs, each substitution asserted) -> restart (verify_import + probe again) ->
+rollback from the safety copies (this device's state equal to before the import) -> cleanup.
+
+Network: the whole run in a network namespace of its own; the probe enters the broker's (network none) namespace with
+nsenter. .54 kernel oops 2026-11-23 21:02: the kernel state is recorded before/after; a new oops, task in uninterruptible
+sleep or hung-task report fails the run. Secrets: HA's passwords and the HA key arrive in 0600 files read and unlinked
+at start; every value is scanned for in the output, the recorded podman argv and the product log before printing."""
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+import traceback
+from types import MethodType, SimpleNamespace
+
+from arm54_final_runtime import (BASE, DRIVER, ENV, LABEL, ROOT, RootfulRunner, kernel_state, private_dir, report,
+                                 sha256_file, store_objects)
+from arm54_final_emqx_lib import (CLONE_NEWNET, CONTAINER, DATA, IMAGE, JOBS, LOG, MQTT_USER, QUADLET_FILES,
+                                  READY_TIMEOUT, SECRET_NAMES, VOLUMES, bootstrap_csv, container_args, function_from,
+                                  probe_program, config_diff)
+
+from woowbackup import habackup, haimport, ha_emqx, tempctr  # noqa: E402
+from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter  # noqa: E402
+from woowbackup.errors import BackupError  # noqa: E402
+
+LAB_SOURCE = ROOT / 'source/tests/e2e/lab'
+PACKAGE = LAB_SOURCE / 'evidence/arm54-final-20261123/emqx-package-ea5886c'
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+KEY_FILE = ROOT / 'input' / CHAIN['key_file'] if CHAIN.get('key_file') else None
+CREDS_FILE = ROOT / 'input/emqx-creds.json'
+EXPECT = json.loads((ROOT / 'input/emqx-expect.json').read_text())
+RECORDED = {'b6cbc980': 'b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664',
+            '5fb6f348': '0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9'}
+
+
+def production_cpus():
+    """The throwaway --cpus the product job runner uses on a production device: tempctr.default_cpus for an owner uid
+    whose user manager delegates the cpu controller (the product formula itself, fed a controllers list with `cpu`)."""
+    listing = ROOT / 'tmp/delegated-cgroup.controllers'
+    listing.write_text('cpuset cpu io memory pids\n')
+    try:
+        return tempctr.default_cpus(1000, controllers=str(listing))
+    finally:
+        listing.unlink()
+
+
+PRODUCTION_CPUS = production_cpus()
+
+
+# ---------------------------------------------------------------- run state
+
+LIBC = None
+RECORD_BOOT_FORMS = '--record-boot-forms' in sys.argv[2:]
+BOOT_FORMS = []
+SETTINGS_CALLS = []
+AUTHN_CALLS = []
+LOG_WORDS = ('eacces', 'permission denied', 'read-only file system', 'enoent', 'crash', 'error', 'failed')
+NS = {}
+checks, facts, PRIVATE, LOGS, MEM = {}, {}, [], [], []
+
+
+def enter_private_netns():
+    import ctypes
+    global LIBC
+    LIBC = ctypes.CDLL(None, use_errno=True)
+    if LIBC.unshare(CLONE_NEWNET) != 0:
+        raise OSError(ctypes.get_errno(), 'unshare')
+    subprocess.run(['ip', 'link', 'set', 'lo', 'up'], check=True, timeout=30, capture_output=True)
+    NS['private_inode'] = os.stat('/proc/self/ns/net').st_ino
+
+
+def private(value):
+    if isinstance(value, str) and value:
+        PRIVATE.append(value)
+    return value
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def sample_mem():
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        if line.startswith('MemAvailable:'):
+            value = int(line.split()[1]) * 1024
+            MEM.append(value)
+            assert value > 400 * 1024 ** 2, 'memory-headroom-refused'   # never push .54's originals towards OOM
+
+
+def main():  # noqa: C901 - one linear acceptance run
+    host_netns = os.stat('/proc/self/ns/net').st_ino
+    os.nice(10)
+    subprocess.run(['ionice', '-c3', '-p', str(os.getpid())], capture_output=True, timeout=30)
+    enter_private_netns()
+    r = RootfulRunner()
+    out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete', 'store_driver': DRIVER,
+           'runner': 'rootful private store (RootfulRunner + product adapter); not production OwnerRunner/rootless',
+           'source': {'slug': CHAIN['slug'], 'archive_sha256': RECORDED.get(CHAIN['slug']), 'machine': EXPECT['machine'],
+                      'addon': 'woow-emqx 5.9.1 (EMQX 5.8.9), stopped when the backup was made (cold)',
+                      'encrypted_backup': KEY_FILE is not None,
+                      'provenance': EXPECT['provenance']},
+           'target': {'image': IMAGE, 'package': 'Woow_podman_emqx ea5886c quadlets + config',
+                      'label': 'product image and package (not substitutes); network none, no ports'},
+           'checks': checks, 'facts': facts}
+    started = time.monotonic()
+    kernel_before = kernel_state()
+    facts['kernel_before'] = dict(kernel_before, modules=len(kernel_before['modules']))
+    temps, opened, staging = {}, None, None
+
+    def podman(*args, **kw):
+        return r.podman(*args, **kw)
+
+    def text(*args, **kw):
+        return podman(*args, **kw).stdout.decode('utf-8', 'replace')
+
+    if RECORD_BOOT_FORMS:
+        # Diagnostic only (emqx-real-arm-attempt2: 「EMQX 候選啟動後設定與目標不一致」): record what the product's own
+        # boot_form returns -- this device's (ha_emqx candidate_from_target) and the candidate's (target_broker) -- and
+        # return it unchanged; no check is altered. The differing paths are reported without values.
+        product_boot_form = ha_emqx.boot_form
+
+        def recording_boot_form(execute):
+            value = product_boot_form(execute)
+            BOOT_FORMS.append(value)
+            return value
+        ha_emqx.boot_form = recording_boot_form
+        # Same observation for restore_target_settings' final comparison (emqx-real-arm-attempt4: 「EMQX
+        # 匯入後未能保留目標有效設定」): what preserved_settings / preserved_bootstrap_authn return, unchanged.
+        product_preserved = ha_emqx.preserved_settings
+        product_authn = ha_emqx.preserved_bootstrap_authn
+
+        def recording_preserved(config):
+            value = product_preserved(config)
+            SETTINGS_CALLS.append((config, value))
+            return value
+
+        def recording_authn(original, imported):
+            value = product_authn(original, imported)
+            AUTHN_CALLS.append(value)
+            return value
+        ha_emqx.preserved_settings = recording_preserved
+        ha_emqx.preserved_bootstrap_authn = recording_authn
+        out['diagnostic'] = 'record-boot-forms: ha_emqx.boot_form observed (value returned unchanged)'
+    product_source = (LAB_SOURCE / 'emqx_product_real_ha.py').read_text()
+    b1_source = (LAB_SOURCE / 'ha_import_b1_e2e.py').read_text()
+    program = probe_program(product_source, b1_source)
+    evaluate_imported = function_from(product_source, 'evaluate_imported')
+    acl_path = ROOT / '.config/emqx/acl.conf'
+    device = {}   # this device's generated secrets (memory only)
+    spec = {}     # the broker's podman run arguments (no secret value: secrets go through podman secrets)
+
+    def running():
+        return text('ps', '--format', '{{.Names}}').split().count(CONTAINER) == 1
+
+    def wait_ready(tag):
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < READY_TIMEOUT:
+            p = podman('exec', CONTAINER, 'emqx', 'ctl', 'status', check=False, timeout=60, max_output=65536)
+            if p.returncode == 0 and b'is started' in (p.stdout or b''):
+                facts.setdefault('ready_seconds', {})[tag] = round(time.monotonic() - t0, 1)
+                return
+            if not running():
+                break
+            time.sleep(3)
+        raise AssertionError('broker-not-ready-' + tag)
+
+    def start(tag):
+        sample_mem()
+        podman('run', '-d', '--replace', '--pull=never', *spec['args'], IMAGE, timeout=300, max_output=65536)
+        wait_ready(tag)
+
+    def stop():
+        podman('stop', '--time', '30', CONTAINER, check=False, timeout=120)
+        podman('rm', '--force', CONTAINER, check=False, timeout=60)
+
+    def probe(tag, mode, *, ha=False, authz_add=False):
+        req = {'mode': mode, 'ha_admin_password': creds['ha_admin_password'], 'user2': creds['user2'],
+               'user2_password': creds['user2_password'], 'authz_add': authz_add, 'acl_path': str(acl_path),
+               'podman': BASE, 'device_secrets': {'woow-emqx-dashboard-password': device['dashboard'],
+                                                  'woow-emqx-mqtt-password': device['mqtt']}}
+        if ha:
+            req.update(mqtt=creds['mqtt'], api_key=creds['api_key'], api_secret=creds['api_secret'])
+        pid = text('inspect', CONTAINER, '--format', '{{.State.Pid}}').strip()
+        assert pid.isdigit() and int(pid) > 1, 'broker-pid'
+        sample_mem()
+        p = subprocess.run(['nsenter', '--net=/proc/%s/ns/net' % pid, '--', sys.executable, '-I', '-c', program],
+                           input=(json.dumps(req) + '\n').encode(), capture_output=True, env=ENV, timeout=900)
+        try:
+            doc = json.loads(p.stdout.decode().strip().splitlines()[-1])
+        except (ValueError, IndexError):
+            raise AssertionError('probe-output-%s-exit-%s' % (tag, p.returncode)) from None
+        facts.setdefault('probes', {})[tag] = doc
+        return doc
+
+    def digest(doc):
+        keys = ('mqtt_users', 'authenticators', 'authz_settings', 'authz_sources', 'file_acl_readback_equal',
+                'acl_api', 'retained_api', 'rules', 'connectors', 'actions', 'banned', 'dashboard_users', 'api_keys')
+        found = {key: doc.get(key) for key in keys}
+        found['retained_api'] = {t: h for t, h in (doc.get('retained_api') or {}).items() if not t.startswith('$SYS/')}
+        return found
+
+    def device_state(tag, doc, sources):
+        login = doc.get('login') or {}
+        names = {u[0] for u in doc.get('mqtt_users') or []}
+        must(tag + '_device_admin_logs_in_ha_admin_does_not', login.get('device_admin') == 200
+             and login.get('ha_admin') == 401 and login.get('ha_user2') == 401, login=login)
+        must(tag + '_authorization_is_this_devices', doc.get('authz_sources') == sources
+             and doc.get('authz_settings') == {'no_match': 'deny', 'deny_action': 'ignore'}
+             and doc.get('file_acl_readback_equal') is True,
+             sources=doc.get('authz_sources'), settings=doc.get('authz_settings'))
+        must(tag + '_no_ha_data', names == {MQTT_USER} and not doc.get('rules') and not doc.get('api_keys')
+             and not [t for t in (doc.get('retained_api') or {}) if not t.startswith('$SYS/')]
+             and doc.get('dashboard_users') == ['admin'], users=sorted(names), rules=doc.get('rules'))
+
+    def evaluate(tag, doc):
+        results = evaluate_imported(doc, EXPECT['emqx'], 'builtin')
+        failed = [name for name, ok, _d in results if not ok]
+        facts.setdefault('acceptance', {})[tag] = {'checks': len(results), 'failed': failed}
+        for name, ok, _detail in results:
+            check('%s: %s' % (tag, name), ok)
+        must(tag + '_dev_d_acceptance_all_pass', results and not failed, failed=failed)
+
+    def work_for(job):
+        # cpus: what the product job runner passes on a production device = tempctr.default_cpus for an owner whose
+        # user manager delegates the cpu controller (half the CPUs: '2' on .54). Attempts 1-3 passed '1' and attempts
+        # 4/5 none (the rootful default); a smaller --cpus made the candidate's dashboard num_acceptors default
+        # (schedulers_online, emqx_dashboard_schema.erl:125-131) differ (emqx-real-arm-attempt3-bootdiag) until the
+        # product started the candidate with this device's scheduler counts (ERL_AFLAGS, 92f2461 + be2c92d) -- so this
+        # run exercises exactly that fix under the production CPU limit.
+        temps['current'] = tempctr.TempObjects(r, job, memory='1g', pids=1024, cpus=PRODUCTION_CPUS)
+        work = SimpleNamespace(ha=opened, keys=KEYS, _addons={}, staging=staging,
+                               guard=haimport.SpaceGuard([staging, ROOT], 12 * 1024 ** 3 + 128 * 1024 ** 2),
+                               quadlets=lambda a: quadlets, runner=lambda a: r, adapter=lambda a: adapter,
+                               temp=lambda a: temps['current'], abort=lambda: None, checkpoint=sample_mem,
+                               phase=lambda p: None, log=LOGS.append)
+        for method in ('addon_member', 'addon_info', 'open', 'share_member'):
+            setattr(work, method, MethodType(getattr(haimport.Work, method), work))
+        return work
+
+    def temp_cleanup(tag):
+        # Before the job's objects go: the state of each of its containers that is no longer running, and fixed words
+        # of its last log lines (counts only, never a line: logs could hold a value), so a product refusal can be
+        # explained (emqx-real-arm-attempt1: the candidate exited at boot).
+        for container in list(temps['current'].containers):
+            p = podman('inspect', container, '--format', '{{.State.Running}} {{.State.ExitCode}} {{.State.OOMKilled}}',
+                       check=False, timeout=60)
+            state = (p.stdout or b'').decode().split()
+            if p.returncode == 0 and state[:1] != ['true']:
+                logs = podman('logs', '--tail', '200', container, check=False, timeout=60, max_output=4 * 1024 * 1024)
+                low = ((logs.stdout or b'') + (logs.stderr or b'')).decode('utf-8', 'replace').lower()
+                facts.setdefault('exited_throwaways', {})[tag + ':' + container.split('-', 3)[-1]] = {
+                    'state': state, 'log_words': {w: low.count(w) for w in LOG_WORDS}}
+        left = temps['current'].cleanup()
+        must(tag + '_temp_objects_removed', not left, left=len(left or []))
+
+    try:
+        out['phase'] = 'inputs'
+        before = store_objects(r)
+        facts['store_before_run'] = {k: len(v) for k, v in before.items()}
+        must('store_clean_before_run', not before['volumes'] and not before['containers'] and not before['secrets'])
+        must('run_in_its_own_netns_not_the_hosts', NS['private_inode'] != host_netns)
+        must('archive_sha256_equals_the_b1_record', CHAIN['slug'] in RECORDED and CHAIN.get('sha256')
+             == RECORDED[CHAIN['slug']] and sha256_file(ARCHIVE) == RECORDED[CHAIN['slug']])
+        KEYS = None
+        if KEY_FILE is not None:
+            from woowbackup import hasecuretar
+            key_text = haimport.read_key_file(KEY_FILE)
+            private(key_text)
+            KEYS = hasecuretar.Keys(key_text)
+            del key_text
+            os.unlink(KEY_FILE)
+        raw = json.loads(CREDS_FILE.read_text())
+        CREDS_FILE.unlink()
+        creds = {'ha_admin_password': private(raw['ha_admin_password']), 'user2': raw['user2'],
+                 'user2_password': private(raw['user2_password']),
+                 'mqtt': [[user, private(password)] for user, password in raw['mqtt']],
+                 'api_key': private(raw['api_key']), 'api_secret': private(raw['api_secret'])}
+        must('ha_mqtt_users_are_the_recorded_ones', [u for u, _p in creds['mqtt']]
+             == [u['user_id'] for u in EXPECT['emqx']['mqtt_users']])
+        info = json.loads(text('image', 'inspect', IMAGE))[0]
+        must('product_image_arm64', info['Architecture'] == 'arm64'
+             and (info.get('Config') or {}).get('Labels', {}).get('org.opencontainers.image.version') == '5.8.9')
+        facts['image'] = {'id': info['Id'], 'declared_volumes': sorted(((info.get('Config') or {}).get('Volumes')
+                                                                        or {}).keys())}
+
+        out['phase'] = 'target-deploy'
+        home = str(ROOT)
+        conf = ROOT / '.config/emqx'
+        qdir = ROOT / '.config/containers/systemd'
+        for path in (ROOT / '.config', conf, ROOT / '.config/containers', qdir):
+            path.mkdir(mode=0o700, exist_ok=True)
+        for name in ('base.hocon', 'acl.conf'):
+            shutil.copyfile(PACKAGE / 'config' / name, conf / name)
+            os.chmod(conf / name, 0o644)   # the broker (uid 1000) reads them through the ro mounts
+        env_lines = [line for line in (PACKAGE / 'config/emqx.env.example').read_text().splitlines()
+                     if line and not line.startswith('#')]
+        (conf / 'emqx.env').write_text('\n'.join(env_lines) + '\n')
+        for path in (ROOT / '.config', conf):
+            os.chmod(path, 0o755)
+        quadlets = {}
+        for name in QUADLET_FILES:
+            data = (PACKAGE / 'quadlet' / name).read_bytes()
+            if name == 'emqx.container':   # install.sh renders the publish placeholders (not used: network none)
+                for port in ('MQTT', 'MQTTS', 'WS', 'WSS', 'DASHBOARD'):
+                    data = data.replace(b'@@EMQX_PUBLISH_%s@@' % port.encode(), b'127.0.0.1:0')
+            (qdir / name).write_bytes(data)
+            quadlets[name] = data
+        app = SimpleNamespace(id='emqx', name='EMQX', owner='arm54-rootful-private-store',
+                              volumes=[{'name': DATA}, {'name': LOG}], data_dirs=[], secrets=[], postgres=[],
+                              units=['emqx.service'], quadlet_files=list(QUADLET_FILES),
+                              health=[{'type': 'command', 'timeout_seconds': READY_TIMEOUT}])
+        adapter = QuadletPostgresAdapter(app, r, LOGS.append)
+        must('adapter_reads_the_written_quadlets', adapter.read_quadlets() == quadlets)
+        name, image, args, skipped = container_args(quadlets['emqx.container'], home, LABEL)
+        must('package_names_the_product_container_and_image', name == CONTAINER and image == IMAGE)
+        facts['quadlet_keys_not_translated'] = skipped
+        spec['args'] = args
+        device.update(dashboard=private(secrets.token_urlsafe(24)), cookie=private(secrets.token_urlsafe(24)),
+                      mqtt=private(secrets.token_urlsafe(24)))
+        values = {'woow-emqx-dashboard-password': device['dashboard'], 'woow-emqx-node-cookie': device['cookie'],
+                  'woow-emqx-mqtt-password': device['mqtt'],
+                  'woow-emqx-mqtt-bootstrap': bootstrap_csv(MQTT_USER, device['mqtt'])}
+        for secret_name in SECRET_NAMES:
+            podman('secret', 'create', '--label', LABEL, secret_name, '-', input=values[secret_name].encode(),
+                   timeout=60)
+        for volume in VOLUMES:
+            podman('volume', 'create', '--label', LABEL, '--label', 'io.woowtech.stack=emqx', volume, timeout=60)
+        start('deploy')
+        must('broker_network_none', text('inspect', CONTAINER, '--format', '{{.HostConfig.NetworkMode}}').strip()
+             == 'none')
+        # This device's scheduler threads, read with the product's own fixed expression (ha_emqx.schedulers); the
+        # candidate must start with them although its throwaway runs under --cpus PRODUCTION_CPUS.
+        facts['device_schedulers'] = list(ha_emqx.schedulers(
+            lambda command: podman('exec', CONTAINER, *command, check=False, timeout=120, max_output=65536)))
+        facts['throwaway_cpus'] = PRODUCTION_CPUS
+        must('throwaway_cpu_limit_below_the_devices_online_schedulers', PRODUCTION_CPUS is not None
+             and int(PRODUCTION_CPUS) < facts['device_schedulers'][1], cpus=PRODUCTION_CPUS,
+             schedulers=facts['device_schedulers'])
+
+        out['phase'] = 'device-before'
+        d0 = probe('device-before', 'file')
+        device_state('device_before', d0, [['file', True]])
+        digest_d0 = digest(d0)
+
+        out['phase'] = 'decision-c-check'
+        opened = habackup.open_backup(ARCHIVE)
+        staging = private_dir('work', 'staging')
+        work = work_for(JOBS['check-file'])
+        try:
+            found = ha_emqx.check(work, app)
+        finally:
+            temp_cleanup('check_file')
+        facts['check_file'] = {'blockers': found['blockers'], 'warnings': len(found['warnings']),
+                               'target_version': found.get('target_version')}
+        must('decision_c_check_names_exactly_the_owners_text', found['blockers'] == [ha_emqx.ACL_NEEDS_BUILTIN])
+        out['phase'] = 'decision-c-convert'
+        work = work_for(JOBS['convert-file'])
+        refused = None
+        try:
+            ha_emqx.convert(work, app, False, private_dir('work', 'converted-file'))
+        except BackupError as error:
+            refused = error
+        finally:
+            temp_cleanup('convert_file')
+        must('decision_c_convert_refused_incompatible_with_the_owners_text', refused is not None
+             and refused.code == 'incompatible' and ha_emqx.ACL_NEEDS_BUILTIN in refused.message)
+        must('decision_c_convert_wrote_no_volume', not any((ROOT / 'work/converted-file/volumes').glob('*')))
+        shutil.rmtree(staging / 'emqx-work', ignore_errors=True)
+        d0b = probe('device-after-refusal', 'file')
+        must('decision_c_device_unchanged', digest(d0b) == digest_d0)
+
+        out['phase'] = 'customer-adds-built-in-database'
+        d1 = probe('customer-adds-built-in-database', 'file', authz_add=True)
+        must('built_in_database_added_after_the_file_source', d1.get('authz_add') in (200, 204)
+             and d1.get('authz_move') in (200, 204) and d1.get('authz_sources')
+             == [['file', True], ['built_in_database', True]],
+             add=d1.get('authz_add'), move=d1.get('authz_move'), sources=d1.get('authz_sources'))
+        d1b = probe('device-before-import', 'builtin')
+        device_state('device_before_import', d1b, [['file', True], ['built_in_database', True]])
+        digest_d1 = digest(d1b)
+
+        out['phase'] = 'product-check'
+        work = work_for(JOBS['check-builtin'])
+        try:
+            found = ha_emqx.check(work, app)
+        finally:
+            temp_cleanup('check_builtin')
+        section = found.get('emqx') or {}
+        facts['check_builtin'] = {'blockers': found['blockers'], 'warnings': len(found['warnings']),
+                                  'target_version': found.get('target_version'),
+                                  'section_keys': sorted(section)}
+        must('product_check_no_blocker', found['blockers'] == [])
+
+        out['phase'] = 'product-convert'
+        shutil.rmtree(staging / 'emqx-work', ignore_errors=True)
+        work = work_for(JOBS['convert-builtin'])
+        converted_dir = private_dir('work', 'converted')
+        t0 = time.monotonic()
+        try:
+            converted = ha_emqx.convert(work, app, False, converted_dir)
+        finally:
+            temp_cleanup('convert_builtin')
+            opened.close()
+            opened = None
+        facts['convert_seconds'] = round(time.monotonic() - t0, 1)
+        # Security fix abff1a0 (SR-8/SR-9): the candidate gets this device's EnvironmentFile with podman --env-file. The
+        # recorded podman commands of this run show it on Podman 6.1.1 (option words and names only).
+        new_runs = [c for c in r.commands if c[:1] == ['run'] and any(str(a).endswith('-emqx-new') for a in c)]
+        env_files = [os.path.basename(c[i + 1]) for c in new_runs for i, a in enumerate(c) if a == '--env-file']
+        env_names = sorted({c[i + 1].split('=', 1)[0] for c in new_runs for i, a in enumerate(c) if a == '--env'})
+        file_names = sorted(line.split('=', 1)[0] for line in env_lines if line.startswith('EMQX_'))
+        facts['candidate_command_line'] = {'runs': len(new_runs), 'env_files': env_files, 'env_names': env_names,
+                                           'environment_file_emqx_names': file_names}
+        must('candidate_started_with_env_file_on_this_podman', bool(new_runs)
+             and env_files == ['emqx.env'] * len(new_runs))
+        must('no_environment_file_setting_on_the_command_line', bool(file_names) and not set(env_names) & set(file_names))
+        check_doc = converted.get('import_check') or {}
+        must('convert_volumes_and_readback', sorted(converted['volumes']) == sorted(VOLUMES)
+             and check_doc.get('kind') == ha_emqx.READBACK_KIND and check_doc.get('version') == ha_emqx.READBACK_VERSION)
+        facts['converted'] = {'volume_bytes': {k: os.path.getsize(v) for k, v in converted['volumes'].items()},
+                              'readback_roots': len(check_doc.get('config_roots') or {}),
+                              'readback_tables': {t: (v or [None])[0] for t, v in (check_doc.get('tables') or {}).items()},
+                              'node': converted.get('node'), 'anonymous': converted.get('anonymous'),
+                              'hash_differs': converted.get('hash_differs'), 'api_keys': converted.get('api_keys'),
+                              'ha_hosts': len(converted.get('ha_hosts') or []), 'plugins': converted.get('plugins')}
+        must('readback_has_ha_rows', (check_doc.get('tables') or {}).get('emqx_acl', [0])[0]
+             == EXPECT['emqx']['mnesia_sizes']['emqx_acl'])
+
+        out['phase'] = 'restore'
+        stop()
+        safety = private_dir('work', 'safety')
+        for volume in VOLUMES:   # cold rollback copies of this device's volumes (the product's restore makes its own)
+            with open(safety / (volume + '.tar'), 'xb') as handle:
+                podman('volume', 'export', volume, stdout=handle, timeout=600)
+        for volume in VOLUMES:
+            adapter._recreate_volume(volume, converted['volumes'][volume])
+        start('restored')
+        haimport.verify_import(app, adapter, check_doc, log=LOGS.append)
+        must('verify_import_logged_equal', any(line.startswith('EMQX 還原後核對一致') for line in LOGS))
+        evaluate('imported', probe('imported', 'builtin', ha=True))
+
+        out['phase'] = 'restart'
+        stop()
+        start('restarted')
+        lines = len(LOGS)
+        haimport.verify_import(app, adapter, check_doc, log=LOGS.append)
+        must('verify_import_after_restart', any(line.startswith('EMQX 還原後核對一致') for line in LOGS[lines:]))
+        evaluate('restarted', probe('restarted', 'builtin', ha=True))
+
+        out['phase'] = 'rollback'
+        stop()
+        for volume in VOLUMES:
+            adapter._recreate_volume(volume, safety / (volume + '.tar'))
+        start('rolled-back')
+        back = probe('rolled-back', 'builtin', ha=True)
+        device_state('rolled_back', back, [['file', True], ['built_in_database', True]])
+        must('rollback_device_state_equal_to_before_import', digest(back) == digest_d1)
+        mq = back.get('mqtt') or {}
+        must('rollback_ha_mqtt_users_refused', all(mq.get('login_' + u) not in (0, None) for u, _p in creds['mqtt'])
+             and mq.get('bootstrap_woow') == 0, mqtt={k: v for k, v in mq.items() if k.startswith('login_')})
+        must('rollback_ha_api_key_refused', back.get('api_key_works') in (401, 403), code=back.get('api_key_works'))
+        stop()
+        out.update(status='passed' if all(checks.values()) else 'partial', phase='done',
+                   false_checks=sorted(k for k, v in checks.items() if not v))
+    except Exception as error:  # noqa: BLE001
+        out['error_code'] = type(error).__name__
+        out['error_where'] = [[Path(f.filename).name, f.lineno, f.name]
+                              for f in traceback.extract_tb(error.__traceback__)[-4:]]
+        if isinstance(error, (AssertionError, KeyError)):
+            out['failed_check'] = str(error)[:80]
+        if isinstance(error, BackupError):
+            out['product_error_code'] = error.code
+            out['product_message'] = error.message[:300]
+    finally:
+        cleanup = {}
+        if RECORD_BOOT_FORMS:
+            facts['boot_forms_recorded'] = len(BOOT_FORMS)
+            if len(BOOT_FORMS) >= 2 and isinstance(BOOT_FORMS[0], dict) and isinstance(BOOT_FORMS[1], dict):
+                facts['boot_form_diff_target_vs_candidate'] = config_diff(BOOT_FORMS[0], BOOT_FORMS[1])
+                facts['boot_form_roots'] = [len(BOOT_FORMS[0]), len(BOOT_FORMS[1])]
+            facts['settings_calls'] = len(SETTINGS_CALLS)
+            if len(SETTINGS_CALLS) >= 3:   # expected = preserved_settings(original) ... preserved_settings(after)
+                facts['settings_diff_expected_vs_after'] = config_diff(SETTINGS_CALLS[0][1], SETTINGS_CALLS[-1][1])
+                authn = AUTHN_CALLS[0] if AUTHN_CALLS else None
+                if authn is not None:
+                    facts['authn_diff_preserved_vs_after'] = config_diff(
+                        {'authentication': authn}, {'authentication': SETTINGS_CALLS[-1][0].get('authentication')})
+        for staged in (KEY_FILE, CREDS_FILE):
+            if staged is not None and staged.exists():
+                cleanup['staged_file_removed_late'] = True
+                staged.unlink()
+        if opened is not None:
+            opened.close()
+        if temps.get('current') is not None:
+            cleanup['temp_left'] = len(temps['current'].cleanup() or [])
+        r.podman('stop', '--time', '30', CONTAINER, check=False, timeout=120)
+        r.podman('rm', '--force', CONTAINER, check=False, timeout=60)
+        # Anything the product left in the store (e.g. an anonymous volume of an image VOLUME a throwaway container did
+        # not mount: cross-lane note litellm-secreview 22:35) is counted before it is removed.
+        leftover = store_objects(r)
+        cleanup['product_left_volumes'] = sorted(v for v in leftover['volumes'] if v not in VOLUMES)
+        cleanup['product_left_containers'] = sorted(c for c in leftover['containers'] if c != CONTAINER)
+        # Since be5bc6f HA's throwaway broker mounts both image VOLUME paths: a pass needs nothing left (c7 runs: 4).
+        cleanup['no_product_anonymous_volume'] = not cleanup['product_left_volumes'] \
+            and not cleanup['product_left_containers']
+        for volume in leftover['volumes']:
+            r.podman('volume', 'rm', '--force', volume, check=False, timeout=60)
+        for container in leftover['containers']:
+            r.podman('rm', '--force', container, check=False, timeout=60)
+        for secret_name in SECRET_NAMES:
+            r.podman('secret', 'rm', secret_name, check=False, timeout=60)
+        shutil.rmtree(ROOT / 'work', ignore_errors=True)
+        shutil.rmtree(ROOT / '.config/emqx', ignore_errors=True)
+        shutil.rmtree(ROOT / '.config/containers', ignore_errors=True)
+        objects = store_objects(r)
+        after = kernel_state()
+        cleanup['kernel_after'] = dict(after, modules=len(after['modules']))
+        cleanup['modules_added'] = sorted(set(after['modules']) - set(kernel_before['modules']))
+        cleanup['no_new_oops'] = after['oops_count'] == kernel_before['oops_count']
+        cleanup['no_new_d_state_task'] = after['d_state'] <= kernel_before['d_state']
+        cleanup['no_new_hung_task_report'] = after['hung_task_reports'] == kernel_before['hung_task_reports']
+        cleanup.update(store_after={k: len(v) for k, v in objects.items()}, work_removed=not (ROOT / 'work').exists(),
+                       no_lab_containers=not objects['containers'], no_lab_pods=not objects['pods'],
+                       no_lab_volumes=not objects['volumes'], no_lab_secrets=not objects['secrets'],
+                       creds_file_removed=not CREDS_FILE.exists(),
+                       unlock_file_removed=KEY_FILE is None or not KEY_FILE.exists(),
+                       workspace_mode_restored=(ROOT.stat().st_mode & 0o777) == 0o700)
+        out['cleanup'] = cleanup
+        if out['status'] == 'passed' and not all(cleanup[k] for k in (
+                'no_lab_containers', 'no_lab_pods', 'no_lab_volumes', 'no_lab_secrets', 'creds_file_removed',
+                'unlock_file_removed', 'workspace_mode_restored', 'no_new_oops', 'no_new_d_state_task',
+                'no_new_hung_task_report', 'no_product_anonymous_volume')):
+            out['status'] = 'failed'
+            out['failed_check'] = 'cleanup'
+        out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+        out['podman_commands'] = len(r.commands)
+        out['free_bytes_min'] = min(r.free) if r.free else None
+        out['mem_available_min'] = min(MEM) if MEM else None
+        out['product_log'] = [line[:200] for line in LOGS][:40]
+        needles = {v for v in PRIVATE if len(v) >= 6}
+        out['product_log_secret_hits'] = sum(line.encode().count(v.encode()) for line in LOGS for v in needles)
+        encoded = json.dumps(out, sort_keys=True, ensure_ascii=False)
+        commands = json.dumps(r.commands)
+        if any(v in encoded or json.dumps(v)[1:-1] in encoded or v in commands for v in needles) \
+                or out['product_log_secret_hits']:
+            out = {'status': 'failed', 'failed_check': 'secret_in_output_suppressed',
+                   'commercial_acceptance': 'not-complete', 'phase': out.get('phase')}
+        report(ROOT / 'emqx-result.json', out)
+        print(json.dumps(out, sort_keys=True, ensure_ascii=False))
+    return 0 if out['status'] == 'passed' else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

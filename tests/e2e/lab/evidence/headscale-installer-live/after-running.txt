@@ -1,0 +1,8 @@
+omnigent-postgres Up 34 hours (healthy)
+hermes-postgresql Up 34 hours (healthy)
+woow-emqx Up 34 hours (healthy)
+hermes-redis Up 34 hours (healthy)
+woow-emqx-entrance Up 34 hours (healthy)
+hermes-agent Up 34 hours (healthy)
+omnigent-server Up 34 hours (healthy)
+omnigent-runner Up 34 hours

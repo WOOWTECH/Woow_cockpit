@@ -1,0 +1,21 @@
+{
+  "scope": "dev-d isolated synthetic PostgreSQL 17 SQL query contract; not PG18 or migration",
+  "image_id": "sha256:094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+  "memory_limit_mib": 128,
+  "cgroup_headroom_before_bytes": 2111950848,
+  "cases": {
+    "matching_rows": true,
+    "salt_mismatch": true,
+    "fingerprint_mismatch": true,
+    "missing_fingerprint": true,
+    "duplicate_salt_rows": true,
+    "oversized_salt": true,
+    "view_refused": true,
+    "rls_refused": true,
+    "superuser_refused": true
+  },
+  "cleanup_notes": 0,
+  "remaining_test_containers": 0,
+  "remaining_test_volumes": 0,
+  "conversion": "disabled"
+}

@@ -1,0 +1,121 @@
+{
+ "job": "j20261124T152412Z-ffc26a7e",
+ "image": "docker.io/library/postgres:17.11-alpine3.23",
+ "network": "none",
+ "image_id": "094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+ "network_mode": "none",
+ "only_the_named_volume_mounted": true,
+ "psql": "psql (PostgreSQL) 17.11",
+ "cases": {
+  "write_file control (300 KiB list)": {
+   "status": "pass",
+   "bytes": 325786,
+   "content_equal": true,
+   "mode": "600",
+   "writes": 1
+  },
+  "write_file: every attempt cut to half": {
+   "status": "pass",
+   "raised": true,
+   "message_is_incomplete_file": true,
+   "writes": 3,
+   "file_in_container_short": true
+  },
+  "write_file: the first attempt cut, the second whole": {
+   "status": "pass",
+   "writes": 2,
+   "content_equal": true
+  },
+  "write_file: a 4 KiB chunk lost in the middle": {
+   "status": "pass",
+   "raised": true,
+   "writes": 3
+  },
+  "write_file: the cksum branch (busybox)": {
+   "status": "pass",
+   "whole_accepted": true,
+   "one_byte_short_refused": true,
+   "python_cksum_equals_busybox": true
+  },
+  "script control": {
+   "status": "pass",
+   "rows": 1000,
+   "changed_rows": 2
+  },
+  "script: tail lost at a statement boundary": {
+   "status": "pass",
+   "raised": true,
+   "message_is_incomplete_sql": true,
+   "changed_rows": 0,
+   "rows": 1000
+  },
+  "script: tail lost inside the last statement (valid prefix)": {
+   "status": "pass",
+   "raised": true,
+   "message_is_incomplete_sql": true,
+   "changed_rows": 0,
+   "rows": 1000
+  },
+  "script: only the end mark lost": {
+   "status": "pass",
+   "raised": true,
+   "message_is_incomplete_sql": true,
+   "changed_rows": 2,
+   "rows": 1000
+  },
+  "OLD psql -1 shape, same cut (the defect)": {
+   "status": "pass",
+   "psql_exit": 0,
+   "changed_rows": 1000,
+   "note": "expected: the defect - exit 0 and every row updated"
+  },
+  "statement control (ALTER SYSTEM, outside a transaction)": {
+   "status": "pass",
+   "work_mem_is_8MB": true
+  },
+  "statement: end mark lost": {
+   "status": "pass",
+   "message_is_incomplete_sql": true,
+   "applied": true
+  },
+  "statement: cut inside the value": {
+   "status": "pass",
+   "raised": "CommandError",
+   "unchanged": true
+  },
+  "custom-format dump streams cut short (pg_restore)": {
+   "status": "pass",
+   "dump_bytes": 487825,
+   "whole": [
+    0,
+    1
+   ],
+   "half": [
+    1,
+    0
+   ],
+   "one_byte_short": [
+    1,
+    0
+   ],
+   "full_read_one_byte_short_exit": 1,
+   "list_90_percent_exit": 0
+  },
+  "COPY text data cut inside the last field (classification)": {
+   "status": "pass",
+   "copy_exit": 0,
+   "rows_loaded": 100,
+   "last_value_whole": false,
+   "note": "classification only: a tail lost inside the last field still loads every row"
+  },
+  "clean-up (no container or volume of this job left)": {
+   "status": "pass",
+   "containers_left": 0,
+   "volumes_left": 0
+  }
+ },
+ "retry_notes": 7,
+ "seconds": 61.6,
+ "status": "pass",
+ "commercial_acceptance": "not-complete"
+}

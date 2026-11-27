@@ -1,0 +1,68 @@
+{
+  "status": "preparation-passed-runtime-held",
+  "prior_attempt": {
+    "source_commit": "507b187e9ea4e50832eae38d84eb3bc3124d9313",
+    "returncode": 2,
+    "fixed_failure": "fixed-upload-foreign-upload-store-or-writer",
+    "upload_begin_called": false,
+    "receipt_sha256": "cb6d54fd1d8dce098292c7b73558a42d587455cbbda6567de209269e608adecc"
+  },
+  "read_only_inventory": {
+    "status": "passed",
+    "upload_entries": 10,
+    "uploads_exact": true,
+    "suffix_counts": {
+      ".done": 10
+    },
+    "active_jobs": 0,
+    "native_process_count": 0,
+    "upload_fd_users": 0,
+    "fuser_returncode": null,
+    "installed_storage_sha256": "d515431db2990025e7acf7cf3d1fd720622865e4dd0fcee3d59c59912c1b703b",
+    "private_inventory_sha256": "13a44b964704174156cdaa967a1f31db25e89d267d167dd6c62f05aa7c424f5b",
+    "device_mutations": 0,
+    "all_native_done_records_valid": true,
+    "all_gid_root": true,
+    "min_done_age_seconds": 11481,
+    "max_done_age_seconds": 74447,
+    "matching_upload_locks": 0,
+    "host_r6_receipt_upload_references": 0,
+    "host_r6_receipt_sha256": "d35b376a162dddcdc556b2f5f6e867203a52afbd1eeaae08aa5c95798b144007",
+    "same_names_as_failed_preflight": true,
+    "native_done_cleanup_seconds": 86400,
+    "initial_fullshare_upload_cause": "unknown-not-recorded",
+    "fuser_available": false
+  },
+  "corrected_read_only_probe": {
+    "status": "passed",
+    "prior_source_exact": true,
+    "expected_store_absent": true,
+    "completed_cache_count": 10,
+    "writer_census": {
+      "processes_scanned": 9,
+      "fds_scanned": 152,
+      "active_upload_writers": 0
+    },
+    "probe_sha256": "ac730d4a7c76bc28303ec931ffe5c4a81141223d2deccc03cbd981f72de2f6f2",
+    "private_result_sha256": "e27e44e847fb360e15488e105e2218655e5cba92b3ffb24cc5ace7ac1bb89b62",
+    "device_mutations": 0
+  },
+  "initial_fullshare_upload_cause": "unknown-not-recorded",
+  "verification": {
+    "red_regressions": 2,
+    "targeted_tests": 25,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "log": "/tmp/parity-focus-20261127/nextcloud-r6-done-targeted-final.log",
+    "neighbors_repeated": false
+  },
+  "runtime": {
+    "upload_bytes": 0,
+    "apps_started": 0,
+    "device_mutations": 0,
+    "cleanup": false,
+    "retry": false,
+    "hold": "parent-LL-image-success-release-then-new-exact-source-lease"
+  }
+}

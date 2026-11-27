@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "status": "passed",
+  "payload_bytes": 134217728,
+  "payload_method": "shake256-1MiB-per-index (incompressible)",
+  "fixture_generations": 1,
+  "encryption": "age-x25519",
+  "compression": "zstd",
+  "deadline_seconds": 3600,
+  "service_restore": false,
+  "hermes_attempts": 0,
+  "commercial_acceptance": "not-complete",
+  "cases": {
+    "fixture-write": {
+      "consumer": "write_archive",
+      "max_progress_bytes": 134217728,
+      "active_tool_children_observed": 2,
+      "tool_children_after_consumer": 0,
+      "observed_children_reaped": true,
+      "open_pipe_or_temp_fds_delta": 0,
+      "elapsed_seconds": 9.502,
+      "source_window": {
+        "method": "sliding-window regular file",
+        "logical_bytes": 134217728,
+        "ahead_bytes": 67108864,
+        "behind_bytes": 16777216,
+        "bytes_physically_written": 134217728,
+        "max_allocated_bytes": 92278784,
+        "max_progress_bytes": 134217728
+      },
+      "engine_sha256_check_of_every_read_byte": "passed",
+      "harness_removed_window_source": true,
+      "status": "passed"
+    },
+    "verify": {
+      "consumer": "verify_archive",
+      "max_progress_bytes": 134217728,
+      "active_tool_children_observed": 2,
+      "tool_children_after_consumer": 0,
+      "observed_children_reaped": true,
+      "open_pipe_or_temp_fds_delta": 0,
+      "elapsed_seconds": 3.569,
+      "verified_bytes": 134217728,
+      "status": "passed"
+    },
+    "flip-last-byte-in-place-verify": {
+      "consumer": "verify_archive",
+      "max_progress_bytes": 127789056,
+      "active_tool_children_observed": 2,
+      "outer_member_checksum_passed": true,
+      "mutation_at_ciphertext_offset": 134255847,
+      "ciphertext_offset_over_8gib": false,
+      "error_code": "corrupt-archive",
+      "tool_children_after_consumer": 0,
+      "observed_children_reaped": true,
+      "open_pipe_or_temp_fds_delta": 0,
+      "elapsed_seconds": 5.277,
+      "late_failure_minimum_bytes": 67108864,
+      "status": "passed"
+    }
+  },
+  "archive_bound_bytes": 136602810,
+  "expected_archive_bytes_model": 134284595,
+  "window_peak_bytes": 93323264,
+  "planned_peak_storage_bytes": 229926074,
+  "reserve_bytes": 12884901888,
+  "guard_margin_bytes": 268435456,
+  "required_free_bytes": 13383263418,
+  "free_bytes_at_plan": 21382586368,
+  "shortfall_bytes": 0,
+  "outer_over_8gib_expected": false,
+  "free_before": 21382582272,
+  "minimum_free_observed": 21223092224,
+  "dependencies": {
+    "age": "1.1.1",
+    "age-keygen": "1.1.1",
+    "zstd": "*** Zstandard CLI (64-bit) v1.5.5, by Yann Collet ***"
+  },
+  "keystream_sha256": "b1aa595c83853447cc52bcd9faa182d1f3a785eafafc18b05c32203956b3805b",
+  "keystream_hash_seconds": 1.482,
+  "archive_bytes": 134266880,
+  "archive_sha256": "f9b99d0db3170459a1dc72c1cba2bd1f0da68790a3fe462a8a4941577f92591d",
+  "archive_allocated_bytes": 134270976,
+  "ciphertext_bytes": 134255848,
+  "archive_over_8gib": false,
+  "ciphertext_over_ustar_limit": false,
+  "compression_ratio": 1.000284,
+  "stream_hash": {
+    "reader": "archive.describe_fd(check_members=True, hasher)",
+    "file_sha256_equals_writer": true,
+    "member_sha256_checked_against_backup_json": true,
+    "seconds": 1.367
+  },
+  "outer_member_header": {
+    "pax_header": false,
+    "pax_size_record": null,
+    "ustar_size_field": 134255848,
+    "effective_size": 134255848,
+    "ustar_size_limit": 8589934591,
+    "size_above_ustar_limit": false
+  },
+  "inner_member_header": {
+    "size": 134217728,
+    "pax": {}
+  },
+  "key_rejections": {
+    "missing": "key-required",
+    "wrong": "wrong-key"
+  },
+  "original_restored_bit_exact": true,
+  "identity_copies_in_scratch": 0,
+  "harness_removed_private_scratch_and_keys": true,
+  "tool_children_at_end": 0,
+  "elapsed_seconds": 23.725,
+  "max_rss_kib": 45452,
+  "minimum_reserve_preserved_in_samples": true,
+  "free_after_cleanup": 21542842368
+}

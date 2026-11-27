@@ -1,0 +1,14 @@
+{
+  "catalog_read_or_mutated": false,
+  "containers": 0,
+  "device_mutex_free_at_check": true,
+  "frozen_source_clean": true,
+  "installed_source_read_or_mutated": false,
+  "networks": 0,
+  "r4_payload_directories": 0,
+  "result_sha256": "a62bf95f74923c745cbb2d18b03ca66a059fc2a5307ddc2200493b951ce3109e",
+  "scope": "independent read-only exact owned prefix; durable volume/image equality inside result; no separate catalog-content measurement",
+  "source_commit": "27cb52c4eafbaaa2dbc2ba2916b9604a8941a280",
+  "summary_written_at": "2026-11-26T23:15:04Z",
+  "volumes": 0
+}

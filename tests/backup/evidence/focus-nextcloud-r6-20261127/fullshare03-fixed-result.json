@@ -1,0 +1,22 @@
+{
+  "status": "failed",
+  "phase": "fullshare-cold-return",
+  "source_commit": "0377b53050a0ede893a290eb95196c0d597ee410",
+  "product_commit": "5168f1ecf68e3a22b6909f3c516c4a41e77e3cc2",
+  "product_manifest_sha256": "ce554fc77f3e3940464688f60d92305f85b16c44fb5f01de47971f57aecb635d",
+  "source_deployed": true,
+  "case_entered": true,
+  "data_baseline_safe": true,
+  "prior_quadlets_exact": true,
+  "prior_engine_helper_version_exact": true,
+  "units_images_catalog_baseline_archive_isolation_preserved": true,
+  "baseline_id": "20261123T132013Z-34811d90",
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472,
+  "pulls": 0,
+  "installer": false,
+  "fixture_copy": false,
+  "fixed_failure": null,
+  "source_transaction_nonce": "e71e507f181616c9",
+  "private_copies_retained": true
+}

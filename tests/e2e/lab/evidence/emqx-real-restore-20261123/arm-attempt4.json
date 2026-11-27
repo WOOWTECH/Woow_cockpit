@@ -1,0 +1,13 @@
+{
+  "source_commit": "6f106deca71d6b2a75d472dc8cd6c364a39ac484",
+  "scope": "real ARM same-target product gate diagnosis with unchanged import guards",
+  "exit": 1,
+  "elapsed_seconds": 201.43628156278282,
+  "stdout_sha256": "e6acc374ef5b5d477e297520222796ad1b2a32d37487aca2acd22cfec70836fd",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_TARGET_CANDIDATE_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

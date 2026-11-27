@@ -1,0 +1,17 @@
+{
+  "scope": "real ARM all selected cold historical values only; no broker",
+  "source_commit": "3ec88ac5ca51073a7c1ec76a3f89cea1a6e6b7c7",
+  "exit": 0,
+  "elapsed_seconds": 52.522726541152224,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HISTORY PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "6174beafc781c8ef555cd20866f41fbe7964d339b8abb001ac007ab59fb7f7fc",
+  "restore_executed": false,
+  "selected_files_expected": 28,
+  "selected_bytes_expected": 57502
+}

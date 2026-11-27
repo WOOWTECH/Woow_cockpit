@@ -35,8 +35,10 @@ import types
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import util
+from . import haissues, util
+from . import kept as kept_copies  # (flows has many locals named kept)
 from . import version as engine_version
+from .adapters.base import PAUSED_PREFIX
 from .errors import BackupError
 from .storage import valid_backup_id
 
@@ -123,7 +125,8 @@ def _os_name():
 
 def _podman_version():
     try:
-        out = subprocess.run(['/usr/bin/podman', '--version'], stdin=subprocess.DEVNULL, capture_output=True,
+        from .podman import PODMAN
+        out = subprocess.run([PODMAN, '--version'], stdin=subprocess.DEVNULL, capture_output=True,
                              env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}, timeout=15,
                              check=False).stdout.decode('utf-8', 'replace')
     except (OSError, subprocess.TimeoutExpired):
@@ -183,6 +186,12 @@ class FlowContext:
         self.reporter = reporter
         self.key_file = Path(key_file) if key_file else None
         self.ha_key = None  # an HA import job's key text (run-job reads and masks it; haimport.py)
+        # The restore of a backup converted from a Home Assistant backup (`from_ha`): the adapters then handle what
+        # differs on this device on their own (a slower start, a missing volume, other containers using a folder, ...) and
+        # list it in the confirmation. Other restores keep their checks (owner decision H6, 2026-11-25).
+        self.ha_import = False
+        self.acknowledged = {}  # {app id: frozenset of confirmation keys} the restore request carried (params.acknowledged)
+        self.planned_pauses = {}  # {app id: the services the confirmation lists as paused for the restore} (D10; set after the check)
         self._catalog = None
         self._stopped_writers = {}
         self._unfinished_fresh = []
@@ -293,6 +302,9 @@ class FlowContext:
                                             writers_hook=lambda units, app_id=app.id: self.note_writers(app_id, units),
                                             imported_hook=lambda app_id=app.id: self.note_imported(app_id))
         adapter.job_id = self.job_id  # names the restore's host-directory siblings
+        adapter.ha_import = self.ha_import
+        adapter.acknowledged = self.acknowledged.get(app.id, frozenset())
+        adapter.planned_pauses = frozenset(self.planned_pauses.get(app.id, ()))
         return adapter
 
     def identities(self):
@@ -386,6 +398,19 @@ def resolve_apps(catalog, app_ids):
     if not apps:
         raise BackupError('invalid-request', '請至少選擇一個應用。')
     return apps
+
+
+def from_ha(paths, backup_id, meta=None):
+    """True for a backup converted from a Home Assistant backup: ha-imports.json lists it; while that file cannot be read
+    the note says it (the same rule retention.py applies). Never raises: the answer only decides how forgiving a restore is."""
+    from . import haimport
+    try:
+        rows = haimport.load_registry(paths)
+    except Exception:  # noqa: BLE001 - never decides anything else
+        rows = None
+    if rows is not None:
+        return backup_id in rows
+    return str((meta or {}).get('note') or '').startswith(haimport.NOTE_PREFIX)
 
 
 def created_from_id(backup_id):
@@ -531,15 +556,32 @@ def digest_entry(app, adapter, entry=None):
     return entry
 
 
-def verification_entry(app, adapter, app_manifest):
+def verification_entry(app, adapter, app_manifest, *, lenient=False, notes=None):
     """The data check of one restored app: the http-json snapshot compared after the health checks, plus the digest
-    checks compared before the units started (digest_entry)."""
+    checks compared before the units started (digest_entry).
+
+    `lenient` (the restore of a converted Home Assistant backup; X-AD-39, HAOS parity 2026-11-25): a conversion stores no
+    snapshot, so with nothing to compare against nothing is read; and a value the app does not answer counts as not
+    compared (`match` null, a note in `notes`) instead of failing the restore. What can be compared still is, exactly:
+    the digest checks, and a snapshot the backup does hold that the app answers differently."""
     entry = None
     if _http_specs(app):
         before = app_manifest.get('verify_snapshot') or {}
-        after = adapter.verify_snapshot()
-        entry = {'app': app.id, 'match': compare_snapshots(app, before, after), 'before': bounded_snapshot(app, before),
-                 'after': bounded_snapshot(app, after)}
+        unread = False
+        if lenient and not before:
+            after = {}
+        else:
+            try:
+                after = adapter.verify_snapshot()
+            except BackupError:
+                if not lenient:
+                    raise
+                after, unread = {}, True
+                if notes is not None:  # a fixed text: what the failed read said (an address, a status) stays in the journal
+                    notes.append(f'還原後讀不到「{app.name}」回報的資料核對值，這個項目沒有比對資料；'
+                                 '其他核對（資料摘要、健康檢查）照常做過。')
+        entry = {'app': app.id, 'match': None if unread else compare_snapshots(app, before, after),
+                 'before': bounded_snapshot(app, before), 'after': bounded_snapshot(app, after)}
     return digest_entry(app, adapter, entry)
 
 
@@ -570,7 +612,7 @@ def release_handover(ctx, plans, handover):
         except BackupError as error:
             ctx.log(f'警告：{error.message}')
             failed = units
-        ctx.note_writers(plan.app.id, failed)
+        ctx.note_writers(plan.app.id, [unit if unit in plan.app.units else PAUSED_PREFIX + unit for unit in failed])
         failed_all.extend(failed)
         if not failed:
             ctx.log(f'已恢復「{plan.app.name}」被還原前備份暫停的服務')
@@ -589,9 +631,15 @@ def restart_writers(deps, stopped, *, log=None):
         try:
             adapter = deps.adapter_factory(app, log=log or _noop, phase=None, checkpoint=None)
             # Writers a backup stopped, or every unit an in-place restore stopped before it masked them (still
-            # unchanged then): only units of the app's own catalog entry.
+            # unchanged then): the units of the app's own catalog entry, and the other services the restore of a
+            # converted HA backup paused (D10; the adapter starts only valid service names, and says which did not start).
+            start_paused = getattr(adapter, 'start_paused', None)
             failed.extend(adapter.start_units([u for u in units if u in app.units]))
-            failed.extend(u for u in units if u not in app.units)
+            for unit in (u for u in units if u not in app.units):
+                if start_paused is None or not unit.startswith(PAUSED_PREFIX):
+                    failed.append(unit)  # not one of the app's units and not marked as paused: never started from a record
+                elif start_paused([unit[len(PAUSED_PREFIX):]]):
+                    failed.append(unit)
         except BackupError:
             failed.extend(units)
     return failed
@@ -805,7 +853,8 @@ def create_backup(ctx, apps, staging, *, include_images, note, backup_type, key,
         info = adapter.probe()
         problem = None
         if not info['deployed']:
-            problem = BackupError('not-deployed', f'應用「{app.name}」尚未部署在此設備，無法備份。', app=app.id)
+            from .hatarget import not_deployed_error  # FL-11: the adapter's own reason (no linger) before "not deployed"
+            problem = not_deployed_error(app, info)
         elif info['problems']:
             problem = BackupError('job-failed', f'應用「{app.name}」狀態異常：{info["problems"][0]}', app=app.id)
         elif skipped is not None:
@@ -986,6 +1035,7 @@ def prune_safety(ctx, app_ids, keep=SAFETY_KEEP, exclude=()):
         return
     exclude = set(exclude) | pinned
     backups = [b for b in ctx.storage.list_backups() if b.get('type') == 'safety']
+    exclude |= kept_copies.kept_ids(backups)  # a kept copy (S4) is the administrator's to delete: never pruned
     backups.sort(key=lambda b: (b.get('created') or '', b.get('id') or ''), reverse=True)
     keepers, per_app = set(), {}
     for backup in backups:
@@ -1191,6 +1241,10 @@ def run_restore(ctx, params):
     apps = resolve_apps(ctx.catalog(), params.get('apps') or [])
     header = ctx.archive.read_header(path)
     _require_key(ctx, header)
+    ctx.ha_import = from_ha(ctx.paths, backup_id, meta)
+    ctx.acknowledged = {app_id: frozenset(keys) for app_id, keys in (params.get('acknowledged') or {}).items()
+                        if isinstance(app_id, str) and isinstance(keys, (list, tuple))
+                        and all(haissues.valid_key(key) for key in keys)}
     if _unauthenticated(meta, header) and params.get('accept_unauthenticated') is not True:
         raise BackupError('invalid-request', '這份上傳的備份沒有加密，內容無法驗證來源與完整性；'
                                              '需要另外確認信任這個檔案才能還原。', field='accept_unauthenticated')
@@ -1209,6 +1263,7 @@ def run_restore(ctx, params):
     keep_fresh_marker = False
     dirs_marked = False
     plans, handover = [], {}
+    kept_info = {}  # {app id: kept.Kept}: the copies of whole database services this restore kept (S4)
     pending = None  # the pre-restore copy (pending/<job>/) until it is packaged into the safety backup
     try:
         ctx.phase('decrypt')
@@ -1221,6 +1276,12 @@ def run_restore(ctx, params):
 
         ctx.phase('preflight')
         plans = _preflight(ctx, apps, manifest, extract_dir)
+        _require_confirmed(ctx, plans, ctx.acknowledged)
+        if ctx.ha_import:
+            # D10: what the customer confirmed to be paused is all that is paused (a service that starts using the data later
+            # stops this app and asks again); every adapter this job makes later (the pre-restore copy, a rollback) gets the list
+            ctx.planned_pauses = {plan.app.id: frozenset(getattr(plan.adapter, 'planned_pauses', None) or ()) for plan in plans}
+            kept_copies.check_space(ctx, plans)  # S4: before anything stops, there must be room for the kept copy of a database service
         device_key = ctx.keys.device_key()
         inplace = [plan for plan in plans if plan.mode == 'inplace']
         if inplace and encrypt_safety and device_key is None:
@@ -1253,6 +1314,9 @@ def run_restore(ctx, params):
                 ctx.skip('safety')
             if pending is None:
                 ctx.skip('safety-package')
+            if ctx.ha_import:
+                kept_info.update(kept_copies.keep(ctx, plans, handover, staging=staging, key=device_key if encrypt_safety else None,
+                                           source_backup_id=backup_id, result=result))
         except BaseException:
             _undo_preparation(ctx, plans, handover)
             _drop_pending(ctx, pending, result)
@@ -1286,7 +1350,11 @@ def run_restore(ctx, params):
                 if failed:
                     raise BackupError('job-failed', f'應用「{plan.app.name}」還原後健康檢查未通過：{failed[0]["message"]}',
                                       app=plan.app.id)
-                entry = verification_entry(plan.app, plan.adapter, plan.manifest)
+                unread = []
+                entry = verification_entry(plan.app, plan.adapter, plan.manifest, lenient=ctx.ha_import, notes=unread)
+                for note in unread:
+                    ctx.log(f'注意：{note}')
+                    _add_warning(result, note)
                 if entry is not None:
                     result['verification'].append(entry)
                     if entry['match'] is False:
@@ -1296,10 +1364,16 @@ def run_restore(ctx, params):
                         ctx.log(f'備份未包含「{plan.app.name}」的資料核對快照，已略過資料比對。')
                     else:
                         ctx.log(f'應用「{plan.app.name}」資料核對一致')
+                if plan.manifest.get('import_check') is not None:
+                    # A converted Home Assistant backup: the app must hold exactly what the conversion verified
+                    # (CONTRACT section 9); a difference raises here and the restore rolls back.
+                    from . import haimport
+                    haimport.verify_import(plan.app, plan.adapter, plan.manifest['import_check'], log=ctx.log)
                 timing = timing_entry(plan.app, plan.adapter)
                 result['timing'].append(timing)
                 if timing['unavailable_seconds'] is not None:
                     ctx.log(f'「{plan.app.name}」從停止到健康檢查通過共 {_seconds(timing["unavailable_seconds"])} 秒')
+            kept_copies.put_back(ctx, plans, kept_info, result)  # a required put-back can still roll back the whole cluster
         except BaseException as exc:  # noqa: BLE001 - includes termination signals
             for plan in touched:
                 _collect_warnings(result, plan.adapter)
@@ -1323,8 +1397,9 @@ def run_restore(ctx, params):
             error = exc if isinstance(exc, BackupError) else BackupError(
                 'internal-error', '還原過程發生未預期的錯誤。')
             _rollback(ctx, touched, result, staging, error, pending,
-                      untouched=[plan for plan in plans if plan not in touched], handover=handover)
+                      untouched=[plan for plan in plans if plan not in touched], handover=handover, kept_info=kept_info)
         result['changed'] = True
+        resume_paused(ctx, plans, result)  # D10: the services paused for the restore run again, the data is in place
         # The job succeeded: the host-directory copies its restore moved aside can go now, and only now. Recorded
         # first, so a job that dies while deleting them is reported as a finished restore (review L4).
         ctx.reporter.set_partial(finishing=True)
@@ -1368,6 +1443,61 @@ def run_restore(ctx, params):
         _cleanup_staging(ctx)
 
 
+def _require_confirmed(ctx, plans, acknowledged):
+    """The lines of the restore check (`adapter.restore_issues`, haissues.Issue) that the restore of a converted HA backup
+    needs confirmed (D10: the services it pauses, the account whose id range it widens, ...). Every `confirm` line must be
+    among the keys the request acknowledged, with exactly its names (`haissues.missing`): otherwise nothing is touched and
+    the restore of this app stops with `confirmation-required` (the chain goes on with the others and offers "confirm
+    again"). Lines of an ordinary restore do not exist (H6)."""
+    if not ctx.ha_import:
+        return
+    missing = {}
+    for plan in plans:
+        issues = list(getattr(plan.adapter, 'restore_issues', None) or [])
+        for issue in issues:
+            if issue.level == 'auto':
+                ctx.log(f'自動處理：{issue.message}')
+        left = haissues.missing(plan.app.id, issues, (acknowledged or {}).get(plan.app.id))
+        if left:
+            missing[plan.app.id] = left
+    if missing:
+        names = '、'.join(haissues.clean(plan.app.name, 60) for plan in plans if plan.app.id in missing)
+        raise haissues.confirmation_required(missing, f'還原 {names} 前還有事情要確認。')
+
+
+def resume_paused(ctx, plans, result=None):
+    """Start again the other services the restore of a converted HA backup paused (D10: X-AD-14, X-AD-50) -- done, failed or
+    refused. What does not start stays listed in the job's record (`stopped_writers`), so the recovery tries again, and
+    the result says which (`warnings`). A machine that is shutting down starts them with the user manager at boot."""
+    waiting = [plan for plan in plans if getattr(plan.adapter, 'paused', None)
+               and getattr(plan.adapter, 'resume_paused', None) is not None]
+    if not waiting or _shutting_down(ctx):  # (an ordinary restore pauses nothing: no question about the machine either)
+        return
+    for plan in waiting:
+        resume = plan.adapter.resume_paused
+        try:
+            started, failed = resume()
+        except BaseException as exc:  # noqa: BLE001 - a signal: the record keeps them for the recovery
+            started, failed = [], list(plan.adapter.paused)
+            if isinstance(exc, Exception):
+                ctx.log(f'警告：重新啟動被暫停的服務時發生未預期的錯誤（{type(exc).__name__}）')
+            else:
+                raise
+        finally:
+            _note_paused(ctx, plan)
+        if started:
+            ctx.log(f'已重新啟動匯入時暫停的服務：{"、".join(started)}')
+        if failed and result is not None:
+            _add_warning(result, f'匯入時暫停的服務沒有重新啟動：{"、".join(failed)}；請到服務頁啟動它們。')
+
+
+def _note_paused(ctx, plan):
+    """The job's record lists the app's stopped writers and the services paused for it: write what is stopped now."""
+    paused = [PAUSED_PREFIX + unit for unit in getattr(plan.adapter, 'paused', None) or []]
+    own = [unit for unit in ctx._stopped_writers.get(plan.app.id, []) if not unit.startswith(PAUSED_PREFIX)]
+    ctx.note_writers(plan.app.id, own + paused)
+
+
 def _undo_preparation(ctx, plans, handover):
     """A failure (or a signal) before the restore's first destructive step: remove the directory copies stage_dirs()
     wrote ahead and start the writers the safety backup left stopped. Nothing that existed was changed. A copy that
@@ -1377,6 +1507,7 @@ def _undo_preparation(ctx, plans, handover):
             for problem in _discard_dirs(ctx, plan.adapter):
                 ctx.log(f'注意：{problem}')
     release_handover(ctx, plans, handover)
+    resume_paused(ctx, plans)
 
 
 def _record_failed_checks(result, touched):
@@ -1462,6 +1593,8 @@ def _take_safety_copy(ctx, inplace, backup_id, meta, params, key, result, handov
     (review 2026-11-14)."""
     ctx.log('保存還原前資料…' if key is not None else '保存還原前資料（還原前備份依設定不加密）…')
     note = f'還原前自動備份（還原來源 {backup_id}）'
+    if kept_copies.wants_pin(inplace):  # L-38: the pre-restore backup holds what the restore replaces and nothing else does: keep it
+        note = kept_copies.note_for(None, source_note=note)
     source_is_safety = meta.get('type') == 'safety'
     # Recovering *to* a pre-restore backup, or the user explicitly accepted it (review CR-16): the current state is
     # the broken one being replaced.
@@ -1995,8 +2128,21 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
         if app_manifest is None:
             raise BackupError('incompatible', f'此備份不包含應用「{app.name}」。', app=app.id)
         adapter = ctx.adapter(app)
+        if ctx.ha_import:
+            # A converted HA backup can be restored directly later, without a fresh HA check first. Its owner's
+            # user manager still has to run before the adapter probes Podman or systemd (X-AD-01, H6).
+            runner = getattr(adapter, 'runner', None)
+            if runner is not None:
+                from .hatarget import ensure_user_manager
+                ensure_user_manager(ctx, app, runner)
         mode = adapter.detect_mode()
         checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes, extracted_dir=extract_dir)
+        if app_manifest.get('import_check') is not None:
+            # A converted Home Assistant backup's readback: only a kind this engine can compare is restored.
+            from . import haimport
+            problem = haimport.import_check_problem(app, app_manifest['import_check'])
+            if problem:
+                checks = list(checks) + [{'id': f'{app.id}/import-check', 'status': 'fail', 'message': problem}]
         for check in checks:
             if check['status'] == 'warn':
                 ctx.log(f'注意：{check["message"]}')
@@ -2012,7 +2158,7 @@ def _preflight(ctx, apps, manifest, extract_dir=None):
     return plans
 
 
-def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), handover=None):
+def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), handover=None, kept_info=None):
     """Bring every app the failed restore changed back to its state before the restore, from the pre-restore copy
     `pending` (no extraction: it is laid out like an extracted archive) or, when the copy went after its packaging in
     the downtime, from the safety backup extracted as before 2026.11.14.2; remove fresh deployments, then package the
@@ -2039,6 +2185,7 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
     if failed:
         problems.append(f'無法重新啟動服務 {", ".join(failed)}')
     inplace = [plan for plan in touched if plan.mode == 'inplace' and plan.adapter.destructive_started]
+    rolled = []  # the adapters of the rollbacks (they hold what they paused themselves)
     damaged = False  # the copy failed its check: no rollback from it, and no packaging either
     if inplace:
         source = None
@@ -2072,18 +2219,24 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                 if app_manifest is None:
                     raise BackupError('job-failed', '還原前資料不含此應用')
                 adapter = ctx.adapter(plan.app, phases=False)
+                rolled.append(Plan(plan.app, adapter, None, 'inplace'))  # it may pause services too (D10)
                 # The rollback owns the app's stopped units from here (they are stopped and masked): the safety backup's
                 # hand-over entry must not make a later recovery start them on whatever the rollback leaves.
                 (handover or {}).pop(plan.app.id, None)
                 ctx.note_writers(plan.app.id, [])
                 swapped = getattr(plan.adapter, 'swapped_dirs', None)
+                whole = kept_copies.rollback_volumes(kept_info, plan.app.id)  # S4: a service whose copy was kept comes back whole
                 adapter.restore(app_manifest, source['data'], mode='inplace', rollback=True,
-                                replaced_dirs=swapped() if swapped else ())
+                                replaced_dirs=swapped() if swapped else (), **({'kept_volumes': whole} if whole else {}))
                 failed = [c for c in adapter.health() if c['status'] == 'fail']
                 if failed:
                     problems.append(f'「{name}」回復後健康檢查未通過')
                 else:
-                    entry = verification_entry(plan.app, adapter, app_manifest)
+                    unread = []
+                    entry = verification_entry(plan.app, adapter, app_manifest, lenient=ctx.ha_import, notes=unread)
+                    for note in unread:
+                        ctx.log(f'注意：{note}')
+                        _add_warning(result, note)
                     if entry is not None and entry['match'] is False:
                         problems.append(f'「{name}」回復後資料與還原前不一致')
                     else:
@@ -2139,6 +2292,7 @@ def _rollback(ctx, touched, result, staging, error, pending, *, untouched=(), ha
                     _keep_pending(ctx, pending, result,
                                   _failure_text(exc) if isinstance(exc, Exception) else '作業被要求停止',
                                   finished=False, waiting=_short_of_space(exc))
+    resume_paused(ctx, list(touched) + list(untouched) + rolled, result)  # D10: also when the rollback was incomplete
     safety_id = result.get('safety_backup_id')
     if problems:
         result['rolled_back'] = False

@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-2",
+  "tested_commits": {
+    "tests/backup, backup-ui, targeted": "d812699",
+    "tests/e2e/lab (final)": "5d83b24 (= d812699 + evidence 1646337 + lab wrapper fix 5d83b24)"
+  },
+  "tree": "integration/ha-import-batch1-20261123 = 82ac971 (integration-1) + --no-ff merges 90613fc (R-EMQX feat/ha-import-batch1 ab9e4da, 5 add/add conflicts resolved by side), 7c87560 (feat/odoo-import-mail-reminder-20261123 ae5b0d4), d812699 (test/services-b-final-20261123 cde33c2)",
+  "host": "python 3.12.3, node v22.23.4, playwright-core 1.58.2 with chromium_headless_shell-1208",
+  "guard": "scratchpad/integration-2/guard.py (in-process): subprocess.Popen/os.exec*/os.posix_spawn*/os.system refuse podman, labpodman, ssh, scp, sshpass, sudo, systemctl, systemd-run, machinectl, runuser, nsenter, docker, crun, runc as the executable (and podman/labpodman anywhere in argv unless --exe-only; any forbidden name inside sh/bash/env/nice/timeout/flock wrappers); emqx_native_runtime.run_native refused; PATH shim stubs (log + exit 97) for the same names. Host /usr/bin/podman is the production rootless store and was never started by this lane.",
+  "host_heavy_lock": "every whole-suite run held /tmp/woowbk-host-heavy-tests.lock (flock -w 3600), nice -n 10, ionice -c3",
+  "secrets": "HA_BACKUP_KEY read in-process with shlex from ~/.woowbk-lab/secrets/ha-import-creds.env into WOOWBK_HA_B1_KEY (and WOOWBK_HA_KEY for the 20261118 rerun); never printed; logs masked; logs kept private (0600)",
+  "before_merge_commits": {
+    "conflict files (test_ha_real_fixture, test_emqx_real_candidate, test_emqx_captured_candidate) on the resolved merge": "54/54 ok, 0 refused calls",
+    "tests.backup.test_ha_odoo on the Odoo merge": "33/33 ok",
+    "test_litellm_real_ha + test_credential_ledger + tests.backup.test_ha_litellm_cluster_candidate on the services-b merge": "24/24 ok"
+  },
+  "suites": {
+    "tests/backup (discover, real batch-1 HA backups on)": {
+      "commit": "d812699",
+      "env": "WOOWBK_HA_B1_FIXTURES=~/.woowbk-lab/ha-fixtures/20261119-b1, WOOWBK_HA_B1_KEY=<in-process>",
+      "tests": 1454,
+      "ok": 1440,
+      "skipped": 1,
+      "failures": 8,
+      "errors": 5,
+      "guard_refused_calls": 6,
+      "shim_hits": 0,
+      "elapsed_seconds": 323,
+      "lock_held": "18:22:34-18:27:59",
+      "real_backup_tests": "test_ha_b1_real 5/5 ok (ARM + x86 batch-1 HA backups decrypted with the lab HA key)",
+      "not_ok_explained": {
+        "tests.backup.test_ha_omnigent (7: 5 failures + 2 errors)": "pre-existing public guard SECURITY_BLOCKER (Omnigent HA import disabled until the schema security check is done); the same 7 ids at 82ac971 (pre-merge integration tip) and at R-EMQX ab9e4da",
+        "tests.backup.test_litellm_lab_runner (5: 2 failures + 3 errors)": "this guard's own false positive: the test's fake child gets the word podman in its argv (6 refused calls); rerun with --exe-only: 6/6 ok, the only executable started was the test's fake 'child' (10x)",
+        "tests.backup.test_ha_omnigent_real_app_fixture.ProducerContractTests.test_missing_end_truncation_and_timeout_are_not_evidence (1 failure)": "timing: the test gives a freshly started python -I child 0.3 s to print its auth event; under host load ~25 it did not; the module (unchanged since 82ac971) passed 18/18 in three isolated reruns; not changed"
+      },
+      "skipped_rerun": "tests.backup.test_ha_backup.RealBackupTests (needs WOOWBK_HA_FIXTURES): rerun with ~/.woowbk-lab/ha-fixtures/20261118 + lab key: 1/1 ok",
+      "emqx_public_contract_note": "tests.backup.test_ha_emqx: 0 not ok here (10 at 82ac971). Not caused by this lane: R-EMQX commit ca0a30d (2026-11-23 04:09, 'Separate guarded public checks from internal EMQX build and package regressions') rewrote the legacy public-entry tests to assert ha_emqx.PRESERVATION_BLOCKER on the public check/convert path and moved the build/package regressions to the internal candidate (before-state in its legacy-public-boundaries-before.json/.txt). The guard itself is unchanged: ha_emqx.convert still raises PRESERVATION_BLOCKER; haimport.APPS has no litellm."
+    },
+    "tests/backup-ui.mjs": {
+      "commit": "d812699",
+      "tests": 99,
+      "pass": 99,
+      "fail": 0,
+      "elapsed_seconds": 500,
+      "lock_held": "18:46:53-18:55:14"
+    },
+    "tests/e2e/lab (discover, 120 modules of both lines)": {
+      "commit": "5d83b24",
+      "tests_started": 1012,
+      "ok": 965,
+      "not_ok_started_tests": 47,
+      "classes_not_started": "8 classes (30 tests) whose setUpClass needs the real native runtime",
+      "unittest_records": "73 (2 failures + 71 errors; 20 of them are subtests of 2 tests, 8 are setUpClass)",
+      "guard_refused_calls": 133,
+      "all_refused_calls": "emqx_native_runtime.run_native",
+      "shim_hits": 0,
+      "spawned_executables": "bash 52, git 12, python3 142, sh 5, stat 1, tar 2 (no podman/labpodman/ssh/sudo)",
+      "elapsed_seconds": 265,
+      "lock_held": "19:09:42-19:14:09",
+      "by_line": {
+        "R-COCKPIT-only modules (14)": "152/152 ok",
+        "modules on both lines (17)": "111/111 ok",
+        "services-b modules (test_litellm_real_ha, test_credential_ledger)": "17/17 ok",
+        "R-EMQX-only modules (87)": "732 started: 685 ok, 45 refused by the guard (they need emqx_native_runtime.run_native = host podman; each one had >= 1 refused call or failed directly on the refusal), 2 stale (see below); plus the 8 classes above not started"
+      },
+      "not_ok_explained": {
+        "71 records in 29 R-EMQX modules": "need the pinned EMQX image through run_native, which runs host /usr/bin/podman (forbidden by the host rule); refused before any process started; identical ids at R-EMQX ab9e4da with the same guard (75 = these 71 + the 4 below before the fix)",
+        "test_emqx_persisted_values (2 failures, 0 refused calls)": "stale on the R-EMQX line since 60844f1 (2026-11-22 23:16 'Preserve full secret scans with canonical localized text receipts', found by bisecting 82c2c25..ab9e4da): login_preflight now writes the fixed localized text receipt credential-preflight.txt (198 bytes, no ASCII 'passed'), while the tests still expect credential-preflight.json and use the bytes 'passed' as the probe value that must appear in the published receipt. Not changed here (rule: change an assertion only with vendor proof); for the EMQX owner lane to update the probe to the new receipt bytes.",
+        "test_emqx_adapter_wrapper (2, fixed)": "real defect since R-EMQX b727726: run_emqx_adapter_lab.sh bundled emqx_candidate_stage.py without its tests/e2e/lab/ prefix, so tar failed; fixed in 5d83b24 (path only); 7/7 ok after the fix, 5/7 before (same on ab9e4da)"
+      }
+    },
+    "mocked EMQX lab modules on d812699 (19 modules: workflow, transport, native object integrity, post_restore_values, file_policy_api, controlled_delivery, file_policy_delivery, source_api_validator, source_mqtt_negative, retained_history, semantic_readers, private_boundary, republish_templates, b1_object_integrity, source_credential_coverage, row_count_diagnostic, mqtt_diagnostic, issued_target_probe, captured_candidate)": "314/314 ok, 0 refused calls (run before the real run)"
+  },
+  "not_changed": "No test, assertion or public guard was changed by this lane. EMQX PRESERVATION_BLOCKER and Omnigent SECURITY_BLOCKER stay enabled; LiteLLM stays out of haimport.APPS.",
+  "private_logs_sha256": {
+    "backup-suite.log": "ab2d592ab7c24ab92a1df45a44ab9dda1e0e5f444a2e7e7c8053042b9efdcb38",
+    "litellm-runner-exeonly.log": "0441d42ff6e164fa873711d832b8ebe1239fc6cf83abb47c0fa7158cd87dd5ad",
+    "ha-backup-real.log": "6b8e3a08bcfbb0aa74ed8547ec27d57a8fd885167a8c91a1aea6a5aaf0a298be",
+    "omni-fixture-rerun1..3.log": [
+      "8fe157732c47b0dbfdca4f746826db98fa1fca4e495d89b28a9110a2c35ebf32",
+      "fa8e5b407ab173f07c236974dd6fe1db882607fd5f69bf5a978e0c4bcce39f84",
+      "62b96ddfb0ac3b765154d7d37356e3c2fe1ac21dc06201967ef42b9e8ef717c9"
+    ],
+    "base-82ac971-omni-emqx.log": "5f9aeb4a8ba02ebf1c2baa414c6b83fba9b5381fb62f46754ded7129669bb818",
+    "base-ab9e4da-omni-emqx.log": "c634c59cbfadf1d2cf2e90ac3c72ab952242db7890cc3ead895b4f1160cc2297",
+    "merged-omni-emqx.log": "4fbec17178bd5f48b9617cfee1104a6d43489441ea68a7a96bf314041e33e736",
+    "backup-ui.log": "16d4449e69bc976e508527bfeec28d2b1e02734a34c8e5bdf3ef4b1795b8c461",
+    "lab-suite.log (d812699, before the wrapper fix: 75 records)": "69625b7d0f79475bd6a4dd7d5822ffb71beb9e3bb9050dd536da93a42c52f9e7",
+    "lab-suite-tip.log (5d83b24)": "7528db36fd63d733bcf86959ef9f9d809f1574fcb82a57b0f9721d5738d96b6b",
+    "base-ab9e4da-lab-notok.log": "2bc121e354641fb99213dcbc181fe97a971c9da67ef4a9a14cb1683e35fbc693",
+    "merged-lab-notok2.log (per-test refused-call attribution)": "5077391f4059bfc6bc922930694d8ca4dcce276dd1c9027e57dbd48431f24270",
+    "adapter-wrapper-fixed.log": "fc401cc97b841b35868a10615aac6e462aa3aca8c6f092e4ca34a7b13d478fd5",
+    "persisted-values.log": "7c8bb4470facdadcda86577728357f6545e3e97c2ef3e82a4505a7235b2a0305",
+    "emqx-mocked.log": "50b0486b02d1ba7e49abec018ef49cbbbb7f83be86640385f70d8098dd9ac995"
+  },
+  "commercial_acceptance": "not-complete"
+}

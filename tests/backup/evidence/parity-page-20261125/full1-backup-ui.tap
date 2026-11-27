@@ -1,0 +1,778 @@
+TAP version 13
+# Subtest: static source rules: DOM-only rendering, fixed helper, no remote assets
+ok 1 - static source rules: DOM-only rendering, fixed helper, no remote assets
+  ---
+  duration_ms: 27.951637
+  type: 'test'
+  ...
+# Subtest: key setup shows the emergency kit once, downloads it as a Blob and confirms it
+ok 2 - key setup shows the emergency kit once, downloads it as a Blob and confirms it
+  ---
+  duration_ms: 3017.450241
+  type: 'test'
+  ...
+# Subtest: create backup follows job phases to success; download uses the external fsread1 channel URL
+ok 3 - create backup follows job phases to success; download uses the external fsread1 channel URL
+  ---
+  duration_ms: 9010.709763
+  type: 'test'
+  ...
+# Subtest: upload streams 512 KiB frames within a 4 MiB ack window; cancel closes the channel and aborts
+ok 4 - upload streams 512 KiB frames within a 4 MiB ack window; cancel closes the channel and aborts
+  ---
+  duration_ms: 7526.657505
+  type: 'test'
+  ...
+# Subtest: key-required upload: kit key, per-app preflight, explicit confirmation, progress and result table
+ok 5 - key-required upload: kit key, per-app preflight, explicit confirmation, progress and result table
+  ---
+  duration_ms: 9063.82373
+  type: 'test'
+  ...
+# Subtest: failed restore that rolled back shows the error, safety backup and before/after comparison
+ok 6 - failed restore that rolled back shows the error, safety backup and before/after comparison
+  ---
+  duration_ms: 4607.057148
+  type: 'test'
+  ...
+# Subtest: a reload resumes the active job; interrupted restore shows guidance and offers the safety backup
+ok 7 - a reload resumes the active job; interrupted restore shows guidance and offers the safety backup
+  ---
+  duration_ms: 1981.440103
+  type: 'test'
+  ...
+# Subtest: an interrupted restore that had already finished is not offered to be reverted
+ok 8 - an interrupted restore that had already finished is not offered to be reverted
+  ---
+  duration_ms: 629.995976
+  type: 'test'
+  ...
+# Subtest: busy refusal links to the running job and keeps the request
+ok 9 - busy refusal links to the running job and keeps the request
+  ---
+  duration_ms: 2773.277345
+  type: 'test'
+  ...
+# Subtest: admin-required state runs nothing until access is granted, then reloads
+ok 10 - admin-required state runs nothing until access is granted, then reloads
+  ---
+  duration_ms: 1345.15367
+  type: 'test'
+  ...
+# Subtest: empty catalog and empty backup list explain what to do
+ok 11 - empty catalog and empty backup list explain what to do
+  ---
+  duration_ms: 1239.648928
+  type: 'test'
+  ...
+# Subtest: delete asks for confirmation; cancel never deletes
+ok 12 - delete asks for confirmation; cancel never deletes
+  ---
+  duration_ms: 2476.539981
+  type: 'test'
+  ...
+# Subtest: a cancellable job can be cancelled after confirmation; nothing is cancelled on dismiss
+ok 13 - a cancellable job can be cancelled after confirmation; nothing is cancelled on dismiss
+  ---
+  duration_ms: 3724.436095
+  type: 'test'
+  ...
+# Subtest: verify asks for the key when this device does not hold it
+ok 14 - verify asks for the key when this device does not hold it
+  ---
+  duration_ms: 3270.420881
+  type: 'test'
+  ...
+# Subtest: hostile helper strings are rendered literally everywhere
+ok 15 - hostile helper strings are rendered literally everywhere
+  ---
+  duration_ms: 9695.880018
+  type: 'test'
+  ...
+# Subtest: layouts fit 1440/1024/768/390/360/320 px for every view
+ok 16 - layouts fit 1440/1024/768/390/360/320 px for every view
+  ---
+  duration_ms: 33404.162246
+  type: 'test'
+  ...
+# Subtest: keyboard focus is visible and every view is reachable with Tab
+ok 17 - keyboard focus is visible and every view is reachable with Tab
+  ---
+  duration_ms: 19787.194696
+  type: 'test'
+  ...
+# Subtest: disconnected transport offers reconnect; a missing helper is explained
+ok 18 - disconnected transport offers reconnect; a missing helper is explained
+  ---
+  duration_ms: 12880.057297
+  type: 'test'
+  ...
+# Subtest: a failed download page is reported instead of failing silently
+ok 19 - a failed download page is reported instead of failing silently
+  ---
+  duration_ms: 1973.066237
+  type: 'test'
+  ...
+# Subtest: restore results say what really happened (F2, F3, CR-05, CR-09, CR-16)
+ok 20 - restore results say what really happened (F2, F3, CR-05, CR-09, CR-16)
+  ---
+  duration_ms: 2015.319165
+  type: 'test'
+  ...
+# Subtest: a safety backup packaged in the downtime explains the longer outage
+ok 21 - a safety backup packaged in the downtime explains the longer outage
+  ---
+  duration_ms: 2672.258554
+  type: 'test'
+  ...
+# Subtest: a backup's settings are reviewed and installed from the restore wizard, then checked again
+ok 22 - a backup's settings are reviewed and installed from the restore wizard, then checked again
+  ---
+  duration_ms: 5625.160789
+  type: 'test'
+  ...
+# Subtest: installed settings: a late dialog close event leaves the focus on the app the new preflight focused
+ok 23 - installed settings: a late dialog close event leaves the focus on the app the new preflight focused
+  ---
+  duration_ms: 7455.281016
+  type: 'test'
+  ...
+# Subtest: replacing settings sends the reviewed digest; a change meanwhile is reviewed again; the entered key is kept
+ok 24 - replacing settings sends the reviewed digest; a change meanwhile is reviewed again; the entered key is kept
+  ---
+  duration_ms: 11897.538959
+  type: 'test'
+  ...
+# Subtest: an unencrypted upload's settings: a failed review is retried or closed, long settings are shown whole, copied or selected
+ok 25 - an unencrypted upload's settings: a failed review is retried or closed, long settings are shown whole, copied or selected
+  ---
+  duration_ms: 11030.025997
+  type: 'test'
+  ...
+# Subtest: settings this device cannot take as they are are shown with the reason, never installed
+ok 26 - settings this device cannot take as they are are shown with the reason, never installed
+  ---
+  duration_ms: 8027.442587
+  type: 'test'
+  ...
+# Subtest: restoring a pre-restore backup never promises a new one; warnings repeat on 確認 (F1, F13)
+ok 27 - restoring a pre-restore backup never promises a new one; warnings repeat on 確認 (F1, F13)
+  ---
+  duration_ms: 2988.13486
+  type: 'test'
+  ...
+# Subtest: the confirmation names what happens for fresh deployments (F13)
+ok 28 - the confirmation names what happens for fresh deployments (F13)
+  ---
+  duration_ms: 960.993498
+  type: 'test'
+  ...
+# Subtest: a wrong key is reported and never saved; a right key is saved only after it worked (F4)
+ok 29 - a wrong key is reported and never saved; a right key is saved only after it worked (F4)
+  ---
+  duration_ms: 6655.060169
+  type: 'test'
+  ...
+# Subtest: background polls keep open sections and never break IME input (F5)
+ok 30 - background polls keep open sections and never break IME input (F5)
+  ---
+  duration_ms: 3439.30428
+  type: 'test'
+  ...
+# Subtest: an upload-finish timeout never discards the upload; it can be confirmed again (F6)
+ok 31 - an upload-finish timeout never discards the upload; it can be confirmed again (F6)
+  ---
+  duration_ms: 7594.418316
+  type: 'test'
+  ...
+# Subtest: an unconfirmed upload stays the active upload: banner, leave-page guard, never replaced (HD-08)
+ok 32 - an unconfirmed upload stays the active upload: banner, leave-page guard, never replaced (HD-08)
+  ---
+  duration_ms: 5771.421882
+  type: 'test'
+  ...
+# Subtest: a running upload is never orphaned by opening another restore (F7, F10)
+ok 33 - a running upload is never orphaned by opening another restore (F7, F10)
+  ---
+  duration_ms: 5151.745235
+  type: 'test'
+  ...
+# Subtest: one persistent error is announced once; deletes wait for the running job (F9, CR-08)
+ok 34 - one persistent error is announced once; deletes wait for the running job (F9, CR-08)
+  ---
+  duration_ms: 6675.195877
+  type: 'test'
+  ...
+# Subtest: a busy refusal in the delete dialog links to the blocking job (F12)
+ok 35 - a busy refusal in the delete dialog links to the blocking job (F12)
+  ---
+  duration_ms: 5766.538059
+  type: 'test'
+  ...
+# Subtest: the kit secret is shown once; re-downloading needs a confirmation and never shows it (F11, decision 1)
+ok 36 - the kit secret is shown once; re-downloading needs a confirmation and never shows it (F11, decision 1)
+  ---
+  duration_ms: 3162.841041
+  type: 'test'
+  ...
+# Subtest: terms and labels follow the glossary; unhealthy apps are not "running" (F14, lab H5)
+ok 37 - terms and labels follow the glossary; unhealthy apps are not "running" (F14, lab H5)
+  ---
+  duration_ms: 3907.023862
+  type: 'test'
+  ...
+# Subtest: host directories are listed in backup details, preflight, confirmation and the restore result
+ok 38 - host directories are listed in backup details, preflight, confirmation and the restore result
+  ---
+  duration_ms: 9494.467839
+  type: 'test'
+  ...
+# Subtest: a fresh restore names the host directories it creates
+ok 39 - a fresh restore names the host directories it creates
+  ---
+  duration_ms: 7407.453849
+  type: 'test'
+  ...
+# Subtest: interrupted or unrecovered restores explain leftover host-directory copies
+ok 40 - interrupted or unrecovered restores explain leftover host-directory copies
+  ---
+  duration_ms: 7091.365859
+  type: 'test'
+  ...
+# Subtest: hostile host-directory paths and labels are rendered literally and wrap at every width
+ok 41 - hostile host-directory paths and labels are rendered literally and wrap at every width
+  ---
+  duration_ms: 9106.169314
+  type: 'test'
+  ...
+# Subtest: follows the Cockpit dark theme live with readable contrast in every surface
+ok 42 - follows the Cockpit dark theme live with readable contrast in every surface
+  ---
+  duration_ms: 6472.217974
+  type: 'test'
+  ...
+# Subtest: an unencrypted backup needs no device key; while 預設加密備份 is on it needs its own acknowledgement
+ok 43 - an unencrypted backup needs no device key; while 預設加密備份 is on it needs its own acknowledgement
+  ---
+  duration_ms: 9889.779761
+  type: 'test'
+  ...
+# Subtest: 預設加密備份: turning it off needs the acknowledged warning, turning it on does not
+ok 44 - 預設加密備份: turning it off needs the acknowledged warning, turning it on does not
+  ---
+  duration_ms: 5418.64802
+  type: 'test'
+  ...
+# Subtest: download menu: the encrypted .tar by default; 下載未加密版本 warns, runs an export job and downloads the copy
+ok 45 - download menu: the encrypted .tar by default; 下載未加密版本 warns, runs an export job and downloads the copy
+  ---
+  duration_ms: 4947.049923
+  type: 'test'
+  ...
+# Subtest: 下載未加密版本 of a backup whose key is not on this device asks for the emergency key next
+ok 46 - 下載未加密版本 of a backup whose key is not on this device asks for the emergency key next
+  ---
+  duration_ms: 10953.270389
+  type: 'test'
+  ...
+# Subtest: an unencrypted upload is unauthenticated: no key step, a preflight warning and a second acknowledgement on 確認
+ok 47 - an unencrypted upload is unauthenticated: no key step, a preflight warning and a second acknowledgement on 確認
+  ---
+  duration_ms: 12119.933796
+  type: 'test'
+  ...
+# Subtest: a digest mismatch is listed per item with its differences, and the restore reports its downtime
+ok 48 - a digest mismatch is listed per item with its differences, and the restore reports its downtime
+  ---
+  duration_ms: 5731.034571
+  type: 'test'
+  ...
+# Subtest: a successful restore lists the JSON summary fields and the digests that matched
+ok 49 - a successful restore lists the JSON summary fields and the digests that matched
+  ---
+  duration_ms: 6507.797527
+  type: 'test'
+  ...
+# Subtest: deep verify: what was checked, what a restore would drop, and 已驗證（內容已逐項檢查）
+ok 50 - deep verify: what was checked, what a restore would drop, and 已驗證（內容已逐項檢查）
+  ---
+  duration_ms: 9438.023357
+  type: 'test'
+  ...
+# Subtest: backup details name the PostgreSQL mode (整個執行個體／單一資料庫), the data checks and format 2 facts
+ok 51 - backup details name the PostgreSQL mode (整個執行個體／單一資料庫), the data checks and format 2 facts
+  ---
+  duration_ms: 9441.919149
+  type: 'test'
+  ...
+# Subtest: the overview shows each app's backup storage; an engine without retention says so on 清理備份
+ok 52 - the overview shows each app's backup storage; an engine without retention says so on 清理備份
+  ---
+  duration_ms: 4614.431421
+  type: 'test'
+  ...
+# Subtest: without engine figures the overview computes storage per app from the backup list
+ok 53 - without engine figures the overview computes storage per app from the backup list
+  ---
+  duration_ms: 2886.428963
+  type: 'test'
+  ...
+# Subtest: 清理備份: usage, a keep-last policy, a preview with protected backups and a confirmed deletion
+ok 54 - 清理備份: usage, a keep-last policy, a preview with protected backups and a confirmed deletion
+  ---
+  duration_ms: 7776.987095
+  type: 'test'
+  ...
+# Subtest: 應用設定: owners, a scan, draft review, PostgreSQL mode, JSON editing with validation and diff, install and remove
+ok 55 - 應用設定: owners, a scan, draft review, PostgreSQL mode, JSON editing with validation and diff, install and remove
+  ---
+  duration_ms: 16962.392901
+  type: 'test'
+  ...
+# Subtest: 應用設定 on an engine without catalog-suggest explains that this device cannot scan yet
+ok 56 - 應用設定 on an engine without catalog-suggest explains that this device cannot scan yet
+  ---
+  duration_ms: 1400.57512
+  type: 'test'
+  ...
+# Subtest: hostile draft warnings, labels, diff lines and digest samples are rendered literally
+ok 57 - hostile draft warnings, labels, diff lines and digest samples are rendered literally
+  ---
+  duration_ms: 6671.874671
+  type: 'test'
+  ...
+# Subtest: dark theme: the new views keep WCAG AA contrast and fit every width
+ok 58 - dark theme: the new views keep WCAG AA contrast and fit every width
+  ---
+  duration_ms: 21985.169488
+  type: 'test'
+  ...
+# Subtest: light theme and keyboard: the new views keep WCAG AA contrast, visible focus and every control reachable
+ok 59 - light theme and keyboard: the new views keep WCAG AA contrast, visible focus and every control reachable
+  ---
+  duration_ms: 14446.940665
+  type: 'test'
+  ...
+# Subtest: 排程備份: overview card, the kit step before turning it on, the choices and a preview of the next runs and deletions before saving
+ok 60 - 排程備份: overview card, the kit step before turning it on, the choices and a preview of the next runs and deletions before saving
+  ---
+  duration_ms: 4975.835926
+  type: 'test'
+  ...
+# Subtest: 排程備份: 立即執行一次 follows the job; a partial run is named in the result, the list, 清理備份 and 活動紀錄
+ok 61 - 排程備份: 立即執行一次 follows the job; a partial run is named in the result, the list, 清理備份 and 活動紀錄
+  ---
+  duration_ms: 12086.498358
+  type: 'test'
+  ...
+# Subtest: 排程備份 banners: every attention code as the engine words it, with the way to the schedule or the job; waiting is information
+ok 62 - 排程備份 banners: every attention code as the engine words it, with the way to the schedule or the job; waiting is information
+  ---
+  duration_ms: 3929.087077
+  type: 'test'
+  ...
+# Subtest: an engine without 排程備份 says 這台設備的備份元件不支援排程 and is never sent the commands
+ok 63 - an engine without 排程備份 says 這台設備的備份元件不支援排程 and is never sent the commands
+  ---
+  duration_ms: 1677.941825
+  type: 'test'
+  ...
+# Subtest: an engine that refuses schedule-get as unknown gets the same notice
+ok 64 - an engine that refuses schedule-get as unknown gets the same notice
+  ---
+  duration_ms: 1337.736529
+  type: 'test'
+  ...
+# Subtest: a device in another time zone: the hint says both times; a saved app the device no longer has is named and refused
+ok 65 - a device in another time zone: the hint says both times; a saved app the device no longer has is named and refused
+  ---
+  duration_ms: 4196.039056
+  type: 'test'
+  ...
+# Subtest: a device without a key: the kit step creates one first; an engine refusal shows the kit step again
+ok 66 - a device without a key: the kit step creates one first; an engine refusal shows the kit step again
+  ---
+  duration_ms: 6365.341065
+  type: 'test'
+  ...
+# Subtest: 排程備份 in the dark theme: card, banner, form, kit step, dialog, list and activity keep WCAG AA contrast and fit every width
+ok 67 - 排程備份 in the dark theme: card, banner, form, kit step, dialog, list and activity keep WCAG AA contrast and fit every width
+  ---
+  duration_ms: 15823.407122
+  type: 'test'
+  ...
+# Subtest: 排程備份 with the keyboard in the light theme: visible focus, every control reachable, the switch, the radios and the dialog
+ok 68 - 排程備份 with the keyboard in the light theme: visible focus, every control reachable, the switch, the radios and the dialog
+  ---
+  duration_ms: 10120.320826
+  type: 'test'
+  ...
+# Subtest: schedule times are the device's on the overview card, the schedule card, 活動紀錄 and the job view when the browser keeps another time
+ok 69 - schedule times are the device's on the overview card, the schedule card, 活動紀錄 and the job view when the browser keeps another time
+  ---
+  duration_ms: 4043.005458
+  type: 'test'
+  ...
+# Subtest: a device in the browser's zone: no 設備時間 marks, the same times as before
+ok 70 - a device in the browser's zone: no 設備時間 marks, the same times as before
+  ---
+  duration_ms: 4381.919232
+  type: 'test'
+  ...
+# Subtest: turning 排程備份 off needs no deletion checkbox and saves it off; saving again while off says it stays off
+ok 71 - turning 排程備份 off needs no deletion checkbox and saves it off; saving again while off says it stays off
+  ---
+  duration_ms: 9310.373983
+  type: 'test'
+  ...
+# Subtest: 全部保留 saves keep_last null: the dialog lists no deletions and the form keeps 全部保留
+ok 72 - 全部保留 saves keep_last null: the dialog lists no deletions and the form keeps 全部保留
+  ---
+  duration_ms: 1597.065511
+  type: 'test'
+  ...
+# Subtest: an engine refusal for a missing device key shows the kit step that creates the key and opens no dialog
+ok 73 - an engine refusal for a missing device key shows the kit step that creates the key and opens no dialog
+  ---
+  duration_ms: 3352.057413
+  type: 'test'
+  ...
+# Subtest: 立即執行一次: an error is shown, a retry sends the same request id and the next run a new one
+ok 74 - 立即執行一次: an error is shown, a retry sends the same request id and the next run a new one
+  ---
+  duration_ms: 4997.649625
+  type: 'test'
+  ...
+# Subtest: 立即執行一次 needs this device's key while 預設加密備份 is on; an unencrypted run needs none
+ok 75 - 立即執行一次 needs this device's key while 預設加密備份 is on; an unencrypted run needs none
+  ---
+  duration_ms: 1037.298704
+  type: 'test'
+  ...
+# Subtest: an error when confirming keeps the dialog open with the engine's words; nothing is saved and the edits stay
+ok 76 - an error when confirming keeps the dialog open with the engine's words; nothing is saved and the edits stay
+  ---
+  duration_ms: 3161.556027
+  type: 'test'
+  ...
+# Subtest: turning 預設加密備份 off while the schedule is on says that its runs will not be encrypted either
+ok 77 - turning 預設加密備份 off while the schedule is on says that its runs will not be encrypted either
+  ---
+  duration_ms: 2659.395753
+  type: 'test'
+  ...
+# Subtest: the 排程檢查 row says what the banner says: not running while the checks stopped, 正常 only after a recorded check
+ok 78 - the 排程檢查 row says what the banner says: not running while the checks stopped, 正常 only after a recorded check
+  ---
+  duration_ms: 944.86237
+  type: 'test'
+  ...
+# Subtest: a saved settings file the engine cannot use: the form says it shows the defaults and needs saving again
+ok 79 - a saved settings file the engine cannot use: the form says it shows the defaults and needs saving again
+  ---
+  duration_ms: 1186.754231
+  type: 'test'
+  ...
+# Subtest: the 排程備份 switch keeps its knob with forced colors: on and off look different
+ok 80 - the 排程備份 switch keeps its knob with forced colors: on and off look different
+  ---
+  duration_ms: 2392.534058
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: an uploaded HA backup opens its own page, never inspect; 備份列表 lists it with its chip, filter, search and count; 總覽 counts its space
+ok 81 - 從 HA 備份匯入: an uploaded HA backup opens its own page, never inspect; 備份列表 lists it with its chip, filter, search and count; 總覽 counts its space
+  ---
+  duration_ms: 8503.369171
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: a wrong HA key goes back to the key step with the engine's words; the right one checks; the key is dropped when the wizard closes or the page changes
+ok 82 - 從 HA 備份匯入: a wrong HA key goes back to the key step with the engine's words; the right one checks; the key is dropped when the wizard closes or the page changes
+  ---
+  duration_ms: 12923.123479
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: HA's key is asked for when a chosen add-on is encrypted, whatever `protected` says (review P-04)
+ok 83 - 從 HA 備份匯入: HA's key is asked for when a chosen add-on is encrypted, whatever `protected` says (review P-04)
+  ---
+  duration_ms: 7503.547599
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 without this device's key while 預設加密 is on: the wizard says so with a link from the start and keeps 轉換 off; a refusal in the dialog links to 加密金鑰 (review P-07, F-05)
+ok 84 - 從 HA 備份匯入 without this device's key while 預設加密 is on: the wizard says so with a link from the start and keeps 轉換 off; a refusal in the dialog links to 加密金鑰 (review P-07, F-05)
+  ---
+  duration_ms: 5771.695097
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: a key refusal when the conversion starts closes the dialog on the key field (review P-08)
+ok 85 - 從 HA 備份匯入: a key refusal when the conversion starts closes the dialog on the key field (review P-08)
+  ---
+  duration_ms: 6104.67287
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: check results — a blocker leaves out only its own app (UI-14); the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked
+ok 86 - 從 HA 備份匯入: check results — a blocker leaves out only its own app (UI-14); the Odoo database picker with its counts; n8n facts and workflows to fix; 「這只是測試」 starts unchecked
+  ---
+  duration_ms: 6825.211193
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: convert, then the restore wizard takes over at its preflight with an HA notice; the result says what to do next
+ok 87 - 從 HA 備份匯入: convert, then the restore wizard takes over at its preflight with an HA notice; the result says what to do next
+  ---
+  duration_ms: 16252.368207
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: an app this device lacks cannot be chosen; a test import sends test_mode and says so on the restore and its result; no MCP lines without the MCP apps
+ok 88 - 從 HA 備份匯入: an app this device lacks cannot be chosen; a test import sends test_mode and says so on the restore and its result; no MCP lines without the MCP apps
+  ---
+  duration_ms: 12776.542179
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入: deleting an HA backup asks first; cancel never deletes; a busy refusal links to the job; the HA file goes, the converted backup stays
+ok 89 - 從 HA 備份匯入: deleting an HA backup asks first; cancel never deletes; a busy refusal links to the job; the HA file goes, the converted backup stays
+  ---
+  duration_ms: 9940.344086
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, engine whose inspect does not name the import: a converted backup restored from 備份列表 keeps its HA notice; 檢視內容 keeps 由 HA 轉換 (review P-01)
+ok 90 - 從 HA 備份匯入, engine whose inspect does not name the import: a converted backup restored from 備份列表 keeps its HA notice; 檢視內容 keeps 由 HA 轉換 (review P-01)
+  ---
+  duration_ms: 13062.743964
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 jobs: 檢查 HA 備份 and 轉換 HA 備份 are named in the banner, the job view and 活動紀錄; their results render; an active HA job is accepted
+ok 91 - 從 HA 備份匯入 jobs: 檢查 HA 備份 and 轉換 HA 備份 are named in the banner, the job view and 活動紀錄; their results render; an active HA job is accepted
+  ---
+  duration_ms: 7342.276121
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 errors: a busy start links to the running job; an engine without the HA commands asks for an update; python3-nacl and space in the engine's words; a cancelled check
+ok 92 - 從 HA 備份匯入 errors: a busy start links to the running job; an engine without the HA commands asks for an update; python3-nacl and space in the engine's words; a cancelled check
+  ---
+  duration_ms: 6601.514255
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 on an engine without it: no HA filter; an HA file is refused with a hint to update the 備份元件; \#/ha/<id> says so
+ok 93 - 從 HA 備份匯入 on an engine without it: no HA filter; an HA file is refused with a hint to update the 備份元件; \#/ha/<id> says so
+  ---
+  duration_ms: 3227.339056
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, LiteLLM: the check shows the versions, what moves, the salt that replaces this device's, and before a real import the apps here whose LiteLLM keys stop working
+ok 94 - 從 HA 備份匯入, LiteLLM: the check shows the versions, what moves, the salt that replaces this device's, and before a real import the apps here whose LiteLLM keys stop working
+  ---
+  duration_ms: 3994.859461
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, LiteLLM: with no other app using LiteLLM keys the reminder still says this device's keys stop working
+ok 95 - 從 HA 備份匯入, LiteLLM: with no other app using LiteLLM keys the reminder still says this device's keys stop working
+  ---
+  duration_ms: 8911.334519
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, LiteLLM: an entry in another backup mode is refused by the check with what to choose and where
+ok 96 - 從 HA 備份匯入, LiteLLM: an entry in another backup mode is refused by the check with what to choose and where
+  ---
+  duration_ms: 4455.415356
+  type: 'test'
+  ...
+# Subtest: 應用設定, LiteLLM: the draft has the single-database mode chosen (what the HA import fills) and says why; it installs as it is
+ok 97 - 應用設定, LiteLLM: the draft has the single-database mode chosen (what the HA import fills) and says why; it installs as it is
+  ---
+  duration_ms: 3506.092687
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 1: the HA page offers Omnigent, Hermes, EMQX and Headscale; the check shows each app's versions, facts and warnings; the trust notice and the test choice say what applies
+ok 98 - 從 HA 備份匯入, batch 1: the HA page offers Omnigent, Hermes, EMQX and Headscale; the check shows each app's versions, facts and warnings; the trust notice and the test choice say what applies
+  ---
+  duration_ms: 4635.359638
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 2: OpenDesign is importable; its check card shows the core revision both sides share, what moves and how to log in afterwards
+ok 99 - 從 HA 備份匯入, batch 2: OpenDesign is importable; its check card shows the core revision both sides share, what moves and how to log in afterwards
+  ---
+  duration_ms: 4048.274312
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 2: code-server is importable; Cloudflare Tunnel and the MCP admin add-on are never moved and say what to do here; the check card shows what moves and the four program versions
+ok 100 - 從 HA 備份匯入, batch 2: code-server is importable; Cloudflare Tunnel and the MCP admin add-on are never moved and say what to do here; the check card shows what moves and the four program versions
+  ---
+  duration_ms: 9507.764989
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 2: Nextcloud with HA's share folder is importable; the check card shows the users, the users' files from the share folder, shares, calendars, custom apps, Office and both URLs
+ok 101 - 從 HA 備份匯入, batch 2: Nextcloud with HA's share folder is importable; the check card shows the users, the users' files from the share folder, shares, calendars, custom apps, Office and both URLs
+  ---
+  duration_ms: 16592.621099
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 2: Nextcloud without HA's share folder is refused with the engine's sentence (the users' files are not in the backup); the card says where they were and convert stays disabled
+ok 102 - 從 HA 備份匯入, batch 2: Nextcloud without HA's share folder is refused with the engine's sentence (the users' files are not in the backup); the card says where they were and convert stays disabled
+  ---
+  duration_ms: 8339.995587
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 1: convert and restore; the notice says what each app replaces and keeps; the result lists each app's to-dos (Headscale's devices, Hermes's Omnigent and Paseo pairing, the engine's MCP lines) and no MCP line of the page; 由 HA 轉換 and 活動紀錄
+ok 103 - 從 HA 備份匯入, batch 1: convert and restore; the notice says what each app replaces and keeps; the result lists each app's to-dos (Headscale's devices, Hermes's Omnigent and Paseo pairing, the engine's MCP lines) and no MCP line of the page; 由 HA 轉換 and 活動紀錄
+  ---
+  duration_ms: 18968.324662
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 1 test import: Omnigent's schedules pause and Hermes keeps running (HA's add-on is stopped instead); the choice, the confirmation, the restore notice, the result, the converted backup and its job never say everything is off
+ok 104 - 從 HA 備份匯入, batch 1 test import: Omnigent's schedules pause and Hermes keeps running (HA's add-on is stopped instead); the choice, the confirmation, the restore notice, the result, the converted backup and its job never say everything is off
+  ---
+  duration_ms: 20523.34512
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 1: a hot EMQX backup whose database did not load is refused with the engine's advice to stop the add-on and back up again; a conversion refused the same way keeps the choices
+ok 105 - 從 HA 備份匯入, batch 1: a hot EMQX backup whose database did not load is refused with the engine's advice to stop the add-on and back up again; a conversion refused the same way keeps the choices
+  ---
+  duration_ms: 12661.186191
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入, batch 1: SR-5 — a different MQTT password hashing is a warning that names this device's accounts before any conversion (the conversion stays possible); HA's plain hashing is refused and the conversion cannot start
+ok 106 - 從 HA 備份匯入, batch 1: SR-5 — a different MQTT password hashing is a warning that names this device's accounts before any conversion (the conversion stays possible); HA's plain hashing is refused and the conversion cannot start
+  ---
+  duration_ms: 10648.21412
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 screens fit 1440 to 320 px without horizontal scrolling, render HA text literally and keep WCAG AA contrast
+ok 107 - 從 HA 備份匯入 screens fit 1440 to 320 px without horizontal scrolling, render HA text literally and keep WCAG AA contrast
+  ---
+  duration_ms: 24416.79558
+  type: 'test'
+  ...
+# Subtest: 從 HA 備份匯入 in the dark theme: the HA page, the results and options, the restore notice and its result keep WCAG AA contrast
+ok 108 - 從 HA 備份匯入 in the dark theme: the HA page, the results and options, the restore notice and its result keep WCAG AA contrast
+  ---
+  duration_ms: 13225.852941
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: the check says what can and cannot be imported, the one confirmation lists every line, one tick starts the import and each app has its own result
+ok 109 - HAOS 一次確認: the check says what can and cannot be imported, the one confirmation lists every line, one tick starts the import and each app has its own result
+  ---
+  duration_ms: 15095.69671
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: the only database that can move is chosen already, a line of another database is not asked, and an app the check has no result for is left out and named (UI-15, UI-16)
+ok 110 - HAOS 一次確認: the only database that can move is chosen already, a line of another database is not asked, and an app the check has no result for is left out and named (UI-15, UI-16)
+  ---
+  duration_ms: 12621.240459
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a choice the check asks for (the same add-on from two stores) is made on the page and sent again with the check
+ok 111 - HAOS 一次確認: a choice the check asks for (the same add-on from two stores) is made on the page and sent again with the check
+  ---
+  duration_ms: 21056.13522
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: an import whose start does not answer is asked again with the same request id and follows the one job (UI-22)
+ok 112 - HAOS 一次確認: an import whose start does not answer is asked again with the same request id and follows the one job (UI-22)
+  ---
+  duration_ms: 9000.398258
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a start that never answers ends in words that say the job may be running; pressing the button again reaches the same job (UI-22)
+ok 113 - HAOS 一次確認: a start that never answers ends in words that say the job may be running; pressing the button again reaches the same job (UI-22)
+  ---
+  duration_ms: 17612.1664
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: when every try ran out of time the status decides: the job the engine started is found and followed (UI-22)
+ok 114 - HAOS 一次確認: when every try ran out of time the status decides: the job the engine started is found and followed (UI-22)
+  ---
+  duration_ms: 7478.402011
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a key with a Tab is tried as it is and a refusal says why it may have failed; only an empty key stops the page (UI-12)
+ok 115 - HAOS 一次確認: a key with a Tab is tried as it is and a refusal says why it may have failed; only an empty key stops the page (UI-12)
+  ---
+  duration_ms: 11045.197929
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: no device key yet — the page does not stop, the import makes one and asks for the emergency key (UI-17, D11)
+ok 116 - HAOS 一次確認: no device key yet — the page does not stop, the import makes one and asks for the emergency key (UI-17, D11)
+  ---
+  duration_ms: 14597.642568
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: 做完這個應用就停止 lets the app being worked on finish and does not start the next; the others say they did not start
+ok 117 - HAOS 一次確認: 做完這個應用就停止 lets the app being worked on finish and does not start the next; the others say they did not start
+  ---
+  duration_ms: 10523.370171
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: cancelling the import stops the whole chain; the app that was converted keeps its backup and can be restored from the result
+ok 118 - HAOS 一次確認: cancelling the import stops the whole chain; the app that was converted keeps its backup and can be restored from the result
+  ---
+  duration_ms: 6722.076419
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a line whose names changed since the check stops only that app; the result offers to check and confirm it again
+ok 119 - HAOS 一次確認: a line whose names changed since the check stops only that app; the result offers to check and confirm it again
+  ---
+  duration_ms: 13950.757792
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: 只轉換 converts the apps and leaves the restore to the customer; nothing of this device is replaced
+ok 120 - HAOS 一次確認: 只轉換 converts the apps and leaves the restore to the customer; nothing of this device is replaced
+  ---
+  duration_ms: 7757.600213
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: the choices, the one tick and the buttons are reachable with the keyboard, each with a visible focus ring
+ok 121 - HAOS 一次確認: the choices, the one tick and the buttons are reachable with the keyboard, each with a visible focus ring
+  ---
+  duration_ms: 4283.356537
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認 in the dark theme: the check, the one confirmation, the running import and its result keep WCAG AA contrast and fit every width
+ok 122 - HAOS 一次確認 in the dark theme: the check, the one confirmation, the running import and its result keep WCAG AA contrast and fit every width
+  ---
+  duration_ms: 11662.734003
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: names from a backup are only ever text, and the screens fit 1440 to 320 px without sideways scrolling
+ok 123 - HAOS 一次確認: names from a backup are only ever text, and the screens fit 1440 to 320 px without sideways scrolling
+  ---
+  duration_ms: 3429.889807
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a job of an import found again after a reload shows every app of the import, what became of each, and the way to the next job
+ok 124 - HAOS 一次確認: a job of an import found again after a reload shows every app of the import, what became of each, and the way to the next job
+  ---
+  duration_ms: 1345.978782
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a job that is not found says the job may still be running and offers to read it again (X-JOB-03)
+ok 125 - HAOS 一次確認: a job that is not found says the job may still be running and offers to read it again (X-JOB-03)
+  ---
+  duration_ms: 1008.692781
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: a conversion that reports no new backup is a hint to the backup list, not an error (UI-21), and one app that fails the check does not hold back the others in the two-step flow (UI-14, UI-15)
+ok 126 - HAOS 一次確認: a conversion that reports no new backup is a hint to the backup list, not an error (UI-21), and one app that fails the check does not hold back the others in the two-step flow (UI-14, UI-15)
+  ---
+  duration_ms: 4063.54775
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: the engine could not make the device key — the refusal is shown with the way to 加密金鑰, the import is not started (UI-17)
+ok 127 - HAOS 一次確認: the engine could not make the device key — the refusal is shown with the way to 加密金鑰, the import is not started (UI-17)
+  ---
+  duration_ms: 9876.692727
+  type: 'test'
+  ...
+# Subtest: HAOS 一次確認: the restore check of a converted backup lists its lines; an app that fails it is not offered and the others go on; the lines to confirm are sent with the restore (UI-25)
+ok 128 - HAOS 一次確認: the restore check of a converted backup lists its lines; an app that fails it is not offered and the others go on; the lines to confirm are sent with the restore (UI-25)
+  ---
+  duration_ms: 3199.564453
+  type: 'test'
+  ...
+1..128
+# tests 128
+# suites 0
+# pass 128
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 988199.491169

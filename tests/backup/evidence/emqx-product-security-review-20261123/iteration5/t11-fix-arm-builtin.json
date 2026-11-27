@@ -1,0 +1,58 @@
+{
+ "attempt": "t11-fix-arm-builtin",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "t11_profile_real.py fix arm builtin",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 231.4,
+ "exit_code": 0,
+ "harness_commit": "50eaf177e249b39d57170e6c8fa5ba0f5ea777f9",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "arch": "arm",
+  "candidate_env_file_flag": true,
+  "candidate_has_env_file_cookie": true,
+  "candidate_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "candidate_rules": 2,
+  "codebase": "fix",
+  "containers_left": 0,
+  "conversion": "PASSED (candidate built, all product checks green, profile equal)",
+  "dangling_volumes_new": -1,
+  "device_config_unchanged": true,
+  "device_profile": [
+   "file",
+   "built_in_database"
+  ],
+  "device_sources": "builtin",
+  "elapsed_s": 230.7,
+  "fixture": "woow-b1-arm-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "b6eb257cc5790bee",
+  "ha_counts": {
+   "emqx_acl": 4,
+   "emqx_admin": 2,
+   "emqx_app": 1,
+   "emqx_authn_mnesia": 3,
+   "emqx_authn_scram_mnesia": 0,
+   "emqx_banned": 1,
+   "emqx_banned_rules": 0,
+   "emqx_psk": 0,
+   "emqx_retainer_message": 5
+  },
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "readback_roots": 44,
+  "store": "labpodman (separate --root)",
+  "test": "T11 real batch-1 HA backup, conversion body with this device's profile and EnvironmentFile"
+ },
+ "source_commit": "3ad74cacae3cc77ddb281eb166488ff5af0d15fb",
+ "started": "2026-11-24T13:55:49+0800",
+ "status_lines": [],
+ "stdout_sha256": "9c8f1fb5cd0c71397d0635e257bc3c411ef3be1333564bd365a1beeb7198582f",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

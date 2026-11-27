@@ -18,7 +18,8 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 
-from . import flows, hastore
+from . import flows, haapps, hachain, haissues, hastore
+from . import kept as kept_copies
 from . import jobs as jobmod
 from . import version as engine_version
 from .errors import BackupError
@@ -34,6 +35,7 @@ SHA256_RE = re.compile(r'[0-9a-f]{64}\Z')
 CONTROL_RE = re.compile(r'[\x00-\x1f\x7f-\x9f]')
 GENERIC_ERROR = '發生未預期的內部錯誤，請查看系統日誌。'
 STATUS_WORKERS = 8  # apps probed (and health-hinted) at the same time by `status`
+ISSUES = {'restore.device-key': 'auto'}  # haissues: X-PF-03, FL-07 (D11)
 
 
 # ---------------------------------------------------------------- request validation
@@ -72,20 +74,54 @@ def v_ha_backup_id(value, field):
     return value
 
 
-HA_APP_IDS = ('odoo', 'n8n')
-HA_DB_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}\Z')
+HA_APP_IDS = haapps.APP_IDS  # the importers' catalog ids (haapps.IMPORTERS, in order)
+HA_NODE_RE = re.compile(r'[A-Za-z0-9_.-]{1,64}@[A-Za-z0-9_.:-]{1,190}\Z')  # an Erlang node name (EMQX)
 
 
 def v_ha_apps(value, field):
     if (not isinstance(value, list) or not 1 <= len(value) <= len(HA_APP_IDS) or len(set(map(str, value))) != len(value)
             or not all(isinstance(item, str) and item in HA_APP_IDS for item in value)):
-        raise _bad(field, '必須是 1 到 2 個不重複的應用 ID（odoo、n8n）的陣列。')
+        raise _bad(field, f'必須是 1 到 {len(HA_APP_IDS)} 個不重複的應用 ID（{"、".join(HA_APP_IDS)}）的陣列。')
     return value
 
 
 def v_ha_database(value, field):
-    if not isinstance(value, str) or not HA_DB_RE.fullmatch(value):
+    from .haimport import valid_database
+    if not valid_database(value):
         raise _bad(field, '不是有效的資料庫名稱。')
+    return value
+
+
+def v_acknowledged(value, field):
+    """{app id or `_shared`: [confirmation keys]} (CONTRACT section 7 HaIssue): at most 80 keys each."""
+    if not isinstance(value, dict) or len(value) > 33:
+        raise _bad(field, '必須是 JSON 物件（應用 ID 對應確認鍵的陣列）。')
+    for app_id, keys in value.items():
+        if app_id != haissues.SHARED and not APP_ID_RE.fullmatch(app_id):
+            raise _bad(field, '含有格式不正確的應用 ID。')
+        if (not isinstance(keys, list) or len(keys) > haissues.MAX_ACKNOWLEDGED
+                or not all(haissues.valid_key(key) for key in keys) or len(set(keys)) != len(keys)):
+            raise _bad(field, f'的確認鍵必須是最多 {haissues.MAX_ACKNOWLEDGED} 個不重複確認鍵的陣列。')
+    return value
+
+
+def v_ha_choices(value, field):
+    """{app id: {'addon'|'database'|'node': value}}: what the customer chose (only what the importer knows)."""
+    if not isinstance(value, dict):
+        raise _bad(field, '必須是 JSON 物件。')
+    for app_id, kinds in value.items():
+        if app_id not in HA_APP_IDS or not isinstance(kinds, dict):
+            raise _bad(field, '含有不能從 HA 備份匯入的應用。')
+        for kind, item in kinds.items():
+            if kind not in haapps.get(app_id).choices:
+                raise _bad(field, f'含有「{app_id}」不支援的選項。')
+            if kind == 'database':
+                v_ha_database(item, f'{field}.{app_id}.database')
+            elif kind == 'addon':
+                if not isinstance(item, str) or not hastore.ADDON_SLUG_RE.fullmatch(item):
+                    raise _bad(f'{field}.{app_id}.addon', '格式不正確。')
+            elif not isinstance(item, str) or not HA_NODE_RE.fullmatch(item):
+                raise _bad(f'{field}.{app_id}.{kind}', '格式不正確。')
     return value
 
 
@@ -137,8 +173,8 @@ def v_key_id(value, field):
 
 
 def v_filename(value, field):
-    if (not isinstance(value, str) or not 1 <= len(value) <= 255 or CONTROL_RE.search(value)
-            or '/' in value or '\\' in value):
+    """The name of an uploaded file is only shown (storage.display_filename cleans it): any text that is no path (X-UP-01)."""
+    if not isinstance(value, str) or '/' in value or '\\' in value:
         raise _bad(field, '不是有效的檔名。')
     return value
 
@@ -196,9 +232,10 @@ SPECS = {
     'restore-start': {'backup_id': (REQUIRED, v_backup_id), 'apps': (REQUIRED, v_apps),
                       'request_id': (REQUIRED, v_request_id), 'confirm': (REQUIRED, v_true),
                       'key': (OPTIONAL, v_key), 'save_key': (OPTIONAL, v_bool),
-                      'allow_no_safety': (OPTIONAL, v_bool), 'accept_unauthenticated': (OPTIONAL, v_bool)},
+                      'allow_no_safety': (OPTIONAL, v_bool), 'accept_unauthenticated': (OPTIONAL, v_bool),
+                      'acknowledged': (OPTIONAL, v_acknowledged)},
     'job-status': {'job_id': (REQUIRED, v_job_id)},
-    'job-cancel': {'job_id': (REQUIRED, v_job_id)},
+    'job-cancel': {'job_id': (REQUIRED, v_job_id), 'after_this': (OPTIONAL, v_bool)},
     'delete': {'backup_id': (REQUIRED, v_backup_id)},
     'upload-begin': {'filename': (REQUIRED, v_filename), 'size': (REQUIRED, v_size)},
     'upload-finish': {'upload_id': (REQUIRED, v_upload_id)},
@@ -225,11 +262,20 @@ SPECS = {
     'ha-delete': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'confirm': (REQUIRED, v_true)},
     # The HA import jobs (part B): `key` is the HA key exactly as typed (never trimmed or normalised).
     'ha-check-start': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'apps': (REQUIRED, v_ha_apps),
-                       'request_id': (REQUIRED, v_request_id), 'key': (OPTIONAL, v_key)},
+                       'request_id': (REQUIRED, v_request_id), 'key': (OPTIONAL, v_key),
+                       'choices': (OPTIONAL, v_ha_choices)},
     'ha-convert-start': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'apps': (REQUIRED, v_ha_apps),
                          'test_mode': (REQUIRED, v_bool), 'request_id': (REQUIRED, v_request_id),
                          'confirm': (REQUIRED, v_true), 'odoo_database': (OPTIONAL, v_ha_database),
-                         'key': (OPTIONAL, v_key)},
+                         'key': (OPTIONAL, v_key), 'acknowledged': (OPTIONAL, v_acknowledged),
+                         'choices': (OPTIONAL, v_ha_choices)},
+    # The whole import of the selected apps, one after the other (HAOS parity; CONTRACT section 7).
+    'ha-import-start': {'ha_backup_id': (REQUIRED, v_ha_backup_id), 'apps': (REQUIRED, v_ha_apps),
+                        'request_id': (REQUIRED, v_request_id), 'confirm': (REQUIRED, v_true),
+                        'test_mode': (REQUIRED, v_bool), 'then_restore': (REQUIRED, v_bool),
+                        'overwrite': (OPTIONAL, v_bool), 'acknowledged': (OPTIONAL, v_acknowledged),
+                        'choices': (OPTIONAL, v_ha_choices), 'check_job_id': (OPTIONAL, v_job_id),
+                        'key': (OPTIONAL, v_key)},
 }
 NO_INPUT = frozenset({'status', 'list', 'key-init', 'key-kit', 'jobs', 'settings-get', 'schedule-get'})
 
@@ -294,6 +340,12 @@ def validate(command, data):
             raise _bad(field, '為必填。')
     if data.get('save_key') and 'key' not in data:
         raise _bad('save_key', '需要同時提供 key。')
+    if command == 'ha-import-start':
+        if data['then_restore'] and data.get('overwrite') is not True:
+            raise _bad('overwrite', '必須為 true（匯入會取代這台這些應用現在的資料，需要明確確認）。')
+        for field, also in (('acknowledged', {haissues.SHARED}), ('choices', set())):
+            if set(data.get(field) or {}) - set(data['apps']) - also:
+                raise _bad(field, '含有沒有選擇的應用。')
     if command in ('catalog-install', 'catalog-remove') and data.get('confirm') and 'expected_sha256' not in data:
         # A confirmed change names the entry it previewed (null: none was installed).
         raise _bad('expected_sha256', '確認時為必填（預覽回傳的 expected_sha256，沒有安裝的設定時為 null）。')
@@ -503,7 +555,8 @@ def backup_view(meta, key_ids, scheduled=frozenset(), from_ha=None):
     """BackupMeta for the page: `format` (1|2), `encrypted`, `key_available` (always true without encryption),
     `unauthenticated` (an unencrypted upload: a restore needs `accept_unauthenticated`) and `scheduled` (a manual backup
     the schedule's registry lists: 排程備份; the index itself is unchanged); `from_ha` only for a manual backup converted
-    from a Home Assistant backup (ha-imports.json; branch feat/ha-import)."""
+    from a Home Assistant backup (ha-imports.json; branch feat/ha-import); `kept` (true, only then) for a kept copy of a
+    database service (kept.py: the administrator's to download or delete; nothing prunes it)."""
     from .storage import unauthenticated
     view = dict(meta)
     view.setdefault('format', 1)
@@ -514,6 +567,8 @@ def backup_view(meta, key_ids, scheduled=frozenset(), from_ha=None):
     origin = (from_ha or {}).get(view.get('id')) if view.get('type') == 'manual' else None
     if origin is not None:
         view['from_ha'] = origin
+    if kept_copies.is_kept(view):
+        view['kept'] = True  # a kept copy (S4) or a pinned pre-restore backup: derived from the note, only when true
     return view
 
 
@@ -621,6 +676,15 @@ UNAUTHENTICATED_MESSAGE = ('這份上傳的備份沒有加密，內容無法驗�
                            '只有在確定檔案來源可信時才還原；確認還原時需要另外勾選這一點。')
 
 
+RESTORE_KEY_CREATED = ('這台還沒有加密金鑰，開始還原時會自動建立，用來加密還原前備份；完成後請到「加密金鑰」下載並保存。')
+
+
+def adapter_issues(adapter):
+    """The haissues.Issue objects an adapter's preflight left in `restore_issues` ([] for an adapter without them)."""
+    found = getattr(adapter, 'restore_issues', None)
+    return list(found) if isinstance(found, (list, tuple)) else []
+
+
 def build_preflight(svc, manifest, meta=None):
     plain = manifest.get('encryption') == 'none'
     checks = [{'id': 'archive', 'status': 'ok',
@@ -644,6 +708,7 @@ def build_preflight(svc, manifest, meta=None):
     entry_sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or []}
     device_key = svc.keys.device_key()
     safety_encrypted = svc.encrypt_by_default()  # safety backups follow the setting 預設加密備份
+    ha_import = flows.from_ha(svc.paths, meta['id'], meta) if isinstance(meta, dict) and meta.get('id') else False
     apps = []
     for app_manifest in manifest.get('apps') or []:
         app = catalog.get(app_manifest['id'])
@@ -672,17 +737,22 @@ def build_preflight(svc, manifest, meta=None):
             apps.append(item)
             continue
         adapter = svc.adapter(app)
+        adapter.ha_import = ha_import
         mode = 'fresh'
         try:
             mode = adapter.detect_mode()
             app_checks = adapter.preflight(app_manifest, mode=mode, entry_sizes=entry_sizes)
         except BackupError as error:
             app_checks = [{'id': f'{app.id}/probe', 'status': 'fail', 'message': error.message}]
+        issues = adapter_issues(adapter)
         if mode == 'inplace' and device_key is None and safety_encrypted:
-            app_checks.append({'id': f'{app.id}/device-key', 'status': 'fail',
-                               'message': '原位還原需要先建立這台設備的加密金鑰（用於建立還原前備份）。'})
+            # Created by restore-start (D11, X-PF-03): no reason to refuse.
+            app_checks.append({'id': f'{app.id}/device-key', 'status': 'warn', 'message': RESTORE_KEY_CREATED})
+            issues.append(haissues.Issue('restore.device-key', 'auto', RESTORE_KEY_CREATED))
         item = {'id': app.id, 'name': app.name, 'mode': mode, 'checks': app_checks,
                 'restorable': not any(c['status'] == 'fail' for c in app_checks)}
+        if issues:
+            item['issues'] = haissues.views(app.id, issues)
         if carried is not None:
             item['settings'] = {'state': 'same' if carried == app.raw else 'different', 'entry': carried}
         apps.append(item)
@@ -786,9 +856,13 @@ def cmd_list(svc, _req):
             'ha_backups': ha_backups_view(svc)}
 
 
-def _refuse_key_for_plain(header, req):
-    if header.get('encryption') == 'none' and req.get('key') is not None:
-        raise BackupError('invalid-request', '這份備份沒有加密，不需要金鑰。', field='key')
+def request_key(header, req):
+    """The key text a request carries, or None. A backup that is not encrypted needs none (X-PF-05, HAOS parity): a key
+    that comes with such a backup is left out -- not read, not saved, not handed to a job -- and the request goes on
+    (it used to be refused with `invalid-request`)."""
+    if header.get('encryption') == 'none':
+        return None
+    return req.get('key')
 
 
 def _member_sizes(svc, path):
@@ -808,8 +882,7 @@ def cmd_inspect(svc, req):
     meta = svc.storage.get(backup_id)
     path = svc.storage.archive_path(backup_id)
     header = svc.archive.read_header(path)
-    _refuse_key_for_plain(header, req)
-    key_text = req.get('key')
+    key_text = request_key(header, req)
     identities = list(svc.keys.identities())
     with ExitStack() as stack:
         if header.get('encryption') == 'none':
@@ -883,19 +956,18 @@ def cmd_backup_start(svc, req):
 
 def cmd_verify_start(svc, req):
     svc.storage.get(req['backup_id'])
-    _refuse_key_for_plain(svc.archive.read_header(svc.storage.archive_path(req['backup_id'])), req)
-    params = {'backup_id': req['backup_id'], 'key_provided': 'key' in req}
-    return svc.start('verify', params, req['request_id'], key_text=req.get('key'))
+    key_text = request_key(svc.archive.read_header(svc.storage.archive_path(req['backup_id'])), req)
+    params = {'backup_id': req['backup_id'], 'key_provided': key_text is not None}
+    return svc.start('verify', params, req['request_id'], key_text=key_text)
 
 
 def cmd_restore_start(svc, req):
     meta = svc.storage.get(req['backup_id'])
     flows.resolve_apps(svc.catalog(), req['apps'])
     header = svc.archive.read_header(svc.storage.archive_path(req['backup_id']))
-    _refuse_key_for_plain(header, req)
+    key_text = request_key(header, req)
     if backup_view(meta, set())['unauthenticated'] and req.get('accept_unauthenticated') is not True:
         raise BackupError('invalid-request', UNAUTHENTICATED_MESSAGE, field='accept_unauthenticated')
-    key_text = req.get('key')
     if key_text is not None and req.get('save_key'):
         # Saved only after it opened this backup (review finding F4).
         path = svc.storage.archive_path(req['backup_id'])
@@ -903,12 +975,104 @@ def cmd_restore_start(svc, req):
             svc.archive.read_manifest(path, [identity])
         svc.keys.import_key(key_text)
         key_text = None
-    params = {'backup_id': req['backup_id'], 'apps': list(req['apps']), 'key_provided': key_text is not None}
+    confirm_restore(svc, req, header, key_text, meta)
+    created = ensure_key(svc, 'restore') if _needs_safety_key(svc, req['apps']) else False
+    apps = list(req['apps'])
+    params = {'backup_id': req['backup_id'], 'apps': apps, 'key_provided': key_text is not None}
     if req.get('allow_no_safety'):
         params['allow_no_safety'] = True
     if req.get('accept_unauthenticated'):
         params['accept_unauthenticated'] = True
-    return svc.start('restore', params, req['request_id'], key_text=key_text)
+    # Only the lines of the apps this restore touches stay in the job record (a request may carry the keys of 33 apps).
+    acknowledged = {app_id: list(keys) for app_id, keys in (req.get('acknowledged') or {}).items()
+                    if keys and app_id in req['apps']}
+    group = None
+    if 1 < len(apps) <= hachain.MAX_APPS and _from_ha(svc, req['backup_id']):
+        # A converted HA backup restores one app after the other, each with its own pre-restore backup and its own automatic
+        # rollback: one app's problem never takes back or stops the others (HAOS parity; hachain.py). Any other backup keeps
+        # its all-or-nothing restore.
+        group = hachain.new_group_id()
+        params['apps'] = apps[:1]
+        params['group'] = hachain.group_params(group, 'ha-restore', 'restore', apps[0], 0, len(apps))
+        params['chain'] = hachain.new_chain(apps, key_provided=key_text is not None, acknowledged=acknowledged,
+                                            allow_no_safety=bool(req.get('allow_no_safety')),
+                                            accept_unauthenticated=bool(req.get('accept_unauthenticated')))
+        acknowledged = {app_id: keys for app_id, keys in acknowledged.items() if app_id == apps[0]}
+    if acknowledged:
+        params['acknowledged'] = acknowledged
+    started = svc.start('restore', params, req['request_id'], key_text=key_text)
+    reply = dict(started, key_created=created)
+    if group is not None:
+        known = ((svc.job_record(started['job_id']) or {}).get('params') or {}).get('group') or {}
+        reply['group'] = known.get('id') if started.get('deduplicated') else group
+    return reply
+
+
+def _from_ha(svc, backup_id):
+    """True for a backup converted from an HA backup (ha-imports.json lists it; an unreadable file says no)."""
+    from . import haimport
+    try:
+        return backup_id in (haimport.load_registry(svc.paths) or {})
+    except Exception:  # noqa: BLE001 - the registry never changes whether a restore can start
+        traceback.print_exc(file=sys.stderr)
+        return False
+
+
+def _needs_safety_key(svc, app_ids):
+    """The restore is going to encrypt a pre-restore copy and this device has no key yet (FL-07, X-PF-03): an app that
+    is there is restored in place. One that cannot be asked counts as there (the job finds out)."""
+    if not svc.encrypt_by_default() or svc.keys.device_key() is not None:
+        return False
+    catalog = svc.catalog()
+    for app_id in app_ids:
+        try:
+            if svc.adapter(catalog.get(app_id)).detect_mode() == 'inplace':
+                return True
+        except Exception:  # noqa: BLE001 - the job's own preflight says what is wrong
+            traceback.print_exc(file=sys.stderr)
+            return True
+    return False
+
+
+def confirm_restore(svc, req, header, key_text, meta=None):
+    """Refuses a restore whose preflight has lines to confirm that the request does not confirm (`confirmation-required`,
+    `details.apps`; nothing started). Only adapters that report such lines (`restore_issues`, a class attribute) are
+    asked; one that cannot be made is the job's to report."""
+    adapters = {}
+    ha_import = flows.from_ha(svc.paths, req['backup_id'], meta)  # (the same answer the job gets: the note counts while the registry cannot be read)
+    for app in flows.resolve_apps(svc.catalog(), req['apps']):
+        with contextlib.suppress(BackupError):
+            adapter = svc.adapter(app)
+            adapter.ha_import = ha_import
+            if getattr(type(adapter), 'restore_issues', None) is None:
+                continue
+            if getattr(type(adapter), 'issues_only_for_ha', False) and not ha_import:
+                continue  # an ordinary restore has no lines to confirm and keeps its checks (H6): no extra preflight either
+            adapters[app.id] = adapter
+    if not adapters:
+        return
+    path = svc.storage.archive_path(req['backup_id'])
+    with ExitStack() as stack:
+        identities = list(svc.keys.identities())
+        if header.get('encryption') == 'none':
+            identities = []
+        elif key_text is not None:
+            identities = [stack.enter_context(svc.keys.temp_identity(key_text, f'key-check-{secrets.token_hex(8)}'))]
+        manifest = svc.archive.read_manifest(path, identities)
+    sizes = {e.get('path'): e.get('size', 0) for e in manifest.get('entries') or []}
+    missing = {}
+    for app_manifest in manifest.get('apps') or []:
+        adapter = adapters.get(app_manifest['id'])
+        if adapter is None:
+            continue
+        adapter.preflight(app_manifest, mode=adapter.detect_mode(), entry_sizes=sizes)
+        left = haissues.missing(app_manifest['id'], adapter_issues(adapter),
+                                (req.get('acknowledged') or {}).get(app_manifest['id']))
+        if left:
+            missing[app_manifest['id']] = left
+    if missing:
+        names = '、'.join(haissues.clean(svc.catalog().get(app_id).name, 60) for app_id in missing)
+        raise haissues.confirmation_required(missing, f'還原 {names} 前還有事情要確認。')
 
 
 def cmd_job_status(svc, req):
@@ -934,7 +1098,9 @@ def cmd_jobs(svc, _req):
 
 
 def cmd_job_cancel(svc, req):
-    return jobmod.cancel_job(svc.paths, req['job_id'])
+    """Cancel a job. A job of an HA import stands for the whole import (its live job is cancelled and the import stops);
+    `after_this: true` lets the app being worked on finish and stops the import after it (CONTRACT section 7)."""
+    return jobmod.cancel_job(svc.paths, req['job_id'], after_this=req.get('after_this') is True)
 
 
 def cmd_delete(svc, req):
@@ -959,6 +1125,9 @@ def cmd_delete(svc, req):
         from . import haimport
         with contextlib.suppress(Exception):  # a converted backup's origin row goes with it (ha-imports.json)
             haimport.forget(svc.paths, backup_id)
+    elif kept_copies.is_kept(meta):
+        with contextlib.suppress(Exception):  # the converted backup no longer points at a copy that is gone
+            kept_copies.forget_pointer(svc.paths, backup_id)
     # Every deletion is journaled, like retention's (review L6).
     svc.audit(f'backup-delete backup={backup_id} type={meta.get("type")} '
               f'encrypted={"false" if meta.get("encrypted") is False else "true"} loginuid={_login_uid()}')
@@ -993,62 +1162,172 @@ def cmd_ha_delete(svc, req):
     return {}
 
 
+def ensure_key(svc, reason):
+    """True when the device key was created just now (D11: HAOS restores without a key of one's own, so an import or a
+    restore that encrypts something creates it; the page then asks to download it until that is confirmed)."""
+    if svc.keys.device_key() is not None:
+        return False
+    try:
+        info, created = svc.keys.ensure_device_key()
+    except (BackupError, OSError) as error:
+        raise BackupError('no-device-key', '無法自動建立這台的加密金鑰，請到「加密金鑰」建立後再試一次。') from error
+    if created:
+        svc.audit(f'device-key-created key_id={info.key_id} reason={reason} loginuid={_login_uid()}')
+    return bool(created)
+
+
 def _ha_selection(svc, req):
-    """(record, members of the selected add-ons) of an HA import request; the key is checked against every encrypted
-    member before a job starts (key-required / wrong-key, before any plaintext)."""
+    """(record, the key to hand to the job or None, selected apps the backup holds, selected apps it does not hold) of
+    an HA import request. The key is checked before a job starts against every encrypted member the selection reads,
+    the share folder included for an importer that reads it (KEY-16): key-required, or wrong-key when it opens none of
+    them, both before any plaintext. A selection the backup holds nothing of is invalid-request; an app it does not hold
+    is only left out (HA-03, X-CLI-03)."""
     from . import habackup, haimport, hasecuretar
     rec = svc.ha_store.get(req['ha_backup_id'])
-    by_suffix = {hastore.addon_suffix(addon['slug']): addon for addon in rec['addons']}
-    selected = []
-    for app_id in req['apps']:
-        addon = by_suffix.get(haimport.APPS[app_id])
-        if addon is None:
-            raise BackupError('invalid-request', f'這份 HA 備份沒有可以匯入「{app_id}」的附加元件。', field='apps',
-                              app=app_id)
-        selected.append(addon)
+    slugs = {}
+    for addon in rec['addons']:
+        slugs.setdefault(hastore.addon_suffix(addon['slug']), []).append(addon)
+    present = [app_id for app_id in req['apps'] if haimport.APPS[app_id] in slugs]
+    missing = [app_id for app_id in req['apps'] if app_id not in present]
+    if not present:
+        raise BackupError('invalid-request', f'這份 HA 備份沒有可以匯入「{missing[0]}」的附加元件。', field='apps',
+                          app=missing[0])
     key = req.get('key')
-    if any(addon['encrypted'] for addon in selected):
+    share = 'share' in rec['folders'] and any(haapps.get(app_id).needs_share for app_id in present)
+    if not share and not any(addon['encrypted'] for app_id in present for addon in slugs[haimport.APPS[app_id]]):
+        return rec, None, present, missing  # nothing to decrypt: the key is not kept
+    choices = req.get('choices') or {}
+    with habackup.open_backup(svc.ha_store.file_path(rec['id'])) as backup:
+        wanted = []
+        for app_id in present:
+            members = haimport.addon_members(backup.layout, haimport.APPS[app_id])
+            chosen = [m for m in members if m.slug == (choices.get(app_id) or {}).get('addon')]
+            for member in chosen or members:
+                wanted += haimport.needed_members(backup.layout, {app_id: member})
+        if not any(member.encrypted for _app, member in wanted):
+            return rec, None, present, missing
         if key is None:
             raise hasecuretar.key_required(ha_backup_id=rec['id'])
-        keys = hasecuretar.Keys(key)
-        with habackup.open_backup(svc.ha_store.file_path(rec['id'])) as backup:
-            for addon in selected:
-                member = backup.layout.addon(addon['slug'])
-                if member.encrypted:
-                    with backup.open_member(member.name, keys):
-                        pass
-    else:
-        key = None  # nothing to decrypt: the key is not kept
-    return rec, key
+        haimport.key_problems(backup, hasecuretar.Keys(key), wanted)
+    return rec, key, present, missing
 
 
 def cmd_ha_check_start(svc, req):
-    """An HA check job (type verify, params.source 'ha'; CONTRACT section 7)."""
-    rec, key = _ha_selection(svc, req)
+    """An HA check job (type verify, params.source 'ha'; CONTRACT section 7). An app the backup does not hold stays in
+    the job: its result says so."""
+    rec, key, _present, _missing = _ha_selection(svc, req)
     params = {'source': 'ha', 'ha_backup_id': rec['id'], 'apps': list(req['apps']), 'key_provided': key is not None}
+    if req.get('choices'):
+        params['choices'] = req['choices']
     return svc.start('verify', params, req['request_id'], key_text=key, key_kind='ha')
 
 
+def _convert_params(rec, apps, *, database, test_mode, encrypt, key, acknowledged, choices):
+    return hachain.convert_params(rec['id'], apps, database=database, test_mode=test_mode, encrypt=encrypt,
+                                  key_provided=key is not None, acknowledged=acknowledged, choices=choices)
+
+
 def cmd_ha_convert_start(svc, req):
-    """An HA convert job (type backup, params.source 'ha'; CONTRACT section 7)."""
-    from .haimport import INSTALL_HINT, _app_label
+    """An HA convert job (type backup, params.source 'ha'; CONTRACT section 7): the conversion alone. Without an Odoo
+    database the only one that can move is taken (HA-14); without a device key one is created (HA-13)."""
+    from . import haimport
     apps = list(req['apps'])
     database = req.get('odoo_database')
-    if 'odoo' in apps and database is None:
-        raise _bad('odoo_database', '為必填（選擇要匯入的 Odoo 資料庫）。')
+    if database is None:
+        database = ((req.get('choices') or {}).get('odoo') or {}).get('database')
     if 'odoo' not in apps:
         database = None
     catalog = svc.catalog()
     for app_id in apps:
         if catalog.get(app_id) is None:
-            raise BackupError('app-not-in-catalog', INSTALL_HINT.format(name=_app_label(app_id)), app=app_id)
+            issue = haimport.not_installed(catalog, app_id)
+            raise BackupError('app-not-in-catalog', issue.message + issue.action, app=app_id)
     encrypt = svc.encrypt_by_default()
-    if encrypt and svc.keys.device_key() is None:
-        raise BackupError('no-device-key', '這台設備尚未建立加密金鑰，請先完成金鑰設定。')
-    rec, key = _ha_selection(svc, req)
-    params = {'source': 'ha', 'ha_backup_id': rec['id'], 'apps': apps, 'odoo_database': database,
-              'test_mode': bool(req['test_mode']), 'encrypt': bool(encrypt), 'key_provided': key is not None}
-    return svc.start('backup', params, req['request_id'], key_text=key, key_kind='ha')
+    rec, key, _present, missing = _ha_selection(svc, req)
+    if missing:
+        raise BackupError('invalid-request', f'這份 HA 備份沒有可以匯入「{missing[0]}」的附加元件。', field='apps',
+                          app=missing[0])
+    created = ensure_key(svc, 'ha-convert') if encrypt else False
+    params = _convert_params(rec, apps, database=database, test_mode=req['test_mode'], encrypt=encrypt, key=key,
+                             acknowledged=req.get('acknowledged'), choices=req.get('choices'))
+    return dict(svc.start('backup', params, req['request_id'], key_text=key, key_kind='ha'), key_created=created)
+
+
+def _group_result(app_id, status, code=None, message=None):
+    """GroupResult (CONTRACT section 7): what became of one app of an import."""
+    return hachain.group_result(app_id, status, code, message)
+
+
+def _import_plan(svc, req):
+    """(record, key, apps to import in order, GroupResults of the apps that are left out) of `ha-import-start`: an app
+    the backup does not hold or this device has no settings for is left out with its reason while another one can be
+    imported; with none left the request is refused."""
+    from . import haimport
+    rec, key, present, missing = _ha_selection(svc, req)
+    skipped = [_group_result(app_id, 'skipped', 'not-found', haimport.ADDON_MISSING + haimport.ADDON_MISSING_ACTION)
+               for app_id in missing]
+    catalog = svc.catalog()
+    apps, refusal = [], None
+    for app_id in present:
+        if catalog.get(app_id) is not None:
+            apps.append(app_id)
+            continue
+        issue = haimport.not_installed(catalog, app_id)
+        skipped.append(_group_result(app_id, 'skipped', 'app-not-in-catalog', issue.message + issue.action))
+        refusal = refusal or BackupError('app-not-in-catalog', issue.message + issue.action, app=app_id)
+    if not apps:
+        raise refusal
+    return rec, key, apps, skipped
+
+
+def _confirmed_items(svc, req):
+    """{(app id or `_shared`, key): how many names the confirmed line had} from the check the page showed (the audit
+    lines only; nothing depends on it)."""
+    record = svc.job_record(req['check_job_id']) if req.get('check_job_id') else None
+    check = ((record or {}).get('result') or {}).get('ha_check') if isinstance(record, dict) else None
+    counts = {}
+    if isinstance(check, dict) and check.get('ha_backup_id') == req['ha_backup_id']:
+        groups = [(haissues.SHARED, check.get('shared'))] + [(app.get('app_id'), app.get('issues'))
+                                                              for app in check.get('apps') or []]
+        for app_id, issues in groups:
+            for issue in issues or []:
+                if issue.get('key'):
+                    counts[(app_id, issue['key'])] = len(issue.get('items') or []) + int(issue.get('more') or 0)
+    return counts
+
+
+def cmd_ha_import_start(svc, req):
+    """The whole import of the selected apps, one after the other (CONTRACT section 7): the first app's conversion job
+    starts here, with the import's group and what the rest of it needs (`params.chain`). The customer's one confirmation
+    is in the request: every line with a consequence by its key (`acknowledged`) and that this device's data is
+    replaced (`overwrite`, with `then_restore`). Each app's conversion checks its own lines again."""
+    rec, key, apps, skipped = _import_plan(svc, req)
+    encrypt = svc.encrypt_by_default()
+    created = ensure_key(svc, 'ha-import') if encrypt else False
+    group = hachain.new_group_id()
+    first = apps[0]
+    acknowledged, choices = req.get('acknowledged') or {}, req.get('choices') or {}
+    database = (choices.get(first) or {}).get('database') if first == 'odoo' else None
+    params = _convert_params(rec, [first], database=database, test_mode=req['test_mode'], encrypt=encrypt, key=key,
+                             acknowledged=acknowledged, choices=choices)
+    params['group'] = hachain.group_params(group, 'ha-import', 'convert', first, 0, len(apps))
+    params['chain'] = hachain.new_chain(apps, test_mode=req['test_mode'], then_restore=req['then_restore'],
+                                        encrypt=encrypt, key_provided=key is not None, ha_backup_id=rec['id'],
+                                        acknowledged=acknowledged, choices=choices, results=skipped)
+    started = svc.start('backup', params, req['request_id'], key_text=key, key_kind='ha')
+    if started.get('deduplicated'):
+        known = ((svc.job_record(started['job_id']) or {}).get('params') or {}).get('group') or {}
+        if not known.get('id'):
+            raise BackupError('invalid-request', '此請求識別碼已用於其他類型的作業。')
+        group = known['id']
+    else:
+        counts = _confirmed_items(svc, req)
+        for app_id, keys in acknowledged.items():
+            for item in keys:
+                svc.audit(f'ha-import-confirm ha_backup={rec["id"]} group={group} app={app_id} '
+                          f'issue={item.rsplit(":", 1)[0]} items={counts.get((app_id, item), "-")} '
+                          f'loginuid={_login_uid()}')
+    return dict(started, group=group, key_created=created)
 
 
 def cmd_upload_abort(svc, req):
@@ -1276,6 +1555,7 @@ COMMANDS = {
     'catalog-remove': cmd_catalog_remove, 'retention-plan': cmd_retention_plan, 'retention-apply': cmd_retention_apply,
     'schedule-get': cmd_schedule_get, 'schedule-set': cmd_schedule_set, 'schedule-run-now': cmd_schedule_run_now,
     'ha-delete': cmd_ha_delete, 'ha-check-start': cmd_ha_check_start, 'ha-convert-start': cmd_ha_convert_start,
+    'ha-import-start': cmd_ha_import_start,
 }
 
 

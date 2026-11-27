@@ -1,0 +1,1185 @@
+{
+ "started": "2026-11-25 11:43:13",
+ "head": "5a2fd25",
+ "results": [
+  {
+   "mutation": "install never adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "packages added after the files",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "plan not made again after apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "plan made again only when something was added",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_page_changed_while_apt_ran_is_not_overwritten"
+   ]
+  },
+  {
+   "mutation": "plan made again from the old state",
+   "file": "scripts/manage.py",
+   "verdict": "SURVIVED",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "command line does not make the plan again",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "command line installs without the package step",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "own refusal after apt (changes)",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installers_own_refusal_comes_before_apt"
+   ]
+  },
+  {
+   "mutation": "own refusal after apt (directories)",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installers_own_refusal_comes_before_apt"
+   ]
+  },
+  {
+   "mutation": "refusal again when a package cannot be added",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_a_page_changed_while_apt_ran_is_not_overwritten"
+   ]
+  },
+  {
+   "mutation": "apt exit code trusted instead of the probes",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "probes not run again after apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "every package counted as added",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_page_changed_while_apt_ran_is_not_overwritten"
+   ]
+  },
+  {
+   "mutation": "notice dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "missing packages not reported",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "notice not printed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "tools checked with --no-backup",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "tools checked with --root",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "no tools on the live root",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "tools without an engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "result does not report the packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "notices of the install lost",
+   "file": "scripts/manage.py",
+   "verdict": "SURVIVED",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "age not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "age-keygen not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "zstd not probed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "age-keygen brought by another package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "nacl probe imports nothing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "cryptography probe imports nothing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "nacl probe misspells a module",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "nacl probe misspells a name",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "nacl probe forgets the secretstream",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "cryptography probe forgets the decryptor",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "nacl probe not used",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "--no-remove dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "--no-install-recommends dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "--reinstall dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "lock wait dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "-y dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "index not refreshed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "needrestart not suspended",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "interactive frontend",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "whole environment passed to apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "proxy not passed",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "apt-get killed after two minutes",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "Ctrl-C reaches apt-get",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "Ctrl-C stays ignored afterwards",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "probes without a time limit",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "a hanging tool is an error",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "a missing program is an error",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_the_probes_really_run_and_every_name_they_use_counts"
+   ]
+  },
+  {
+   "mutation": "a failing probe counts as working",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_cockpit_podman_upgraded_while_apt_ran_keeps_its_new_bundle"
+   ]
+  },
+  {
+   "mutation": "only the first missing package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "every package counted as missing",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "other search path than the engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "probes not isolated",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "probes by another python",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "reasons: raw apt lines shown when unsure",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: raw apt lines shown for the known ones",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: apt-get did not start",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_how_the_tools_and_apt_are_run"
+   ]
+  },
+  {
+   "mutation": "reasons: lock",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: lock of dpkg only by the second text",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: interrupted dpkg",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: disk",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: unreadable sources",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: held package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: removal needed",
+   "file": "scripts/manage.py",
+   "verdict": "SURVIVED",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "reasons: unmet dependencies",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: conflict",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: conflict after the general text",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: network",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: package gone",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: a mirror being synchronised is not told",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_is_not_proven_is_called_unknown_with_the_exit_code"
+   ]
+  },
+  {
+   "mutation": "reasons: 404 is not a gone package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: hash mismatch is not a sync problem",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_is_not_proven_is_called_unknown_with_the_exit_code"
+   ]
+  },
+  {
+   "mutation": "reasons: proxy login is not the network",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: captive portal is not the network",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: unresolvable name is not the network",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: refused connection is not the network",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: unreachable host after the first file",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: expired Release is not the signature",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: a Release dated in the future",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: signature word",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: unsigned source",
+   "file": "scripts/manage.py",
+   "verdict": "SURVIVED",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "reasons: stderr says nothing about a source",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: flat source in stderr",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: archive layout in stderr",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: only Err lines count",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: other sources said fine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: other sources always fine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: unknown update failure",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_is_not_proven_is_called_unknown_with_the_exit_code"
+   ]
+  },
+  {
+   "mutation": "reasons: universe",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: reinstall not possible",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: failed fetch lines of stderr",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_is_not_proven_is_called_unknown_with_the_exit_code"
+   ]
+  },
+  {
+   "mutation": "reasons: absent packages decide first",
+   "file": "scripts/manage.py",
+   "verdict": "SURVIVED",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "reasons: sure although nothing proves it",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "reasons: broken tool after a good apt",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_what_is_not_proven_is_called_unknown_with_the_exit_code"
+   ]
+  },
+  {
+   "mutation": "notice without the names",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "notice without what stops",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "notice without the way out",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "notice without the status command",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "what stops: keys told without age",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "what stops: archives told for age only",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "what stops: HA backups of 2026-03 told for the wrong package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "status always ready",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "status lists no package",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "status adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_install_that_cannot_add_them_goes_on_and_says_what_is_missing"
+   ]
+  },
+  {
+   "mutation": "status of --root claims ready",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "status ignores an engine that --no-backup kept",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_status_after_no_backup_still_checks_the_engine_that_is_there"
+   ]
+  },
+  {
+   "mutation": "status says tools without an engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_status_after_no_backup_still_checks_the_engine_that_is_there"
+   ]
+  },
+  {
+   "mutation": "status exit code",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "status without sudo is not explained",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (errors=1)",
+   "failed": [
+    "test_status_needs_the_administrator_to_read_the_install_record"
+   ]
+  },
+  {
+   "mutation": "status gives no note",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "plan does not list packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "plan adds packages",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "plan note promises a refusal",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_plan_and_status_report_missing_packages_and_change_nothing"
+   ]
+  },
+  {
+   "mutation": "--root note dropped",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "--root note also without the engine",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_no_backup_and_other_roots_check_and_run_nothing"
+   ]
+  },
+  {
+   "mutation": "no progress note",
+   "file": "scripts/manage.py",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_missing_package_is_added_before_a_file_changes"
+   ]
+  },
+  {
+   "mutation": "bootstrap list without python3-nacl",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_installer_the_bootstrap_and_the_engine_mean_the_same_tools"
+   ]
+  },
+  {
+   "mutation": "bootstrap: failed index update is fatal",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_an_offline_device_that_has_everything_is_not_refused"
+   ]
+  },
+  {
+   "mutation": "bootstrap: transient update errors unnoticed",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_package_no_index_knows_is_refused_before_anything_is_installed"
+   ]
+  },
+  {
+   "mutation": "bootstrap: held counts as missing",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: no fallback to the missing ones",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: refused although nothing is missing",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: missing packages do not matter",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_missing_and_offline_is_refused_with_the_names"
+   ]
+  },
+  {
+   "mutation": "bootstrap: index not consulted",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_package_no_index_knows_is_refused_before_anything_is_installed"
+   ]
+  },
+  {
+   "mutation": "bootstrap: cockpit packages counted as backup tools",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_apply_installs_everything_and_again_is_harmless"
+   ]
+  },
+  {
+   "mutation": "bootstrap: socket not enabled",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: plan goes on",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_a_held_tool_does_not_keep_a_missing_one_from_being_added"
+   ]
+  },
+  {
+   "mutation": "bootstrap: cockpit packages step tolerant",
+   "file": "scripts/bootstrap-ubuntu.sh",
+   "verdict": "caught",
+   "last": "FAILED (failures=1)",
+   "failed": [
+    "test_the_cockpit_packages_step_is_as_before_it_still_needs_the_network"
+   ]
+  },
+  {
+   "mutation": "control: a comment",
+   "file": "scripts/manage.py",
+   "verdict": "unnoticed (as a control must be)",
+   "last": "OK",
+   "failed": []
+  },
+  {
+   "mutation": "control: a docstring",
+   "file": "scripts/manage.py",
+   "verdict": "unnoticed (as a control must be)",
+   "last": "OK",
+   "failed": []
+  }
+ ],
+ "baseline": {
+  "code": 0,
+  "last": "OK",
+  "failed": []
+ },
+ "baseline_after": {
+  "code": 0,
+  "last": "OK"
+ },
+ "wrong": 5,
+ "total": 129,
+ "controls": 2,
+ "caught": 124,
+ "finished": "2026-11-25 12:02:49"
+}

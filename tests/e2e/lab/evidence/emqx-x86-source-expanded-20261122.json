@@ -1,0 +1,18 @@
+{
+  "scope": "real x86 HA test readonly capacity; candidate256MiB gate unchanged",
+  "restore_executed": false,
+  "measurement_cap": 536870912,
+  "status": "full-read-passed",
+  "expanded_tar_bytes": 290785280,
+  "tar_complete": true,
+  "file_count": 43,
+  "mnesia_file_extension_counts": {
+    ".DCD": 22,
+    ".DCL": 3,
+    ".LOG": 2,
+    ".DAT": 1
+  },
+  "candidate256MiB_fits": false,
+  "elapsed_seconds": 2.993972438154742,
+  "archive_sha256": "0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9"
+}

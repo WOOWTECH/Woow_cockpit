@@ -1,0 +1,12 @@
+{
+ "device": {
+  "scanned": 649,
+  "journal_bytes": 104744042,
+  "names": 18,
+  "hits": 0
+ },
+ "host": {
+  "files": 16,
+  "hits": 0
+ }
+}

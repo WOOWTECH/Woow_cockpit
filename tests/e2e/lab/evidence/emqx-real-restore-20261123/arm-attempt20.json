@@ -1,0 +1,21 @@
+{
+  "source_commit": "d433de980a071e4c7dc67f188e643adcf43c3e3a",
+  "variant_flag": "--real-restore",
+  "target_mode": "file-baseline",
+  "source_arch": "arm",
+  "rule_delivery_round": "required",
+  "scope": "real ARM HA backup, target file ACL policy (FILE baseline), product restore + automatic rollback + restart, with the FILE-baseline rule-delivery round (HA rule-topic publishes refused by the target file ACL, management-API ingress, republish to an HA-gateway session, original HTTP action by vendor counters); retry of arm-attempt19 with fixed build-kind labels and a 2100s child deadline",
+  "started_at": "2026-11-23T17:32:55+0800",
+  "ended_at": "2026-11-23T17:50:26+0800",
+  "exit": 0,
+  "elapsed_seconds": 1050.784,
+  "stdout_sha256": "6a289ca5d193e91cd258081090243fe73fc64011082c0b1f8ac0302863a62de4",
+  "fixed_status": [
+    "REAL OWNER RESTORE ROLLBACK PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "dev_d_lock_seen_held_by_this_run": true,
+  "head_unchanged_during_run": true,
+  "commercial_acceptance": "not-complete"
+}

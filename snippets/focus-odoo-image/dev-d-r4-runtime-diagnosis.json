@@ -1,0 +1,11 @@
+{
+  "status": "diagnosed",
+  "reason": "rootless-proc-cwd-runtime-unusable",
+  "store_initialized_before_failure": false,
+  "config_and_all_ordered_layers_verified": true,
+  "source_mutations": 0,
+  "pulls": 0,
+  "short_private_mount_with_private_store_runtime_probe_exit": 0,
+  "private_runtime_inside_same_owned_leaf": true,
+  "r4_quarantine_preserved": true
+}

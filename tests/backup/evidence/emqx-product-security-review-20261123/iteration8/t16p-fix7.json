@@ -1,0 +1,196 @@
+{
+ "attempt": "t16p-fix7",
+ "backup_engine_tree": "3ea9610f67527a6aa4bb01dc2411fad5ba772874",
+ "code": "sec/emqx-secreview7-20261124 (SR-11 fix, iteration 7)",
+ "command": "-I t16_product.py fix7 gwl-plain,past-digits,past-dollar2,hash-boot",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 949.5,
+ "exit_code": 0,
+ "harness_commit": "c2e601c23f562af91981ab15f00d505e245ce827",
+ "iteration": 8,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "fix7",
+  "device_users_added": "13",
+  "elapsed_s": 949.0,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "lab_left": {
+   "containers": 0,
+   "volumes": 0
+  },
+  "modes": {
+   "gwl-plain": {
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [
+      "PLAIN_ELSEWHERE"
+     ],
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 2,
+      "elsewhere": 1
+     }
+    },
+    "conversion": "REFUSED: PLAIN_ELSEWHERE",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 143.4,
+    "expect": {
+     "blocker": "PLAIN_ELSEWHERE",
+     "warning": null
+    },
+    "export_called": false,
+    "plaintext_rows_in_candidate": 0,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['stomp:tcp:default']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "1c5d9b8ac93dad2d17773b5a10d359f0ebf37f71986194e331774a207b63e33e",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 3
+    }
+   },
+   "hash-boot": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "clear_rows_exact": false,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 253.0,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "source": {
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "past-digits": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "clear_rows_exact": false,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 242.9,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "past-dollar2": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "clear_rows_exact": false,
+     "db_off": 0,
+     "plain_answer": {
+      "clear": 0,
+      "elsewhere": 0
+     }
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 281.3,
+    "expect": {
+     "blocker": "CLEAR_ROWS",
+     "warning": null
+    },
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "source": {
+     "added": "2:2",
+     "source_clear": "rows=2:clear=2:groups=['mqtt:global']"
+    },
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T16P stored-form refusal, gateway-listener plain and unknown-format rows through the product check path and conversion body (rows written by EMQX itself)"
+ },
+ "source_commit": "966553352624f0e13be5cc38309460ae1cace778",
+ "started": "2026-11-24T20:00:54+0800",
+ "status_lines": [],
+ "stdout_sha256": "b94500330dda6cbd72edff97411e9d7dc12d77d24beb6d835af3b39de4144694",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

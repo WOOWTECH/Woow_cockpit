@@ -108,6 +108,53 @@ class StoreTests(JobCase):
         self.assertEqual(stat.S_IMODE(self.store.log_path(record['id']).stat().st_mode), 0o600)
 
 
+    def test_a_log_line_stays_one_line(self):
+        """secreview SR-6: a log line carries text an HA backup chose (its name, its PG_VERSION). append_log replaced
+        only \r and \n while read_log split with str.splitlines(): \x0b, \x0c, \x1c-\x1e, \x85, U+2028 and U+2029 made
+        one message two lines on the page (a forged line). Each message is now one line without control characters,
+        and a log written before this change still reads one line per newline."""
+        record = self.store.create('backup', {})
+        breaks = '\n\r\x0b\x0c\x1c\x1d\x1e\x85  \x1b\t\x00\x7f\x9f'
+        for ch in breaks:
+            self.store.append_log(record['id'], f'HA 備份「WOOW{ch}2026-11-23T15:00:00Z 作業結束：成功」')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(breaks))
+        for line in log:
+            self.assertRegex(line, r'\A\S+ HA 備份「WOOW 2026-11-23T15:00:00Z 作業結束：成功」\Z')
+        with open(self.store.log_path(record['id']), 'a', encoding='utf-8') as handle:
+            handle.write('2026-11-23T15:00:00Z old\x0bline kept\x85here\n')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(breaks) + 1)
+        self.assertTrue(log[-1].endswith('here'))
+
+    def test_a_log_line_keeps_its_reading_order(self):
+        """The verifier's SR-6 gap: a Unicode bidirectional control in text an HA backup chose (U+202E in its name)
+        stays inside the one line and reorders how the rest of it reads on the page ('WOOW' U+202E 'TLIAF' shows 'FAIL').
+        Every Bidi_Control code point (PropList: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069) is written as
+        a space; the explicit-formatting classes are taken from the Unicode database itself, so none is missed."""
+        import unicodedata
+        explicit = {'LRE', 'RLE', 'PDF', 'LRO', 'RLO', 'LRI', 'RLI', 'FSI', 'PDI'}
+        controls = ''.join(chr(cp) for cp in range(0x110000) if unicodedata.bidirectional(chr(cp)) in explicit)
+        self.assertEqual(len(controls), 9, 'Unicode: U+202A-U+202E and U+2066-U+2069')
+        controls += '\u061c\u200e\u200f'
+        record = self.store.create('backup', {})
+        for ch in controls:
+            self.store.append_log(record['id'], f'檢查 HA 備份「WOOW{ch}TLIAF」')
+        log = self.store.read_log(record['id'])
+        self.assertEqual(len(log), len(controls))
+        for line in log:
+            self.assertRegex(line, r'\A\S+ 檢查 HA 備份「WOOW TLIAF」\Z')
+
+    def test_a_record_may_name_the_unit_that_runs_it(self):
+        """The next job of an import's chain runs in the unit of the first one; a record without one names its own."""
+        own = self.store.create('backup', {})
+        self.assertEqual(own['unit'], jobs.unit_name(own['id']))
+        shared = self.store.create('backup', {}, unit='woowtech-backup-j20261113T020000Z-0123abcd.service')
+        self.assertEqual(self.store.get(shared['id'])['unit'], 'woowtech-backup-j20261113T020000Z-0123abcd.service')
+        for bad in (None, '', 5):
+            record = self.store.create('backup', {}, unit=bad)
+            self.assertEqual(record['unit'], jobs.unit_name(record['id']))
+
     def test_unencrypted_backup_package_phase_says_so(self):
         labels = {encrypt: {p['id']: p['label'] for p in self.store.create('backup', {'encrypt': encrypt})['phases']}
                   for encrypt in (True, False)}
@@ -399,6 +446,34 @@ class RunJobTests(JobCase):
         self.assertEqual(cleanup, ['writers restarted'])
         self.assertEqual(record['state'], 'interrupted')
         self.assertEqual(list(Path(self.paths.run).glob('key-*')), [])
+
+    def test_what_a_cancelled_or_terminated_job_found_is_kept(self):
+        """An HA check that is cancelled or terminated hands over what it had checked (`exc.result`; haimport.run_ha_check)."""
+        found = {'ha_check': {'schema': 2, 'apps': [{'app_id': 'odoo'}]}}
+        job_id = self.queue(job_type='verify')
+
+        def cancel(ctx, params):
+            error = flows.Cancelled()
+            error.result = found
+            raise error
+
+        record, _ = self.run_with(job_id, cancel)
+        self.assertEqual((record['state'], record['result']), ('cancelled', found))
+        job_id = self.queue(job_type='verify')
+
+        def terminated(ctx, params):
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+                time.sleep(5)
+            except jobs.Terminated as error:
+                error.result = found
+                raise
+
+        record, _ = self.run_with(job_id, terminated)
+        self.assertEqual((record['state'], record['result']), ('interrupted', found))
+        job_id = self.queue(job_type='verify')
+        record, _ = self.run_with(job_id, lambda ctx, params: (_ for _ in ()).throw(flows.Cancelled()))
+        self.assertEqual((record['state'], record['result']), ('cancelled', None), 'a job with nothing to hand over keeps none')
 
     def test_sigterm_during_restore_keeps_safety_guidance(self):
         job_id = self.queue(job_type='restore')
@@ -1392,6 +1467,40 @@ class RetentionTests(JobCase):
 
     def listed(self):
         return {record['id'] for record in self.store.list(limit=None)}
+
+    def test_the_stop_request_of_an_import_is_swept_once_the_import_is_over(self):
+        """`<group>.stop` (CONTRACT section 8, HA import chain): kept while a job of the import is active, else removed once it
+        is an hour old; a young one stays."""
+        from woowbackup import hachain
+        live, over, young = 'g0123456789abcdef', 'gfedcba987654321a'[:17], 'g00000000000000aa'
+        params = hachain.convert_params('ha-' + '0' * 20, ['odoo'], database=None, test_mode=False, encrypt=True, key_provided=False,
+                                        acknowledged={}, choices={})
+        params['group'] = hachain.group_params(live, 'ha-import', 'convert', 'odoo', 0, 2)
+        params['chain'] = hachain.new_chain(['odoo', 'n8n'], ha_backup_id='ha-' + '0' * 20)
+        alive = self.make('backup', 'running', 100, params=params)
+        self.active_units.add(jobs.unit_name(alive))
+        old = time.time() - jobs.ORPHAN_MAX_AGE - 60
+        for group in (live, over, young):
+            self.store.request_stop(group)
+        for group in (live, over):
+            os.utime(self.store.stop_path(group), (old, old))
+        self.assertEqual(jobs.recover_interrupted(self.paths, unit_active=self.unit_active), [])
+        self.assertEqual([self.store.stop_requested(group) for group in (live, over, young)], [True, False, True])
+        os.utime(self.store.stop_path(live), (old, old))
+        record = self.store.get(alive)
+        record['state'] = 'succeeded'
+        self.store.save(record)
+        jobs.recover_interrupted(self.paths, unit_active=self.unit_active)
+        self.assertFalse(self.store.stop_requested(live), 'the import is over: nothing asks for it any more')
+        self.assertTrue(self.store.stop_requested(young))
+
+    def test_a_stop_file_name_is_never_taken_for_a_job_side_file(self):
+        self.store.ensure()
+        for name in ('g0123456789abcdef.stop', 'j20261113T020000Z-0123abcd.stop', 'g0123456789abcdef.stop.tmp'):
+            Path(self.paths.jobs, name).write_text('')
+        self.assertIsNotNone(jobs.STOP_FILE_RE.fullmatch('g0123456789abcdef.stop'))
+        self.assertIsNone(jobs.STOP_FILE_RE.fullmatch('j20261113T020000Z-0123abcd.stop'))
+        self.assertIsNone(jobs.SIDE_FILE_RE.fullmatch('g0123456789abcdef.stop'))
 
     def test_keeps_newest_finished_records_and_everything_still_needed(self):
         safety = '20261101T000000Z-00000001'

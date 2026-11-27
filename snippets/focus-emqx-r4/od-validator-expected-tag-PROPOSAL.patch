@@ -1,0 +1,74 @@
+--- a/backup-engine/woowbackup/pg16_bundle.py
++++ b/backup-engine/woowbackup/pg16_bundle.py
+@@ -191,7 +191,7 @@
+             raise BundleError(ERROR_LAYER_DIGEST)
+
+
+-def validate_archive(stream, arch, image_id, *, abort=None):
++def validate_archive(stream, arch, image_id, *, abort=None, expected_tag=None):
+     """Inspect bounded Docker-save metadata without extraction, layer buffering, or tar extension allocations.
+
+     USTAR/GNU regular headers only; PAX, sparse files, links, devices, duplicate/absolute/traversing paths are refused.
+@@ -202,6 +202,10 @@
+     stream.seek(0, os.SEEK_END)
+     end = stream.tell()
+     stream.seek(0)
++    tag = TAG if expected_tag is None else expected_tag
++    if (not isinstance(tag, str) or not tag or '@' in tag or ':' not in tag
++            or any(c.isspace() for c in tag)):
++        raise BundleError('Invalid expected Docker archive ref.')
+     config_name = image_id[7:] + '.json'
+     names, metadata, sizes, positions = set(), {}, {}, {}
+     while stream.tell() < end:
+@@ -244,7 +248,7 @@
+     manifest = _json(metadata.get('manifest.json', b''))
+     config = metadata.get(config_name, b'')
+     if (not isinstance(manifest, list) or len(manifest) != 1 or not isinstance(manifest[0], dict)
+-            or manifest[0].get('Config') != config_name or manifest[0].get('RepoTags') != [TAG]
++            or manifest[0].get('Config') != config_name or manifest[0].get('RepoTags') != [tag]
+             or hashlib.sha256(config).hexdigest() != image_id[7:]):
+         raise BundleError(ERROR_CONFIG_IDENTITY)
+     config = _json(config)
+@@ -262,10 +266,10 @@
+         raise BundleError('Unrelated image files in Docker archive.')
+     if 'repositories' in metadata:
+         repositories = _json(metadata['repositories'])
+-        repo, tag = TAG.rsplit(':', 1)
++        repo, repo_tag = tag.rsplit(':', 1)
+         if (not isinstance(repositories, dict) or set(repositories) != {repo}
+-                or not isinstance(repositories[repo], dict) or set(repositories[repo]) != {tag}
+-                or repositories[repo][tag] != layers[-1].removesuffix('/layer.tar').removesuffix('.tar')):
++                or not isinstance(repositories[repo], dict) or set(repositories[repo]) != {repo_tag}
++                or repositories[repo][repo_tag] != layers[-1].removesuffix('/layer.tar').removesuffix('.tar')):
+             raise BundleError('Docker archive repositories differ from the release ref.')
+     rootfs = config.get('rootfs')
+     diff_ids = rootfs.get('diff_ids') if isinstance(rootfs, dict) else None
+--- a/backup-engine/woowbackup/pg16_docker_dir.py
++++ b/backup-engine/woowbackup/pg16_docker_dir.py
+@@ -13,10 +13,11 @@
+ ERROR_PIN = 'PG16 Docker directory config differs from the release pin.'
+
+
+-def convert_directory(path, target, bundle, arch, image_id, *, abort=None):
++def convert_directory(path, target, bundle, arch, image_id, *, abort=None, expected_tag=None):
+     def require(ok, reason=ERROR_DIRECTORY):
+         if not ok:
+             raise bundle.BundleError(reason)
++    tag = bundle.TAG if expected_tag is None else expected_tag
+     with bundle._directory(path) as dfd:
+         names = set()
+         with os.scandir(dfd) as entries:
+@@ -69,11 +70,11 @@
+                     require(target.tell() <= bundle.MAX_ARCHIVE)
+             require('sha256:' + digest.hexdigest() == descriptor['digest'], ERROR_DESCRIPTOR)
+             target.write(bytes(-size % 512))
+-        raw = json.dumps([{'Config': config_out, 'RepoTags': [bundle.TAG], 'Layers': layer_out}],
++        raw = json.dumps([{'Config': config_out, 'RepoTags': [tag], 'Layers': layer_out}],
+                          separators=(',', ':')).encode()
+         header('manifest.json', len(raw))
+         target.write(raw)
+         target.write(bytes(-len(raw) % 512 + 1024))
+         require(target.tell() <= bundle.MAX_ARCHIVE)
+         target.flush()
+-        bundle.validate_archive(target, arch, image_id, abort=abort)
++        bundle.validate_archive(target, arch, image_id, abort=abort, expected_tag=tag)

@@ -1,0 +1,38 @@
+ok  plain: the file as HA made it 2 members
+ok  plain: repacked with tar --format=gnu 
+ok  plain: repacked with tar --format=oldgnu 
+ok  plain: repacked with tar --format=posix 
+ok  plain: repacked with tar --format=ustar 
+ok  plain: repacked with tar --format=v7 
+ok  plain: repacked with busybox tar 
+ok  plain: repacked with tar -b 
+ok  plain: rubbish behind the archive 
+ok  plain: a bit of one add-on changed (gzip or cipher header) 598298c3eff6da22199c2eb60853c3feb893f76356af202fdbc3a77568928c84
+ok  plain: a bit of one add-on changed (first) error corrupt-archive member
+ok  plain: a bit of one add-on changed (middle) error corrupt-archive member
+ok  plain: a bit of one add-on changed (last) error corrupt-archive member
+ok  plain: one add-on cut off error corrupt-archive member
+ok  plain: one add-on twice 
+ok  plain: one add-on gone 
+ok  plain: one add-on followed by another gzip 
+ok  plain: one add-on followed by rubbish error corrupt-archive member
+ok  encrypted v3: the file as HA made it 3 members
+ok  encrypted v3: repacked with tar --format=gnu 
+ok  encrypted v3: repacked with tar --format=oldgnu 
+ok  encrypted v3: repacked with tar --format=posix 
+ok  encrypted v3: repacked with tar --format=ustar 
+ok  encrypted v3: repacked with tar --format=v7 
+ok  encrypted v3: repacked with busybox tar 
+ok  encrypted v3: repacked with tar -b 
+ok  encrypted v3: rubbish behind the archive 
+ok  encrypted v3: a bit of one add-on changed (gzip or cipher header) error corrupt-archive member
+ok  encrypted v3: a bit of one add-on changed (first) error corrupt-archive member
+ok  encrypted v3: a bit of one add-on changed (middle) error corrupt-archive member
+ok  encrypted v3: a bit of one add-on changed (last) error corrupt-archive member
+ok  encrypted v3: one add-on cut off error corrupt-archive member
+ok  encrypted v3: one add-on twice 
+ok  encrypted v3: one add-on gone 
+ok  encrypted v3: one add-on followed by another gzip 
+ok  encrypted v3: one add-on followed by rubbish kept
+ok  plain: every add-on recompressed in two gzip parts and padded 
+37 of 37

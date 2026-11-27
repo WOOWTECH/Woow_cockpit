@@ -1,0 +1,336 @@
+{
+ "source_commit": "01b36b4",
+ "what": "the mutations of NAMED, each by its own test alone",
+ "module": "woowbackup/ha_omnigent.py",
+ "module_sha256": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+ "modules_sha256": {
+  "woowbackup/ha_omnigent.py": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+  "woowbackup/hacommon.py": "ad058935b6a772cb7ac3ed48950aa76cec47a60747bfecbb09bfe84d78085d86",
+  "woowbackup/jobs.py": "c6e62948131bacedf70036bc2d7ef5d6839b5949e91adddcc68df6edf06c036d"
+ },
+ "tests": [
+  "tests.backup.test_ha_omnigent.ConvertTests.test_a_version_that_does_not_match_stops_the_conversion_itself",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_a_cluster_that_did_not_stop_cleanly_is_never_exported",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_test_mode_that_left_a_task_active_stops_the_conversion",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_a_volume_podman_could_not_import_is_never_packed",
+  "tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_the_dump_is_schema_only_and_reads_the_exported_snapshot",
+  "tests.backup.test_ha_omnigent_trusted.SnapshotScriptTests.test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_what_the_job_writes_is_private_to_it",
+  "tests.backup.test_ha_omnigent.RefusalTests.test_the_space_check_of_the_conversion",
+  "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+  "tests.backup.test_ha_omnigent.RefusalTests.test_a_live_version_that_cannot_be_read_is_no_version"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 13,
+  "failures": 0,
+  "failed": []
+ },
+ "mutations": [
+  {
+   "id": "M29",
+   "protection": "the conversion itself refuses a version that does not match, not only the check (X7)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_version_that_does_not_match_stops_the_conversion_itself"
+   ]
+  },
+  {
+   "id": "M30",
+   "protection": "after the last write every table holds HA's rows (users this device's kept accounts too) and the revision is HA's (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_counts_that_differ_stop_the_conversion"
+   ]
+  },
+  {
+   "id": "M31",
+   "protection": "the row counts of that final comparison (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_counts_that_differ_stop_the_conversion"
+   ]
+  },
+  {
+   "id": "M32",
+   "protection": "the revision of that final comparison (X8)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_counts_that_differ_stop_the_conversion"
+   ]
+  },
+  {
+   "id": "M33",
+   "protection": "a cluster whose stop did not end with 0 is never exported (X9)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_cluster_that_did_not_stop_cleanly_is_never_exported"
+   ]
+  },
+  {
+   "id": "M34",
+   "protection": "only a cluster that pg_controldata calls \"shut down\" is exported (X10)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported"
+   ]
+  },
+  {
+   "id": "M35",
+   "protection": "exactly \"shut down\", not \"shut down in recovery\" (X10)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_only_a_cluster_that_pg_controldata_calls_shut_down_is_exported"
+   ]
+  },
+  {
+   "id": "M36",
+   "protection": "test mode asks again after its pause: no task is left active (X11)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_test_mode_that_left_a_task_active_stops_the_conversion"
+   ]
+  },
+  {
+   "id": "M37",
+   "protection": "every volume is checked as a restore would read it before it is packed (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_volume_podman_could_not_import_is_never_packed"
+   ]
+  },
+  {
+   "id": "M38",
+   "protection": "the server and pi volumes too, not only the database's (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_volume_podman_could_not_import_is_never_packed"
+   ]
+  },
+  {
+   "id": "M39",
+   "protection": "that check uses the owner's id maps (X13)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_volume_podman_could_not_import_is_never_packed"
+   ]
+  },
+  {
+   "id": "M40",
+   "protection": "the capture dumps this device's schema only, never its rows (X15)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_the_dump_is_schema_only_and_reads_the_exported_snapshot"
+   ]
+  },
+  {
+   "id": "M41",
+   "protection": "the capture dumps what the exported snapshot shows (X15, the same line)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_the_dump_is_schema_only_and_reads_the_exported_snapshot"
+   ]
+  },
+  {
+   "id": "M42",
+   "protection": "the capture reads the revision inside the snapshot again (the same script)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one"
+   ]
+  },
+  {
+   "id": "M43",
+   "protection": "only a snapshot id reaches pg_dump's arguments (the same script)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_nothing_is_dumped_when_the_snapshot_is_not_the_expected_one"
+   ]
+  },
+  {
+   "id": "M44",
+   "protection": "HA's cluster is removed before the new cluster starts",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_the_whole_conversion_in_test_mode"
+   ]
+  },
+  {
+   "id": "M45",
+   "protection": "the new cluster is ready when it answers on TCP, not the image's temporary server",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_the_whole_conversion_in_test_mode"
+   ]
+  },
+  {
+   "id": "M46",
+   "protection": "HA's dump is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_what_the_job_writes_is_private_to_it"
+   ]
+  },
+  {
+   "id": "M47",
+   "protection": "the new cluster's export is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_what_the_job_writes_is_private_to_it"
+   ]
+  },
+  {
+   "id": "M48",
+   "protection": "this device's schema dump is private to the job (0600)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_what_the_job_writes_is_private_to_it"
+   ]
+  },
+  {
+   "id": "M49",
+   "protection": "the conversion checks the space it needs before it starts a cluster",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_the_space_check_of_the_conversion"
+   ]
+  },
+  {
+   "id": "M50",
+   "protection": "a live account row nobody asked for is not carried",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_same_named_ha_account_wins"
+   ]
+  },
+  {
+   "id": "M51",
+   "protection": "the live version is asked on the loopback address only",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_live_version_that_cannot_be_read_is_no_version"
+   ]
+  },
+  {
+   "id": "M52",
+   "protection": "an error page is no live version",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_live_version_that_cannot_be_read_is_no_version"
+   ]
+  },
+  {
+   "id": "M53",
+   "protection": "only x.y.z is a live version",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 1,
+   "failed": [
+    "test_a_live_version_that_cannot_be_read_is_no_version"
+   ]
+  }
+ ],
+ "all_caught": true,
+ "seconds": 51.0
+}

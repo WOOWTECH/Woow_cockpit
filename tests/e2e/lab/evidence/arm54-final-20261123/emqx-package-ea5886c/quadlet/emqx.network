@@ -1,0 +1,7 @@
+# Same name podman-compose used, so an existing compose host adopts it in place.
+[Unit]
+Description=Woow EMQX network
+
+[Network]
+NetworkName=woow_emqx_network
+Label=io.woowtech.stack=emqx

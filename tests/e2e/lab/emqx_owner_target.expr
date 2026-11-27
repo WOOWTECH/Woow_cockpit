@@ -1,0 +1,426 @@
+%% Diagnostics are fixed enums only. Never serialize abort terms or table names.
+ReasonCode = fun F(R,D) when D < 5 ->
+    case R of
+        {aborted,Nested} -> F(Nested,D+1);
+        {'EXIT',Nested} -> F(Nested,D+1);
+        {badmatch,{aborted,Nested}} -> F(Nested,D+1);
+        {badmatch,_} -> badmatch;
+        {no_exists,_} -> no_exists; {no_exists,_,_} -> no_exists;
+        {bad_type,_} -> bad_type; {bad_type,_,_} -> bad_type; {bad_type,_,_,_} -> bad_type;
+        {not_active,_} -> not_active; {not_active,_,_} -> not_active;
+        {node_not_running,_} -> node_not_running;
+        undef -> undef; badarg -> bad_argument; function_clause -> function_clause;
+        no_exists -> no_exists; bad_type -> bad_type; not_active -> not_active;
+        node_not_running -> node_not_running;
+        no_transaction -> no_transaction; system_limit -> system_limit;
+        storage_null_copies -> storage_null_copies;
+        storage_null_nonempty -> storage_null_nonempty;
+        storage_external -> storage_external; storage_unknown -> storage_unknown;
+        storage_unsupported -> storage_unsupported;
+        fragments_unsupported -> fragments_unsupported;
+        table_type_unsupported -> table_type_unsupported;
+        table_row_limit -> table_row_limit;
+        table_count_mismatch -> table_count_mismatch; table_receipt_changed -> table_receipt_changed;
+        config_changed -> config_changed; provider_changed -> provider_changed;
+        ticker_not_suspended -> ticker_not_suspended; ticker_changed -> ticker_changed;
+        schema_record_invalid -> schema_record_invalid;
+        unsupported_pid -> unsupported_pid;
+        unsupported_reference -> unsupported_reference;
+        unsupported_port -> unsupported_port;
+        unsupported_function -> unsupported_function;
+        unsupported_bitstring -> unsupported_bitstring;
+        owner_target_unsupported_term -> unsupported_term;
+        {Nested,Stack} when is_list(Stack) -> F(Nested,D+1);
+        _ -> native_refused
+    end;
+    F(_,_) -> native_refused
+end,
+SafeStage = fun(S) ->
+    case lists:member(S,[typed_setup,effective_config,provider_state,native_inventory,
+        native_tables,table_storage,table_fragments,table_type,table_lock,
+        schema_metadata,table_size,table_schema,table_fold,table_row_terms,
+        schema_terms,ticker_state,table_receipts,stable_config,stable_provider,
+        serialize_config,serialize_provider,encode_reply]) of
+        true -> S; false -> native_tables
+    end
+end,
+%% Complete persistent schema record, not VM-local table_info(all) handles.
+%% The envelope retains its {Table,CreateList} shape, without projecting fields.
+CanonicalSchema = fun(T,Records) ->
+    case Records of
+        [{schema,T,CreateList}] when is_list(CreateList), length(CreateList) =< 4096 ->
+            Keys = [K || {K,_} <- CreateList, is_atom(K)],
+            case length(Keys) =:= length(CreateList) andalso
+                 length(Keys) =:= length(lists:usort(Keys)) of
+                true -> {T,CreateList}; false -> error(schema_record_invalid)
+            end;
+        _ -> error(schema_record_invalid)
+    end
+end,
+%% Fixed builtin policy: evaluated before any table fold; never invoke a module
+%% or alias supplied by input. Plain null_copies is not the native ext tuple.
+StoragePolicy = fun(Storage) ->
+    case Storage of
+        ram_copies -> ok; disc_copies -> ok; disc_only_copies -> ok;
+        {ext,rocksdb_copies,mnesia_rocksdb} -> ok;
+        {ext,null_copies,mria_mnesia_null_storage} -> ok;
+        null_copies -> error(storage_null_copies);
+        {ext,_,_} -> error(storage_external);
+        unknown -> error(storage_unknown);
+        _ -> error(storage_unsupported)
+    end
+end,
+StorageReceipt = fun(Storage,Count,N,N2,CountAfter) ->
+    case Storage of
+        {ext,null_copies,mria_mnesia_null_storage} ->
+            case {Count,N,N2,CountAfter} of
+                {0,0,0,0} -> ok; _ -> error(storage_null_nonempty)
+            end;
+        _ -> ok
+    end
+end,
+erase(woow_target_function_diag),
+put(woow_target_stage, typed_setup),
+try
+%% Owner-selected fixed read-only expression. No archive/user-selected code.
+%% Substitution is only a producer-generated 32-character lowercase hex nonce.
+Typed = fun F(V,D) when D =< 16 ->
+    case V of
+        B when is_binary(B), byte_size(B) =< 65536 -> #{type => <<"binary">>,value => base64:encode(B)};
+        A when is_atom(A) -> #{type => <<"atom">>,value => atom_to_binary(A,utf8)};
+        I when is_integer(I), I >= -9223372036854775808, I < 9223372036854775808 -> #{type => <<"integer">>,value => I};
+        N when is_float(N) -> #{type => <<"float">>,value => N};
+        T when is_tuple(T), tuple_size(T) =< 4096 -> #{type => <<"tuple">>,value => [F(X,D+1) || X <- tuple_to_list(T)]};
+        L when is_list(L), length(L) =< 4096 -> #{type => <<"list">>,value => [F(X,D+1) || X <- L]};
+        M when is_map(M), map_size(M) =< 4096 -> #{type => <<"map">>,value => [[F(K,D+1),F(X,D+1)] || {K,X} <- maps:to_list(M)]};
+        P when is_pid(P) -> error(unsupported_pid);
+        R when is_reference(R) -> error(unsupported_reference);
+        P when is_port(P) -> error(unsupported_port);
+        F0 when is_function(F0) -> error(unsupported_function);
+        B when is_bitstring(B), not is_binary(B) -> error(unsupported_bitstring);
+        _ -> error(owner_target_unsupported_term)
+    end
+end,
+%% Metadata-only config diagnostics. Only names present in hash-pinned PUBLIC
+%% BEAM symbols may leave this function. Never call the observed function.
+ConfigFunctionDiagnostic = fun(Fun,ReversePath) ->
+    Env = element(2,erlang:fun_info(Fun,env)),
+    Kind = fun(X) ->
+        case X of
+            B when is_binary(B) -> binary;
+            A when is_atom(A) -> atom;
+            I when is_integer(I) -> integer;
+            N when is_float(N) -> float;
+            T when is_tuple(T) -> tuple;
+            L when is_list(L) -> list;
+            M when is_map(M) -> map;
+            F0 when is_function(F0) -> function;
+            P when is_pid(P) -> pid;
+            R when is_reference(R) -> reference;
+            P when is_port(P) -> port;
+            _ -> other
+        end
+    end,
+    EnvKind = case Env of [] -> empty; [Only] -> Kind(Only); _ -> multiple end,
+    PathClass = case lists:reverse(ReversePath) of
+        [{map,log},{map,console},{map,time_offset}] -> log_console_time_offset;
+        [{map,log},{map,file},{map,_},{map,time_offset}] -> log_file_time_offset;
+        [{map,log}|_] -> log_other;
+        [{map,dashboard}|_] -> dashboard;
+        [{map,node}|_] -> node;
+        [{map,authentication}|_] -> authentication;
+        [{map,authorization}|_] -> authorization;
+        [{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}] -> ssl_default_user_lookup_fun;
+        [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}] -> wss_default_user_lookup_fun;
+        [{map,listeners}|_] -> listeners;
+        _ -> other_config
+    end,
+    Mod = element(2,erlang:fun_info(Fun,module)),
+    Name = element(2,erlang:fun_info(Fun,name)),
+    Arity = element(2,erlang:fun_info(Fun,arity)),
+    Type = element(2,erlang:fun_info(Fun,type)),
+    SafeType = case Type of local -> local; external -> external; _ -> unknown end,
+    Profile = case {Mod,Name} of
+        {emqx_secret,'-wrap/1-fun-0-'} -> secret_wrap_identity_or_env;
+        {emqx_secret,'-wrap_load/1-fun-0-'} -> secret_loader_refused;
+        _ -> unverified
+    end,
+    DescriptorHash = case {Type,Env} of
+        {external,[]} -> binary:encode_hex(crypto:hash(sha256,term_to_binary({Mod,Name,Arity,Type})));
+        _ -> <<"not-emitted">>
+    end,
+    Base = #{descriptor_sha256 => DescriptorHash,module => unknown,name => unknown,arity => unknown,md5 => unknown,
+        type => SafeType,path => PathClass,env_kind => EnvKind,profile => Profile},
+    try
+        PublicHashes = [{emqx_secret,<<"A27D8A4F73E7689F1F8B78E0DCB7C91B">>},{emqx_conf_schema,<<"47407C70442C15C84DCAF0157F58624B">>},{emqx_schema,<<"B1F415D121502FA65EC8E6BD1C5E0050">>},{emqx_config_logger,<<"A8E0E3D3A9E1A0B84BD35A8E527FBBA5">>},{emqx_schema_secret,<<"E3C6061A327AC7306B499E96F37DB478">>},{hocon_tconf,<<"76C974DAEFA9AF02CE84663448CCCCD8">>},{emqx_logger_textfmt,<<"7A51D59C06A00F53673478CDAAE3B515">>}],
+        {Mod,ExpectedHash} = lists:keyfind(Mod,1,PublicHashes),
+        BeamPath = code:which(Mod),
+        true = is_list(BeamPath) andalso lists:prefix("/opt/emqx/lib/",BeamPath),
+        {ok,Beam} = file:read_file(BeamPath),
+        {ok,{Mod,Hash}} = beam_lib:md5(Beam),
+        ExpectedHash = binary:encode_hex(Hash),
+        Hash = erlang:get_module_info(Mod,md5),
+        {ok,{Mod,[{locals,Locals},{exports,Exports}]}} = beam_lib:chunks(Beam,[locals,exports]),
+        case Type of
+            local ->
+                {new_uniq,Hash} = erlang:fun_info(Fun,new_uniq),
+                true = length(Env) =< 128,
+                true = lists:member({Name,Arity+length(Env)},Locals);
+            external -> [] = Env, true = lists:member({Name,Arity},Exports)
+        end,
+        PublicProfile = case Profile of unverified -> public_code; _ -> Profile end,
+        Base#{module => Mod,name => Name,arity => Arity,md5 => ExpectedHash,profile => PublicProfile}
+    catch _:_ -> Base
+    end
+end,
+RejectConfigFunction = fun(Fun,Path) ->
+    put(woow_target_function_diag,ConfigFunctionDiagnostic(Fun,Path)),
+    error(unsupported_function)
+end,
+%% Proven by attempt11 descriptor hash and offline immutable-image export scan.
+%% Exact disabled default TLS paths only. Read public BEAM metadata; never load
+%% its module, invoke lookup/3 or resolve hooks/PSK values.
+InertTlsCallback = fun(Callback,Path) ->
+    Info = [erlang:fun_info(Callback,K) || K <- [module,name,arity,type,env]],
+    Exact = [{module,emqx_tls_psk},{name,lookup},{arity,3},{type,external},{env,[]}],
+    AllowedPaths = [[{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
+                    [{map,listeners},{map,wss},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
+                    [{map,dashboard},{map,listeners},{map,https},{map,ssl_options},{map,user_lookup_fun},{tuple,0}]],
+    case Info =:= Exact andalso lists:member(Path,AllowedPaths) of
+        false -> unsupported;
+        true ->
+            %% Fixed public path from pinned image export catalogue, no input path.
+            {ok,Beam} = file:read_file("/opt/emqx/lib/emqx-5.5.5/ebin/emqx_tls_psk.beam"),
+            {ok,{emqx_tls_psk,Md5}} = beam_lib:md5(Beam),
+            <<"F2653DFD1072A73E2E6FEC1D77865D1F">> = binary:encode_hex(Md5),
+            {ok,{emqx_tls_psk,[{exports,Exports}]}} = beam_lib:chunks(Beam,[exports]),
+            true = lists:member({lookup,3},Exports),
+            case code:is_loaded(emqx_tls_psk) of
+                false -> ok;
+                {file,_} -> Md5 = erlang:get_module_info(emqx_tls_psk,md5)
+            end,
+            {ok,#{owner_fixed_public_callback => #{module => emqx_tls_psk,
+                name => lookup,arity => 3,type => external,env => [],
+                profile => default_tls_user_lookup_fun,
+                beam_md5 => <<"F2653DFD1072A73E2E6FEC1D77865D1F">>,
+                descriptor_sha256 => <<"DE702B30F75648B1435B584233503E51347F769A39B94DC5A2237781179633D6">>}}}
+    end
+end,
+%% Config-only capability. Never call a fun, unwrap/1, loader or external source.
+%% Identity measured from the pinned public emqx_secret BEAM; environment limited
+%% to the single binary captured by wrap/1. wrap_load/1 is deliberately refused.
+ConfigSecrets = fun F(V,D,Path,Acc) when D =< 16 ->
+    case V of
+        SecretFun when is_function(SecretFun) ->
+            case InertTlsCallback(SecretFun,lists:reverse(Path)) of
+                {ok,PublicIdentity} -> {PublicIdentity,Acc};
+                unsupported ->
+            Expected = [{module,emqx_secret},{name,'-wrap/1-fun-0-'},
+                {arity,0},{type,local},{index,0},{new_index,0},{uniq,85191762},
+                {new_uniq,<<162,125,138,79,115,231,104,159,31,139,120,224,220,183,201,27>>}],
+            Info = [erlang:fun_info(SecretFun,K) || K <-
+                [module,name,arity,type,index,new_index,uniq,new_uniq]],
+            case Info =:= Expected andalso length(Acc) < 128 of
+                true -> ok; false -> RejectConfigFunction(SecretFun,Path)
+            end,
+            {env,Env} = erlang:fun_info(SecretFun,env),
+            case Env of
+                [Secret] when is_binary(Secret), byte_size(Secret) =< 65536 ->
+                    Metadata = #{path => lists:reverse(Path),module => emqx_secret,
+                        name => '-wrap/1-fun-0-',arity => 0,type => local,
+                        index => 0,new_index => 0,uniq => 85191762,
+                        new_uniq => <<"A27D8A4F73E7689F1F8B78E0DCB7C91B">>,env => Env},
+                    {Secret,[Metadata|Acc]};
+                _ -> RejectConfigFunction(SecretFun,Path)
+            end
+            end;
+        M when is_map(M), map_size(M) =< 4096 ->
+            {Pairs,Next} = lists:mapfoldl(fun({K,Child},A) ->
+                _ = Typed(K,D+1),
+                {Value,A1} = F(Child,D+1,[{map,K}|Path],A),
+                {{K,Value},A1}
+            end,Acc,maps:to_list(M)),
+            {maps:from_list(Pairs),Next};
+        L when is_list(L), length(L) =< 4096 ->
+            lists:mapfoldl(fun({Child,I},A) -> F(Child,D+1,[{list,I}|Path],A) end,
+                Acc,lists:zip(L,lists:seq(0,length(L)-1)));
+        T when is_tuple(T), tuple_size(T) =< 4096 ->
+            {Items,Next} = lists:mapfoldl(fun({Child,I},A) -> F(Child,D+1,[{tuple,I}|Path],A) end,
+                Acc,lists:zip(tuple_to_list(T),lists:seq(0,tuple_size(T)-1))),
+            {list_to_tuple(Items),Next};
+        _ -> _ = Typed(V,D), {V,Acc}
+    end;
+    F(_,_,_,_) -> error(owner_target_unsupported_term)
+end,
+<<"5.8.9">> = iolist_to_binary(emqx_release:version()),
+"26" = erlang:system_info(otp_release),
+"14.2.5.11" = erlang:system_info(version),
+Fingerprint = fun(V) -> binary:encode_hex(crypto:hash(sha256,term_to_binary(V))) end,
+put(woow_target_stage, ticker_state),
+TickerPid = whereis(emqx_sys),
+case is_pid(TickerPid) of true -> ok; false -> error(ticker_changed) end,
+case sys:get_status(TickerPid,5000) of
+    {status,TickerPid,_,[_,suspended|_]} -> ok; _ -> error(ticker_not_suspended)
+end,
+[] = emqx_cm:all_channels(),
+put(woow_target_stage, effective_config),
+Before = emqx:get_config([]),
+put(woow_target_stage, provider_state),
+Providers = case emqx_authn_chains:list_authenticators('mqtt:global') of
+    {ok,L0} -> L0; _ -> {ok,L1}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L1 end,
+put(woow_target_stage, native_inventory),
+All = lists:sort(mnesia:system_info(tables)),
+true = length(All) =< 64,
+true = lists:member(schema,All),
+Tabs = lists:delete(schema,All),
+put(woow_target_stage, native_tables),
+Transaction = mnesia:transaction(fun() ->
+    erase(woow_target_failure),
+    try
+        lists:foreach(fun(T) ->
+            put(woow_target_stage, table_storage),
+            Storage = mnesia:table_info(T,storage_type),
+            StoragePolicy(Storage),
+            put(woow_target_stage, table_fragments),
+            case mnesia:table_info(T,frag_properties) of
+                [] -> ok; _ -> error(fragments_unsupported)
+            end,
+            put(woow_target_stage, table_type),
+            Type = mnesia:table_info(T,type),
+            case lists:member(Type,[set,ordered_set,bag]) of
+                true -> ok; false -> error(table_type_unsupported)
+            end,
+            put(woow_target_stage, table_lock),
+            mnesia:read_lock_table(T)
+        end,Tabs),
+        put(woow_target_stage, table_lock),
+        mnesia:read_lock_table(schema),
+        put(woow_target_stage, schema_metadata),
+        %% OTP read/3 forbids schema. Its fixed native ETS table contains the
+        %% complete {schema,T,CreateList} records written by mnesia_schema.
+        true = ets:info(schema,size) =:= length(All),
+        Defs = [CanonicalSchema(T,ets:lookup(schema,T)) || T <- All],
+        Data = [begin
+            put(woow_target_stage, table_size),
+            StorageBefore = mnesia:table_info(T,storage_type),
+            StoragePolicy(StorageBefore),
+            Count = mnesia:table_info(T,size),
+            case is_integer(Count) andalso Count >= 0 andalso Count =< 4096 of true -> ok; false -> error(table_row_limit) end,
+            put(woow_target_stage, table_schema),
+            Record = mnesia:table_info(T,record_name),
+            Attrs = mnesia:table_info(T,attributes),
+            put(woow_target_stage, table_fold),
+            {N,Rs} = mnesia:foldl(fun(R,{C,A}) ->
+                case C < 4096 of true -> ok; false -> error(table_row_limit) end,
+                put(woow_target_stage, table_row_terms),
+                Row = Typed(R,0),
+                put(woow_target_stage, table_fold),
+                {C+1,[Row|A]}
+            end,{0,[]},T),
+            put(woow_target_stage, table_receipts),
+            case Count =:= N of true -> ok; false -> error(table_count_mismatch) end,
+            {N2,Rs2} = mnesia:foldl(fun(R,{C,A}) ->
+                case C < 4096 of true -> ok; false -> error(table_row_limit) end,
+                {C+1,[Typed(R,0)|A]}
+            end,{0,[]},T),
+            CountAfter = mnesia:table_info(T,size),
+            StorageAfter = mnesia:table_info(T,storage_type),
+            case StorageBefore =:= StorageAfter of
+                true -> ok; false -> error(table_receipt_changed)
+            end,
+            StorageReceipt(StorageBefore,Count,N,N2,CountAfter),
+            case N2 =:= N andalso CountAfter =:= N of
+                true -> ok; false -> error(table_count_mismatch)
+            end,
+            ReceiptBefore = Fingerprint(lists:sort(Rs)),
+            ReceiptAfter = Fingerprint(lists:sort(Rs2)),
+            case ReceiptBefore =:= ReceiptAfter of
+                true -> ok; false -> error(table_receipt_changed)
+            end,
+            #{table => atom_to_binary(T,utf8),record_name => atom_to_binary(Record,utf8),
+              attributes => [atom_to_binary(A,utf8) || A <- Attrs],
+              row_count => N,rows => lists:reverse(Rs)}
+        end || T <- Tabs],
+        put(woow_target_stage, table_receipts),
+        true = ets:info(schema,size) =:= length(All),
+        DefsAfter = [CanonicalSchema(T,ets:lookup(schema,T)) || T <- All],
+        SchemaBefore = Fingerprint(Defs), SchemaAfter = Fingerprint(DefsAfter),
+        case SchemaBefore =:= SchemaAfter of true -> ok; false -> error(table_receipt_changed) end,
+        put(woow_target_stage, schema_terms),
+        {Typed(Defs,0),Data,SchemaBefore,SchemaAfter}
+    catch InnerClass:InnerReason:InnerStack ->
+        %% Retain only sanitized enums for diagnostics. Rethrow privately so
+        %% Mnesia retains its original abort/retry behavior; never print terms.
+        put(woow_target_failure,{SafeStage(get(woow_target_stage)),ReasonCode(InnerReason,0)}),
+        erlang:raise(InnerClass,InnerReason,InnerStack)
+    end
+end),
+{Definitions,Rows,_SchemaReceiptBefore,_SchemaReceiptAfter} = case Transaction of
+    {atomic,Collected} -> Collected;
+    {aborted,AbortReason} ->
+        {InnerStage,InnerCode} = case get(woow_target_failure) of
+            {FailedStage,FailedCode} -> {SafeStage(FailedStage),FailedCode};
+            _ -> {SafeStage(get(woow_target_stage)),ReasonCode(AbortReason,0)}
+        end,
+        put(woow_target_stage, InnerStage),
+        %% InnerCode was produced by ReasonCode; outer catch revalidates it.
+        error({owner_target_fixed,InnerCode});
+    _ -> error({owner_target_fixed,native_refused})
+end,
+put(woow_target_stage, table_receipts),
+case All =:= lists:sort(mnesia:system_info(tables)) of
+    true -> ok; false -> error(table_receipt_changed)
+end,
+put(woow_target_stage, stable_config),
+After = emqx:get_config([]),
+case Before =:= After of true -> ok; false -> error(config_changed) end,
+put(woow_target_stage, stable_provider),
+ProvidersAfter = case emqx_authn_chains:list_authenticators('mqtt:global') of
+    {ok,L2} -> L2; _ -> {ok,L3}=emqx_authn_chains:list_authenticators(<<"mqtt:global">>), L3 end,
+case Providers =:= ProvidersAfter of true -> ok; false -> error(provider_changed) end,
+put(woow_target_stage, ticker_state),
+case whereis(emqx_sys) =:= TickerPid of true -> ok; false -> error(ticker_changed) end,
+case sys:get_status(TickerPid,5000) of
+    {status,TickerPid,_,[_,suspended|_]} -> ok; _ -> error(ticker_not_suspended)
+end,
+[] = emqx_cm:all_channels(),
+put(woow_target_stage, serialize_config),
+{ConfigPlain,ConfigSecretMetadata} = ConfigSecrets(Before,0,[],[]),
+{ConfigPlainAfter,ConfigSecretMetadataAfter} = ConfigSecrets(After,0,[],[]),
+case Fingerprint({ConfigPlain,ConfigSecretMetadata}) =:=
+     Fingerprint({ConfigPlainAfter,ConfigSecretMetadataAfter}) of
+    true -> ok; false -> error(config_changed)
+end,
+ConfigTyped = Typed(ConfigPlain,0),
+ConfigSecretsTyped = Typed(ConfigSecretMetadata,0),
+put(woow_target_stage, serialize_provider),
+ProvidersTyped = Typed(Providers,0),
+put(woow_target_stage, encode_reply),
+Encoded = emqx_utils_json:encode(#{contract => <<"emqx-owner-live-target-v2">>,
+    version => <<"5.8.9">>,otp_release => <<"26">>,erts_version => <<"14.2.5.11">>,
+    generation => <<"__OWNER_NONCE__">>,complete => true,
+    config => ConfigTyped,config_secret_wrappers => ConfigSecretsTyped,providers => ProvidersTyped,
+    schema_metadata => Definitions,table_names => [atom_to_binary(T,utf8) || T <- All],
+    tables => Rows}),
+true = byte_size(Encoded) =< 1048576,
+io:format("WOOWTARGET:~s:END",[base64:encode(Encoded)])
+catch _:Reason:_ ->
+    Code0 = case Reason of
+        {owner_target_fixed,FixedCode} -> FixedCode;
+        _ -> ReasonCode(Reason,0)
+    end,
+    Code = case lists:member(Code0,[undef,badmatch,bad_argument,function_clause,
+        no_exists,bad_type,not_active,node_not_running,no_transaction,system_limit,
+        storage_null_copies,storage_null_nonempty,storage_external,storage_unknown,storage_unsupported,
+        fragments_unsupported,table_type_unsupported,table_row_limit,
+        table_count_mismatch,table_receipt_changed,config_changed,provider_changed,
+        ticker_not_suspended,ticker_changed,schema_record_invalid,unsupported_pid,unsupported_reference,unsupported_port,unsupported_function,unsupported_bitstring,unsupported_term,native_refused]) of
+        true -> Code0; false -> native_refused
+    end,
+    case {get(woow_target_stage),get(woow_target_function_diag)} of
+        {serialize_config,FunctionDiag} when is_map(FunctionDiag) ->
+            io:format("WOOWFUN:~s:END~n",[base64:encode(emqx_utils_json:encode(FunctionDiag))]);
+        _ -> ok
+    end,
+    io:format("WOOWTARGETFAIL:~s:~s:END",[atom_to_binary(SafeStage(get(woow_target_stage))),atom_to_binary(Code)])
+end.

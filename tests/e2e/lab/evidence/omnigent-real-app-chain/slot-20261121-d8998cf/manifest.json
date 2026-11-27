@@ -1,0 +1,8 @@
+{
+  "cleanup_synthetic_objects_removed": true,
+  "command": "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backup-engine:. python3 tests/e2e/lab/omnigent_real_app_chain.py --run --outer-isolation-confirmed",
+  "exit_status": 1,
+  "failure": "live cookie reader stripped the file newline; exported reader preserved it; assertion at line 400",
+  "run_sha256": "c59641ac81ef759dc29b36f667c4a3a500af844a4337632ce17dd41d2459296d",
+  "tested_commit": "d8998cf720ffb45728f6b5158cc0cffd3fe889dd"
+}

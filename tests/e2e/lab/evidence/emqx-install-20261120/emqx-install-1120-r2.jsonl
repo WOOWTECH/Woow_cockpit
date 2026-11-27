@@ -1,0 +1,61 @@
+{"stage": "isolated_startup", "result": "pass"}
+{"stage": "effective_root_inventory", "roots": ["actions", "alarm", "api_key", "authentication", "authorization", "auto_subscribe", "banned", "bridges", "broker", "cluster", "conn_congestion", "connectors", "crl_cache", "dashboard", "delayed", "durable_sessions", "durable_storage", "exhook", "flapping_detect", "force_gc", "force_shutdown", "gateway", "limiter", "listeners", "log", "mqtt", "node", "overload_protection", "plugins", "prometheus", "psk_authentication", "retainer", "rewrite", "rpc", "rule_engine", "slow_subs", "sources", "stats", "sys_topics", "sysmon", "telemetry", "topic_metrics", "trace", "zones"]}
+{"stage": "effective_config_and_bootstrap_mount", "result": "pass"}
+{"stage": "product_structured_config_reader", "result": "pass"}
+{"stage": "operational_root", "root": "api_key", "result": "pass"}
+{"stage": "operational_root", "root": "banned", "result": "pass"}
+{"stage": "operational_root", "root": "cluster", "result": "pass"}
+{"stage": "operational_root", "root": "log", "result": "pass"}
+{"stage": "operational_root", "root": "node", "result": "pass"}
+{"stage": "operational_root", "root": "rpc", "result": "pass"}
+{"stage": "restricted_root", "root": "actions", "result": "pass"}
+{"stage": "restricted_root", "root": "auto_subscribe", "result": "pass"}
+{"stage": "restricted_root", "root": "bridges", "result": "pass"}
+{"stage": "restricted_root", "root": "connectors", "result": "pass"}
+{"stage": "restricted_root", "root": "exhook", "result": "pass"}
+{"stage": "restricted_root", "root": "gateway", "result": "pass"}
+{"stage": "restricted_root", "root": "plugins", "result": "pass"}
+{"stage": "restricted_root", "root": "psk_authentication", "result": "pass"}
+{"stage": "restricted_root", "root": "rewrite", "result": "pass"}
+{"stage": "restricted_root", "root": "rule_engine", "result": "pass"}
+{"stage": "restricted_root", "root": "sources", "result": "pass"}
+{"stage": "restricted_root", "root": "topic_metrics", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_sessions", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_storage", "result": "pass"}
+{"stage": "restricted_root", "root": "limiter", "result": "pass"}
+{"stage": "restricted_root", "root": "prometheus", "result": "pass"}
+{"stage": "restricted_root", "root": "sysmon", "result": "pass"}
+{"stage": "product_complete_reference_validation", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "synthetic_ha_backup_product_parser_and_staging", "result": "pass"}
+{"stage": "product_phase_convert", "result": "pass"}
+{"stage": "retainer_count_diagnostic", "total": 1, "system_topic_count": 0}
+{"stage": "retainer_count_diagnostic", "total": 0, "system_topic_count": 0}
+{"stage": "retainer_count_diagnostic", "total": 1, "system_topic_count": 0}
+{"stage": "retained_table_counts", "source": 1, "candidate": 1}
+{"stage": "product_ha_parse_snapshot_import_restore_counts", "result": "pass"}
+{"stage": "actual_candidate_isolation_before_cleanup", "result": "pass"}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "ha_only_retained_message_restored", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["135"], "flags": {"not_authorized": true, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "product_candidate_restart_mqtt_allow_deny", "result": "pass"}
+{"stage": "product_output_volume_packaging", "result": "pass"}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["135"], "flags": {"not_authorized": true, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "packaged_volume_install_config_data_mqtt", "result": "pass"}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "mqtt_subscribe_transport", "exit_code": 0, "suback_seen": true, "authorization_rejected": true}
+{"stage": "installed_volume_restart_persistence", "result": "pass"}
+{"stage": "product_cleanup", "remaining": 0}
+{"stage": "product_candidate_backup_probe", "result": "fail", "error_type": "AssertionError"}
+{"image": "3f60addfad2b", "client_image": "93a0bdfcbd9b", "results": [{"stage": "isolated_startup", "result": "pass"}, {"stage": "effective_config_and_bootstrap_mount", "result": "pass"}, {"stage": "product_structured_config_reader", "result": "pass"}, {"stage": "product_complete_reference_validation", "result": "pass"}, {"stage": "synthetic_ha_backup_product_parser_and_staging", "result": "pass"}, {"stage": "product_phase_convert", "result": "pass"}, {"stage": "product_ha_parse_snapshot_import_restore_counts", "result": "pass"}, {"stage": "actual_candidate_isolation_before_cleanup", "result": "pass"}, {"stage": "ha_only_retained_message_restored", "result": "pass"}, {"stage": "product_candidate_restart_mqtt_allow_deny", "result": "pass"}, {"stage": "product_output_volume_packaging", "result": "pass"}, {"stage": "packaged_volume_install_config_data_mqtt", "result": "pass"}, {"stage": "installed_volume_restart_persistence", "result": "pass"}, {"stage": "product_candidate_backup_probe", "result": "fail", "error_type": "AssertionError"}]}

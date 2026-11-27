@@ -1,0 +1,74 @@
+{
+  "started": "2026-11-26T23:37:35.667734+08:00",
+  "before_free": 28354396160,
+  "removed_cache_directories": [
+    {
+      "path": "/home/woowtechopenclaw/.npm/_npx/15c61037b1978c83",
+      "apparent_bytes": 27853909
+    },
+    {
+      "path": "/home/woowtechopenclaw/.npm/_npx/2db181330ea4b15b",
+      "apparent_bytes": 33697375
+    },
+    {
+      "path": "/var/tmp/container_images_oci1032315544",
+      "apparent_bytes": 265298355
+    },
+    {
+      "path": "/var/tmp/buildah-cache-1000",
+      "apparent_bytes": 168692181
+    }
+  ],
+  "kept_busy": [
+    {
+      "path": "/home/woowtechopenclaw/.npm/_npx/53c4795544aaa350",
+      "users": [
+        {
+          "pid": 1457499,
+          "comm": "sh"
+        },
+        {
+          "pid": 1457501,
+          "comm": "node"
+        }
+      ],
+      "builders": []
+    },
+    {
+      "path": "/home/woowtechopenclaw/.npm/_npx/6c62f6e058386832",
+      "users": [
+        {
+          "pid": 1458186,
+          "comm": "sh"
+        },
+        {
+          "pid": 1458187,
+          "comm": "node"
+        }
+      ],
+      "builders": []
+    },
+    {
+      "path": "/home/woowtechopenclaw/.npm/_npx/b6a381d62ce0fe56",
+      "users": [
+        {
+          "pid": 1458032,
+          "comm": "sh"
+        },
+        {
+          "pid": 1458035,
+          "comm": "node"
+        }
+      ],
+      "builders": []
+    }
+  ],
+  "image_policy": "dangling images older than 24h only; no volumes or containers",
+  "pnpm_prune_rc": 0,
+  "image_prune_rc": 0,
+  "containers_unchanged": true,
+  "volumes_unchanged": true,
+  "after_free": 28888502272,
+  "net_free_gain": 534106112,
+  "finished": "2026-11-26T23:38:03.250859+08:00"
+}

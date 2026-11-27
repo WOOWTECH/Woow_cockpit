@@ -1,0 +1,13 @@
+{
+  "source_commit": "8b7ee411b25a684b12215da00ff2c759ef1c70e0",
+  "scope": "real ARM fixed vendor ACL path preservation after proven child budget recovery",
+  "exit": 1,
+  "elapsed_seconds": 263.34313281299546,
+  "stdout_sha256": "09c85c987f86072200b61121b11f63582fa4635d5f2e441c7a7f7720089bdd1c",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ACL_PROFILE_FILE_PATH_NONTEXT_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

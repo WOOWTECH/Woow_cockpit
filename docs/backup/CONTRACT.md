@@ -58,6 +58,40 @@ page (§11) and the lab scenarios (§13). The archive and index formats are unch
 backup with the note 排程備份 that the schedule's registry lists, readable by 2026.11.15.2.
 Revised 2026-11-19 (branch `feat/ha-import-arm`): HA backups made on **ARM (aarch64)** are imported like x86 ones, after tests with
 a real Raspberry Pi 5; an Odoo custom module that would be copied and holds an ELF file for another processor is a blocker (§7, §9).
+Revised 2026-11-23 (branch `feat/ha-import-litellm-product-20261123`, owner decision 「決定1 做」): the WOOWTECH LiteLLM add-on
+(`woow-litellm` → `litellm`) is imported as a product (§9 "LiteLLM"): HA's PostgreSQL 18 rows move into this device's
+PostgreSQL 17 schema (never HA's DDL), HA's salt key replaces this device's secret `litellm-salt-key` through the new
+`adapter.import_manifest(secrets={name: file})` item (only a declared secret), and the check and the notes name this
+device's apps that use LiteLLM keys (`HaCheck.litellm.key_users`); every other shape is unchanged except the app id
+enumerations gaining `litellm`.
+Revised 2026-11-19 (branch `feat/ha-import-batch1`, engine): the HA import is **registry-driven** (`haapps.IMPORTERS`: add-on slug
+suffix → catalog app id, default name, module, convert params, MCP admin app) and imports four more WOOWTECH add-ons: Omnigent
+(`woow-omnigent` → `omnigent`), Hermes (`woow-hermes` → `hermes`), EMQX (`woow-emqx` → `emqx`) and Headscale (`woow-headscale` →
+`headscale`) (§5 "Apps", §7 shapes, §9 "Home Assistant import"); the HA reader hands out clean absolute symlinks below the areas a
+caller allows (`Select.absolute_symlinks`) and new HA-side secrets are never read (§5, §6); throwaway containers take validated
+`--add-host` lines (§6, §8); SQLite files of the new add-ons are read, and Headscale's API keys replaced, only by a sandboxed child
+(`hasqlite`, §9, §10 rule 18). Odoo and n8n behave exactly as before; every existing shape is unchanged except that the app id
+enumerations (`apps`, `importable_apps[].app_id`, `HaCheck.apps[].app_id`, `HaImport.apps`) gain the four ids, and `HaCheck` /
+`reminders_by_app` gain the new apps' sections and lines.
+Revised 2026-11-23 (branch `feat/ha-import-opendesign-20261123`, engine and page; owner decision 「決定2 A」): the HA
+import takes the WOOWTECH **OpenDesign** add-on (`woow_ha_opendesign` → `open-design`, §9 "Batch 2: OpenDesign"): the
+registry gains its importer (MCP admin `opendesign-mcp-admin`; the MCP server is built into the add-on), the SQLite
+child two fixed reads (`opendesign.project_folders`, `opendesign.routines_active`), the app id enumerations
+`open-design`, `HaCheck` the `open-design` section and the page its facts. Every other shape is unchanged.
+Revised 2026-11-23 (branch `feat/ha-import-code-server-20261123`, engine and page; owner decision 「決定2 A」): the HA import
+takes the WOOWTECH **code-server** add-on (`woow_ha_code_server` → `woow-code-server`, §9 "Batch 2: code-server"): the
+registry gains its importer (no MCP admin app, no HA MCP add-on), `habackup.NEVER_READ` the agents' login files of that
+add-on, the app id enumerations `woow-code-server`, `HaCheck` the `woow-code-server` section and the page its facts. The
+page also names the add-ons an HA backup may hold that are **never moved** — the Cloudflare Tunnel and the WOOWTECH MCP
+admin add-ons — with what to do on this device (§9 "Batch 2: add-ons that are not moved"). Every other shape is
+unchanged.
+Revised 2026-11-23 (branch `feat/ha-import-nextcloud-20261123`, engine + page; owner decision 2026-11-23 「決定2 A」): imports
+the WOOWTECH **Nextcloud Office** add-on (`woow-nextcloud-office` → `nextcloud`, `ha_nextcloud.py`; §9 "Batch 2: Nextcloud"):
+HA's PostgreSQL 16 database (restored as the live Nextcloud role), config.php's identity, the custom apps and the users'
+files, which live in HA's **share folder** (when they are absent, the check asks for one confirmation and imports the
+remaining Nextcloud data; §9 describes the empty data folder and file-scan reminder); the target keeps
+its URLs, database credentials, mail, caches, secrets and Office (Collabora) settings. The app id enumerations gain
+`nextcloud`; `HaCheck` gains the `nextcloud` section (§7); no other shape changes.
 Revised 2026-11-18 (branch `feat/ha-import`, part A: engine) for **importing Home Assistant backups** (owner decisions
 2026-11-18: Cockpit reads a Home Assistant OS backup file itself; only the WOOWTECH Odoo and n8n add-ons; x86 only; the
 HA key is pasted for each import and never stored): an uploaded HA backup is recognised by `upload-finish` and kept in
@@ -72,6 +106,23 @@ of a job, the phase labels of the HA jobs, throwaway containers of a job with th
 `tempctr.py`), the side registry `ha-imports.json` (§3, §8) and the conversion itself (§9 "Home Assistant import"): the
 converted backup is an ordinary format 2 `manual` backup that every reader since 2026.11.15.2 restores, so the import
 itself is the existing restore.
+Revised 2026-11-25 (**HAOS parity**, branch `feat/ha-import-haos-parity-20261125`; owner decisions 2026-11-25: importing a Home
+Assistant backup feels like restoring it on another HAOS): content and settings that differ are no reason to refuse any
+more, one app's problem never stops the others, and the customer confirms ONCE, on one page, what has a consequence.
+Foundation (lane F1): one **issue** model for the check, the conversion and the restore check (`haissues.py`; §7 `HaIssue`:
+`stop`, `confirm`, `auto`, `notice`) with confirmation keys over all names; `HaCheck` schema 2 (per app `importable`, `issues`,
+`choices`; `shared` issues; `ok`/`blockers`/`warnings` stay for older pages, conservatively: an app with a line to confirm is
+not `ok`); the check job isolates every app (§8 "Results"); `ha-import-start` (the whole import of several apps, started with
+the one confirmation; its chain of single-app jobs is §8's, lane F2), `choices` and `acknowledged` in the start commands and
+`restore-start`, the error code `confirmation-required`; per-app `results` of a conversion (§7); the device key is created
+where it was demanded (`key_created`; D11); one key for the whole backup, the share folder included (KEY-16); versions inform and
+no longer gate in those common cases (CM-01, CM-02, CM-06: `haissues.version_issues`, `Work.image_version`; each importer changes over in its own lane; OpenDesign's known core mismatch still stops, §9);
+the image's processor name is no gate (HA-06); `ha-imports.json` schema 2 (§3). `api` stays 1: every new field is optional or
+belongs to a new command. Compatibility: older page + this engine reads `ok/blockers/warnings` (an app with lines to confirm
+shows as not importable until the page is reloaded); this page + an older engine sees no `schema: 2` and keeps the two-step
+flow, never sending the new fields (an older engine refuses unknown fields); after a downgrade a schema 2 `ha-imports.json` is
+kept untouched (rows an older engine would drop are not read), the converted backups stay ordinary format 2 backups. Which
+block of the import became what is registered row by row in `tests/backup/ha_parity_rows.json`.
 Product docs for customers are written separately in Traditional Chinese (`docs/backup.md`).
 All UI text is **Traditional Chinese (zh-TW)**. Code comments in English.
 
@@ -113,6 +164,7 @@ entry is generated or written per device and reviewed). Owner `root` is rejected
 | --- | --- | --- |
 | `backup-engine/woowbackup/{archive,keys,storage,util}.py` | E1 engine-core | format, crypto, local storage |
 | `backup-engine/woowbackup/{hasecuretar,habackup,hastore}.py` | E1 engine-core (format) | Home Assistant backups (read only): securetar decryption, outer/inner tars, the `ha-backups/` store (branch feat/ha-import) |
+| `backup-engine/woowbackup/{haimport,haapps,haissues,hacommon,hasqlite,ha_odoo,ha_n8n,ha_omnigent,ha_hermes,ha_emqx,ha_headscale,tempctr}.py` | E2 engine-ops | Home Assistant import: jobs, the registry of importers, shared helpers, the sandboxed SQLite child, one module per app, throwaway containers (branches feat/ha-import, feat/ha-import-batch1) |
 | `backup-engine/woowbackup/{settings,deepcheck}.py` | E1 engine-core (format) | 預設加密備份 setting; deep verify checks |
 | `backup-engine/woowbackup/{errors,paths,__init__}.py` | coordinator (frozen) | shared; change only via coordinator |
 | `backup-engine/woowbackup/{catalog,podman,flows,jobs,cli,digests}.py`, `adapters/*` | E2 engine-ops | apps, podman, orchestration, CLI, data digests |
@@ -150,12 +202,40 @@ root). No `sudo`. Do not write user-supplied credentials anywhere.
 | `/etc/woowtech-cockpit/backup/keys/` | root 0700 | `device-<KEYID>.key`, `imported-<KEYID>.key` (0600), `keys.json` |
 | `/etc/woowtech-cockpit/backup/settings.json` | root 0644 | `{"schema": 1, "encrypt_by_default": bool, "updated": "…Z"}` (預設加密備份); missing, not root-owned, group/world-writable, a symlink or invalid → ignored: **encrypted** (with a `problem` in `status.settings`) |
 | `/var/lib/woowtech-backup/` | root 0700 | `archives/<id>.tar` (format 2, every new backup) or `archives/<id>.woowbackup` (format 1) + `archives/<id>.json` (index), `uploads/<upload_id>.{part,json,done}` (`.done` names the backup of a finished upload for 24 h), `staging/<job>/`, `pending/<job>/` (an in-place restore's pre-restore copy: `pending.json` + `data/apps/<id>/…`, plaintext like staging, kept until it is packaged into the safety backup and removed only by that packaging or before the restore changed anything; §8, §9), `exports/<export_id>.tar` + `.json` (unencrypted download copies, 0600, deleted after `EXPORT_TTL` = 15 min; §8), `jobs/<job>.json` + `.log` + `.lock` (record lock, empty, 0600) + `.cancel` (pending cancel request), `requests.json`, `schedule-state.json` (0600, ≤ 4 MiB: the schedule's registry `{backup id: {job, slot, trigger}}`, last handled slot, the handled slot a clock reset put aside (`handled_before_reset`), the floor kept while the clock is below `armed_at` (`armed_floor{armed_at, floor}`), waiting slot, last run, events ≤ 50; §8) |
-| `/var/lib/woowtech-backup/ha-backups/` | root 0700 | uploaded Home Assistant backups (branch feat/ha-import, §5 "Home Assistant backups"): `<id>.tar` (the file exactly as uploaded, 0600) + `<id>.json` (sidecar, 0600, exactly the stored HaBackupMeta keys of §7, strictly validated; unknown keys make it unreadable and it is then never replaced), id `ha-` + sha256[:20] of the file (the same file uploaded twice is one record); written only by `upload-finish` (sidecar first, then the rename, under `index.lock`) and removed only by `ha-delete`; retention, orphan adoption, the schedule and `delete` never look here |
-| `/var/lib/woowtech-backup/ha-imports.json` | root 0600 | which backups were converted from an HA backup (branch feat/ha-import part B, §8 "Home Assistant import jobs"): `{"schema": 1, "imports": {<backup id>: {ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix, reminders, reminders_by_app, notes, addons, job_id, created}}}` (rows written before `reminders_by_app` and `notes` existed read as empty ones), strict when read (an unreadable file is never replaced and `from_ha` is then omitted), every text cleaned and cut when a row is written (whatever a conversion found is accepted), written under `index.lock`; a row is dropped when its backup is deleted, when its job failed before the backup was in the index, and a day after its backup no longer exists; `ha-delete` never touches it |
+| `/var/lib/woowtech-backup/ha-backups/` | root 0700 | uploaded Home Assistant backups (branch feat/ha-import, §5 "Home Assistant backups"): `<id>.tar` (the file exactly as uploaded, 0600) + `<id>.json` (sidecar, 0600, exactly the stored HaBackupMeta keys of §7, an add-on that cannot be read also with `problem`, ≤ 4 MiB, strictly validated; unknown keys make it unreadable and it is then never replaced), id `ha-` + sha256[:20] of the file (the same file uploaded twice is one record); written only by `upload-finish` (sidecar first, then the rename, under `index.lock`) and removed only by `ha-delete`; retention, orphan adoption, the schedule and `delete` never look here |
+| `/var/lib/woowtech-backup/ha-imports.json` | root 0600 | which backups were converted from an HA backup (branch feat/ha-import part B, §8 "Home Assistant import jobs"): `{"schema": 2, "imports": {<backup id>: {ha_backup_id, name, date, apps, odoo_database, test_mode, workflows_to_fix, reminders, reminders_by_app, notes, addons, job_id, created, group, results, confirmed, left_databases, kept}}}` (2026-11-25; a schema 1 file is read, what its rows do not have is empty, and it becomes schema 2 with the next write: an older engine would drop a row with keys it does not know, so it must not take the file for its own and leaves it as it is; rows written before `reminders_by_app` and `notes` existed read as empty ones), strict when read (an unreadable file is never replaced and `from_ha` is then omitted), never written larger than it is read (8 MiB: the oldest rows go first), every text cleaned and cut when a row is written (whatever a conversion found is accepted), written under `index.lock`; a row is dropped when its backup is deleted, when its job failed before the backup was in the index, and a day after its backup no longer exists; `ha-delete` never touches it |
 | `/run/woowtech-backup/` | root 0700 (tmpfs) | `engine.lock`, `jobs.lock` (start lock), `index.lock` (index sidecar and HA store writes), transient key files `key-<random>` (0600, deleted in `finally`), `schedule-tick` (empty, 0600; its mtime is the last tick), `schedule-tick.lock` (one tick at a time), `schedule.lock` (state file writes), `schedule-state.reported` (an unreadable state file was journaled this boot) |
 
 `woowbackup.paths.Paths` holds these. Tests construct `Paths(base=tmpdir)`; real paths are used
 when `base` is None. The entrypoint never honours environment overrides when running as root.
+
+**Host tools (revised 2026-11-25, HAOS parity).** The engine needs `age` and `age-keygen` (package `age`), `zstd`, PyNaCl
+(`python3-nacl`) and cryptography (`python3-cryptography`). `scripts/bootstrap-ubuntu.sh` installs these four packages: a
+package that is really missing and cannot be added stops that script, an index that cannot be refreshed or a held or not
+downloadable newer version of an installed one does not. That is about the four backup packages only; the step of the five
+Cockpit packages is unchanged and needs the network when something has to be downloaded.
+
+`scripts/manage.py install` on the live root, when it manages the engine, probes the tools the way the engine uses them
+(programs on `util.SAFE_PATH` that answer `--version` within 30 s; the imports and calls in `/usr/bin/python3 -I`) after its own
+checks and before it changes a file. It adds the packages of the tools that do not work with fixed `apt-get` argv: `update`
+(best effort), then `install -y --no-install-recommends --no-remove --reinstall <packages>`; noninteractive, a sanitized
+environment plus the administrator's `http_proxy`/`https_proxy`/`no_proxy`, `NEEDRESTART_SUSPEND=1` (no service is restarted),
+up to 300 s wait for the dpkg lock, never killed while dpkg works (no time limit, Ctrl-C waits). The probes after apt decide,
+not its exit code. The plan (desired files, the Cockpit and cockpit-podman checks) is made again after this step, because apt
+can wait minutes for the lock of an automatic update and what that update changed counts.
+
+When a tool still does not work the update goes on all the same: no refusal because of the environment (an offline device is
+updated). `install` then returns `missing_packages` and one zh-TW notice in `notices` (also on stderr): the names, the reason,
+what cannot be done until they are there, and what to do. The reason is a fixed sentence chosen from what apt wrote (never its
+own lines): no network (a proxy or a portal that asks for a login included), universe not enabled or no source has the
+package, a broken third-party source, signature or validity of a source (no key, expired, not valid yet), the lists or dpkg
+locked by another job, an interrupted dpkg, disk space, an unreadable source list, a held package, a conflict or unmet
+dependencies, package gone or mirror being synchronised; what its lines do not prove is called 原因不明 with the exit code.
+`plan` lists the packages it would add (`packages`). `status` (new; read-only; needs sudo to read the install record) shows
+every tool, also for an engine that `--no-backup` left on the device, and exits 1 while a package is missing. `install`
+returns the packages it added (`packages`). Nothing is probed or run with `--no-backup`, `--root` (a note names the packages) or
+a source tree without the engine, and rollback never removes a package. The engine never runs apt: at run time a missing tool
+still stops only what needs it (`internal-error` that names it).
 
 ## 4. Trusted catalog entry (schema 1)
 
@@ -275,7 +355,8 @@ store) and the downtime of a stopped database is acceptable.
   directory (`data_dir`, a `data_dirs[]` path) as type, mode, numeric owner, size, link target and sha256. `exclude`: up
   to 64 fnmatch globs; a glob without `/` matches any name (file or directory, a directory with everything below it), a
   glob with `/` the path from the top. Sockets are not listed (tar never keeps them); a volume's top directory is not
-  listed (`podman volume import` creates it anew, 0755 owner 0 — lab 2026-11-13); setuid/setgid of a volume's files are
+  listed (`podman volume import` creates it anew, 0755 owner 0 — lab 2026-11-13; a restore sets its owner, group and mode
+  itself afterwards, §5); setuid/setgid of a volume's files are
   not compared (a volume restore drops them, §5). A listing is at most 1 GiB whatever the free space (about 2,000,000
   entries; review M4).
 * Every digest is read **twice** during a backup, around the copy it vouches for (§9): a check whose two reads differ --
@@ -337,7 +418,11 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   database keeps its data in a named volume — `instance` (`{"id","container","unit","user","data_volume","scope":
   "instance"}`) and `database` (`{"id","container","unit","database","user","data_volume"}`). The selected variant is
   `cold`, except for an installed entry that exports its database: then its mode is kept (`installed-mode`), because
-  changing the mode makes the existing backups unrestorable under the new entry.
+  changing the mode makes the existing backups unrestorable under the new entry; and except for an id in
+  `suggest.PREFERRED_MODES` (`litellm`, `n8n`, `hermes`: `database`) that is not installed: the default for the package
+  when that variant can be installed (info note `import-mode`; the cold label then drops 「（預設）」).
+  Supported installed cold/instance entries keep their mode without being told to switch for HA import. Where no usable
+  PostgreSQL export variant exists (the data in a host directory), the existing unsupported-layout warning remains.
 * `volumes`: named volumes the containers mount (`Volume=x.volume:` resolved through `VolumeName=`, default
   `systemd-<stem>`), except volumes mounted only below `/run`, `/var/run`, `/tmp`, `/var/tmp`, `/dev/shm` (skipped: sockets,
   PID files) and, in export modes, the database's data volume.
@@ -350,13 +435,24 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
   `/run/dbus`) are skipped; a Podman/Docker socket is reported (`podman-socket`).
 * `config_files`: `EnvironmentFile=` files (mode `0600`) and bound files (`0644`, or `0600` when not readable by group and
   others) that lie in `.config/<id>/` or `.local/share/<id>/`; a current mode above 0644 is reported (`config-mode`); files
-  elsewhere are listed in `skipped`; files inside a proposed host directory are covered by it.
+  elsewhere are listed in `skipped`; files inside a proposed host directory are covered by it. A package file no
+  Quadlet names (`suggest.PACKAGE_CONFIGS`: LiteLLM's `litellm.env`, the input of its install script) is proposed
+  (`0600`) when the owner has it.
 * `secrets`: every `Secret=` name (also `PodmanArgs --secret`); names that do not exist are reported (`secret-missing`).
 * `health`: every `http://localhost|127.0.0.1|0.0.0.0[:port]/path` in a `HealthCmd=`, mapped to the host port of a
   `PublishPort=` bound to 127.0.0.1 or all addresses (of the container, its network-namespace owner or its pod; with
   `Network=host` the port itself); `expect_status` 200 and `timeout_seconds` 300 (180 for a single service without a
-  database) are proposals (`hints`). LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
-  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5).
+  database; 600 for the id `litellm`, `suggest.HEALTH_TIMEOUTS`) are proposals (`hints`). LiteLLM's 600 s (owner
+  decision 2026-11-23, the catalog maximum) follows its package's own 10-minute start budget (40 readiness probes 15 s
+  apart, `TimeoutStartSec=600`): real restores on a loaded test device took 251-345 s until `/health/readiness`
+  answered, so 300 s could declare a restore that worked failed. A longer limit only waits longer; no check is relaxed.
+  LiteLLM's `/health/liveliness` (it does not look at the database) is proposed as `/health/readiness`, which its
+  package's startup probe waits for (`suggest.READY_PATHS`, with a hint; an installed entry's checks are kept).
+  LAN-only ports, HTTPS and unpublished ports give hints instead of URLs. A query
+  string (`?…`, possibly a token) is never copied: the URL keeps only its path and a hint says so (review L5). A path
+  that can never answer the engine's check with 200 (`suggest.HEALTH_PATHS`: `emqx` `/readyz`, 403 through the published
+  port, and the Dashboard page `/`, 406 to the check's `Accept: application/json`) is replaced by the path of the same port
+  that can (`/api/v5/error_codes`, the broker's own public REST endpoint), with a hint.
 * `verify`: built-in digests (feature 1): one `postgres-digest` per PostgreSQL database (`{"postgres": "main"}` in export
   modes, `{"container","unit","user"}` in cold mode) and one `files-digest` per proposed volume and host directory, except
   a PostgreSQL data volume or directory (the table digest covers it); at most 16. If the validator rejects them (an engine
@@ -367,7 +463,15 @@ variant invalid (`field: "id"`): installing it would move that entry and its bac
 **Installed entries.** For an id that is installed for this owner, every variant keeps the installed entry's name,
 description, `template_dir`, volume and directory labels, `health` and `verify` items (built-in digests of targets the
 installed checks do not cover are appended), its list order (new items last; the start order only when no unit was
-added), and leaves out empty lists the installed entry leaves out. `installed.changes` is the structured diff
+added), and leaves out empty lists the installed entry leaves out. A kept `postgres-digest` whose form another mode
+cannot use (the container form in an export mode, an unknown `postgres` id in cold mode) becomes that variant's own
+check of the same database container with the kept `id`, `label` and `exclude_tables` (`suggest.digest_for_mode`):
+every variant of an installed app can be installed as proposed. One exception: a `health` item of an id in
+`suggest.HEALTH_TIMEOUTS` (`litellm`) with a shorter `timeout_seconds` (or none, the catalog's 60 s) gets that limit in
+the draft, with an info note `health-timeout` naming the old limits; it takes effect when the draft is installed (the
+engine never edits an installed entry by itself). The same way a `health` item that expects 200 on a path in
+`suggest.HEALTH_PATHS` gets the path that can answer (or is left out when the entry already asks it), with an info note
+`health-path` (a check adapted to another status is left alone). `installed.changes` is the structured diff
 installed → draft, `installed.drift` the zh-TW notes on structural differences (a volume, directory, secret, config file,
 unit, writer or Quadlet file on one side only), `installed.same` true when nothing differs.
 
@@ -380,7 +484,8 @@ Which mode a draft proposes (the general guidance is the "PostgreSQL modes" tabl
 | Restore needs | the same PostgreSQL major | the same or a newer major | the same or a newer major |
 
 The draft for an app that is already installed in an export mode keeps that mode, because switching modes makes its
-existing backups unrestorable under the new entry (`compat` says so before installing).
+existing backups unrestorable under the new entry (`compat` says so before installing). LiteLLM, n8n and Hermes are the ids
+whose new draft is single-database (`suggest.PREFERRED_MODES`). Their HA imports also fill supported cold and complete-instance layouts; the default does not require migrating an installed entry.
 
 ### Installing and removing entries (`catalog-install`, `catalog-remove`)
 
@@ -458,7 +563,7 @@ Strict (unknown keys rejected; a schema violation is `corrupt-archive`, another 
 encryption, `size` (> 0, the member's size) and `sha256` (of the member's bytes).
 
 The inner tar of an app follows the strict tar rules of format 1: `manifest.json` first, then exactly the entries it
-lists, in order. The **per-app manifest** (≤ 1 MiB; authenticated by age when encrypted):
+lists, in order. The **per-app manifest** (≤ 16 MiB since 2026-11-25, X-AR-03; authenticated by age when encrypted):
 
 ```json
 {"format": 2, "backup_id": "…", "created": "…Z", "type": "manual", "note": "", "key_id": "ABCD-EF01-2345-6789",
@@ -486,7 +591,7 @@ gzip stream end exactly at the member's end and the member's sha256 match. Only 
 restore of one app never decrypts another. Their manifests are read first, so the totals and limits are known before
 anything is written. The combined manifest the flows get has the format 1 shape plus `format: 2`, `encryption` and
 `backup_apps`, holding the selected apps only (`incompatible` when a selected app is not in the backup). Limits: ≤ 100
-apps, ≤ 3,999 entries in all, manifest and `backup.json` ≤ 1 MiB, README ≤ 64 KiB, declared total ≤ 2 TiB and ≤ free
+apps, ≤ 39,999 entries in all, manifest ≤ 16 MiB, `backup.json` ≤ 1 MiB, README ≤ 64 KiB, declared total ≤ 16 TiB and ≤ free
 space − 512 MiB (extract). Errors as format 1 (`wrong-key` when age matches no identity and `backup.json` names a key
 this device does not hold, else `corrupt-archive`; `key-required` without usable identities; an unencrypted backup needs
 none).
@@ -541,7 +646,7 @@ WOOWTECH-BACKUP/1\n
   Never pass key material in argv/env; identity files live in `/run/woowtech-backup` (0600).
 * Tar members, in order: `manifest.json` first, then each entry listed in `manifest.entries` in
   that order. Regular files only, mode 0600, uid/gid 0, names exactly as listed.
-* `manifest.json` (≤ 1 MiB):
+* `manifest.json` (≤ 16 MiB):
 
 ```json
 {
@@ -576,8 +681,8 @@ matching identity), stream-decompress, parse+validate the manifest, then for eve
 name == next expected entry, type regular, size == declared, sha256 == declared, total ≤ limits;
 reject links, devices, absolute or `..` names, duplicates, extra or missing members, and require
 age and zstd to exit 0 before anything is considered valid. Extraction only into an empty
-root-owned 0700 directory, with `O_NOFOLLOW|O_EXCL` file creation. Limits: ≤ 4000 members,
-manifest ≤ 1 MiB, declared total ≤ free space − 512 MiB reserve, per-member size enforced while
+root-owned 0700 directory, with `O_NOFOLLOW|O_EXCL` file creation. Limits: ≤ 40,000 members,
+manifest ≤ 16 MiB, declared total ≤ free space − 512 MiB reserve, per-member size enforced while
 streaming.
 
 Key id: `sha256(recipient_utf8).hexdigest()[:16].upper()` grouped as `XXXX-XXXX-XXXX-XXXX`.
@@ -594,7 +699,7 @@ already does, before the safety backup, and the restore reuses the result):
 
 * A volume tar may hold only regular files, directories, FIFOs, symlinks and hard links to an earlier non-directory
   member (a second name of a file, symlink or FIFO, as `podman volume export` writes it), with no absolute or `..`
-  names, no duplicates, no member below a symlink or other non-directory, at most 2,000,000 members, no symlink whose
+  names, no duplicates, no member below a symlink or other non-directory, at most 4,000,000 members (2,000,000 before 2026-11-25; an image 100,000, was 10,000), no symlink whose
   target leaves the volume when resolved from the link's own directory (podman's own import rule, which otherwise
   aborts half-way after the volume was emptied), and only member owners (uid and gid) that the owner's user
   namespace maps (`podman unshare cat /proc/self/uid_map`, `gid_map`; else `incompatible`). Devices and sparse or
@@ -607,7 +712,10 @@ already does, before the safety backup, and the restore reuses the result):
 
 Podman is then fed a canonical tar rebuilt from the validated members only, never the archive's bytes: for volumes
 setuid/setgid are dropped from non-directories, owner names dropped and only `SCHILY.xattr.user.*` kept (what was
-dropped is reported, §7 `warnings`); for images the index names the image `local_name(ref)`, the name
+dropped is reported, §7 `warnings`), and the new volume's top directory then gets the owner, group and mode of the tar's
+first `.` entry (validated like every member) or, when there is none (`podman volume export` writes none), of the volume
+it replaces, set inside the owner's user namespace: Podman 6.1.1 ignores that entry and no longer hands an imported volume
+to the image's user (an ARM64 test machine, 2026-11-23); for images the index names the image `local_name(ref)`, the name
 `podman tag <id> <ref>` gives it (`localhost/<short ref>`, Docker Hub `library/`, `:latest` added), which `<ref>`
 resolves to first, so the archive never chooses which image name of the owner moves. Exception: a short name with an
 alias (`/etc/containers/registries.conf.d/shortnames.conf`: `ubuntu`, `python`, `node`, `alpine`, …) resolves to an
@@ -677,6 +785,22 @@ target hex|-> <path hex>` sorted by path bytes; postgres `D <db hex>` (each data
 hex> <t|f>` sorted by line bytes (`woowbackup.digests` parses both and is what the engine uses; a reader that only
 displays may ignore the entry). The verify job's deep check may recompute the entry's sha256 against `digest`.
 
+**Import readback in the archive [format]** (2026-11-23). The app section of a converted Home Assistant backup may
+carry `import_check` (older archives have none; an engine that does not know the key refuses the archive as before):
+
+```json
+"import_check": {"kind": "emqx-readback", "version": 1,
+  "config_roots": {"authorization": "<sha256 hex>", "listeners": "<sha256 hex>", "node": "<sha256 hex>"},
+  "tables": {"emqx_authn_mnesia": [4, "<sha256 hex>"], "emqx_authn_scram_mnesia": [0, "<sha256 hex>"],
+             "emqx_acl": [4, "<sha256 hex>"], "emqx_admin": [2, "<sha256 hex>"], "emqx_app": [1, "<sha256 hex>"],
+             "emqx_psk": [0, "<sha256 hex>"], "emqx_banned_rules": [-1, null]}}
+```
+
+Validation (strict, unknown keys rejected): `kind` one of the known kinds and belonging to the section's app
+(`emqx-readback` → `emqx`), `version` 1, `config_roots` 1–128 roots `^[a-z][a-z0-9_]{0,63}$` (a real broker has all of its about 44) each a 64
+lowercase hex digest, `tables` exactly the kind's tables, each `[rows, digest]` with `rows` −1…2^31 (−1: no such table, digest
+`null`) and a 64 lowercase hex digest otherwise. CONTRACT section 9 (EMQX, step 6) says how a restore uses it.
+
 **Instance-mode PostgreSQL items [format]** (accepted by both formats since 2026-11-13). A `postgres[]` item may carry `"scope": "instance"`; then (all keys required,
 unknown keys rejected):
 
@@ -707,51 +831,28 @@ displays names and counts; passwords never appear outside the globals entry.
 Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**, never written. Facts and sources:
 `tests/backup/fixtures/ha/README.md` and the design notes of the branch.
 
-* **Outer file**: a plain, never compressed POSIX tar written by Python's tarfile -- per member a PAX header (float
-  `mtime`; `path`/`size` when needed) and a regular file, `./backup.json` written last, flat names (`./` stripped
-  before comparing). Accepted: ustar POSIX headers with valid checksums, PAX records `path size mtime atime ctime uid
-  gid uname gname hdrcharset` (any other key, `GNU.sparse.*` and global headers are refused), regular files only, no
-  duplicates, zero padding, the end-of-archive marker and only zeros (≤ 1 MiB) after it, ≤ 512 members.
-* **Recognition** (`habackup.looks_like_ha`, run by `upload-finish` before the Cockpit formats): a member named
-  `backup.json` (any `./` prefix) whose strict JSON has `supervisor_version`. A Cockpit file answers no at once.
-* **backup.json** (≤ 1 MiB, strict JSON; a subset of Supervisor's SCHEMA_BACKUP, unknown keys ignored): `version` 2
-  (1 → `unsupported-format`), `slug` `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`, `name` ≤ 200 characters without control
-  characters, `date` ISO 8601 (kept as UTC `…Z`), `type` `full|partial`, `supervisor_version`, `protected` and
-  `compressed` booleans, `addons[{slug, name, version, size?}]` (≤ 100, unique slugs), `folders[]` (`homeassistant`
-  dropped, `addons/local` read as `apps/local`), `homeassistant` object|null, `repositories[]`, `extra` object. Display
-  data only: never trusted for a security decision.
-* **Members**: exactly `<add-on slug>.tar[.gz]` per add-on, `homeassistant.tar[.gz]` when `homeassistant` is set,
-  `<folder with / as _>.tar[.gz]` per folder (`apps_local` or the legacy `addons_local`) and optionally
-  `supervisor.tar[.gz]`; `.tar.gz` when `compressed`, else `.tar`. Encryption is decided **per member from its first
-  bytes**, never from `protected` (Home Assistant's download button gives a decrypted copy that says `protected: false`
-  while `supervisor.tar.gz` stays encrypted): `SecureTar` + version 2|3 → v2|v3 (another version:
-  `unsupported-format`), gzip or tar magic → plain, anything else → v1 when `protected`, else `corrupt-archive`. The
-  member size must fit the header: v1 whole cipher blocks, v2 the plaintext size rounded up to the next 16 bytes, v3
-  the plaintext size + 17 bytes per 1 MiB chunk.
+**Revised 2026-11-25 (HAOS parity, lane READ).** What HAOS takes is taken; what cannot be read stops no more than it must: an entry is skipped and listed, else that member (one add-on), else the file. Data that is not complete and intact is never used; limits were raised, not removed. `tests/backup/test_ha_backup.py` `HaosParityTests` holds every case where HAOS takes a file or document and this device does not, with its reason.
+
+* **Outer file**: a plain, never compressed tar, normally POSIX ustar written by Python's tarfile (per member a PAX header and a regular file, `./backup.json` last, flat names). Read: headers with valid checksums, POSIX, GNU or v7; PAX records of any key (strict record syntax, no key twice), GNU long names, Solaris `X`; `GNU.sparse.*` / type `S` and a global PAX header with `path`, `linkpath` or `size` refuse the file (another global header is ignored, none of its records is used). Members are the regular files (types `0`, NUL, `7`) with a flat name (no `/`, ≤ 255 characters, no control characters, `./` stripped); folders, links, devices, other names and whatever backup.json does not list are stepped over, never followed, never written (`Layout.ignored`, `ignored_count`). Padding is not looked at; the first zero block ends the archive and nothing behind it is read. Limits: 4096 headers, extended headers 1 MiB (long names 64 KiB). Damage in the tar itself (checksum, numbers, a member or the end cut off, extended headers without a member or twice) is `corrupt-archive` for the file.
+* **Recognition** (`habackup.looks_like_ha`, run by `upload-finish` before the Cockpit formats): a member named `backup.json` (any `./` prefix; without one, `snapshot.json`, as Supervisor called it until 2021) whose strict JSON has `supervisor_version`, or -- backups older than 2022.08 -- `slug`, `name`, `date` and `type` and no Cockpit `backup_id`. A Cockpit file answers no at once.
+* **backup.json** (≤ 16 MiB, strict JSON, once in the file; a subset of Supervisor's SCHEMA_BACKUP, unknown keys ignored): `version` 1 or 2 (absent: 1, coerced like Supervisor's), `type` `full|partial`, `addons[{slug, name, version}]` (≤ 1000, a valid slug only once), `folders[]` (≤ 256, `[a-z0-9_]` names with at most one `/`, unique; `homeassistant` dropped, `addons/local` read as `apps/local`), `repositories[]`, `extra` object. Anything else refuses the file. Shown only, cleaned (`clean_text`: control, format -- bidirectional, zero-width --, surrogate and unassigned characters become spaces) and cut, never a reason to refuse: `slug` (64), `name` (200), `date` (ISO 8601, kept as UTC `…Z`, else null), `supervisor_version` (64, '' when absent), `homeassistant`, an add-on's `name` (200, else its slug) and `version` (64, numbers as text). `protected`: absent false, not a boolean true. `compressed`: absent or not a boolean: what the member names say, else true. An add-on whose slug cannot name a member is listed as `invalid-<n>` with the problem `bad-slug`. Display data only: never trusted for a security decision.
+* **Members**: `<add-on slug>.tar[.gz]` per add-on, `homeassistant.tar[.gz]` when `homeassistant` has a version, `<folder with / as _>.tar[.gz]` per folder (`apps_local` or the legacy `addons_local`: the first of the two) and optionally `supervisor.tar[.gz]`; `.tar.gz` when `compressed`, else `.tar`; a name of Home Assistant's own parts is never an add-on's. Encryption is decided **per member from its first bytes**, never from `protected`: `SecureTar` + version 2|3 → v2|v3, the declared gzip or tar magic → plain, anything else → v1 when `protected`. The member must hold what that header announces (v1 whole cipher blocks; v2 the plaintext size rounded up to the next 16 bytes; v3 the plaintext size + 17 bytes per 1 MiB chunk); bytes after that are never read. A member that cannot be used keeps a **problem** and is never opened (`problem_error`, before any key is asked for): `duplicate` (its name is there twice), `encryption-unsupported` (another SecureTar version), `size-mismatch` (shorter than announced), `partial-ciphertext`, `not-an-archive`; a listed add-on without a member has `missing`. One member's problem never concerns another member.
 * **securetar** (`hasecuretar`): v1 (Supervisor ≤ 2024.12: 16 B salt + AES-128-CBC), v2 (2025.01–2026.03: 48 B header +
   AES-128-CBC, PKCS7 over the whole stream), v3 (2026.04+ with Core 2026.3+: 136 B header + XChaCha20-Poly1305
   secretstream in 1 MiB chunks). Keys come from the HA key text exactly as pasted (UTF-8, never trimmed or upper-cased):
   v1/v2 100 rounds of SHA-256; v3 Argon2id (opslimit 8, memlimit 16 MiB, once per backup) and BLAKE2b-256 subkeys. A
   wrong key is `wrong-key` before any plaintext (v3 exact through the validation key; v1/v2 the first 512 decrypted
-  bytes must look like gzip or tar, a heuristic). Truncation and tampering are `corrupt-archive`: v3 authenticates every
-  chunk and requires exactly the writer's tags and chunk sizes, v2 its padding and plaintext size; v1 has no integrity of
-  its own (the gzip CRC/ISIZE or the tar structure catches it). PyNaCl (`python3-nacl`, v3) and cryptography
-  (`python3-cryptography`, v1/v2) are imported only when needed; a missing package is `internal-error` naming it.
-* **Member streams**: decrypted, then gunzipped by the engine's own reader (RFC 1952 header parse, raw inflate with
-  bounded output, CRC32 and ISIZE checked; a v1 member may end `pad | CRC | 0x0c × 12 | ISIZE`, the trailer securetar
-  ≤ 2024.11 wrote because it padded every write, also checked).
-* **Inner tars** (`habackup.iter_entries`): ustar POSIX or GNU headers with PAX and GNU long-name records; names
-  without `./`, never absolute, with `..`, `.` or empty components or control characters, ≤ 4096 bytes; no
-  duplicates, nothing below a non-directory, no non-directory where a directory was implied; regular files,
-  directories, symlinks (handed out only below the caller's areas when relative and staying inside them, else skipped
-  and counted), hard links (only to an earlier selected regular file and only when the caller allows them, else
-  refused) and FIFOs (skipped); devices, sparse and contiguous files, global headers and unknown types are refused;
-  member and byte budgets; the end-of-archive marker, only zeros after it, then the stream's final checks.
-  `addon.json` of an add-on is parsed (`system.slug`, `version`, `user.image` → arch `amd64|aarch64|unknown`,
-  `system.name`) and never handed out (it holds the options with passwords and the tokens); `data/options.json`,
-  `data/odoo.conf` and `data/n8n-runners-auth-token` are never read.
-* **Apps**: an add-on maps to this device's catalog id by its slug after the first `_` (any repository prefix):
-  `odoo18ce` → `odoo`, `woow-n8n` → `n8n`; the jobs identify the app by addon.json `system.slug`.
+  bytes must look like gzip or tar, a heuristic). Truncation and tampering are `corrupt-archive` with the detail `scope`
+  "member" (`MEMBER_MESSAGE`: one add-on or folder, not the file): v3 authenticates every chunk and requires exactly the
+  writer's tags and chunk sizes, v2 its padding and plaintext size; v1 has no integrity of its own (the gzip CRC/ISIZE or
+  the tar structure catches it); bytes behind what a v2/v3 header announces are never read. PyNaCl (`python3-nacl`, v3) and cryptography
+  (`python3-cryptography`, v1/v2) are imported only when needed; a missing package is `internal-error` naming it (`scripts/manage.py install` adds it, section 3).
+* **Member streams**: decrypted, then gunzipped by the engine's own reader (RFC 1952 header parse, raw inflate with bounded output; header fields ≤ 1 MiB; CRC32 and ISIZE of every gzip member checked; several members one after the other (≤ 1 000 000) and zero padding are read as gzip(1) does, anything else behind a member is `corrupt-archive`; a v1 member may end `pad | CRC | 0x0c × 12 | ISIZE`, also checked). `MemberStream.reopen()` is the same member from its start.
+* **Inner tars** (`habackup.iter_entries`): POSIX, GNU or v7 headers with PAX (≤ 1 MiB) and GNU long-name (≤ 64 KiB) records. **Stop the app** (`corrupt-archive`, `scope` "member"): absolute names, names with `..`, `.` or empty components, duplicates, anything below a non-directory, a non-directory where a directory was implied, sparse and contiguous files, global headers, unknown types, a non-file with data, a root that is no directory, `addon.json` that is not a regular file or not an add-on's metadata, damage and truncation. **Skipped and counted** (`Report.skips`, when selected; for the customer's confirmation): names that are blank, over 4096 bytes or with control characters (`name`; they still obey the structure rules), device nodes (`device`), FIFOs (`fifo`), anything but a file in a secret's place (`secret`), symlinks outside the caller's areas (`symlink`: handed out only when relative and staying inside them, or absolute with a clean target below a prefix the caller allows; nothing may lie below one), hard links without content (`hardlink`), and files a caller declines as too large (`large`, `Entry.read_or_skip`). **Hard links**: one that names an earlier selected file is handed out as a link when the caller takes links (`Select.hardlinks`); every other selected one comes after the walk as a regular file with the content of the file it names (also through other links, also one later in the tar or not selected), read in a further pass over the same member (≤ 4 passes, ≤ 100 000 waiting links; the copies count into the byte budget); `Entry.copy_later()` asks for the same. Never copied: a secret, `addon.json`, what the caller excludes. Budgets: 4 000 000 entries (names in a 64-bit table of about 18 bytes each; implied folders count too; an entry costs its own missing folders, not the depth of its path), 16 TiB of selected files, 256 GiB or 100 times the stored size inflated, 50 000 000 records in all the extended headers of one tar (reading them is Python work); a limit that stops one member is `limit-exceeded` with the detail `scope` "member" and `MEMBER_LIMIT_MESSAGE` (the rest of the file can be read), a limit of the outer tar or backup.json has no `scope` and `LIMIT_MESSAGE`. The first zero block ends the tar; the rest of a compressed or encrypted stream is read for its final checks and dropped; a plain, unencrypted tar that goes on behind it is refused (nothing else would notice zeros in its middle). `addon.json` of an add-on (≤ 32 MiB) is parsed (`system.slug`; `version` '' when it is none; `user.image` → arch `amd64|aarch64|unknown`; `system.name` cleaned) and never handed out (it holds the options with passwords and the tokens); `data/options.json`, `data/odoo.conf`, `data/n8n-runners-auth-token` and (batch 1) Hermes's `data/secrets/{dashboard_password,api_server_key,webhook_secret,basic_auth_secret}` and `data/applied/{minimax_api_key,openrouter_api_key,github_token}`, EMQX's `data/emqx/node.cookie`, Headscale's `data/.headplane_api_key` / `data/.headplane_cookie_secret` and (batch 2) code-server's agent logins are never read, nor is anything below such a name.
+* **Apps**: an add-on maps to this device's catalog id by its slug after the first `_` (any repository prefix), from
+  the one registry `haapps.IMPORTERS` (in this order): `odoo18ce` → `odoo`, `woow-n8n` → `n8n`, `woow-omnigent` →
+  `omnigent`, `woow-hermes` → `hermes`, `woow-emqx` → `emqx`, `woow-headscale` → `headscale`; the jobs identify the app
+  by addon.json `system.slug`.
 
 ## 6. Python module contract (signatures are in the scaffold files; keep them)
 
@@ -779,6 +880,13 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `summary_text()`, `notes`.
 * `catalog`: `load_catalog(paths) -> dict[str, App]`.
 * `podman`: `OwnerRunner(owner)` — runs as the owner via `runuser`, user systemd, safe file I/O.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `OwnerRunner.run` raises `CommandError(.., reason=)` with one fixed zh-TW sentence per kind of failure
+  (`podman.REASONS`, `classify(stderr, returncode)`, `reason_code(error)`, `SENTENCES`): never the command's own words (stderr can
+  hold a password, an SQL statement or a row of the customer's data); `scaled_timeout(base, nbytes)` and `scaled_limit(base, nbytes,
+  ratio=, ceiling=)` (the floor is what a call had, the ceiling keeps a runaway out); `LineSink` and `OwnerRunner.stream_lines(argv,
+  on_line, ...)` read a listing line by line (a line is at most 1 MiB, the stream 16 GiB); `OwnerRunner.user_manager_ready()` and
+  `ensure_user_manager(*, log, wait, root_run, trusted)` (`loginctl enable-linger <owner>` as root, then wait for the manager's
+  socket; only a runner made with the real executor acts, a runner made with any other never touches the device).
 * `adapters.quadlet_postgres.QuadletPostgresAdapter` — implements `adapters.base.Adapter`; `unavailable(info)`
   (2026.11.17.1) gives the zh-TW reason why `backup()` cannot run in the app's current state (`info` from `probe()`:
   a database it dumps is not running — 「應用「<name>」已停止，無法備份：備份時它的資料庫必須在執行中。」, or 「應用「<name>」的資料庫沒有在
@@ -800,25 +908,33 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   unknown`), `ciphertext_ok(kind, member_size, head)`, `DecryptReader(src, member_size, keys, *, name)` (io.RawIOBase
   over any `read(n)` source positioned at the member: `read`/`readinto` bounded to one ~1 MiB chunk, `finish()` reads
   the rest and runs the final checks, `kind`, `plaintext_size`; `wrong-key`/`key-required`/`unsupported-format` come
-  from the constructor, before any plaintext), `open_decrypted(...)`, the zh-TW `WRONG_KEY_MESSAGE`, `CORRUPT_MESSAGE`,
-  `KEY_REQUIRED_MESSAGE`.
+  from the constructor, before any plaintext), `open_decrypted(...)`, `corrupt(reason)` (the whole file) and
+  `broken(reason)` (one member: detail `scope` "member"), the zh-TW `WRONG_KEY_MESSAGE`, `CORRUPT_MESSAGE`,
+  `MEMBER_MESSAGE`, `KEY_REQUIRED_MESSAGE`.
 * `habackup`: `looks_like_ha(fd) -> bool`; `describe(fd) -> Layout` (`doc` (validate_doc), `members` of `Member(name,
-  offset, size, role addon|homeassistant|folder|supervisor, slug, encryption none|v1|v2|v3, compressed)` (`.encrypted`),
-  `size`, `member(name)`, `addon(slug)`, `summary()`); `open_backup(path) -> HaBackup` (context manager; `layout`,
-  `open_member(name, keys=None)`, `open_addon(slug, keys=None)`); `open_member(path, name, *, keys=None,
-  password=None) -> MemberStream` (owns its descriptor); `MemberStream` (io.RawIOBase of the member's tar stream:
-  `member`, `finish()`, `close()`); `iter_entries(stream, select=None, report=None, *, addon=None)` yields `Entry`
-  (`name, kind file|dir|symlink|hardlink, mode, uid, gid, size, mtime, linkname, fileobj`, `read(n)`,
-  `read_all(max_bytes)`, `copy_to(out)`; a file's data is readable until the walk moves on) and sets `report.complete`
-  only after every final check; `Select(include=None|(), exclude=(), symlinks=(), hardlinks=False, max_members,
-  max_bytes)`; `Report` (`entries, files, dirs, symlinks, hardlinks, bytes, skipped_symlinks, skipped_symlink_samples,
-  skipped_other, secret_files, addon, complete`, `warnings()` zh-TW); `read_addon_info(stream) -> AddonInfo|None`,
-  `parse_addon_json(data) -> AddonInfo(slug, version, image, arch, name)`, `image_arch(image)`, `normalize(name)`,
-  `NEVER_READ`.
+  offset, size, role addon|homeassistant|folder|supervisor, slug, encryption none|v1|v2|v3, compressed, problem=None)`
+  (`.encrypted`), `size`, `ignored_count`, `ignored`, `member(name)`, `addon(slug)` (a listed add-on without a usable
+  member raises its problem), `summary()`); `PROBLEMS`, `problem_text(code)`, `problem_error(member_name, code)`;
+  `clean_text(value, max_len)`; `open_backup(path) -> HaBackup` (context manager; `layout`, `open_member(name,
+  keys=None)`, `open_addon(slug, keys=None)`); `open_member(path, name, *, keys=None, password=None) -> MemberStream`
+  (owns its descriptor); `MemberStream` (io.RawIOBase of the member's tar stream: `member`, `finish()`, `reopen()`,
+  `close()`); `iter_entries(stream, select=None, report=None, *, addon=None)` yields `Entry` (`name, kind
+  file|dir|symlink|hardlink, mode, uid, gid, size, mtime, linkname, fileobj`, `read(n)`, `read_all(max_bytes)`,
+  `read_or_skip(max_bytes)` (None: too large, listed), `copy_later()` (a hardlink: hand it out again as a file),
+  `copy_to(out)`; a file's data is readable until the walk moves on), hard links that come as files after everything
+  else, and sets `report.complete` only after every final check; `Select(include=None|(), exclude=(), symlinks=(),
+  hardlinks=False, max_members, max_bytes, absolute_symlinks=())`; `Report(names=SkipList)` (`entries, files, dirs,
+  symlinks, hardlinks, copied_links, bytes, skips {kind: names}, skip(kind, name), skip_count(*kinds), skip_names(*kinds),
+  skip_text(*kinds), skipped_symlinks, skipped_symlink_samples (the first 20 of every selected area), absolute_symlinks,
+  skipped_other, secret_files, addon, complete`, `warnings()` zh-TW); `SKIP_KINDS` (name, device, fifo, secret, symlink,
+  hardlink, large); `SkipList` (`count`, `first`, `key_items()`, like `haissues.Names`, which an importer passes as
+  `names`); `read_addon_info(stream) -> AddonInfo|None`, `parse_addon_json(data) -> AddonInfo(slug, version ('' when it is
+  none), image, arch, name, state)` (`state`: addon.json `state`, the add-on's state when the backup began, '' when
+  absent; batch 1), `image_arch(image)`, `normalize(name)`, `never_read(name)`, `NEVER_READ`.
 * `hastore`: `HaStore(paths)` (`root`, `ensure()`, `file_path(id)`, `list()`, `get(id)`, `exists(id)`, `delete(id)`,
   `publish(fd, st, part, summary, sha256, filename) -> (record, created)`), `view(record, catalog) -> HaBackupMeta`,
   `valid_id`, `is_record`, `addon_suffix(slug)`, `importable_app(slug) -> (app_id, name)|None`, `IMPORTABLE`,
-  `SIDECAR_KEYS`; `storage.Storage.ha_store`, and `Storage.finish_upload` returns the HA record (id `ha-…`) for an HA
+  `SIDECAR_KEYS`, `ADDON_KEYS`, `ADDON_OPTIONAL` (`problem`); `storage.Storage.ha_store`, and `Storage.finish_upload` returns the HA record (id `ha-…`) for an HA
   file.
 * `jobs` (branch feat/ha-import): `redact(text)` also masks `HA_KEY_PATTERN` and every exact text registered with
   `mask_secret(text)` / `unmask_secret(text)` / `masked(text)` (context manager, reference counted, process-wide: the job
@@ -832,26 +948,89 @@ Home Assistant OS backups (Supervisor) are uploaded like any backup and **read**
   `volume(role)`, `network(role)` (internal), `run(role, image, args, *, detach, network, volumes, secrets, env,
   entrypoint, user, workdir, input, stdout, timeout, max_output, check, remove)`, `run_argv(...)`, `exec(role, argv, *,
   user, env, input, stdout, timeout, max_output, check)`, `stop(role)` (exit code), `running(role)`, `remove(role)`,
-  `remove_volume(role)`, `user_ids(role, image, user)`, `volume_import(role, produce)` (a producer writes the tar into a
-  pipe), `volume_export(role, handle)`, `kill_all()`, `cleanup() -> [names left]`, attributes `cpus`, `abort` (the
+  `remove_volume(role)`, `user_ids(role, image, user)` (`run`/`run_argv` also take `read_only_root` and, batch 1,
+  `add_hosts=[(name, IPv4)]` -> `--add-host`; a read-only root that mounts a secret file under `/run/secrets` also gets a
+  private tmpfs there for the mount points, runc refuses them otherwise), `volume_import(role, produce)` (a producer
+  writes the tar into a pipe; a leading `.` entry is applied to the volume's top directory afterwards, as in §5),
+  `volume_export(role, handle)`, `kill_all()`, `cleanup() -> [names left]`, attributes `cpus`, `abort` (the
   job's watchdog, handed to every long podman call); `sweep(runner, alive, *, log, only_job) -> (removed, left)`,
   `default_cpus(uid)`,
   `quadlet_secrets(text)`, `quadlet_image(text)`, `quadlet_environment(text, allowed)`, `parse_unit(text)`, `LABEL`.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): after `user_ids(role, image, user)`: `TempObjects(..., scope=None)` (haimport.Work.temp passes the app's place in
+  the job while `tempctr.SCOPES` is true; an object is then named `woowbk-<job>-<scope>-<role>` instead of `woowbk-<job>-<role>` only
+  when another TempObjects of the same job and owner still lists the plain name -- what an earlier app could not remove, or a sibling
+  that is alive: `tempctr.stuck(job, owner)`; every other name is as it was, the label stays the job id, `sweep` and the recovery match
+  both), `remove(role)` / `remove_volume(role)` return whether the object
+  is gone and never stop the app (X-TC-05: an object that cannot be removed takes space only: one log line, it stays listed for
+  `cleanup` and the sweeps; a role that is needed again retries the removal first, and an app whose name is still taken stops with
+  `job-failed`), `put_back_later(label, action)` (what a job changed on the device for its reading, e.g. a service it started: run first
+  by `cleanup`, kept and retried while it fails, reported as `service:<label>` in the list `cleanup` returns), `services`
+  (`{container: unit}` of what `hatarget.ensure_running` started), `scale_to(nbytes)` / `size` (every wait of `run`, `exec`,
+  `volume_import`, `volume_export` is `podman.scaled_timeout(wait, size)`: the value a call asks for is the floor).
 * `ha_odoo` / `ha_n8n` (part B): `check(work, app)` and `convert(work, app, …, out_dir)` (the app steps of the jobs,
-  driven by `haimport.Work`), the pure parts the tests use (`database_verdict`, `parse_manifest`, `same_version`,
+  driven by `haimport.Work`), the pure parts the tests use (`database_issues` (2026-11-25; replaces `database_verdict`), `parse_manifest`, `same_version`,
   `filter_toc`, `superuser_kinds`, `settings_to_carry`, `split_list_setting`, `alter_system_sql`, `carry_settings`,
   `restore_dump`, `verify_converted`, `marker_ok`, `role_sql`, `scan_member`, `PgSink`, `ha_server_args`, `web_data_tar`,
   `addons_dir_tar`, `Live`; `inspect_sqlite(path, *, checkpoint)` -> workflows `[(name, active, reasons)]`,
   `workflow_reasons`, `workflows_to_fix`, `fixed_key_settings`, `packages_of`, `elf_fits`, `scan_member`, `count_rows`).
+* `haapps` (batch 1): `Importer(app_id, slug, name, module, convert_args, mcp_admin, mcp_addon, engine_mcp_lines)`
+  (`load()` imports the module), `IMPORTERS` (ordered), `BY_APP`, `BY_SLUG`, `APP_IDS`, `get(app_id)`,
+  `for_slug(suffix)`; every importer module has `check(work, app)` -> `{target_version, blockers?, warnings?, <app id>:
+  section}`, optionally `check_blockers(found)`, `convert(work, app, *convert_args, out_dir)` -> `{volumes?, postgres?,
+  dirs?, ...}` and `import_texts(data)` -> `(notes, reminders)`. `hastore.IMPORTABLE`, `haimport.APPS` and
+  `cli.HA_APP_IDS` are derived from it. 2026-11-25 (HAOS parity): `Importer(..., needs_share, choices)`; `check` may also
+  return `issues` ([`haissues.Issue`]) and `choices` ({kind: [{value, label, ok?, default?}]}), findings go to
+  `work.sink(app)` in `check` and again in `convert`, and the module's `ISSUES` ({issue id: level}) declares its ids
+  (the sentences of `blockers`/`warnings` become `legacy.*` stops and notices while a module has not changed over).
+* `haissues` (2026-11-25): `Issue(id, level, message, items, *, action, database)` (`view(app_id)`, `key(app_id)`), `Names`
+  (the names of an arbitrarily long list), `Sink(app_id, acknowledged, *, database, log)` (`stop`, `confirm`, `auto`,
+  `notice`, `refuse`, `add`, `extend`, `found`, `confirmed()`), `views(app_id, issues)`, `check_fields(app_id, issues,
+  choices)`, `missing(app_id, issues, acknowledged)`, `confirmation_required(by_app, message)`, `stopped(issue, code)`,
+  `app_failure(error)` / `ends_job(error)` / `from_error(error)` / `job_wide(error)` / `is_job_wide(error)`, `version_issues(product,
+  addon_version, upstream, target)`, `ISSUES`, `SHARED` (`_shared`). An error that ends the whole job carries
+  `job_wide = True`, one that stops an app its `issues` (`errors.BackupError`, never sent).
+* `hacommon` (batch 1): `VersionTable(product, table)` (`upstream(addon_version)`, `blocker(addon_version, target)`),
+  `semver`, `image_labels(work, app, ref)`, `container_file`, `mounted`, `environment`, `live_json`, `live_export`,
+  `copy_live`, `top_only`, `TreeTar(path, uid, gid, guard)` (`root`, `dir`, `file`, `data`, `symlink`, `hardlink`,
+  `close`, `files`, `counts`), `ha_hosts(text)`, `scalars(yaml_text)`, `network`, `host_elf_machine`, `foreign_elf`.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `image_labels(work, app, ref, *, pull=True)` (an image this device does not have is downloaded first through
+  `hatarget.ensure_image`; the happy path is still one `image inspect`), `live_json(work, app, container, user, database, sql, *,
+  size=None)` (64 MiB of answer instead of 4, more with `size`; a database that is not running or still starting is started through
+  `hatarget.ensure_running` and read once more; a wrong account or database name is told as such), `live_export(..., *, size=None)`,
+  `copy_live(src, out, *, drop, what, report=None, label='')` and `TreeTar(path, uid, gid, guard=None, report=None)`: with a
+  `habackup.Report` a customer's symlink that leaves the volume (`link_escapes(name, target)`, the restore's own rule) and a hard link
+  whose file is not in the copy are left out and listed in `report.skips` (`symlink`, `hardlink`; the importer's one confirmation
+  line `Sink.skipped(report)` names them, full count, 20 names); `TreeTar.hardlink(name, target, mtime, *, entry=None)` returns
+  `'link'` (a hard link to a file the tar holds), `'copy'` (`entry.copy_later()`: the reader hands the file out again, after the walk,
+  as a regular file) or `'skip'` (listed in the report); without an entry and without a report it stops as before.
+* `hatarget` (HAOS parity; `ISSUES`: `target.image-pulled` auto, `target.image-missing` stop, `target.service-started`
+  auto, `target.service-failed` stop, `target.linger-enabled` auto, `target.linger-failed` stop): `ensure_image(work, app, ref)`,
+  `ensure_app_images(work, app)`, `ensure_running(work, app, container, *, ready='running'|'postgres'|callable, size, timeout)` ->
+  `Service`, `ensure_user_manager(work, app, runner=None)`, `retry(action, *, attempts, pause_first, factor, longest, retry_if, abort,
+  log, what)`, `wait_until(condition, *, timeout, interval, abort)`, `pause`, `transient`, `extras(app, handled_volumes,
+  handled_dirs)`, `carry(work, app, out_dir, ids, *, volumes, dirs, report, size)`, `scale_waits(tmp, ha)`,
+  `not_deployed_error(app, info)`. Every function takes the `work` of haimport and needs of it only `runner(app)`.
+* `hasqlite` (batch 1): `run(specs, files, work_dir, *, outputs, out_dir, checkpoint, timeout, what)` -> `{db name:
+  answer, None: {output name: path}}`, `problem(answer)`, `QUERIES`, `CHILD`; a spec is `{db, check: 'quick'|
+  'integrity'|None, schema, counts[table], queries[QUERIES key], replace_api_keys_from: db|None}`.
+* `ha_omnigent` / `ha_hermes` / `ha_emqx` / `ha_headscale` (batch 1): `check`, `convert`, `import_texts`, `VERSIONS`,
+  `scan_member`, `Target`, and the pure parts the tests use (`toc_kinds`, `key_ok`, `strip_env`, `parse_counts`,
+  `parse_authn`, `parse_strict`, `check_counts`, `valid_records`, `records_rel`, `nodes_outside`).
 * `haimport` (part B): `run_ha_check(ctx, params)`, `run_ha_convert(ctx, params)` (reached through `flows.run_verify` /
-  `flows.run_backup` when `params.source` is `ha`), `Work`, `SpaceGuard`, `Watchdog`, `job_key(ctx)`,
-  `read_key_file(path)`, `import_texts(converted)`, `clean_row(row)`, `register(paths, backup_id, row)`,
+  `flows.run_backup` when `params.source` is `ha`), `Work` (2026-11-25: `sink(app)`, `choice(app_id, kind)`,
+  `addon_choices(suffix)`, `image_version(app, ref, *, label, env, command)`, `reset_app(app)`), `key_problems(ha, keys,
+  wanted)`, `needed_members(layout, members)`, `addon_members(layout, suffix)`, `valid_database(name)`,
+  `device_key_for(ctx)`, `convert_result(app_id, error, issues)`, `SpaceGuard`, `Watchdog`, `job_key(ctx)`,
+  `read_key_file(path)`, `import_texts(converted, catalog=None)`, `mcp_lines(importer, catalog)`, `clean_row(row)`,
+  `register(paths, backup_id, row)`, `update_row(paths, backup_id, results=, kept=)` (2026-11-25),
   `forget(paths, backup_id)`, `load_registry(paths)`, `from_ha_views(paths)`, `view_row(row)`, `note_for(record)`,
   `sweep_job(job_id, owners)`, `sweep_finished(paths, *, log, current)`,
-  `interrupted_message(job_type)`, `APPS`.
+  `interrupted_message(job_type)`, `APPS` (from `haapps`), `ITEM_KEYS`.
 * Adapter (part B): `read_quadlets()` and `import_manifest(staging_dir, *, postgres, volumes, dirs)` -> `(app section,
   [Entry])`: images, secrets, config files and Quadlet files read live exactly like `backup()`, the data items given
-  (one per declared item), `verify_snapshot` empty, `catalog_entry` carried. `flows.Deps.sweep_temp`,
+  (one per declared item), `verify_snapshot` empty, `catalog_entry` carried. A PostgreSQL item is either a single-database
+  dump or the complete `_dump_instance` result (globals, roles, bootstrap user and all database dumps); its scope must
+  match the catalog, and an instance's id must match its item before any live secrets are read. `flows.Deps.sweep_temp`,
   `FlowContext.ha_key`, `FlowContext.phase(phase_id, *, percent, message)` / `JobReporter.phase(...)` (a progress that
   replaces the phase position's), `podman.default_runner(..., abort)` / `OwnerRunner.run|relay|dir_pack(..., abort)`,
   `habackup.iter_entries(..., checkpoint)`, `retention.converted_ids(paths)`, `retention.plan(..., converted)`,
@@ -901,14 +1080,14 @@ Key material only ever travels in stdin JSON field `key`.
 | --- | --- | --- |
 | `status` | – | `version, host{hostname,arch,os,podman}, storage{path,free_bytes,total_bytes,backups_bytes,backup_count,apps[AppUsage],ha_backups_bytes,ha_backup_count}, key{key_id,created,kit_confirmed}\|null, imported_keys[], apps[App], active_job Job\|null, warnings[], settings Settings, schedule ScheduleSummary\|null` (deletes expired unencrypted copies first, §8; `storage.apps` is the per-app usage of the overview, no I/O beyond the index listing and the policy file, `[]` when it cannot be computed; `schedule` null when it cannot be computed, 2026.11.17.1) |
 | `list` | – | `backups[BackupMeta]` (newest first), `exports[{export_id,backup_id,filename,size,expires}]` (unencrypted copies that can still be downloaded; `expires` epoch seconds), `ha_backups[HaBackupMeta]` (uploaded Home Assistant backups, newest HA backup date first; `[]` when the HA store cannot be read; branch feat/ha-import) |
-| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (`backup` carries `from_ha` exactly like `list`; with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`; an unencrypted backup needs no key and refuses one with `invalid-request`). Fast: a format 2 backup decrypts only each app's manifest |
+| `inspect` | `backup_id, key?, save_key?` | `backup BackupMeta, manifest ManifestSummary, preflight Preflight` (`backup` carries `from_ha` exactly like `list`; with `key`, only that key is used; `save_key` imports it only after it decrypted the manifest, else `wrong-key`; a key that comes with an unencrypted backup is left out -- not read, not saved -- instead of refused, 2026-11-25, X-PF-05). Fast: a format 2 backup decrypts only each app's manifest |
 | `key-init` | – | `key, created(bool)` |
 | `key-kit` | – | `key_id, filename, content` (kit text) |
 | `key-confirm` | `key_id` | – |
 | `key-import` | `key` | `key{key_id,created}` |
 | `backup-start` | `apps[], include_images, note, request_id, encrypt?, acknowledge_plaintext?` | `job_id, deduplicated` (`encrypt` = 加密此備份, default the setting 預設加密備份; `encrypt: false` needs no device key, and while the setting is on it needs `acknowledge_plaintext: true`, else `invalid-request` with `details.field`; `encrypt: true` without a device key is `no-device-key`; params record `encrypt`) |
-| `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` (the job verifies deeply, §5; `key` is refused for an unencrypted backup) |
-| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?, accept_unauthenticated?` | `job_id, deduplicated` (`save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made"; `accept_unauthenticated: true` is required — `invalid-request` with `details.field` otherwise — for an `unauthenticated` backup: the separately confirmed "I trust where this unencrypted file came from"; only the selected apps are read) |
+| `verify-start` | `backup_id, request_id, key?` | `job_id, deduplicated` (the job verifies deeply, §5; a `key` that comes with an unencrypted backup is ignored, 2026-11-25, X-PF-05) |
+| `restore-start` | `backup_id, apps[], request_id, confirm:true, key?, save_key?, allow_no_safety?, accept_unauthenticated?, acknowledged?` | `job_id, deduplicated, key_created` (2026-11-25: an in-place restore that encrypts its pre-restore backup creates the missing device key, `key_created`, `no-device-key` only when that fails; lines a restore check wants confirmed, `Preflight.apps[].issues` of level `confirm`, need their keys in `acknowledged` (the shape of `ha-import-start`), else `confirmation-required` with `details.apps {app_id: [HaIssue]}` and nothing started; `save_key` imports only a key that opens this backup; `allow_no_safety: true` is the explicit, separately confirmed "restore even if no safety backup can be made"; `accept_unauthenticated: true` is required — `invalid-request` with `details.field` otherwise — for an `unauthenticated` backup: the separately confirmed "I trust where this unencrypted file came from"; only the selected apps are read; 2026-11-25, lane F2: a backup that was converted from an HA backup (`ha-imports.json` lists it) with several apps is restored one app after the other, each with its own pre-restore backup and its own automatic rollback (§8 "HA import chain", `kind` `ha-restore`): the answer then also has `group`, the first job restores the first app and `params.chain` holds the rest; any other backup, and a converted one with a single app, keeps its one job and its all-or-nothing rollback) |
 | `settings-get` | – | `settings Settings` |
 | `settings-set` | `encrypt_by_default, acknowledge_plaintext?` | `settings Settings` (turning it off needs `acknowledge_plaintext: true`, the acknowledgement of `plaintext_warning`; audited) |
 | `export-start` | `backup_id, request_id, confirm:true, key?` | `job_id, deduplicated` (an **unencrypted copy** of an encrypted backup for one download; `invalid-request` for a backup that is not encrypted — download it as it is; `key-required` when the key is not on this device and none is given; audited) |
@@ -924,15 +1103,16 @@ Key material only ever travels in stdin JSON field `key`.
 | `schedule-set` | `schedule{enabled,days,time,apps,include_images,keep_last}, confirm?` | `saved(bool), schedule Schedule` (as saved, or as it would be saved), `next_runs[Instant], retention{keep_last, apps[], delete[BackupBrief], blocked[BackupBrief], freed_bytes}, timezone{name,utc_offset}` — without `confirm` (or `false`) a preview that writes nothing: `retention.delete` lists the scheduled backups the **next successful run** of `retention.apps` would delete (its new backup counted as the newest), `blocked` those that are protected; with `confirm: true` the settings are saved (root 0644) and journaled (`schedule-set …`, §8). Saving never deletes anything |
 | `schedule-run-now` | `request_id` | `job_id, deduplicated` — one scheduled run now with the saved settings, enabled or not (like Home Assistant's "create automatic backup"); not kit-gated (like `backup-start`); it counts as a scheduled backup and the schedule's keep-last rule runs after it |
 | `schedule-tick` (internal) | argv only | `decision` (`idle`, `settle`, `missed`, `started`, `busy`, `no-key`, `no-apps`, `start-failed`, `settings-problem`, `state-problem`, `tick-running`), `slot?`, `trigger?`, `job_id?`, `deduplicated?` (run by `woowtech-cockpit-backup-schedule.service`; never reads stdin; any argument is `invalid-request`) |
-| `job-status` | `job_id` | `job Job, log[str]` (≤ 200 lines, secrets never logged) |
+| `job-status` | `job_id` | `job Job, log[str]` (≤ 200 lines, secrets never logged; each entry is one written line of ≤ 500 characters: every C0/C1 control character, U+2028/U+2029 and every Unicode bidirectional control (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069) becomes a space when it is written, and the log is split on `\n` only, so text a backup chose, such as its name or an HA `PG_VERSION`, can neither start a line of its own nor reorder how its line reads — SR-6) |
 | `jobs` | – | `jobs[Job]` (≤ 50, newest first, no log), `schedule_events[ScheduleEvent]` (≤ 50, newest first, `[]` when the schedule's state cannot be read; 2026.11.17.1) |
-| `job-cancel` | `job_id` | `state` |
-| `delete` | `backup_id` | – (`busy` with `details.job_id` while a queued/running job uses it as source or as its `safety_backup_id`, or for any `safety` backup while a restore runs; checked under the start lock; journaled `backup-delete backup=… type=… encrypted=true\|false loginuid=…`, review L6) |
+| `job-cancel` | `job_id, after_this?(bool)` | `state, after_this?` — as before for any job. A job of a Home Assistant import (`params.group`, §8 "HA import chain") stands for the whole import: the import's live job (queued or running; also when `job_id` names a job of the import that is over already) is the one cancelled, and the import stops with it (the apps not reached are `not-started` in `result.group`). `after_this: true` lets the app being worked on finish (its restore still follows its conversion) and stops the import after it: a side file named after the group, accepted also while the job cannot be cancelled any more, answered with `after_this: true`; for a job that is no part of an import `invalid-request` with `details.field` `after_this`; a finished import: just its `state` (2026-11-25, lane F2) |
+| `delete` | `backup_id` | – (`busy` with `details.job_id` while a queued/running job uses it as source or as its `safety_backup_id`, or for any `safety` backup while a restore runs; checked under the start lock; journaled `backup-delete backup=… type=… encrypted=true\|false loginuid=…`, review L6; deleting a kept copy sets `from_ha.kept` of the converted backup's row back to null) |
 | `ha-delete` | `ha_backup_id, confirm:true` | – (deletes an uploaded HA backup; `busy` with `details.job_id` while a queued/running job's `params.ha_backup_id` names it, checked under the start lock; `not-found`; journaled `ha-backup-delete ha_backup=… loginuid=…`; branch feat/ha-import) |
-| `ha-check-start` | `ha_backup_id, apps["odoo"\|"n8n"], request_id, key?` | `job_id, deduplicated` — job type `verify`, `params {source:"ha", ha_backup_id, apps, key_provided}`; `key` is the HA key exactly as typed (never trimmed); refused before a job starts with `key-required` (a selected add-on member is encrypted and no key came) or `wrong-key` (it does not open it; v3 exact, v1/v2 heuristic), `invalid-request` (the backup has no such add-on), `not-found`; a key is kept only when something is encrypted; result `{ha_check: HaCheck}`; the job can also fail with `key-required`/`wrong-key`/`corrupt-archive` (branch feat/ha-import part B) |
-| `ha-convert-start` | `ha_backup_id, apps, test_mode(bool), request_id, confirm:true, odoo_database?, key?` | `job_id, deduplicated` — job type `backup`, `params {source:"ha", ha_backup_id, apps, odoo_database (null without odoo), test_mode, encrypt (預設加密備份 when it started), key_provided}`; `odoo_database` required when `apps` has `odoo`; refused like `ha-check-start` and with `app-not-in-catalog` 「請先到「應用軟體」安裝同版本的 <app>，再匯入。」 or `no-device-key`; result `{backup_id, size, apps, encrypted, ha_import: HaImport}`; nothing on the device changes (part B) |
-| `upload-begin` | `filename, size` | `upload_id, path, max_size` |
-| `upload-finish` | `upload_id` | `backup BackupMeta` (idempotent: a retry after success returns the same backup; a failure after the move puts the file back) — or, for a Home Assistant backup (recognised before the Cockpit formats, §5 "Home Assistant backups"), `ha_backup HaBackupMeta`: checked strictly without a key, hashed and stored in `ha-backups/`, idempotent the same way, the same file uploaded again returns its record; a broken HA file is `corrupt-archive`/`unsupported-format`/`limit-exceeded` and stays in uploads/ for `upload-abort` (branch feat/ha-import) |
+| `ha-check-start` | `ha_backup_id, apps["odoo"\|"n8n"\|"omnigent"\|"hermes"\|"emqx"\|"headscale"\|"open-design"\|"woow-code-server"\|"nextcloud"\|"litellm"], request_id, key?, choices?` | `job_id, deduplicated` — job type `verify`, `params {source:"ha", ha_backup_id, apps, key_provided, choices?}`; `key` is the HA key exactly as typed (never trimmed); refused before a job starts with `key-required` (a member the selection reads is encrypted and no key came: the selected add-ons and, for an importer that reads it, HA's share folder, KEY-16) or `wrong-key` (it opens none of them; v3 exact, v1/v2 heuristic; one that does not open while another does stops only its app), `invalid-request` (the backup holds none of the selected apps; one it does not hold stays in the job and its result says so), `not-found`; a key is kept only when something the selection reads is encrypted; `choices` `{app_id: {"addon"\|"database"\|"node": value}}`: what the customer chose (§7 `HaCheck.choices`), for checking again; result `{ha_check: HaCheck}`; the job can also fail with `key-required`/`wrong-key`/`corrupt-archive` (branch feat/ha-import part B) |
+| `ha-convert-start` | `ha_backup_id, apps, test_mode(bool), request_id, confirm:true, odoo_database?, key?, acknowledged?, choices?` | `job_id, deduplicated, key_created` — job type `backup`, `params {source:"ha", ha_backup_id, apps, odoo_database (null without odoo), test_mode, encrypt (預設加密備份 when it started), key_provided, acknowledged?, choices?}`; without an Odoo database the only one that can move is taken (`invalid-request` in the job when there are several); refused like `ha-check-start` (and, unlike it, when the backup lacks one of the apps) and with `app-not-in-catalog` 「這台還沒有「<app>」的應用設定。…」; a missing device key is created (`no-device-key` only when that fails); result `{backup_id, size, apps, encrypted, ha_import: HaImport, results[ConvertResult]}`; one app whose conversion fails still has `result.results[0]`; nothing on the device changes (part B) |
+| `ha-import-start` (2026-11-25) | `ha_backup_id, apps, request_id, confirm:true, test_mode(bool), then_restore(bool), overwrite? (true, required with then_restore), acknowledged?, choices?, check_job_id?, key?` | `job_id, deduplicated, group, key_created` — the whole import of the selected apps, one after the other. `acknowledged` `{app_id\|"_shared": [key]}`: the customer's one confirmation, every `confirm` line of the check by its key (≤ 80 keys each, `[a-z0-9.-]{4,70}:[0-9a-f]{16}`); `choices` as in `ha-check-start`; both only for selected apps. The key is checked like `ha-check-start`'s and the device key created before anything starts. An app the backup does not hold or this device has no settings for is left out (`GroupResult` `skipped`) while another one remains; none left: `invalid-request` / `app-not-in-catalog`. Starts the first app's conversion (job type `backup`) with `params.group {id, index, count, kind:"ha-import", step:"convert", app_id}` and `params.chain {apps[], test_mode, then_restore, encrypt, key_provided, ha_backup_id, acknowledged, choices, results[GroupResult]}` (what the rest of the import needs, never the HA key; the chain itself: §8 "HA import chain"). `check_job_id` only tells the journal how many names a confirmed line had: `ha-import-confirm ha_backup=… group=… app=… issue=… items=N loginuid=…` (codes and counts, never names), one line per key; `busy` like every start |
+| `upload-begin` | `filename, size` | `upload_id, path, max_size` (`filename`: any text without `/` or `\`; it is only shown, cleaned of control and bidirectional characters and cut at 255; when 4 uploads are unfinished the one idle for at least an hour longest is dropped first, else `busy`) |
+| `upload-finish` | `upload_id` | `backup BackupMeta` (idempotent: a retry after success returns the same backup; a failure after the move puts the file back) — or, for a Home Assistant backup (recognised before the Cockpit formats, §5 "Home Assistant backups"), `ha_backup HaBackupMeta`: described without a key (the outer tar and backup.json; an add-on that cannot be read is listed with its `problem` and the rest of the file is taken), hashed and stored in `ha-backups/`, idempotent the same way, the same file uploaded again returns its record; a file without a usable outer tar or backup.json is `corrupt-archive`/`limit-exceeded` and stays in uploads/ for `upload-abort` (branch feat/ha-import) |
 | `upload-abort` | `upload_id` | – |
 | `download-info` | `backup_id` | `path, filename, size` (the stored file as created: `archives/<id>.tar` or `.woowbackup`; for an unencrypted backup journaled `download-unencrypted backup=… loginuid=…`, review L6) |
 | `run-job` (internal) | argv: `run-job <job_id>` | – |
@@ -940,27 +1120,98 @@ Key material only ever travels in stdin JSON field `key`.
 Shapes:
 
 * `App`: `id, name, description, owner, adapter, deployed(bool), state("running"|"stopped"|"partial"|"not-deployed"|"error"), units[{name,active}], last_backup{id,created}|null, problems[str]` — `error` also when every unit is active but a quick health request fails, and while units are masked by an unfinished restore (both explained in `problems`). `last_backup`: the newest manual or pre-restore backup holding the app, never one converted from an HA backup (it holds HA's data, not this device's).
-* `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name,size?}], size, sha256, key_id|null, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok,deep?}|null, inspected(bool), uploaded_at?, format(1|2), encrypted(bool), unauthenticated(bool), scheduled(bool)` — `key_id` null and `key_available` true when not encrypted; `apps[].size` the bytes of the app's archive in a format 2 file (backups made here; uploads after `inspect`); `verified.deep` true when the verify job checked the content like a restore; `unauthenticated` = not encrypted and `type` `uploaded` (also adopted files); `scheduled` (2026.11.17.1) = `type` `manual` and listed in the schedule's registry (排程備份; derived, never stored in the index; false while the registry cannot be read). Sidecars written before format 2 have no `format`/`encrypted` (format 1, encrypted). `from_ha` (HaImport; branch feat/ha-import part B): only on a `manual` backup that `ha-imports.json` lists as converted from an HA backup (absent otherwise, and while that file cannot be read); it keeps the HA backup's name and date after the HA file was deleted.
+* `BackupMeta`: `id, type("manual"|"safety"|"uploaded"), created|null, note, apps[{id,name,size?}], size, sha256, key_id|null, key_available(bool), include_images(bool), filename, source{hostname}|null, verified{at,ok,deep?}|null, inspected(bool), uploaded_at?, format(1|2), encrypted(bool), unauthenticated(bool), scheduled(bool)` — `key_id` null and `key_available` true when not encrypted; `apps[].size` the bytes of the app's archive in a format 2 file (backups made here; uploads after `inspect`); `verified.deep` true when the verify job checked the content like a restore; `unauthenticated` = not encrypted and `type` `uploaded` (also adopted files); `scheduled` (2026.11.17.1) = `type` `manual` and listed in the schedule's registry (排程備份; derived, never stored in the index; false while the registry cannot be read). Sidecars written before format 2 have no `format`/`encrypted` (format 1, encrypted). `from_ha` (HaImport; branch feat/ha-import part B): only on a `manual` backup that `ha-imports.json` lists as converted from an HA backup (absent otherwise, and while that file cannot be read); it keeps the HA backup's name and date after the HA file was deleted. `kept` (RESTORE lane, 2026-11-25): `true` only on a kept copy of a database service or a pinned pre-restore backup (`type` `safety`, note starting `保留的複本：`, `kept.is_kept`; derived like `scheduled`, never stored, absent otherwise): nothing prunes it, the administrator downloads (`export-start`) or deletes (`delete`) it like any backup, and `delete` sets `from_ha.kept` of the converted backup's row back to null.
 * `HaBackupMeta` (branch feat/ha-import): the stored record `id` (`ha-` + sha256[:20]), `ha_slug, name, date` (UTC
-  `…Z`), `type("full"|"partial"), supervisor_version, protected(bool)` (what backup.json says), `compressed(bool),
-  addons[{slug, name, version, encrypted(bool)}]` (`encrypted`: from the member's first bytes), `folders[str], size,
+  `…Z`, or null when it cannot be read), `type("full"|"partial"), supervisor_version, protected(bool)` (what backup.json
+  says), `compressed(bool), addons[{slug, name, version, encrypted(bool), problem?}]` (`encrypted`: from the member's first
+  bytes; `problem`, only of an add-on that cannot be read: `missing`, `duplicate`, `bad-slug`, `encryption-unsupported`,
+  `size-mismatch`, `partial-ciphertext`, `not-an-archive`, any other code like the last; texts are cleaned and may be '',
+  an add-on's `name` never; items of `importable_apps`/`other_addons` then also have `problem` and `problem_text`, zh-TW), `folders[str], size,
   sha256, uploaded_at, filename` (display only: the uploaded name when it is a plain file name, else
-  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"), app_name,
+  `ha-backup-<YYYYMMDD-HHMMSS>.tar`), plus the derived `importable_apps[{slug, app_id("odoo"|"n8n"|"omnigent"|"hermes"|"emqx"|"headscale"|"open-design"|"woow-code-server"|"litellm"), app_name,
   installed(bool)}]` (WOOWTECH add-ons this engine can import, §5; `installed`: this device's catalog has `app_id`;
-  `app_name` from the catalog, else 「Odoo 18」/「n8n 工作流程」) and `other_addons[{slug, name, version}]` (add-ons without
-  an app here: 「這台沒有對應的應用」).
-* `HaCheck` (part B): `ha_backup_id, apps[{app_id, slug, name (the add-on's name), arch("amd64"|"aarch64"|"unknown"),
-  version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`), ok(bool),
+  `app_name` from the catalog, else 「Odoo 18」/「n8n 工作流程」/「Omnigent 協作平台」/「Hermes 代理」/「EMQX MQTT 代理」/
+  「Headscale VPN 控制伺服器」/「OpenDesign 設計工具」/「code-server 開發環境」/「LiteLLM 閘道」) and `other_addons[{slug, name, version}]` (add-ons without
+  an app here: 「這台沒有對應的應用」; the page adds a to-do for the Cloudflare Tunnel and the MCP admin add-ons, §9
+  "Batch 2: add-ons that are not moved").
+* `HaIssue` (2026-11-25; the check, a conversion's results and the restore check): `id` (`[a-z0-9-]{2,24}.[a-z0-9-]{2,40}`,
+  fixed codes), `level("stop"|"confirm"|"auto"|"notice")`, `message` (one zh-TW sentence ≤ 300), `items[str]` (names, ≤ 20
+  of ≤ 120 characters; control, bidirectional and invisible characters as spaces; never a secret value), `more` (how many
+  names are not listed), `action` (only `stop`: what the customer can do, ≤ 200), `database?` (only Odoo: the database it is
+  about), `key` (only `confirm`: `<id>:` + the first 16 hex digits of sha256 over the JSON `[app_id, id, database, all names
+  sorted]`; one more name is another key, a number in `message` is not part of it; a list of more than 1000 names counts by
+  its number and an order-independent digest). `stop`: this app (or that database) cannot be imported, the others go on, this
+  device stays as it is. `confirm`: a consequence the customer must know, a line of the one confirmation. `auto`: the system
+  handles it. `notice`: a reminder. Per app at most 40 lines and 40 KiB: names go first, then the last notices (counted in
+  one line `shared.more-lines`); a `stop` or `confirm` is never left out and a key always covers every name. Every string is
+  shown as text only. What the reader left out of an add-on (`habackup.Report.skips`: names no file can have, device nodes, FIFOs,
+  links that cannot be handed out, files too large for the caller) is ONE `confirm` line `files.skipped` (`Sink.skipped(report)`): their
+  number and kinds in the message, the first 20 names, a key in which every name of every kind stands (`MergedNames`).
+  The shared target helpers (`hatarget.ISSUES`, §6) add these ids: `auto` -- `target.image-pulled` (an image this device lacked was
+  downloaded; items: the image reference), `target.service-started` (a stopped container was started to be read and is put back;
+  items: its name), `target.linger-enabled` (the owner's user manager was started; items: the account); `stop` --
+  `target.image-missing` (the image cannot be had: no network, a registry that refuses, no space, a locally built image that is gone),
+  `target.service-failed` (the container cannot be started, is not ready in time, or no Quadlet file defines it),
+  `target.linger-failed` (the user manager cannot be started): each with the reason in one fixed sentence (`podman.SENTENCES`) and
+  what to do (`action`); the app on this device is unchanged. The links a conversion leaves out of a copy of this device's own
+  volume (`copy_live`, `TreeTar`, `carry`: kinds `symlink` and `hardlink` of `Report.skips`) are part of the one `files.skipped` line.
+* `HaCheck` (part B; schema 2 since 2026-11-25): `schema(2), ha_backup_id, shared[HaIssue]` (what belongs to no single app,
+  keys under `_shared`: `shared.device-key`, the device key the import will create, and what the apps' checks found that is no
+  single app's, each line once), `apps[{app_id, slug, name (the
+  add-on's name), arch("amd64"|"aarch64"|"unknown"; only shown, HA-06),
+  version (the add-on's), target_version (Odoo: the target image's `18.0-YYYYMMDD`; n8n: its `n8n --version`),
+  importable(bool: no `stop` for the app and, for an app whose databases are to choose from, at least one that can move),
+  issues[HaIssue],
+  choices?{addon?[{value, label}] (the same add-on from two stores: a `stop` until one is chosen), database?[{value, label,
+  ok, default?}] (Odoo; `default`: the only one that can move), node?[{value, label, default?}] (EMQX)}, ok(bool: importable
+  and nothing to confirm; for older pages, like `blockers` = stop and confirm sentences and `warnings` = the others),
   blockers[zh-TW], warnings[zh-TW], odoo?{databases[{name, ok, blockers[], warnings[], partners, users (internal,
   active), attachments, attachment_bytes, modules (installed), custom_modules[{name, version, from ("data/addons",
   "data/odoo/addons/18.0" or "share/odoo_addons")}], crons_active, mail_servers_active, size (bytes), filestore_files,
   filestore_bytes}]}, n8n?{owner_email|null, workflows, workflows_active, credentials, executions, users, projects,
-  variables, data_tables, community_packages[{name, version}], workflows_to_fix[{name, active, reasons[]}]}}]` — an app
-  is `ok` only without blockers (Odoo: and at least one database `ok`); a blocker is a plain sentence (unknown processor, app
-  not installed or not deployed here, no owner account in HA's n8n, different versions, missing modules with the
-  share-folder hint, missing Python packages or programs of custom modules, a custom module to copy with an ELF file for
-  another processor, newer PostgreSQL, unsupported extensions,
-  pending module operations, not enough space).
+  variables, data_tables, community_packages[{name, version}], workflows_to_fix[{name, active, reasons[]}]},
+  omnigent?{omnigent_version (HA's, from the add-on version), alembic, users, admins, conversations, scheduled_tasks,
+  scheduled_tasks_active, hosts, agents, files, public_sessions, artifact_files, artifact_bytes, override_files[],
+  account_conflicts[]}, hermes?{hermes_version, target_release, files, bytes, dirs, symlinks, absolute_symlinks,
+  hardlinks, databases, sessions, messages, schema_version|null, config_version|null, skills, cron_jobs, plugins[],
+  env_keys (a count; names and values are never sent), ha_urls[("config.yaml：<host>"|".env：<host>")], media_refs,
+  skipped[]}, emqx?{emqx_version, target_version, node_name, files, bytes, mqtt_users, acl_rules, dashboard_users,
+  api_keys, banned, psk, retained_messages, default_dashboard_password(bool), anonymous(bool), hot_backup(bool: the
+  backup was made while EMQX ran, or its state is unknown), plugins[], ha_hosts[]},
+  headscale?{headscale_version, target_version, db_version, users, nodes, pre_auth_keys, api_keys (HA's, not moved),
+  policies, prefixes{v4, v6} (HA's), server_url (HA's), target_server_url, dns_records},
+  open-design?{open-design_version (HA's, from the add-on version), source_revision, target_version, target_revision
+  (8 hex each), files, bytes, dirs, symlinks, hardlinks, skipped_symlinks, projects, conversations, messages,
+  routines, routines_active, project_folders, mcp_servers (HA's that move), mcp_integration_entries (HA's `woow-paseo`,
+  not moved), shared, ha_urls[("<file>：<host>")], left_out{<top-level
+  name>: entries}, links_copied, skipped (count of entries in `files.skipped`), config_skipped[]},
+  woow-code-server?{woow-code-server_version (HA's code-server, from the add-on version), pins{code-server, pi, claude,
+  codex} (HA's, '' when the add-on ships none), target_pins{same keys} (what the live image prints), files, bytes,
+  sessions, claude_projects, codex_sessions, skills, snippets, settings(bool), extensions (HA's own, without the
+  connector VSIX), mcp_servers, workspace(bool: `projects/` found in HA's share folder), share(bool), workspace_files,
+  workspace_bytes, skipped_symlinks, ha_urls[("<file>：<host>")], left_out{<area>:<label>: entries}, unknown[],
+  links_copied, skipped (count of entries in `files.skipped`), files_kept[]},
+  nextcloud?{nextcloud_version (HA's config.php `version`), addon_nextcloud_version|null, users, files (file cache rows),
+  shares, tokens, calendar_objects, contacts, datadir (HA's `datadirectory`), datadir_in_backup(bool), datadir_files,
+  datadir_bytes, custom_apps[], pg_version, office(bool: richdocuments enabled on HA), ha_url, target_url},
+  litellm?{litellm_version (HA's, from the add-on version), migrations (finished Prisma migrations), pg_major (HA's,
+  18), target_pg_major, users, teams, keys (virtual keys without the UI's session keys), models, credentials,
+  organizations, spend_logs, chatgpt_accounts, salt_moves(true), key_users[names of this device's other catalog apps
+  whose configuration uses LiteLLM today]}}]`
+  (an app the check could not finish has no section of its own, nor has one that would make the result larger than a job record
+  can hold (`haimport.CHECK_BYTES`, 900 KiB; a record above 1 MiB could never be read again): of the app with the most to say the
+  section goes first, its `issues` and `choices` stay, and with still too much it is only a `stop` `failure.limit-exceeded`;
+  batch 2: `target_version` of OpenDesign is the live image's `OD_APP_VERSION`; batch 2: `target_version` of code-server is the live image's `code-server --version`; batch 2: `target_version` of Nextcloud is the live config.php `version`; batch 1: `target_version` is
+  the live server's `/v1/info` version for Omnigent, the live image's Hermes base tag, the live image's version label
+  for EMQX and Headscale) — an app
+  is `ok` only without blockers (Odoo: and at least one database `ok`). A blocker is an app-specific stop sentence,
+  such as an app not deployed here, data that cannot be read safely, a known incompatible data structure or insufficient
+  space. An unknown add-on version alone can be a notice in the revised per-app checks; a known mismatch can still stop an
+  app where its data cannot be opened or safely migrated (for example two known but different OpenDesign core revisions).
+  Missing Nextcloud user files, programs for another processor in Hermes data and a different Headscale prefix follow
+  the confirmation, notice or automatic paths in §9. EMQX's admin/public Dashboard account, a node to choose and MQTT
+  passwords stored with `plain` likewise follow the specific notice, choice and confirmation rules in §9.
+  Odoo section (lane ODOO, 2026-11-25): `odoo.databases[]` is as it was (`name, ok, blockers[], warnings[], partners, users, attachments, attachment_bytes, modules, custom_modules[], crons_active, mail_servers_active, size, filestore_files, filestore_bytes`) and `choices.database` is returned by the module; the sentences of `blockers` are the stop and confirm lines of the database, those of `warnings` its automatic and notice lines. `ha_import.left_databases` and the registry's `left_databases` hold the names of the HA databases that were not moved.
 * `HaImport` (part B; `result.ha_import` and `BackupMeta.from_ha`): `ha_backup_id, name, date, apps[app_id],
   odoo_database|null, test_mode(bool), workflows_to_fix[{name, active, reasons[]}], reminders[zh-TW],
   reminders_by_app{app_id: [zh-TW]}, notes[zh-TW], addons[{app_id, slug, name}]` (every text at most 500 characters,
@@ -969,11 +1220,46 @@ Shapes:
   domains that change, n8n's login account, the community nodes; each line names its app). `reminders_by_app`: what to
   do AFTERWARDS, per app (log in
   with HA's Odoo / n8n account, check the community nodes); `reminders`: what to do afterwards that belongs to no app
-  (none today). The page writes the rest itself: stop the HA add-on, log the MCP admin apps in again, the test-import
-  line, delete the HA backup file (it holds HA's passwords and tokens; the engine never sends that line).
+  (none today). The page writes the rest itself: stop the HA add-on, log the MCP admin apps of Odoo and n8n in again,
+  the test-import line, delete the HA backup file (it holds HA's passwords and tokens; the engine never sends that
+  line). For the batch 1 apps (`haapps.Importer.engine_mcp_lines`) the engine adds the MCP lines to
+  `reminders_by_app` itself: 「請到「<this device's MCP admin app>」確認或重新設定 <app> 的連線資料…」 when the catalog has
+  `hermes-mcp-admin` / `emqx-mcp-admin` / `headscale-mcp-admin` (Omnigent has none), and 「如果 HA 上有「Woow <X> MCP
+  Server」，請把它停掉，並把指向它的 MCP 連接器（例如 claude.ai）刪掉，改用這台的 MCP 網址重新建立。」; the MCP admin apps'
+  state is never imported. Test mode pauses Omnigent's active scheduled tasks; it changes nothing of Hermes, EMQX or
+  Headscale.
+  Since 2026-11-25 also `group` (the import's id `g` + 16 hex, null), `results[GroupResult]` (what became of the import's apps),
+  `left_databases[str]` (Odoo databases that stay on HA) and `kept` (the id of a full copy kept before the import, null).
+* `ConvertResult` (2026-11-25; `result.results`): `app_id, status("converted"|"skipped"|"failed"), code|null, message|null,
+  issues[HaIssue]` — `skipped`: kept out before its data was touched (a `stop`, a missing add-on, `confirmation-required`),
+  `failed`: it went wrong half way; this device is unchanged either way. A conversion of one app has it also when the job
+  fails; one of several apps (the labs) fails as a whole, as before.
+  The OpenDesign importer's conversion details also carry `links_copied` and `config_skipped[]`; code-server's carry
+  `links_copied`, `files_kept[]`, `workspace_conflict[]` and `extensions_unreadable`. These are importer details, not new
+  fields of `ConvertResult`.
+* `GroupResult` (2026-11-25): `app_id, status("imported"|"converted"|"rolled-back"|"failed"|"skipped"|"not-started"),
+  convert_job_id, restore_job_id, backup_id, safety_backup_id, code, message` (null where there is none).
+  `imported`: restored and checked; `converted`: only converted (the import does not restore, or its restore did not happen
+  because the import was stopped: the converted backup is kept, `backup_id`); `rolled-back`: its restore failed and the app is
+  back as it was; `failed`: its conversion failed half way, or its restore failed (`message`: nothing changed here and the
+  converted backup can be restored again, or -- when that backup is bad (`corrupt-archive`, `invalid-manifest`,
+  `unsupported-format`, `limit-exceeded`) -- the app has to be imported from the HA backup again; or it did change and needs a
+  person: `safety_backup_id` names the backup to restore from); `skipped`: kept out before anything of it was touched (a stop
+  line, a missing add-on, an unconfirmed line of its conversion or of its restore check: `confirmation-required`);
+  `not-started`: the import ended before it was reached, `code` says why (an error code, or `cancelled`, `stopped`,
+  `interrupted`) and `message` what to do. `message` never holds a value or a key.
+* `ImportGroup` (2026-11-25, lane F2; §8 "HA import chain"): the jobs of one import share `params.group {id, index, count, kind
+  ("ha-import"|"ha-restore"), step("convert"|"restore"), app_id}` (`index` is the app's place in `params.chain.apps`; `count` their
+  number) and `params.chain {apps[], test_mode, then_restore, encrypt, key_provided, ha_backup_id?, acknowledged, choices,
+  allow_no_safety?, accept_unauthenticated?, convert_job_id?, results[GroupResult]}` (`results`: the apps that are done or were
+  left out when this job was written; `convert_job_id`: the conversion that made the backup a restore step restores). A job
+  that ended through the chain has `result.group {id, index, count, step, next_job_id|null, results[GroupResult]}`: every
+  GroupResult known then (the app this job worked on included; one whose conversion succeeded and whose restore is next shows
+  `converted` until the restore job ends), so the page needs only the newest job, or `jobs` by `params.group.id` after a reload.
+  An import that was cut (a killed process) has no further job: the apps without a job and without a result were not reached.
 * `Settings`: `encrypt_by_default(bool), problem(zh-TW)|null, plaintext_warning(zh-TW)` — the text the page shows for every acknowledgement of an unencrypted backup or copy: database passwords, API keys and tokens are stored and downloaded in plain text.
 * `ManifestSummary`: `backup_id, created, type, note, tool, source, consistency, total_size, format(1|2), encryption("age-x25519"|"none"), apps[{id,name,adapter,owner{name,uid},images[{ref,included}],postgres[{id,database,major,scope("database"|"instance"),databases?[{name,owner}],roles_count?}],volumes[{name}],data_dirs[{path,size,label}],secrets_count,config_files_count,settings_included(bool),verify_snapshot,verify_digests[{id,type,target,summary}],archive_size?}]` (`databases`/`roles_count` only for scope `instance`; `archive_size` the app's member in a format 2 file)
-* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],settings?{state("missing"|"unloadable"|"different"|"same"),entry}}]` (`settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app and `unloadable` where its settings file could not be loaded (the app is not restorable until settings are installed; the check says what else is needed, e.g. the owner account, and never promises the restore), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
+* `Preflight`: `ok(bool), checks[Check], apps[{id,name,restorable(bool),mode("inplace"|"fresh"),checks[Check],issues?[HaIssue],settings?{state("missing"|"unloadable"|"different"|"same"),entry}}]` (`issues` (2026-11-25): only when there are any: `restore.device-key` (`auto`: the missing device key is created by `restore-start`, its check is a `warn` now) and what an adapter's preflight leaves in its `restore_issues`; `settings`: only when the backup carries the app's settings, §5: `missing` where this device has none for the app and `unloadable` where its settings file could not be loaded (the app is not restorable until settings are installed; the check says what else is needed, e.g. the owner account, and never promises the restore), `different` where its settings differ, `entry` the carried settings for `catalog-install`; `settings_included` in `ManifestSummary` says the same for the backup's contents)
 * `Check`: `id, status("ok"|"warn"|"fail"), message(zh-TW)`
 * `Owner`: `name, uid, linger(bool), catalog_apps[str]` (lingering accounts and owners of loaded entries; never root).
 * `Draft`: `id, containers[{file,unit,container,image,state}], databases[DatabaseView], entry, valid, problem|null,
@@ -1119,7 +1405,8 @@ Export: `prepare 準備`, `decrypt 解密並驗證檔案`, `package 封裝未加
 Error codes: `invalid-request, not-found, busy, key-required, wrong-key, no-device-key,
 not-a-backup, unsupported-format, corrupt-archive, invalid-manifest, limit-exceeded,
 insufficient-space, incompatible, app-not-in-catalog, owner-missing, not-deployed,
-permission-denied, not-cancellable, job-failed, internal-error`.
+permission-denied, not-cancellable, job-failed, internal-error, confirmation-required` (2026-11-25: a line to confirm is not
+confirmed; `details.apps {app_id: [HaIssue]}` in a start command; in a job only that app stops).
 
 Requests of the catalog and retention commands (strict like every command, unknown keys rejected): `owner`
 `^[a-z_][a-z0-9_-]{0,31}$` and not `root`; `entry` a JSON object (deep validation is the catalog validator's); `id`
@@ -1222,7 +1509,8 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   and `verify` the partial archive is discarded and writers are already restarted;
   verify and export: always; restore: only before `safety`). `job-cancel` accepts a request only while the record says
   `cancellable` (else `not-cancellable`), and leaving the cancellable window is itself a checkpoint under the
-  same record lock, so an accepted cancel is never followed by a destructive step.
+  same record lock, so an accepted cancel is never followed by a destructive step. For the jobs of an HA import chain
+  `job-cancel` means the whole import, and `after_this` the app being worked on (§8 "HA import chain").
 * Index sidecars are written (register, update, delete) under `/run/woowtech-backup/index.lock`, and an update
   reads the sidecar under it: `inspect` and a verify job's result never overwrite each other. A sidecar that exists but
   cannot be read or validated is never replaced: orphan adoption and a re-upload of the same file leave it as it is.
@@ -1420,28 +1708,54 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   `io.woowtech.backup.job=<job>`; `--network none`, or an internal network of the job when two containers must talk
   (Odoo's `odoo neutralize` with its database; n8n's import with its database); no published ports;
   `--security-opt no-new-privileges`, `--pids-limit 1024`, `--memory 2g`, half the CPUs (`--cpus`, when the owner's user
-  manager has the cpu controller), `--pull=never` (the only download is the pinned PostgreSQL 16 image when the device
-  has none), `--log-driver none`; secrets mounted exactly as the live Quadlet file's `Secret=` lines say; environment
+  manager has the cpu controller), `--pull=never` (a throwaway container never downloads; the downloads are named at the end of this item), `--log-driver none`; secrets mounted exactly as the live Quadlet file's `Secret=` lines say; environment
   only for the keys the job names. HA's PostgreSQL 16 runs with a read-only root file system, its data volume mounted
-  `noexec,nosuid,nodev`, HA's configuration files replaced and every library/command setting overridden (§9). Before
+  `noexec,nosuid,nodev`, HA's configuration files replaced and every library/command setting overridden (§9); batch 1:
+  Omnigent's HA cluster the same way (the live PostgreSQL 16 image), HA's EMQX broker with a read-only root, a
+  `noexec,nosuid,nodev` data volume, user 0 and `--add-host <its node's host>:127.0.0.1` (no network is opened by it),
+  this device's EMQX broker and `headscale configtest` with a read-only root. Before
   the first object exists the record lists its owner in `temp_owners`; every object is removed in `finally` and the
   list is cleared once none is left. A killed job keeps `temp_owners`: the recovery (`recover_interrupted` →
   `_finish_leftovers`, any later helper call) removes that job's labelled objects and clears the list; an object it
   could not remove (podman answered, but the object is still there) or a listing that failed keeps the list and the
   next try waits 10 minutes (`temp_retry_at`). At its start an HA job (only an HA job: other jobs never wait for podman
-  listings) also removes the labelled objects of jobs that are not queued or running, for the owners of `odoo`/`n8n`
+  listings) also removes the labelled objects of jobs that are not queued or running, for the owners of every importable app (`haimport.APPS`)
   and every owner a job record still lists; each listing has a 30-second limit.
+  Since 2026-11-25 (HAOS parity, lane F3-helpers): `--pull=never` stays: a throwaway container never downloads. The only downloads are the pinned PostgreSQL 16 image when the device
+  has none and, since 2026-11-25 (CM-05, X-AD-60), an image of the app's own Quadlet files that this device does not have: `podman
+  pull` run as the app owner (`hatarget.ensure_image`), by the reference that Quadlet file names, tried once more when it failed for a
+  reason that may pass, watched by the job's watchdog (a full disk or a cancel ends it at once); a refusal, a missing network, no
+  space or a locally built image that is gone stops only that app (`target.image-missing`). A service or database of this device that
+  is stopped is started to be read (`hatarget.ensure_running`: `systemctl --user start` of the unit its own Quadlet file defines,
+  waited for) and put back by the app's `TempObjects.cleanup` -- the end of the app's check, the end of the conversion, also when
+  the job fails or is cancelled (the put-back is never ended by the watchdog); a killed process leaves it running, which loses
+  nothing.
 * **Space**: the floor is the running reserve (`flows.running_reserve`) plus 512 MiB. Up front the free space must
   exceed three times the selected members plus the floor; after streaming, each app asks again with what it measured
-  (Odoo: twice HA's cluster plus 1 GiB, before the dump; n8n: four times the SQLite files); before packaging, the
+  (Odoo: twice HA's cluster plus 1 GiB, before the dump; n8n: four times the SQLite files; Omnigent: twice HA's cluster
+  plus 1 GiB; Hermes, EMQX and Headscale are counted every 64 MiB while they write); before packaging, the
   archive (the data plus 1 %). Throughout, the job's watchdog reads the free space of the staging disk and of each
   owner's home and Podman storage every 2 seconds and the engine re-checks every 64 MiB it writes itself
   (`haimport.SpaceGuard`, `Watchdog`): below the floor the job's containers are killed at once and the job fails with
   `insufficient-space`; nothing of the apps changed by then.
-* **Results** (§7 `HaCheck`, `HaImport`): an app that cannot move is a blocker in the check's result, never a failed job:
-  also an add-on that is there twice or whose addon.json is not WOOWTECH's, an owner that is gone, an app not
-  deployed, the live upgrade marker or the `odoo` role the conversion would refuse (failed jobs: key, corrupt file,
-  space, cancel). The conversion fails with the first blocker of the chosen database or app instead.
+* **Results** (§7 `HaCheck`, `HaImport`): an app that cannot move is a `stop` in the check's result, never a failed job:
+  also an add-on that is missing, there twice or whose addon.json is not WOOWTECH's, an owner that is gone, an app not
+  deployed, the live upgrade marker or the `odoo` role the conversion would refuse. Since 2026-11-25 (HA-12) **whatever** one
+  app meets stops only that app -- any error code (a damaged member, its own estimate of the space, permissions, a member the
+  key does not open) and any unexpected exception (told as 「處理這個應用時發生未預期的錯誤…」, its details only in the journal) -- and
+  after every app its open members are closed, its throwaway objects removed and staging emptied (`Work.reset_app`), so the
+  next one starts clean. Only these end the whole job, with what was found until then in `result.ha_check` (the app at whose
+  turn it happened and the ones after it carry a `stop`): a key that opens none of the encrypted members, no key, the
+  watchdog's verdict (below the floor), the engine's own disk running full (`insufficient-space`), another job (`busy`), a
+  cancel and a termination (for these two the result is on the exception, `error.result`; `jobs.run_job` records it only for
+  a `BackupError` so far), and the outer file itself (a damaged `backup.json`, a file that changed; nothing was found then).
+  The conversion fails with the first stop of the chosen database or app instead; one that belongs to an import (`params.group`)
+  and whose member the key does not open ends nothing else (`wrong-key`, not `job_wide`): `ha-import-start` has opened at least
+  one of the selected members with that key.
+* **Confirmations** (2026-11-25): a conversion finds its lines again (`Work.sink`); one whose key is not in
+  `params.acknowledged[app]` -- never confirmed, or with other names than confirmed -- stops that app with
+  `confirmation-required` before anything of it is changed; what was confirmed is kept in the row (`confirmed`: ids and up to
+  20 names).
 * **The converted backup**: one format 2 `manual` backup of the selected apps, written by `flows._package` (the normal
   packaging, encrypted with the device key when `params.encrypt`, verified, registered), note
   「由 HA 備份轉換：<HA name>（<HA date as local time>）」; its row in `ha-imports.json` is written under the index lock
@@ -1453,6 +1767,59 @@ no key); `busy` (`details.job_id`). `schedule-get` and `schedule-tick` take no i
   rows alone.
 * **Interrupted**: an HA job cut short says so in its own words (「檢查 HA 備份的作業意外中斷…」 /
   「轉換 HA 備份的作業意外中斷…」) and that nothing on the device changed; its staging (plaintext) goes like every job's.
+
+### HA import chain (HAOS parity, 2026-11-25, lane F2; `hachain.py`, `jobs.run_job`)
+
+An import of several apps is a chain of the ordinary single-app jobs: convert A, restore A, convert B, restore B, ... (`kind`
+`ha-import`), or only restores (`kind` `ha-restore`: `restore-start` of a converted HA backup with several apps). Each job is the
+job of today (`haimport.run_ha_convert`, `flows.run_restore`), so what one app meets stops that app only: its own pre-restore
+backup and its own automatic rollback are its restore job's, and the next app goes on. Normal (non-HA) restores are not touched.
+
+* **One process, one engine lock.** `ha-import-start` writes the first job (the first app's conversion, `params.group`,
+  `params.chain`) and starts its unit as for any job. `run-job` runs that job and then every job the chain adds, in the same
+  process under the same engine lock (`run_job(..., chain=True)`; it still returns the record of the job it was given). Every
+  job of the chain carries the unit of the first one (`JobStore.create(unit=)`), which is what recovery asks.
+* **The next job first.** Before a job's record is finished, `hachain.conclude` decides what follows and writes that job's record
+  (queued, never in an earlier second than the job before, so `jobs` lists them in order), all under the finishing job's
+  record lock; only then is the finished record written (`result.group.next_job_id`). So the import never has a moment without a
+  queued or running job: another `*-start` says `busy`, a recovery pass decides nothing while the process holds the engine lock,
+  and a queued job of the chain is never taken for a dead one while the unit lives. Termination signals are only noted during
+  this short section; if one came, the job just written is finished as `interrupted` at once ("匯入沒有開始") and the process ends.
+* **What follows.** A conversion that succeeded is followed by the restore of the same app (when `then_restore`), a finished app by
+  the conversion of the next one (`ha-restore`: the restore of the next one). A job that fails, is refused (`skipped`), is rolled
+  back or cannot be rolled back (needs a person; the result says so, red on the page) is that app's: the next app goes on. The
+  HA key (`ha-import`) is read once from the first job's key file, masked for the whole run (`jobs.masked`) and handed to every
+  conversion in memory (`ctx.ha_key`); the file goes with the first job, and nothing of it is in a record or log. The age key of a
+  `restore-start` chain stays a file for every job of the run and goes with it.
+* **What ends the whole import.** The apps not reached are `not-started` in `result.group.results` (`code`: why; `message`: that
+  nothing of them changed here and what to do) and no job is written for them: the customer's cancel (also one that came a moment
+  too late for the job it named: the request file of the job counts), a termination signal (that job is `interrupted`), a key that
+  opens nothing or is missing (`key-required`, `wrong-key` marked job-wide), `no-device-key`, `busy`, the engine's own disk
+  running full (`insufficient-space` marked job-wide, or ENOSPC) while it is still below the floor a job keeps free
+  (`running_reserve` + 512 MiB; with room again only that app fails), and an HA file that cannot be opened or is not the size
+  that was uploaded when a conversion says `corrupt-archive` (one damaged add-on never ends the import). An app's own space
+  estimate, a refused restore check, a missing app in the backup, a nested archive the restore refuses (§10), a service that does
+  not start (rolled back) and an unexpected exception are that app's. A first job that cannot get the engine lock within the
+  wait fails `busy` and its `result.group` lists every app as `not-started` (code `busy`).
+* **Cancel.** `job-cancel` of any job of an import cancels its live job (the lookup is repeated when that job ended while the
+  call waited for its record lock: its successor was written first) and the import stops. `after_this: true` creates
+  `<group id>.stop` in the jobs directory under the same record lock: the chain looks for it at an app boundary (after a
+  restore, or after a conversion when the import does not restore), never between an app's conversion and its restore, and
+  removes it when the import ends; a request that reaches the boundary after the next job was written belongs to that next
+  app. A stop file of an import with no active job is swept after an hour like any orphaned side file.
+* **A killed process.** The record of the job that was running is marked `interrupted` by the next recovery pass with its own
+  guidance (§8 recovery above); a job that was written but never ran is `interrupted` 120 s after it was created ("匯入沒有開始");
+  both carry `result.group` saying which apps are done. Nothing is continued by itself; completed restores are untouched.
+* **Results.** Every finished job's `result.group` holds all GroupResults known then; when the import ends, each converted backup's
+  row in `ha-imports.json` gets the whole list as `results` (`haimport.update_row`; best effort, the job records have it all). A
+  chain restore keeps each app's own pre-restore backup (`safety_backup_id` of its GroupResult); the converted backups stay (one
+  app each). `ha-delete` of the HA file is refused while any job of the import is queued or running (the restore jobs name
+  `ha_backup_id` too).
+* **Limits and risks.** One process holds the memory of every app of the import (`MemoryMax=50%` of the unit): `gc.collect()` runs
+  between the jobs; a unit per app would be the next step if the peak (measured in the real runs) is too high. The disk
+  peak is that of one app, as each app's conversion, backup and restore end before the next starts. A page older than this engine
+  sees the first job of a split `restore-start` only (it ends `succeeded` after the first app): the answer's `group` and
+  `jobs` tell the rest.
 
 ## 9. Backup and restore algorithms (adapter `quadlet-postgres`)
 
@@ -1701,7 +2068,99 @@ changed is left alone. The failed restore's data (`-old-<job>-rollback`) is dele
 and reported otherwise. Any error of a directory step (also an unexpected exception) is recorded as a problem and never
 stops the rollback of the other apps.
 
+### Restore of a backup converted from an HA backup (2026-11-25, lane RESTORE; HAOS parity; `flows.py`, `kept.py`, `adapters/quadlet_postgres.py`)
+
+Only a backup that `ha-imports.json` lists (`flows.from_ha`; while that file cannot be read its note says it) is restored this
+way (`FlowContext.ha_import`, `adapter.ha_import`); every other restore keeps today's checks (owner decision H6).
+
+* **Waits (FL-17, X-AD-37).** The wait for a database and for the health checks is the larger of the fixed time and what the
+  data needs: 60 s + 120 s per GiB restored, at most one hour; the log says "still starting" every minute; a service that failed,
+  or is inactive without being a oneshot, twice in a row ends the wait at once and the restore rolls back.
+* **A missing volume (X-AD-36)** is created empty before the pre-restore copy (`adapter.ensure_volumes`); one whose existence
+  cannot be told stops that app only.
+* **The check after the restore (X-AD-39).** A conversion stores no snapshot, so nothing is read; a value the app does not
+  answer counts as not compared (`match` null, a warning); digests and a differing answer still fail the restore.
+  The same flag (`verification_entry(..., lenient=ctx.ha_import)`) governs the check after the automatic rollback of such a restore
+  (found by the RESTORE verifier, note D, 2026-11-25): a value the app does not answer is a warning that says the data was not
+  compared (health checks and digests were); a differing answer or a digest mismatch is still a problem of that app's rollback.
+* **Other services that use the data (D10: X-AD-14, X-AD-50).** The running containers of other services that mount one of
+  the app's host directories (or the whole home) or write to one of its volumes are one line of the confirmation, issue
+  `restore.pauses` (`confirm`, items: the service names without `.service`; in `Preflight.apps[].issues` and in `params.acknowledged`
+  with its key). The restore pauses them before the pre-restore copy, writes `paused:<unit>` next to the app's own units into the
+  job record's `stopped_writers` first (the recovery of a dead job starts exactly the marked ones, `flows.restart_writers`), and
+  starts them again after the restore, after a rollback or when the restore is refused (`flows.resume_paused`); one that does
+  not start stays in the record and in `warnings`. A container no service started cannot be started again: that app stops
+  (`incompatible`), as an ordinary restore does. Only what the customer confirmed is paused: the job keeps the confirmed list
+  (`FlowContext.planned_pauses`, handed to every adapter it makes: the pre-restore copy, a rollback); a service that uses the data
+  and is not in it (it started after the confirmation) is not paused behind the customer's back -- this app stops with
+  `confirmation-required` and the whole list as the new line, before anything is stopped or changed (after the first destructive
+  step the restore fails and rolls back, as for any container that uses a replaced folder); a service of the list that stopped
+  meanwhile is no reason to ask. A rollback has to finish: it pauses what it finds and the job starts it again.
+* **Lines to confirm (F1's hook).** `flows._require_confirmed`: every `confirm` line of the restore check must be in
+  `params.acknowledged[app]` with exactly its names, else `confirmation-required` for that app only, before anything changes.
+* **Owner ids outside the account's range (X-NS-09).** Found in the job once the tars are extracted: issue `restore.id-range`
+  (`confirm`, item: the account). Unconfirmed: `confirmation-required`, nothing touched. Confirmed: `usermod --add-subuids
+  / --add-subgids` (blocks of 65,536 ids no account has), `podman system migrate`, the account's services started again (the others
+  are in the record as `paused:` first). An owner id above 1,048,576 is not widened for.
+* **Other databases in the database service (S4: X-AD-07, X-AD-08; owner decisions D7 and H4), `kept.py`.** A single-database
+  app whose PostgreSQL service holds other databases, or cannot be listed (not running, no answer), gets issue `restore.other-databases` (`confirm`, items:
+  the database names; the check says `warn`, no longer `fail`; a database service that is not running cannot be asked and counts as
+  "cannot be listed": the line says so and the copy starts it). Before anything is touched (after the pre-restore copy, with
+  space for it checked before any writer stops and again once the pre-restore copy is on disk, `insufficient-space` for that app
+  only) the restore keeps a copy of the whole
+  service: the app's units stop, `pg_dumpall --globals-only` and `pg_dump -Fc` of every database are read, the database stops and
+  its data volume is exported (the cold copy); both are ONE ordinary verified backup of type `safety` (encrypted per 預設加密備份)
+  whose note starts with `保留的複本：` (`kept.is_kept`). It is never pruned (`flows.prune_safety`), the converted backup's
+  `ha-imports.json` row says where it is (`from_ha.kept`), and the administrator downloads or deletes it like any backup.
+  A failed restore rolls back FROM it (`restore(kept_volumes=…)`: the service is put back whole, every database and role). After a
+  success the other databases and roles go back into the new cluster (`put_back_databases`: only roles that do not exist, never
+  the app's own; one database after the other with `pg_restore --create`; one that fails is dropped again); the result has `kept
+  {app: {backup_id, databases[], more, put_back[], not_put_back[{name, reason}], notes[]}}` (optional) and a warning names what is
+  still only in the copy.
+* **L-38 pin API.** `adapter.import_manifest(…, keep_safety=True)` writes `keep_safety: true` into the app section (optional; only `true`);
+  the restore then writes its pre-restore backup with the kept-copy note, so it is pinned like a kept copy.
+* **Selective HA instance restore (N8-01/L-03, 2026-11-27).** An instance item may have optional `ha_database` only for
+  app `n8n` or `litellm`: a valid database name matching exactly one non-template database payload (LiteLLM requires `litellm`).
+  All globals, databases, roles and owners remain mandatory. Database-scope items reject the marker; old archives omit it.
+  HA inplace import retains the current data volume and role/password definitions, reads the app DB's current owner, replaces
+  only that DB and loads under that owner. Missing DB/owner or a different owner at readback stops/fails the import. Other DBs,
+  including later writes, additions/deletions, owners and changed role/password definitions, remain current. The archived globals
+  are not applied in this path. Current database-authentication secrets and declared configuration-file bytes stay; LiteLLM's salt follows its imported encrypted rows.
+  The full current safety snapshot and its complete PostgreSQL/role digest still govern automatic rollback; a marked converted
+  payload cannot be an automatic rollback source. Fresh HA restore explicitly applies the complete conversion-time snapshot to a
+  newly initialized cluster, with the normal guard and warning. Ordinary and unmarked restores retain their full-instance path.
+  Converted payloads retain their existing app-conversion checks and health checks; source-device digests are not fabricated.
+  Optional `ha_access` records bounded structured database/schema/data-object owners, direct table/sequence/column grants
+  and installed extension identifiers/versions/schemas, never SQL/program definitions. Only n8n public and LiteLLM
+  public/woow_platform schemas qualify. Before selective DROP, current access, required roles, installed extension controls,
+  dependency versions and a bounded dump TOC are checked. Fixed trusted administrator setup precreates installed extensions;
+  the data dump loads under the ordinary DB owner with ownership/ACL/comment/security-label commands suppressed. Current
+  access is restored and read back for moved objects; omitted LiteLLM schemas are not recreated. Fresh marked HA restore
+  uses captured access facts and requires reconversion if they are absent. Ordinary/unmarked full restore stays unchanged.
+  Marked inplace preflight validates the real app endpoint against the declared local PG backend and separately checks
+  retained next-start inputs. Only verified password changes may differ; DB/host/user/opaque changes require reconversion
+  before DROP. Borrowed stopped services finish cleanup before restore's safety handover. An explicit one-use handover
+  receipt also covers an empty stopped-unit list, avoiding a second app start after safety capture. Unknown new data-object
+  access refuses before DROP; same-name ordinary/partitioned kind changes fail after load and use full safety rollback.
+* **pg-stdin follow-up F1.** The roles script of an instance restore is `BEGIN;` script `COMMIT;` and an end mark psql prints
+  after it (`_run_sql`); a script that arrived short is `job-failed` instead of half applied.
+
 ### Home Assistant import (branch feat/ha-import, part B; `ha_odoo.py`, `ha_n8n.py`, `haimport.py`)
+
+**Revised 2026-11-25 (HAOS parity).** What an importer below calls a blocker is a `stop` of that one app (§7 `HaIssue`); which of
+them become automatic, a line to confirm, a notice or nothing at all is decided row by row (owner's decision, the lanes of
+`tests/backup/ha_parity_rows.json`), each importer changing over in its own lane: until a paragraph below says otherwise it
+describes the block as it still is. Versions: `haissues.version_issues` replaces `VersionTable.blocker` there (an add-on version
+the table does not know and a version that cannot be read here are told, the data's own structure decides; known and
+different versions still stop).
+
+What the import does by itself before it refuses (HAOS parity, lane F3-helpers): an image this device lacks is downloaded; a
+stopped database or service is started for the reading and put back; the owner's user manager is started when it is not running
+(`loginctl enable-linger`, which stays: the account's apps then run without a login); a hard link whose file does not move becomes a
+copy; a link out of a volume that the customer made is left out and listed, the rest of the volume goes on; waits and the room for
+an answer grow with the data (the old values are the floor); a command that fails says why in one fixed sentence; an object that
+cannot be removed is a log line. Every one of these that cannot be done stops that app only, with its reason, and the app on this
+device is unchanged. What an importer has to do to use them is in the `hatarget` bullet of §6. The helpers are in place; each importer starts to call them in its own lane (rows CM-11, FL-11, X-PD-04, X-PD-05, X-AD-01, X-AD-60 and X-NS-08 stay `part` in `ha_parity_rows.json` until then), so an importer that does not call one yet behaves as before.
 
 **Odoo** (add-on `odoo18ce` → app `odoo`, cold PostgreSQL mode: volumes `odoo18-db-data-isolated` (a whole cluster)
 and `odoo18-web-data`, host directory `.local/share/odoo18/addons`). The live Quadlet files describe the target (the
@@ -1716,88 +2175,876 @@ secret and mounts); an entry of another shape is `incompatible`.
    module candidates are read from `data/addons/<m>` (before `data/odoo/addons/18.0/<m>` and `share.tar[.gz]`
    `odoo_addons/<m>`, HA's addons_path order; `__pycache__` skipped) with their manifests parsed by
    `ast.literal_eval`. A conversion also writes the chosen database's filestore and every candidate to staging.
-2. The live upgrade marker and role `odoo` are checked first, as the conversion checks them (step 4). A throwaway
-   PostgreSQL 16 (`pgvector:0.8.6-pg16`, else `postgres:16.15-alpine`, else the pinned official image, pulled) serves
-   the cluster on its socket only, started with every library, archive, restore, recovery and listen setting overridden
-   on the command line (`shared_preload_libraries=` … `restore_command=`, `dynamic_library_path=$libdir`, `ssl=off`,
-   `jit=off`), its data volume mounted `rw,noexec,nosuid,nodev` and a read-only root; per connectable, non-template
-   database other than `postgres`: installed modules (and pending ones), partners, internal active users, attachments
-   and their bytes, active crons and mail servers, size, extensions, objects only a superuser can create (event
-   triggers, FDWs, servers, subscriptions, languages, C functions, access methods, casts, operator classes, text search
-   parsers/templates that no extension owns) and the website domains (when `website` exists). Odoo itself in the live image (network none, the configuration secret and the live
-   module folders mounted read-only, `python3 -I` fed a scanner on stdin) lists the target's modules with their adapted
-   versions in addons_path order and checks the candidates' `external_dependencies` (`check_python_external_dependency`,
-   `find_in_path`).
-3. Verdict per database (`database_verdict`): every installed module present on the target with the identical version
-   (verify-modules.py's comparison), or a candidate with that version that the target lacks or holds in another
-   version only in the custom modules folder (it is copied); nothing pending; extensions ⊆ plpgsql, pg_trgm, unaccent,
-   vector (vector only with the pgvector image); no object only a superuser can create; HA's major ≤ the target's;
-   the copied modules installable and their Python packages and programs present. Warnings: active mail servers and
-   crons, and the website domains that will change to this device's address.
-4. Conversion of the chosen database: `pg_dump -Fc` in the PostgreSQL 16 container; a new cluster in a throwaway
-   volume from the live database image with the live environment and secret mount (initdb sets the live superuser
-   password); role `odoo` with the attributes and the password verifier of the live role (read from the live cluster
-   as its superuser, checked against a strict pattern, masked, sent on stdin); `createdb -O odoo --template=template0
-   --encoding=UTF8 --lc-collate=C odoo`; pg_trgm, vector (+ unaccent when HA has it), `ALTER EXTENSION vector UPDATE`;
-   the dump's list without its EXTENSION and `COMMENT - EXTENSION` entries (matched on the entry type field), refused
-   (`incompatible`, naming the kind) when it lists an object only a superuser can create; the dump streamed on stdin into
-   `pg_restore -U odoo --no-owner --no-acl --exit-on-error --single-transaction -L <list> -d odoo` (as the role
-   itself: what HA's server wrote never runs with superuser rights);
-   `web.base.url` and `web.base.url.freeze` as the live database has them, `website.domain` cleared on every website
-   row (the target keeps its own address); the live `woow_paas_platform.upgrade_done`
-   (it must name the live Odoo image ID) copied and `…upgrade_attempt` deleted (HA's core date never reaches the
-   marker); test mode: `odoo neutralize -c /etc/odoo/odoo.conf -d odoo --db_host <cluster>` in a throwaway container of
-   the live Odoo image on an internal network with the cluster and the custom modules folder as it will be after the
-   import (step 5, in a throwaway volume: a module copied from HA runs its own `neutralize.sql`), and a new
-   `database.uuid`; the modules (installed, versions equal), partner and attachment counts, marker, address, cleared
-   website domains and uuid verified; settings the live cluster sets in its configuration that differ (not locations,
-   ports, commands or build constants) carried with `ALTER SYSTEM`, one statement per `psql` call outside any
-   transaction block (list settings such as `search_path` one literal per element), then `pg_reload_conf()` and every
-   carried setting read back from `pg_file_settings` without an error; `CHECKPOINT`, stop, exit 0 and `pg_controldata
-   <PGDATA>` "shut down" (PGDATA when the Quadlet sets it, a folder of the volume); `podman volume export`.
+2. This device is made ready and read first, as the conversion needs it (review C-05; HAOS parity: what HAOS sets up itself, this
+   device sets up and says, instead of refusing). Everything below that is "made" is an `auto` line of the app; what cannot be made stops
+   only Odoo and changes nothing.
+   * Images: the Odoo web image, the database image and the PostgreSQL 16 image that opens HA's cluster are downloaded when this device
+     lacks them (`hatarget.ensure_image`, as the app's owner, one more try; a `localhost/` image that is gone cannot be: the text says so).
+     PostgreSQL 16: `pgvector:0.8.6-pg16`, else `postgres:16.15-alpine` (both only when already here), else the pinned official image
+     (already cached by its pin, a verified offline release sidecar, or downloaded). OD-23 sidecars are opt-in per architecture;
+     the root-trusted manifest/artifact SHA and ordered layer diff_ids bind the pinned ref/config ID/content; the verified descriptor is streamed into the
+     app owner's store before online fallback. A configured invalid sidecar stops only Odoo; no sidecar keeps the retry behavior.
+     Release/installer CLI, bounded archive checks, immutable generations and lifetime are specified in
+     [Offline PostgreSQL 16 sidecar](odoo-pg16-offline.md). When a database of HA uses `vector` and the image that read it cannot, the check downloads the pgvector image and reads
+     HA's cluster again; the conversion fetches it for the next try (only the databases that use vector stop while it is not here).
+   * `odoo.conf` (the configuration secret of the live Odoo) is read in a throwaway container of the live Odoo image (network none, read-only
+     root, only the secret mounted, `python3 -I -`): of the file only `db_name` (first name of a list), `db_user` and `db_password` are
+     printed; the password is masked in every log at once and never put into a message, an argument or a log. A file that cannot be read gives
+     the tenant's own names (`odoo`, `odoo`) and no password. A name that is not letters, digits, `_` (`.` `-` in the database name) stops Odoo
+     (`odoo.layout-unsupported`).
+   * The live database container is read through `hacommon.live_json` (a stopped one is started through its Quadlet unit, waited for and put
+     back: `target.service-started`), as its superuser, under the database name of the configuration. `ir_config_parameter` that is not
+     there (or an answer that is no document): default address, one reminder (`odoo.settings-unreadable`); an address that is no text or
+     longer than 2048: the default, a reminder (`odoo.base-url-invalid`); the converted database then has no `web.base.url` row and Odoo makes
+     its own at the first login.
+   * The upgrade marker `woow_paas_platform.upgrade_done` must name the live image; when it is missing or names another one the engine
+     writes `{"digest": <image ID>, "core_date": <release>}` (the shape of the tenant install, whose real marker holds `18.0.20260926`;
+     `odoo.marker-written`, `auto`). `<release>`: the version of the image's `odoo` package (`dpkg-query -W -f '${Version}' odoo` in a
+     throwaway container without a network and with a read-only root), else `ODOO_VERSION.ODOO_RELEASE` of the image (the official image
+     installs that package). An image that says neither has no honest marker: `odoo.marker-unwritable` stops Odoo.
+   * The role of the configuration (`db_user`, default `odoo`): its SCRAM or md5 verifier is taken over as before; a role that does not
+     exist (`odoo.role-created`) or has no such verifier (`odoo.role-password-reset`) is made with `db_password` of the configuration (sent on
+     psql stdin; the new cluster hashes it); none there: `odoo.role-unusable` stops Odoo. A superuser role is never copied with its powers: the
+     new role is `LOGIN NOSUPERUSER CREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` (`odoo.role-normalised`).
+   * Mounts of the two live containers that are no Odoo data (a path outside the home, `%h/..`, another `%` specifier, e.g. `/etc/localtime`)
+     are left out and never mounted into a throwaway container (`odoo.mount-skipped`); `quadlet_mounts(..., skipped=None)` still refuses
+     them for every other caller. The data volume of the database is the mount that holds PGDATA's folder (else the image's own folder); a cluster in a mount that was
+     left out stops Odoo (`odoo.layout-unsupported`). The superuser's name (`POSTGRES_USER`) may be any text of at most 63 bytes without a
+     control character: it is one argument, never SQL or a shell word.
+   * What the app settings hold beyond the tenant layout (other volumes, other host folders, `Target.extra_volumes/extra_dirs`) is carried as
+     this device has it (`hatarget.carry`, before HA is read; `odoo.extras-carried`); a link of that data that leaves its volume is left out and
+     listed in the `files.skipped` line. A custom modules folder that is mounted but not in the app settings is not filled
+     (`odoo.addons-folder-undeclared`; a module only the backup has then counts as missing). A web volume that is not mounted at
+     `/var/lib/odoo`, a data volume the settings do not declare, or `postgres` items in the settings stop Odoo (`odoo.layout-unsupported`;
+     wave 2: LAYOUT).
+   * The database container's own settings may live in `EnvironmentFile=` files (OD-57; podman `--env-file`, which the Quadlet hands over as it is):
+     each file (only `%h/...` or a path below the owner's home, read through the app runner, at most 64 KiB) is read for the keys the engine has to
+     know (`POSTGRES_USER`, `PGDATA`, `POSTGRES_PASSWORD_FILE`, ... = `DB_ENV_KEYS`; an `Environment=` line wins over the file as `--env` wins over
+     `--env-file`), and the new cluster is started with the same files (`tmp.run(env_files=)`, podman reads them again), so it is made exactly like
+     the live one. A `POSTGRES_PASSWORD` line is only noticed: its value is never looked at, kept, logged or put on a command line. A file outside the
+     home, one that cannot be read, a key whose value podman might read differently from the engine (quotes, backslash, `$`, blanks around it, two
+     values in two files) stops Odoo only (`odoo.layout-unsupported`, naming the file and the key, never a value; the check, before HA is read). What
+     stays a stop for the same reason: a password written plainly in `Environment=POSTGRES_PASSWORD=...` (it would be an argument of `podman run`, which
+     every local account can read) unless a podman secret or a file gives it, with the two ways out in the action.
+   A throwaway PostgreSQL 16 serves HA's cluster as before (every wait grows with the data: `podman.scaled_timeout`). Per connectable,
+   non-template database other than `postgres` HA's server is asked as before; **the name of the database goes to psql and pg_dump through
+   `PGDATABASE`, never as the argument of `-d`** (a name with `=` or a URI start would be read as a connection string); a plain name of
+   another caller of `Cluster` still gets `-d`; a name PostgreSQL cannot have (control character) is `odoo.database-name` of that database.
+   The extensions HA's database uses are asked of this device's PostgreSQL (`pg_available_extension_versions`: name, `trusted`). Odoo itself
+   in the live image lists the target's modules (a module whose manifest cannot be read is left out and named: `odoo.target-modules-partial`;
+   only a list without any module stops Odoo) and checks the custom modules' Python packages and programs.
+3. Every database has its own issues (`database` = its name) and one that cannot move never keeps another from moving; `choices.database`
+   `{value, label, ok}` is returned by the module (`ok`: no stop and a name the tools take), `odoo.databases[]` keeps `ok`, `blockers[]`,
+   `warnings[]` (the same sentences) for older pages. App-wide: no database at all `odoo.no-database`, none that can move
+   `odoo.no-movable-database` (stops). Per database:
+   | id | level | when |
+   |---|---|---|
+   | odoo.not-odoo | stop | no Odoo tables (OD-32) |
+   | odoo.db-unreadable | stop | its module list or content cannot be read (OD-33, OD-34) |
+   | odoo.database-name | stop | the name has a control character |
+   | odoo.module-version-different | stop | an installed module has another version than the device's (or the custom copy) |
+   | odoo.pg-newer | stop | HA's PostgreSQL is newer than this device's, or a version is unknown |
+   | odoo.extension-unsupported | stop | an extension this device's image lacks or PostgreSQL does not call trusted (not on the old list plpgsql, pg_trgm, unaccent, vector) (OD-39) |
+   | odoo.vector-image-missing | stop | vector is used and the pgvector image could not be had (OD-40) |
+   | odoo.modules-missing | confirm | installed in HA, not on the device and not in the backup (OD-37; the text says the next Odoo update is stopped by the package's upgrade-gate.sh, exit 4) |
+   | odoo.modules-skipped-deps | confirm | a custom module needs a Python package the device lacks: it stays behind, the rest moves (OD-44) |
+   | odoo.superuser-objects | confirm | objects only a superuser can create (OD-41): they are left out of the restore |
+   | odoo.databases-left | confirm | the other databases of HA stay on HA (UI-20, S6; items = their names) |
+   | odoo.modules-pending, odoo.dependency-unreadable, odoo.module-not-installable, odoo.program-missing, odoo.module-foreign-native, odoo.mail-servers-active, odoo.crons-active, odoo.website-domains, odoo.filestore-missing | notice | reminders (OD-36, OD-43, OD-44, OD-45, OD-46) |
+   Pending modules (to install / upgrade / remove) move in the state HA has them in. The custom modules that would be copied are copied
+   also when installation is marked impossible, a program is missing or the code is for another processor (reminders). When this device
+   has no custom modules folder in its app settings nothing can be copied and such a module counts as missing.
+   What the reader left out of the add-on (devices, FIFOs, links outside, names that cannot be shown, a manifest over 256 KiB, hard links
+   it could not copy) is the one `files.skipped` line (`Sink.skipped`), in the check and again in the conversion; a manifest over 256 KiB
+   makes its module a module without manifest (not copied), no longer a stop of the add-on.
+4. Conversion of the chosen database: the same reading and the same rules again (OD-50): a stop stops Odoo (`incompatible`, the issue in
+   `error.issues`), a line to confirm that was not confirmed, or confirmed with other names, is `confirmation-required`; nothing is kept.
+   Then: `pg_dump -Fc` in the PostgreSQL 16 container (database by PGDATABASE); a new cluster in a throwaway volume from the live database
+   image; the role and database of the configuration (`createdb -O <role> --template=template0 --encoding=UTF8 --lc-collate=C <db_name>`);
+   `pg_trgm` and `vector` only when this device's image offers them or HA uses them (`CREATE EXTENSION IF NOT EXISTS "<name>"` for the
+   others HA uses, after the check above), `ALTER EXTENSION vector UPDATE` only when vector was created; `pg_restore -l` of the dump,
+   **cross-checked against its own header** (`TOC Entries:` counts the lines plus what a plain listing keeps back: the three archive settings
+   ENCODING, STDSTRINGS and SEARCHPATH and a few more entries; a real PostgreSQL 16.15 listing has 1131 lines under 1136. The check accepts a header that
+   exceeds the number of lines by 3 (less the settings the lines show) up to 9 more; a header outside that range, or none, stops with `INCOMPLETE_LIST`
+   before anything is written or restored, and the job log says the two numbers: pg-stdin follow-up F4); the list without the EXTENSION entries and **without the objects only a superuser can create** (their lines, and their COMMENT and
+   SECURITY LABEL lines, are commented out with `;`; they are named in `odoo.superuser-skipped`; a restore that still fails is
+   `odoo.restore-failed` and stops Odoo); the list written by `Cluster.write_file` whose retry note now reaches the job log (pg-stdin follow-up
+   F3); `pg_restore -U <role> --no-owner --no-acl --exit-on-error --single-transaction -L <list> -d <db_name>` as the role itself. Then
+   `web.base.url` (and its freeze flag) as the live database has them, the upgrade marker (the live one, or the engine's), no attempt marker, the
+   website domains cleared; test mode as before (`odoo neutralize -d <db_name>`, a new `database.uuid`). The check after the conversion
+   stays (modules of the converted database = HA's modules in the state HA had, installed ones at the version of the device or the copy,
+   partner and attachment counts, marker, uuid in test mode; anything else stops this conversion). What was only a reminder is no longer
+   a stop: an address that is not the device's (`odoo.url-differs`, OD-66), website domains that are still HA's (`odoo.website-domain-kept`,
+   OD-67), modules left in HA's state (`odoo.modules-pending`, OD-61). PostgreSQL settings of the live cluster are carried as before; one
+   the new cluster refuses is taken out again (`ALTER SYSTEM RESET`) and listed (`odoo.settings-not-carried`, OD-69); one that still has
+   an error after that stops the conversion. The result has `left_databases` (the other databases of HA, at most 100 names), which the
+   registry row and `from_ha` carry (UI-20).
 5. `odoo18-web-data`: the live export (read while Odoo runs) without `filestore/odoo/**` and `sessions/**`, an empty
    `sessions/` owned like the live one, HA's filestore of the database as `filestore/odoo/**` (the image's odoo
    uid/gid, dirs 0700, files 0600). The custom modules folder: the live folder (DIR_HELPER pack) without the modules
    being replaced, plus the copied modules owned by the app owner, dirs 0755, files 0644 (0755 when executable). Every
    tar passes `nested.check_volume`/`check_dir` with the owner's ids.
+6. Time and room (OD-28, OD-73): the waits of the live exports, the scan, the dump, the restore, the new cluster and `odoo neutralize`
+   and the room for the target's module list (`SCAN_OUTPUT`), the module list of a database (`SQL_OUTPUT`) and the dump list
+   (`TOC_OUTPUT`) grow with the data (`podman.scaled_timeout`, `scaled_limit`): the old values are the floor; the room grows by a share of
+   the data (1 % of a database, 5 % of a dump) up to 256 MiB and 512 MiB (what HA's untrusted server and dump may make the engine hold).
+   `odoo.layout-unsupported` stop, `odoo.extras-carried` auto, `odoo.addons-folder-undeclared` notice, `odoo.mount-skipped` notice,
+   `odoo.marker-written` auto, `odoo.marker-unwritable` stop, `odoo.settings-unreadable` notice, `odoo.base-url-invalid` notice,
+   `odoo.role-created` auto, `odoo.role-password-reset` auto, `odoo.role-normalised` auto, `odoo.role-unusable` stop,
+   `odoo.superuser-skipped` notice, `odoo.restore-failed` stop, `odoo.url-differs` notice, `odoo.website-domain-kept` notice,
+   `odoo.settings-not-carried` notice, `odoo.target-modules-partial` notice.
 
 **n8n** (add-on `woow-n8n` → app `n8n`: database `main`, volumes `n8n_n8n_data` and `n8n_valkey_data`).
-1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the
-   WAL) and reads `config/.n8n/config`'s `encryptionKey`
-   (masked); `nodes/package.json` names the community packages; every native `.node` file must be x86-64 ELF without
-   glibc (the image is musl) or the package is named in a warning; a conversion stages `nodes/**` (relative links that
-   stay inside `nodes/` and whose `..` components all come before their names, so no chain of links can climb out)
-   and `storage/**`. Caches, Redis, runner files, logs and `data/` never move.
-2. The SQLite file is never opened by the job process: a child (`python3 -I -S`) reads a copy of its own after it
-   dropped to the account nobody (no supplementary groups, its own network namespace, memory/CPU/file-size/process
-   limits), with `SQLITE_DBCONFIG_DEFENSIVE`, `PRAGMA trusted_schema=OFF`, `cell_size_check=ON`, ordinary tables only
-   (no virtual table or its shadow tables), explicit columns: the `global:owner` user must have an email and a password;
-   counts; the workflows one JSON line each (a workflow over 16 MiB, or past 256 MiB in all, comes as "too large to
-   analyse"), whose nodes the job scans one at a time for things that need changes here (`workflow_reasons`). The
-   add-on version must equal `n8n --version` of the live image, and the live n8n must not set its own
-   `N8N_ENCRYPTION_KEY`/`_FILE` (Quadlet `Environment=`, `Secret=…,type=env`, an `EnvironmentFile=` in the owner's home:
-   names only; it would refuse HA's key).
-3. Conversion: a throwaway volume with the copy, HA's key (0600, the image's node uid/gid), an empty `out/` and a
-   random temporary database password (`pgpass`, masked); `n8n export:entities --outputDir=/work/out
-   --includeExecutionHistoryDataTables=true` (network none, SQLite); a throwaway PostgreSQL from the live n8n-postgres
-   image (user and database as the catalog's) and `n8n import:entities --inputDir=/work/out --truncateTables=true` on
-   an internal network; every table with rows in the copy (but `migrations`, `sqlite_sequence`, `sqlite_stat1`,
-   `sqlite_stat4`) must hold exactly as many rows after the import (it exits 0 when it skipped; counted 40 tables per
-   query); test mode `n8n unpublish:workflow --all` and no active workflow left;
-   `pg_dump -Fc` (read in full once) becomes database `main` with the temporary server's version.
-4. `n8n_n8n_data` from scratch: the top directory owned like the live one, `config` `{"encryptionKey": <HA key>}`
-   (0600), HA's `nodes/**` and `storage/` (node uid/gid); `n8n_valkey_data` only its top directory (owned like the live
-   one): HA's queued jobs never run here.
+1. The pass stages `config/.n8n/database.sqlite` (+ `-wal`; never HA's `-shm` wal-index: SQLite rebuilds it from the WAL) and reads
+   `config/.n8n/config`'s `encryptionKey` (masked; any text without control characters up to 1024 characters is a key: N8-15; a text
+   shorter than 4 characters is not masked, it cannot be hidden from a log without hiding ordinary text). `nodes/package.json` names the
+   community packages; every native `.node` file must be an ELF of this device's processor without glibc, else its package is named in a
+   notice (`n8n.native-code`). A conversion stages `nodes/**` (relative links that stay inside `nodes/`) and `storage/**`. Nothing is
+   stopped for the size of a file (N8-28): a `.node` file is looked at in its first 64 MiB and copied as a stream; a `package.json` over
+   1 MiB is copied unread and its packages are not listed (`n8n.community-packages`, "list too large"); a `config` over 1 MiB is no key file
+   and is listed in the one skipped-items line (`files.skipped`, kind `large`). Caches, Redis, runner files, logs and `data/` never move.
+   The walk's `Report` keeps the names of what it left out (`haissues.Names`) and the check and the conversion ask once about them
+   (`Sink.skipped`).
+2. The SQLite file is never opened by the job process: a child (`python3 -I -S`) reads a copy of its own after it dropped to the account
+   nobody (no supplementary groups, its own network namespace, chroot into its folder). Its limits are arguments: CPU seconds and waiting time
+   = 1800 s plus 1 s per 20 MiB of the files (at most a day; N8-06), address space 2 GiB, file size twice the database plus 64 MiB. A run that
+   was killed by a signal, ran out of memory (`{"failed": "memory"}`), timed out or said nothing is made ONCE more with twice the time, memory
+   (ceiling 8 GiB) and file size (N8-07, N8-09); a database SQLite itself refuses (`{"failed": "database"}`) is not read again. What still fails
+   stops only n8n: `n8n.database-unreadable` (code `corrupt-archive`) or `n8n.database-slow` (`job-failed`); a child that cannot leave the
+   network namespace stops as before (`job-failed`). The child answers: a header (tables with their row counts, the owner's email and whether a
+   password is set, the last migration, the NAMES of the credentials up to 20000, never a value), one line per workflow, `{"end": true}`.
+   Findings (all in the check, the same words again in the conversion: N8-18): `n8n.no-database` (stop, N8-14), `n8n.no-owner` (stop, N8-16),
+   `n8n.fixed-key` (stop; the live n8n sets its own `N8N_ENCRYPTION_KEY`/`_FILE`, wave 2 lifts it), `n8n.no-key` (**confirm**, N8-15: no usable
+   key in HA's backup; the names of the credentials are the items, the count is in the message), `n8n.key-created` (auto: no key and no
+   credentials), `version.different` (stop: add-on version and `n8n --version` both known and not equal), `version.target-unknown` (notice,
+   N8-10: `n8n --version` of this device prints no x.y.z: nothing is compared), `n8n.native-code`, `n8n.community-packages` (notices). The
+   image of this device is downloaded first when it is missing (`hatarget.ensure_image`, CM-05) -- but only while n8n has not stopped.
+3. This device's side (`Target`; N8-01, N8-02, N8-27 and the n8n side of OD-08, OD-09): the app settings list ONE database item of
+   scope `database` or `instance`, or no database item and the PostgreSQL data volume (cold mode). The container is found by its image
+   and `/var/lib/postgresql*` mount; cold mode uses its `POSTGRES_USER`/`POSTGRES_DB`. An instance's normalized maintenance database
+   `postgres` is separate from n8n's actual database. The unique main container's running n8n process supplies selected
+   database/user/host/port fields through its installed Config/Env decorators, including direct/file/secret/entrypoint/dotenv
+   precedence; n8n defaults to database `n8n` and user `postgres`, never the server's `POSTGRES_DB`. Unreadable or ambiguous
+   configuration stops n8n before conversion. Stopped main/dependencies may be borrowed through a scoped lifecycle and
+   returned to their prior state, including partial start, failure and cancellation. Read-only endpoint APIs never start units. More than one item
+   or an unsupported layout stops only n8n. Instance conversion carries the whole device snapshot with only the app DB replaced; the
+   marked HA restore follows the selective-instance rule below. A database container without `ContainerName=` has the name systemd gives it.
+   n8n's data is the declared volume mounted at `/home/node/.n8n`. The queue's volumes are the declared ones that only containers whose image
+   repository is named `valkey` or `redis` mount; every other declared volume and every declared host folder is this device's own and is
+   carried exactly as it is (`hatarget.carry`; `n8n.extras-carried`, auto); a link that would leave a carried volume is left out and
+   listed (`files.skipped`, asked once, found only by the conversion). A mount that is no data (an absolute path, a `%h/` path with `..`) is
+   left out of what throwaway containers see (`n8n.mount-skipped`, notice).
+4. Conversion: a throwaway volume with the copy, the key (HA's; a new one, 32 URL-safe characters, made and masked here when HA's backup has
+   none: the credentials of HA cannot be opened and are entered again, `ha_import.reminders_by_app`), an empty `out/` and a random temporary
+   database password (`pgpass`, masked); `n8n export:entities` (network none, SQLite); a throwaway PostgreSQL from the live n8n-postgres image
+   and `n8n import:entities --truncateTables=true` on an internal network; the rows of every table with rows (but `migrations`,
+   `sqlite_sequence`, `sqlite_stat1`, `sqlite_stat4`) are counted in the database of the app settings (N8-21) and must be the same; the
+   waiting for the new database grows with the SQLite files (OD-28); test mode unpublishes every workflow. Single database: `pg_dump -Fc`
+   (read in full once) becomes database `main`. Cold: the new cluster is made like this device's own (same image and settings, the password
+   from the same podman secret handed to the throwaway containers by name: `POSTGRES_PASSWORD` becomes `DB_POSTGRESDB_PASSWORD` for the
+   throwaway n8n, a `POSTGRES_PASSWORD_FILE` secret is handed over as the file), then `CHECKPOINT`, a clean stop (exit code 0 and
+   `pg_controldata` says "shut down"), and its volume is exported as the app's PostgreSQL volume; no dump.
+5. `n8n_n8n_data` from scratch: the top directory owned like the live one -- when its owner and mode cannot be read (the volume is not there,
+   podman does not tell) the image's own, the `node` account and 0755 (`n8n.volume-root-default`, auto; N8-11, N8-12) --, `config`
+   `{"encryptionKey": <key>}` (0600), HA's `nodes/**` and `storage/` (node uid/gid); each queue volume only its top directory (owned like the
+   live one, else the account of its image: `valkey`/`redis`, else root): HA's queued jobs never run here and this device's old ones are dropped.
+   The conversion returns `volumes`, `dirs` (this device's host folders carried), `postgres` ({} for a cold app), `credentials_to_enter`.
+**Batch 1** (branch `feat/ha-import-batch1`; `ha_omnigent.py`, `ha_hermes.py`, `ha_emqx.py`, `ha_headscale.py`,
+`hasqlite.py`, `hacommon.py`). Binding rules for every app: the data, the data's own keys and the accounts move; the
+target keeps its URL, ports, database passwords, secrets, settings and units; the versions must be identical (each
+module keeps a table add-on version → upstream version; an add-on version it does not know is refused) or the job is
+refused before anything changes; amd64 and aarch64 backups are both accepted. Facts: `phase3/facts/{omnigent,hermes,
+emqx,headscale,mcp-admin}.md` of the design notes.
+
+**Omnigent** (`woow-omnigent` → `omnigent`, cold PostgreSQL mode: volumes `omnigent-postgres-data` (a whole PostgreSQL
+16 cluster whose bootstrap superuser is the app role), `omnigent-server-data`, `omnigent-pi-data`). Revised 2026-11-25 (HAOS
+parity, lane OMNIGENT; rows O-01..O-61): what HAOS would restore as it is no longer a refusal -- each finding is a stop of this
+app only, ONE line to confirm, an automatic step or a notice (`ha_omnigent.ISSUES`, section 6/7 `HaIssue`); this device keeps its
+own schema, so what it cannot take over is left out and listed, never executed (items 2 and 3).
+1. Versions only inform (O-23, O-24, O-25, O-49): add-on 0.1.20–0.1.23 → Omnigent 0.21.0 (0.1.19 → 0.20.0, ≤ 0.1.18 → 0.12.0).
+   An add-on version the table does not know (`version.addon-unknown`), a live server whose `GET http://127.0.0.1:<port>/v1/info`
+   `server_version` cannot be read (`version.target-unknown`; loopback only) and two different versions
+   (`omnigent.version-different`) are notices. What decides is the data: HA's `alembic_version` must equal the live database's (read
+   as the app owner, `podman exec <db> psql`, read again up to 3 times, the database started when it is stopped: O-40, O-41;
+   `omnigent.alembic-different`, `omnigent.target-unreadable`: stops of this app) and HA's tables and columns must equal this
+   device's (`omnigent.schema-different`); HA's PostgreSQL major must not be newer than the image that opens it (`omnigent.pg-newer`;
+   an image without PG_MAJOR is asked through the database it runs here: O-18).
+2. One pass: `data/postgres/**` into a throwaway volume exactly like Odoo's (PgSink: HA's configuration files replaced,
+   recovery/pid files dropped; a hard link or a tablespace link there is refused); the artifact store
+   `data/omnigent-home/.omnigent/artifacts/**` (where omnigent 0.21.0 keeps it: HOME is /data/omnigent-home and the
+   add-on's ARTIFACT_DIR is never read) staged, `.cache/` never; HA's runtime setting files in /data (sharing, admins,
+   allowed domains, config.yaml) only named. The cluster is opened by a throwaway of the LIVE PostgreSQL 16 image,
+   hardened exactly like Odoo's (`ha_odoo.start_ha_cluster`). A hard link in the cluster folder is copied as an ordinary file
+   (O-02, `omnigent.hardlinks-copied`, auto); one of the artifact store to a file outside it is never carried, nor copied (O-03);
+   `PG_VERSION` is read by its start only (O-61); an `accounts-cookie-secret` that is missing, empty or larger than 4096 bytes is
+   not carried and Omnigent makes a new one (`omnigent.cookie-missing`, notice: everyone signs in again; O-20). Still stops
+   (this app only): no `omnigent` database (`omnigent.no-database`), not UTF8 (`omnigent.encoding`), a tablespace or symlink in
+   the cluster. ONE line to confirm, `omnigent.skipped` (O-03, O-12, O-14, O-15, O-16, O-21, O-28; the key covers every name of
+   every kind): HA's tables other than Omnigent's, functions, triggers, views, rules, policies and other schemas (counted, by kind),
+   objects only a superuser can make, extensions beyond plpgsql and pg_trgm, the artifact store's links to outside files and the
+   agent bundle locations that could leave the store (not empty, no `.`/`..` part, not absolute, no backslash, control or invisible
+   character, at most 512 characters and 16 parts: `key_ok`); and `omnigent.files-missing` (O-22): agent bundles or file blobs the
+   database names that the staged store lacks. Nothing of it is moved: the new cluster has this device's tables only.
+3. **Trusted schema (B1-01; owner decision 2026-11-23 replaced the security hold).** HA's backup provides DATA only:
+   no DDL, default, check, domain, index or function written by HA ever runs. The check reads this device's live
+   schema (as the owner, read only) and names every table whose columns differ (a blocker). Conversion: HA's cluster
+   is dumped (`pg_dump -Fc omnigent`, the hardened throwaway); a new cluster from the live image, environment and
+   secret mount (read-only root, data volume `noexec,nosuid,nodev`) gets THIS device's schema: `pg_dump
+   --schema-only` of the live database inside one exported snapshot (`REPEATABLE READ READ ONLY`, revision checked in
+   the snapshot), its pre-data and post-data sections restored by the app role. The product itself proves what the
+   lab proved (`ha_omnigent.trusted_schema`; no caller flag): the live schema signature (`SCHEMA_SIGNATURE_SQL`:
+   relations, columns with types/defaults/collations, constraints, indexes, sequences, types and enum labels,
+   functions, triggers, rules, views, policies, extensions, schemas, other user objects), its columns and its alembic
+   revision are read before and after the capture and must be equal, and the snapshot's columns must be the live
+   ones -- else `incompatible` 「這台 Omnigent 的資料庫結構在轉換期間改變了…」, nothing changed. HA's columns (in order),
+   sequences (type, owning column) and types must equal the trusted ones (else `incompatible`, naming them); HA's
+   defaults, checks and indexes are not compared because they are never used. From HA's dump only TABLE DATA and
+   SEQUENCE SET entries are restored (`pg_restore -L`), and an entry is selected only when it names a table or sequence of the
+   trusted schema, each exactly once (pg_restore reads only a line's dump id: a name with a line break cannot add an entry; an
+   entry of another table or sequence is not selected and told, `omnigent.entries-skipped`, notice, O-28; a trusted name twice stops);
+   they are loaded by `woowbk_restore` (`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, only
+   `USAGE` on public, `INSERT` on its tables, `SELECT` on users/scheduled_tasks, `UPDATE` on scheduled_tasks,
+   sequence values; `--no-owner --no-acl --exit-on-error --single-transaction`). The new cluster's signature must
+   equal the trusted one after the post-data section and again after the last write; `woowbk_restore` is dropped
+   (`DROP OWNED`, `DROP ROLE`); the cluster may then hold only its bootstrap role, no role or database setting, no
+   `postgresql.auto.conf` setting and no large object (else `job-failed`). This device's own accounts -- the
+   Quadlet's `OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME` and `OMNIGENT_RUNNER_USERNAME` (default admin, operator) -- are
+   read from the live database as the owner (password hashes masked in every log line) and added back by
+   `woowbk_restore` (`json_populate_recordset` on its stdin, never an argv; `ON CONFLICT DO NOTHING`: a same-named HA
+   user wins, with a note; accounts that cannot be read, also after trying again, are not kept: `omnigent.accounts-unreadable`,
+   notice, O-09); test mode pauses every active scheduled task (`state` 1 → 2) as `woowbk_restore`; every
+   table's rows equal HA's (users plus the accounts added), alembic unchanged; `CHECKPOINT`, stop, `pg_controldata`
+   "shut down" (the stop's exit code alone is no refusal: O-54), export. A Quadlet `Secret=` of the app that its catalog entry
+   does not list is a notice (`omnigent.secrets-unregistered`, in the check too: O-48). The agent bundle locations that could
+   leave the artifact store are cleared in the new cluster, after the answers were compared, by `woowbk_restore`, which gets
+   `SELECT` and `UPDATE` on `agents.bundle_location` for that one statement (the names travel as one JSON text on stdin; the
+   privilege goes with the role's `DROP OWNED`); a location still unsafe afterwards stops the job (O-21). A different version of an
+   extension both clusters have (the new cluster has the image's) is no difference (`omnigent.extension-version`, auto: O-44).
+   This device's other volumes of the app settings (beyond the three) are carried as they are (`hatarget.carry`; O-07,
+   `omnigent.extras-carried`). `capture_consistent_target_schema` is tried again up to 3 times with a longer wait for the
+   columns (60, 120, 180 s; O-32, O-33, O-58, O-59) and `trusted_schema` waits for a structure that is still moving and reads
+   again (3 tries; O-42, O-43); `_convert_candidate` needs no promise about DDL (O-56); the server volume's top folder takes the
+   owner and mode read last (O-57).
+   HA's cluster is hostile code, not only hostile data (security review 2026-11-23, `tests/backup/evidence/
+   omnigent-product-security-review-20261123/`): its catalog and its own per-role/per-database settings (which win over
+   the command line) can make every answer lie and can run commands inside the throwaway container, whose boundary
+   (no network, read-only root, limits) is what holds. So nothing it answers is believed: right after HA's data is
+   loaded, the new cluster (HA's data on this device's schema and server) must give the check's answers again --
+   `DETAIL_SQL`, `KEYS_SQL` and every table count (lists compared as sets) -- else `incompatible`
+   「這份 HA 備份的 Omnigent 資料庫回報的內容和它實際的資料不一致…」 before anything is exported (SR-1); and the selected
+   SEQUENCE SET entries, whose statement pg_dump writes from the value the server sent (unquoted), are printed by
+   pg_restore itself (`-f - -L`) before anything is restored and must be exactly one
+   `SELECT pg_catalog.setval('public.<trusted sequence>', <integer>, true|false);` each (SR-3).
+   HA's `pg_dump` runs as an OS user that is not the HA server's (`dump_user`: the first of `DUMP_IDS` 65534, 32767,
+   9999, 999 that the owner's uid AND gid maps hold, else the highest other id both maps hold (O-01), never root and never the image's postgres ids; none ->
+   `job-failed` before anything is exported), over the socket directory as the database user postgres: code HA's
+   catalog runs inside its server can then neither open pg_dump's stdout through `/proc/<pid>/fd` nor signal it, so it
+   cannot write the archive the conversion restores (SR-2b). A fixed 65534 failed in the real product flow on dev-d,
+   whose owner maps only uids 1..55000 (`podman exec` exit 255); dev-d gets 32767. Names taken from HA's database (tables, schemas, extensions, alembic) reach the job log and the page
+   with control characters and Unicode bidirectional controls shown as `?` (`hacommon.names`, SR-4).
+   HA's rows that this device's schema refuses (its CHECK/NOT NULL constraints at the data load, its primary keys,
+   unique indexes and foreign keys at post-data, values its column types reject; the schema comparison covers
+   columns, sequences and types, not constraints) end the job `incompatible` with `DATA_REFUSED`
+   「HA 的 Omnigent 資料不符合這台 Omnigent 的資料庫結構…」 (`load_into_new_cluster`): pg_restore's stderr only
+   classifies the failure and is never shown or logged (it holds HA's row values); other failures stay as they were.
+4. `omnigent-server-data`: the live export without `artifacts/**` plus HA's artifacts owned like the live artifacts
+   folder (dirs 0755, files 0644, `accounts-cookie-secret` 0600: HA's session key replaces this device's, so HA's grants
+   and tokens keep working and this device's browser sessions end); `omnigent-pi-data`: the live export as it is (the
+   runner's identity, provider logins and pairings never move; the server's telemetry id never moves either).
+   These live exports run while writers are active, even for a cold-mode catalog: they are not a consistent cold backup.
+   Concurrent writes can produce torn or mutually inconsistent files; Headscale similarly exports headplane-data live
+   and does not integrity-check hp_persist.db. B1-11 remains open: use a coordinated cold snapshot or pause all writers
+   and verify the SQLite copy before claiming consistency; do not treat the converted archive as a cold backup.
+
+**Hermes** (`woow-hermes` → `hermes`: volumes `hermes-data`, `hermes-redis-data`, database `main` of an unused
+PostgreSQL 15).
+1. Versions only inform (HAOS parity 2026-11-25; H-06, H-07, H-09): add-on 0.1.10–0.1.14 → Hermes 0.22.5 (≤ 0.1.9 → 2026.8.31) is compared
+   with the tag of the live image's label `io.woowtech.hermes.base` by `haissues.version_issues`: an add-on version the table does
+   not know (`version.addon-unknown`) or a label that cannot be read (`version.target-unknown`) is a notice, both known and different
+   still stops only Hermes (`version.different`; wave 2, H-08); a different upstream digest (`hermes.digest-differs`) and a
+   `config/.woow-image-version` that is missing or names another add-on version (`hermes.image-version-missing`,
+   `hermes.image-version-differs`) are notices. What decides is the data: `state.db` `schema_version` that cannot be read
+   (`hermes.schema-unreadable`) or is newer than 32 (`hermes.schema-newer`) stops only Hermes; `config.yaml` `_config_version`
+   above 51 is moved and noted (`hermes.config-newer`).
+2. One pass over `config/**` (HERMES_HOME; `data/**` never) into the new `hermes-data` tar: every member owned by the
+   Quadlet's `HERMES_UID`/`HERMES_GID` (10000 when unset; when they are no numbers: the live folder's owner,
+   `hermes.owner-from-folder`), permission bits without setuid/setgid, the top folder as the live one; symlinks as link entries
+   (relative ones staying in the tree; absolute ones only into `/opt/data`, `/opt/hermes`, `/usr`, clean); hard links as hard links
+   to an earlier file of the tree written to the tar. A hard link follows the file it names, never more: one to a runtime file or
+   a wal-index (a file that does not move only for being runtime state) is copied as a file (`hermes.links-copied`, CM-11); one
+   to a known database moves with it when the database stays and stays out, listed, when the database stays out; one to any other
+   file that is not in the tree (an `.env` above 8 MiB, what lies below a folder where a file must be) stays out with it and is
+   listed, so what such a file holds is in the tree under no name; a chain of links, which the reader follows to the file at its
+   end, is left out and listed; one the reader may never copy (a browser profile) is left out and listed by the reader
+   (`files.skipped`, one confirm line, with the entries the reader left out). Left out: `gateway.pid`, `gateway.lock`, `gateway_state.json`,
+   `processes.json`, `cron.pid`, `.backup.lock`, `.woow-image-version` (only its first KiB is read), `.woow-dotenv`, every `-shm`,
+   `browser-profile(s)/`, `browser_profiles/`. HA's `.env` (filtered in memory up to 8 MiB; a larger one is left out and listed)
+   loses the lines of `API_SERVER_KEY`, `WEBHOOK_SECRET`, `HERMES_DASHBOARD_BASIC_AUTH_*`, `HERMES_DASHBOARD_PUBLIC_URL`,
+   `HERMES_BASE_URL`, `HERMES_PASEO_*` (its other values are masked in the job's logs, at most 500 of them); the first start
+   applies this device's hermes.env (no `.woow-dotenv`), whose keys win. `config.yaml`, `cron/jobs.json` and `SKILL.md` are copied
+   as they are and read for what they say up to 32 MiB (a larger one is copied unread, `hermes.text-unread`). A special
+   configuration file, a known SQLite file or a sidecar that is a link or a folder, or a `cron` that is no folder, is left out and
+   listed (`hermes.entries-skipped`, confirm; what lies below a folder goes with it); a database group with such a member stays
+   out as a whole (`hermes.databases-skipped`, confirm), when it is `state.db` Hermes stops (`hermes.state-db-unusable`); no
+   `state.db` stops only Hermes (`hermes.no-state-db`: this device's chats stay). Programs for another processor than this
+   device's are listed and moved (`hermes.foreign-programs`, notice). The known databases (`state.db`, `kanban.db`,
+   `response_store.db`, `runs_idempotency.db`, `shared-state.db`, `projects.db`, `cron/{executions,notepad}.db`) are checked by the
+   sandboxed child (`quick_check`; `state.db`: sessions, messages, schema version) and move unchanged with their WAL, written into
+   the tree only after the checks; a secondary one that is damaged stays out with its WAL and is listed
+   (`hermes.databases-skipped`), a damaged `state.db` stops only Hermes (`hermes.state-db-unusable`), one with an index structure
+   the child does not know (a virtual table other than Hermes's FTS5 layouts: it is never opened outside the child) moves
+   unchecked (`hermes.db-unchecked`, notice). Notices: HA-only hosts in `config.yaml`/`.env` (hosts only), `/media/` references,
+   plugins (they replace this device's and need re-pairing). HA's /media is never moved.
+3. `hermes-redis-data`: its top folder only, owned like the live one (the volume mounted at `/data`; none declared: none made);
+   every `database` entry of this device's app entry: the live database's dump (`adapter._dump_database`, read while it runs:
+   Hermes does not use it); every `instance` entry: the complete live instance (`adapter._dump_instance`) with its globals,
+   roles and all databases, packaged through the ordinary instance manifest and restore path. These PostgreSQL entries
+   carry this device's own data; HA Hermes uses SQLite. Database and instance entries may coexist. Every other volume and
+   host folder (a cold database's volume, a workspace) is carried as it is (`hatarget.carry`, `hermes.extras-carried`).
+
+**EMQX** (`woow-emqx` → `emqx`: volumes `woow_emqx_data`, `woow_emqx_log`). Revised 2026-11-25 (HAOS parity, lane EMQX-A; owner decisions
+D0-D5, S1, S2, H1, H3, H7): restoring HA's backup is what HAOS does, so HA's access settings come with it; what could hurt the customer is a
+line of the ONE confirmation (section 6/7 `HaIssue`), never a refusal. Issue ids are declared in `ha_emqx.ISSUES`.
+1. Versions only inform (`haissues.version_issues`): add-on 5.8.9, 5.9.0, 5.9.1 → EMQX 5.8.9 (pinned by the add-on's Dockerfile). An add-on
+   version the table does not know (`version.addon-unknown`, notice) or an image of this device without a version label (the running
+   broker is asked: `emqx.version-asked`, auto; nothing said: `version.target-unknown`, notice) stops nothing; both known and different
+   is the one stop (`version.different`; installing HA's version is wave 2). This device's image is downloaded as the owner when it is not
+   here (`target.image-pulled`, `hatarget.ensure_image`); a Quadlet that names no image is the one case that still stops.
+2. One pass stages `data/emqx/data/{mnesia/**, configs/cluster.hocon, certs/**, authz/**}` root-owned (certs 0600) into
+   a throwaway volume and reads `data/emqx/node.name` and the latest modification time of every `mnesia/<node>/`; never the cookie,
+   generated `app.*.config`/`vm.*.args`, plugins, patches, backups, traces or logs. The node database used (`ha_emqx.pick_node`): the
+   customer's choice (`choices.node`, request `choices.emqx.node`), else the one `node.name` names, else the only one there is, else the
+   one written last (`emqx.node-chosen`, auto, named; `choices.node` lists them all with the default). No database at all stops only this
+   app (`emqx.no-database`); a node name EMQX would not take or a choice not in the backup stops only this app (`emqx.node-gone`).
+3. HA's broker: the live image, `--network none`, a read-only root, user 0 (as on HA), HA's node name (`--add-host
+   <host>:127.0.0.1` when its host is not an IPv4 literal), the staged volume at `/data/emqx/data` mounted
+   `rw,noexec,nosuid,nodev` (`EMQX_NODE__DATA_DIR`), the image's `VOLUME` paths `/opt/emqx/data` and `/opt/emqx/log`
+   on this job's own volumes, also `rw,noexec,nosuid,nodev`, an empty `EMQX_DASHBOARD__DEFAULT_PASSWORD`; ready when `emqx ctl status` says
+   "is started": the wait grows with the data (`podman.scaled_timeout`) and, while the broker still runs, goes on for another hour; the job's
+   cancel is asked at every step; only a broker that ended (or never answers) stops the app. `emqx eval` of fixed expressions answers whether
+   admin/public still logs in, the table counts (a table every 5.8.9 broker has missing: HA's database did not load completely, refused),
+   root names, authenticators, authorization sources (`[{type, enable}]`, types and flags only) and the no-match rule, and the built-in password
+   database's hashing. The system-message ticker is paused so rows stay countable; when it cannot be (or restarts), `emqx.sys-ticker` (notice)
+   says so and the retained-message count may differ by up to 64 rows (`SYS_SLACK`; never an account, rule or key). Then `emqx ctl data export
+   --root-keys <DATA_ROOTS present> --table-sets builtin_authn,builtin_authz,banned,dashboard_users,api_keys,psk,builtin_retainer --dir
+   /work/out` (listeners, dashboard, node, log, mqtt, zones are never exported). No size cap of 2 GiB any more (E-64): the room for the copy
+   decides (`SpaceGuard.check`), 64 GiB is only a sanity bound per table file.
+   D1 (E-16..E-19): how MQTT passwords are stored is said, never refused: `plain` in the global built-in database (`emqx.plain-passwords`),
+   in a listener's or gateway's (`emqx.plain-elsewhere`), rows not in the form of their authenticator's hashing (`emqx.clear-rows`, names
+   up to 20) are all notices that say the clear text stays on this device and in every later backup; an unreadable answer is
+   `emqx.hashing-unreadable` (notice). D2 (E-20): HA's admin/public Dashboard account is restored as it is (`emqx.default-dashboard`,
+   notice); when this device's Dashboard is published beyond the loopback (the installed Quadlet's `PublishPort=`, an entrance container of
+   the app) or a tunnel container (ngrok, Cloudflare) is installed it is `emqx.default-dashboard-exposed` (confirm, H3).
+4. This device's broker (the candidate). A stopped broker is started for the read and put back (`hatarget.ensure_running`: `target.service-started`
+   auto, `target.service-failed` stop; E-22). Read first from the running broker as the owner, with fixed `emqx eval`
+   expressions: its effective RAW configuration (`emqx:get_raw_config([])`, never cooked defaults), `EMQX_ETC_DIR` (any plain absolute folder: it is
+   what `${EMQX_ETC_DIR}` means to this device's broker, E-24; the candidate must report the same one, else only this app stops: 「EMQX 不能搬過來：這台 EMQX 執行中的設定目錄（EMQX_ETC_DIR）和用它的設定啟動的暫用 EMQX 不同，多半是改過設定還沒重新啟動；為避免匯入後設定跑掉，已停止，這台沒有任何改變。請先重新啟動這台 EMQX，再重新檢查與匯入。」) and the no-follow state of
+   `data/configs/cluster.hocon`. HA's authorization replaces this device's (D0), so this device's authorization sources are not judged (E-26,
+   E-27, E-31). No list of roots or fields is judged either (E-32, E-33, E-34, E-37, E-39, E-40, E-45, E-46): the candidate starts with this
+   device's configuration as it is and `ha_emqx.file_scan` looks at EVERY setting of EVERY root for the files it names: by its name
+   (`certfile`, `keyfile`, `cacertfile`, `dhfile`, `bootstrap_file`, `init_file`, `config_files`, `filename`, anything ending in `file` or `files`,
+   `path` of a source of type `file`) or by a value that is an absolute `/opt/emqx/data/…` path or a `file://` secret. A path may be the list of
+   character codes EMQX makes of it (E-28), start with `$NAME` or `${NAME}` (EMQX_ETC_DIR, EMQX_LOG_DIR and the Quadlet's own `EMQX_*` settings) or be
+   relative to `/opt/emqx`, the broker's working folder (`data/authz/acl.conf` is the form the Dashboard writes, E-30). A file in the data volume
+   is carried wherever in it it lies (not the Mnesia database, nor what the converted volume drops anyway: E-29); one on this device's mounts or in
+   the image is the candidate's the way it is this device's; one that cannot be placed (an unknown variable, a `..`, /proc or /tmp) is named,
+   setting names only, and the import goes on (`emqx.files-not-carried`, notice, E-50): 「這台 EMQX 的設定提到 N 個暫用的 EMQX 帶不過去的檔案（下列設定項目）：它們放在只有執行時才有的位置、找不到的環境變數底下或不會搬的資料夾。匯入不會搬動它們，匯入後請確認它們還在原處。」 The one node setting that still
+   stops is a data directory that is not the image's (`emqx.data-dir-moved`, stop, E-36): 「EMQX 不能搬過來：這台 EMQX 的資料目錄（node.data_dir）不在 /opt/emqx/data，HA 的資料會放到錯的位置，已停止；這台沒有任何改變。」 with the advice 「請先把這台 EMQX 的資料目錄改回 /opt/emqx/data（環境變數 EMQX_NODE__DATA_DIR），再匯入 EMQX；其他應用不受影響。」
+   The folders of the log files, the crash dump and EMQX_LOG_DIR (E-23, E-35) are outputs, never read: when this device keeps them
+   elsewhere the candidate mounts its own log volume there as scratch space (logs are not carried) and this device's real folder is never mounted
+   into it for writing (`emqx.dirs-follow-device`, auto: 「這台 EMQX 的日誌或設定目錄不是預設的位置；暫用的 EMQX 用同樣的目錄（日誌放在暫用空間，不會搬），不影響匯入。」); a place inside `/opt/emqx` or below a mount of this device cannot be given and stops
+   only this app (`emqx.output-dir-unusable`, stop): 「EMQX 不能搬過來：這台 EMQX 把日誌或當機記錄寫在暫用的 EMQX 無法安全提供的位置（下列資料夾），已停止；這台沒有任何改變。」 with the advice 「請先把這台 EMQX 的日誌與當機記錄路徑（log.file.*.path、node.crash_dump_file、EMQX_LOG_DIR）改回 /opt/emqx/log 底下，再匯入 EMQX；其他應用不受影響。」
+   A bootstrap file that cannot be followed (E-48, E-49) or that the candidate cannot read (E-61) is left off and said (`emqx.bootstrap-lost`,
+   notice); the image's own TLS files are fingerprinted (one that cannot be read is left out, E-54). The data volume's
+   `configs/cluster.hocon` and the data-volume files the configuration names are snapshotted; one named file that is not there is said
+   (`emqx.target-file-missing`, notice, E-55: this device's own broker has the same hole); the read is made again up to three times when the
+   configuration changes meanwhile (`emqx.config-reread`, auto; still changing: `emqx.config-changing`, stop with the advice not to edit,
+   E-58). The candidate is the live image with the Quadlet's `EMQX_*` environment, its `EnvironmentFile=` files (read by podman itself with
+   `--env-file`, never into a command line; what they hold is no longer judged, E-53), its `Secret=` mounts and read-only host files, the
+   snapshot in an otherwise empty data volume (owned by the image's emqx user, which may be root, E-56) and the export at `/work/in`. It starts
+   with this device's scheduler counts (`ERL_AFLAGS="+S total:online"`; a count that cannot be read or is not answered is only logged, E-57).
+   Before anything is imported its `EMQX_ETC_DIR` (this device's own, E-24), node name and image TLS fingerprints must equal this device's, and HA's export is listed by the
+   vendor's own functions on the very file the import reads (B1-03: only `META.hocon`, `cluster.hocon` with `DATA_ROOTS` and the table backups).
+   A root where the candidate's boot differs from this device's running configuration (changed, not yet restarted) is listed (`emqx.config-differs`,
+   notice, E-60) and what the candidate booted with is the baseline of every later comparison; only another node name stops.
+   What this device already has of its own is mixed with HA's by the import (a merge: a same-named entry of HA's wins, the others stay next to HA's): the
+   names, read from the finished candidate by `ha_emqx_settings.own_items` so the check and the conversion say the same, are lines of the one
+   confirmation (E-41, E-42, E-43, E-47) or a reminder (E-44), never a refusal: `emqx.device-integrations` (confirm, rules, connectors, actions, sources,
+   bridges, gateways; asked only when HA's import brought entries of that kind, otherwise this device's own stay exactly as they are; the message says
+   how many the import replaced): 「這台的 EMQX 已經有自己的規則、連接器、動作、來源、橋接或閘道（共 N 項，列在下面）。匯入會把 HA 的加進來：同名的以 HA 的為準，其他的留在原處、和 HA 的一起運作（HA 的規則也可能觸發這台的連接器）。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-routing` (confirm, topic rewrite, topic metrics, auto-subscribe,
+   ExHook servers, asked under the same condition; the same ExHook servers may also be named by `emqx.exhook`, which reads the finished candidate): 「這台的 EMQX 已經有自己的主題改寫、主題統計、自動訂閱或 ExHook 伺服器（共 N 項，列在下面）。匯入後它們和 HA 的並存，同名的以 HA 的為準，會和 HA 的一起改寫主題或把訊息送出去。匯入前的自動備份裡還有這台原本的設定。」 `emqx.device-psk`
+   (confirm): 「這台的 EMQX 開了 PSK（預先共用金鑰）認證或設了 PSK 檔。匯入後 PSK 金鑰以 HA 的為準，這台原有的 PSK 金鑰會被取代，用它們連線的裝置要重新設定。匯入前的自動備份裡還有這台原本的金鑰。」 `emqx.durable-sessions` (confirm): 「這台的 EMQX 開了持久工作階段（durable sessions）。持久工作階段的資料不在 HA 的 EMQX 匯出裡，匯入會換掉這台的資料卷：這台替離線裝置排隊的訊息會不見，裝置重新連線後要重新訂閱。匯入前的自動備份裡還有這台原本的資料。」 `emqx.device-plugins` (notice; available device plugins retain configuration, records and order): 「這台 EMQX 的外掛設定（共 N 項，列在下面）會保留；已核對外掛程式、設定及執行狀態可在暫用的 EMQX 保留。HA 備份的外掛程式及啟用記錄不會搬入，需要 HA 的外掛時請另外安裝。」
+   E-44: only state records proven absent on both the device and candidate are removed. Presence includes the
+   extracted directory, installation archive, data/config directory and running app; unreadable metadata is not absence.
+   Available plugin configuration fingerprints and runtime states must survive, or only EMQX stops. HA plugin code and
+   enable records are excluded at source boot and the validated export boundary. All operational roots remain compared.
+   Records supplied by startup files or EMQX_PLUGINS / EMQX_PLUGINS__STATES cannot be persistently removed by a runtime config update; such cleanup stops this app with a concrete request to remove the override first.
+   `emqx.plugin-records-remove` (confirm): 「這台 EMQX 有 N 個啟用中的外掛記錄（列在下面），但這台與暫用的 EMQX 都找不到其程式、安裝包、外掛資料或執行中的程式。匯入會移除這些啟用記錄，以後補上程式也不會自動啟用；需要時請重新安裝並啟用。匯入前的自動備份保留原記錄。」
+   `emqx.plugin-records-unused` (notice): 「這台 EMQX 有 N 個已停用、且這台與暫用的 EMQX 都沒有程式或資料的外掛記錄（列在下面），匯入會移除這些記錄。」
+   H1: this device's own `EMQX_AUTHORIZATION__*` / `EMQX_AUTHENTICATION__*` settings (Quadlet `Environment=`, `Secret=` targets and
+   `EnvironmentFile=` lines: names only) win over HA's after the next start: `emqx.env-wins` (notice, names).
+   `emqx ctl data import` then runs. Output that does not say "imported successfully" names, as far as it names roots or tables, what EMQX could
+   not import: `emqx.import-partial` (confirm, E-67; the rest goes on and the row counts decide the tables). HA's own access control is not one of
+   the items E-67 lets an import skip: see D0 below.
+   D0 (HAOS parity): then HA's `authentication` and `authorization` are made exactly HA's in the candidate (`apply_ha_access`): the authenticators
+   and the authorization sources are cut to HA's, in HA's order, each as the import left it; HA's no-match rule and deny action are set
+   explicitly; HA without any authenticator is an explicit empty list; a built-in database source HA does not have is first disabled and then removed
+   (EMQX 5.8.9 clears the ACL rules of a source it destroys, not of a disabled one); this device's bootstrap file is attached to HA's built-in database
+   authenticator of the same identity when it is enabled and, for a `hash` file, hashes the same way (otherwise `emqx.bootstrap-lost`: E-68, E-69).
+   HA's list of authenticators is read exactly (an answer that is not the list stops the app: never read as "no authentication", S2) and
+   every authenticator (mechanism and backend) and authorization source type HA has must be in the candidate after the import: when one is
+   missing (`access_roots` facts `absent`) only this app stops (`incompatible`, names only, before anything is loaded or packaged) rather than
+   cutting this device's own lists to a shorter list than HA's. After the import the reminders (`import_texts`) say that HA's add-on options
+   (`env_vars`) were never read and did not move (D0 4: the reader hands out neither `addon.json` nor `data/options.json`).
+   The result is read back and must be what was meant (E-80). HA's ACL file replaces this device's: `emqx.acl-replaced` (notice, D3, E-75), nothing is
+   written back; any other data-volume file of this device's snapshot (a certificate) must still be byte-identical. Every other root that is not HA data
+   (`DATA_ROOTS`) is loaded back exactly as it was (`emqx ctl conf load --replace`, E-72, E-74); node, rpc and cluster never change.
+   Security review 2026-11-23, S1 (D4; E-76..E-79): HA's settings run as they are; their NAMES are read from the candidate's finished configuration by the
+   same functions in the check and in the conversion (so the confirmation key is the same): `emqx.file-secret` (a value of the roots HA's import
+   brought uses EMQX's `file://` secret loader), `emqx.jq-rule` (rule ids that call `jq`, which reads the broker's environment), `emqx.external-authn` (enabled
+   authenticators other than the built-in database), `emqx.external-authz` (authorization sources other than file and built-in database),
+   `emqx.exhook` (enabled ExHook servers); all `confirm`: the customer confirms the names, a conversion without the key stops only this app
+   (`confirmation-required`), one more name is another key. S2 (D5; E-82): HA's authentication that lets everybody in is restored;
+   `emqx.no-authentication` (confirm) when this device had authentication before, saying whether the installed Quadlet publishes the MQTT ports beyond
+   the loopback and that a public address (Cloudflare, ngrok) cannot be told from here. Every table holds at least HA's rows and at most HA's plus what
+   the empty broker seeded (`check_counts`, E-83). HA's API keys replace this device's. Hot backups (addon.json `state` `started`) are tried; when HA's broker
+   does not start, a table is missing or EMQX's own export fails the app stops with the advice to back up again with the add-on stopped.
+   H7 (DESIGN H-6): the CHECK builds the same candidate (about +1-2 minutes) and collects the lines; the conversion builds it again and stops at the
+   first confirm line the customer did not confirm. HA's add-on option `env_vars` is not read (D0 (4), open: needs a READ-lane reader).
+   SR-5 (MQTT password hashing; owner decision 2026-11-24, option C, replaced by D1 on 2026-11-25): HA's `authentication` root replaces this device's and EMQX 5.8.9
+   checks every stored row of the built-in password database with the authenticator's CURRENT hashing, never re-hashing a stored row (emqx_authn_mnesia.erl:130-161;
+   the bootstrap import never overwrites a row). This device is read read-only as the owner (`HASH_EXPR`, `USERS_EXPR`: the first ten user ids of the global
+   chain, never a password hash or salt). When a row this device's hashing wrote is no longer accepted by HA's (`rows_still_verify`), the check says
+   `emqx.accounts-reset` (notice) naming the accounts (names through the shared name list, first ten and 「等 N 個」): 「HA 的 EMQX 保存 MQTT 密碼的方式（<HA's>）和這台（<this device's>）不同，匯入後以 HA 的為準：這台現有的 MQTT 帳號（<names>）匯入後無法再用原本的密碼登入，要在匯入後重新設定：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」;
+   HA's built-in database disabled or absent is the same notice with another text: 「HA 的 EMQX 沒有啟用內建資料庫的帳號密碼認證，匯入後以 HA 的為準：這台的 MQTT 帳號（<names>）匯入後無法再用帳號密碼登入。要繼續使用這些帳號，請先在 HA 的 EMQX 管理頁「存取控制 → 認證」啟用內建資料庫認證，再重新製作 HA 備份。」;
+   an unreadable answer is `emqx.accounts-unknown` (notice, E-52: said, never guessed, nothing stops): 「讀不出這台 EMQX 的 MQTT 帳號和密碼保存方式，沒辦法事先列出匯入後會失效的帳號（功能不受影響）；匯入後這台原本的 MQTT 帳號可能要重設密碼：到這台 EMQX 管理頁「存取控制 → 認證」的內建資料庫替這些帳號重設密碼或重新建立；由這台 bootstrap 帳號檔建立的帳號，刪除後重新啟動 EMQX 就會用原本的密碼建回。」.
+   D1 texts (notices): `emqx.plain-passwords` 「HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼；會照 HA 原樣匯入，明文密碼會留在這台的資料卷、轉換出的備份和之後每一份備份裡，這台之後新增的 MQTT 帳號也會用明文保存。裝置照常登入。若要避免，請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把密碼雜湊方式改成 plain 以外的方式並重設密碼，再重新備份。」; `emqx.plain-elsewhere` 「HA 的 EMQX 在 MQTT 監聽器或閘道（gateway）的內建資料庫認證用「plain」（不加密）的方式保存 MQTT 帳號的密碼；會照 HA 原樣匯入，這些帳號的明文密碼會留在這台的資料卷和之後每一份備份裡（監聽器的認證設定不會搬，那些帳號在這台沒人用）。」; `emqx.clear-rows` 「HA 的 EMQX 內建資料庫裡有 <count> 個 MQTT 帳號的密碼沒有以所屬認證目前的雜湊方式保存，可能是明文（例如在改用其他雜湊方式之前用「plain」設定，或以「hash」方式匯入帳號時填入了沒有雜湊的密碼；括號裡是不屬於全域認證的帳號所在的監聽器或閘道）；這些帳號在 HA 現在也無法用密碼登入，會照 HA 原樣匯入。真的是明文時，明文密碼會留在這台的資料卷和之後每一份備份裡。可以略過它們：在 HA 重設這些帳號的密碼或刪除不用的帳號，再重新備份。」;
+   `emqx.hashing-unreadable` 「讀不出 HA 的 EMQX 的 MQTT 密碼保存方式，無法事先知道有沒有明文密碼；照 HA 原樣匯入，真有明文密碼時它會留在這台和之後每一份備份裡。」.
+5. `woow_emqx_data`: that broker's volume export without `configs/app.*.config`, `configs/vm.*.args` (the cookie),
+   `configs/*.bak`, `backup/**`, `trace/**`; `woow_emqx_log`: its top folder only, owned like the live one.
+6. Readback. Before the candidate stops, its readback goes into the converted backup's app section as `import_check` (section 5): a SHA-256 per root of its
+   effective raw configuration in its boot form (secrets redacted first, SR-4) and, per table only an administrator changes (`emqx_authn_mnesia`,
+   `emqx_authn_scram_mnesia`, `emqx_acl`, `emqx_admin`, `emqx_app`, `emqx_psk`, `emqx_banned_rules`), the row count and the SHA-256 of the sorted SHA-256s of the
+   rows' external terms. A receipt that cannot be read (E-84) is written as `[-1, null]` for every table (the one form the schema knows for "no such table") and
+   `emqx.receipt-unreadable` (notice) says it. After a restore of that backup started the units and its health checks passed, the engine waits until `emqx ctl
+   status` says "is started" (the wait grows with the data and goes on while the container runs; a container that ended fails the restore, E-88) and reads the same
+   values from the restored broker. A difference in the TABLES (accounts, ACL rules, keys: 「EMQX 還原後的內建資料庫（…）和轉換時核對的不同…」) fails the restore, which rolls back by
+   itself; a difference in the SETTINGS only (a setting changed after the conversion, the CPU count) is reminded in the job log and nothing is undone (E-90); an equal readback logs
+   「EMQX 還原後核對一致…」. A record this engine does not know after the restore (E-89) is skipped with a reminder; the restore's preflight (`haimport.import_check_problem`) has already refused
+   a backup whose `import_check` kind is not the engine's (E-87). The digests are derived from data the same archive holds and never appear in a log or job record.
+
+**Headscale** (`woow-headscale` → `headscale`: volumes `headscale-data`, `headplane-data`; an entry may also name the package's
+read-only configuration folder, the one mounted at `/etc/headscale`, as its one host folder: the form catalog-suggest drafts).
+1. Versions only inform (HAOS parity 2026-11-25; HS-10, HS-11, HS-16, HS-17, HS-18): add-on 0.1.1–0.1.3 → Headscale 0.29.4 (0.1.0 → 0.29.3)
+   is compared with the live image's `org.opencontainers.image.version` by `haissues.version_issues` (an add-on version the table
+   does not know, `version.addon-unknown`, or a version that cannot be read, `version.target-unknown`, are notices; both known and
+   different still stops only Headscale, `version.different`; wave 2, HS-12); HA's `database_versions` row and migrations this
+   release does not know are a notice (`headscale.db-version-differs`): this device's `headscale configtest` opens the converted
+   database (item 4) and decides. HA's database must be a Headscale database (`users`, `nodes`, `api_keys` present, not empty:
+   `headscale.no-database`, `headscale.db-unusable`) and may only have tables that this device's own database has or that the
+   constant TABLES names. Extra ordinary tables, triggers and views are named in one confirmation
+   (`headscale.db-extra-objects`, HS-15) and removed only from the sandboxed conversion copy before the API keys are
+   replaced; the original HA file and this device's live database are not changed. A virtual table stays a stop because
+   loading or dropping its module is not a safe conversion. No size refuses it (HS-02, HS-38, HS-39, HS-40): the database and its WAL
+   go to disk whatever their size (the job watches the free space), a `noise_private.key` over 4 KiB is no key, a
+   `dns_records.json` or `config.yaml` over 16 MiB is no valid / not read. HA's prefixes (`config/config.yaml`) replace this
+   device's when they differ and the entry names the configuration folder (item 5; `headscale.prefixes-replaced`, confirm); without
+   it this device's stay (`headscale.prefixes-kept`) and the nodes outside the range that will be there are listed
+   (`headscale.devices-outside-range`, confirm, HS-19); HA's prefixes that cannot be read: this device's are used
+   (`headscale.prefixes-unknown`, HS-21).
+2. One pass: `data/db.sqlite` (+ `-wal`, never `-shm`: an add-on killed before it checkpointed leaves all data in the
+   WAL, seen on the RPi5, and the child applies it) staged, `data/noise_private.key` (`privkey:<64 hex>`, masked; none or one that
+   is not: this device's key stays and every device logs in again, `headscale.noise-key-kept`, confirm; this device has none either:
+   Headscale makes one), `config/dns_records.json` (a JSON array of at most 10000 `{name, type, value}` strings; any other: not
+   moved, an empty list is written, `headscale.dns-records-invalid`, confirm), `config/config.yaml` (plain keys only, for the
+   checks); never Headplane's data, API key, cookie secret, options or the image.
+3. The sandboxed child reads HA's database (integrity, ordinary tables, trigger and view names, counts, version, migrations,
+   node addresses). During conversion it drops confirmed extra triggers, views and ordinary tables in a transaction on its
+   own copy; the live database's table names and Headscale's known table names are retained, and the converted database's
+   schema is checked again after the write. Then it replaces HA's `api_keys` rows by the rows of an integrity-checked copy of the live database (taken from
+   the live volume's export while it runs; read again, up to three times, when it was being written, HS-24/26/29; a Headscale that
+   never ran is started once so that it makes one and put back, HS-27), in one transaction, then requires a completed WAL
+   checkpoint and independently reopens the output, original and live copies to verify integrity, table counts (SQLite's own
+   `sqlite_sequence` is not compared: HS-33) and API key prefixes: the live Headplane and MCP admin keys keep working, HA's keys
+   do not exist here. Access policy (owner decision D6, S3): HA's replaces this device's when HA keeps its policy in its database
+   (`headscale.policy-replaced`, confirm when this device had one); HA's policy file is not applied (`headscale.policy-not-applied`,
+   confirm); when HA has none this device's stays (`headscale.policy-kept`): a policy in this device's database is copied into the
+   converted one by the child (`replace_policies_from`, `hasqlite.COPY_POLICIES`; a child that cannot: stops only Headscale,
+   `headscale.policy-keep-unsupported`), one in a file is not touched; a policy HA's database holds but HA did not use is replaced
+   by this device's (none) or, where the child cannot, listed (`headscale.policy-stale`, confirm).
+4. `headscale-data` from scratch, owned like the live top folder: the converted database 0644 and HA's Noise key 0600 (this
+   device's when HA's cannot be used) at the live config's paths (which must lie within `/var/lib/headscale/`; any characters but
+   `..` and control characters), HA's records at the live config's `dns.extra_records_path` when it lies in the volume (`[]` when
+   HA has none; a notice when it lies elsewhere; none written and a confirm line, `headscale.dns-path-conflict`, when that path lies
+   on the database or the key). Before packaging, `headscale configtest` of the live image (network none, read-only root, the
+   configuration read-only -- this device's folder, or, when HA's prefixes were written into it, the converted copy in a throwaway
+   volume) opens a throwaway copy of that volume: version path, migrations and schema as the server will check them; failing it
+   stops only Headscale. `headplane-data`: the live export (this device's Headplane logins and roles stay; an entry without
+   Headplane moves only Headscale, `headscale.headplane-absent`).
+5. The configuration folder, when the entry names it: this device's own folder packed as it is while Headscale runs (nothing
+   of HA's goes into it but HA's prefixes: the values of `prefixes.v4`/`prefixes.v6` on their lines, checked by reading the result
+   back), checked like every host folder (§5); its `config.yaml` must still say what the conversion was made with, else it is
+   packed again (up to three times, HS-36), then only Headscale stops. Every other volume and host folder of the entry is carried as it
+   is (`headscale.extras-carried`). This device's server is the container named `headscale`, else the only one that mounts
+   `/var/lib/headscale` and `/etc/headscale` and no Headplane (HS-03); its `config.yaml` may be a link to a file in the owner's home
+   folder (read once through `podman unshare readlink`, `headscale.config-link-followed`) or large (HS-06).
+
+**Batch 2: code-server** (branch `feat/ha-import-code-server-20261123`; `ha_codeserver.py`; owner decision 2026-11-23
+「決定2 A」 = the facts' recommended answers D1 b, D2 a, D3, D4 a, D6; facts `phase3/facts/code-server.md`). Add-on
+`woow_ha_code_server` → app `woow-code-server`: the container `code-server` (`keep-id:uid=1000`) with the volumes
+`woow-code-server-pi-data` (at `/data/pi-agent`), `woow-code-server-ide` (at `/home/coder/.local/share/code-server/User`)
+and `woow-code-server-extensions` (at `…/code-server/extensions`), and, when the catalog lists it (D1 b), the workspace
+folder bound at `/workspace` (the bind's path below the owner's home). Revised 2026-11-25 (HAOS parity):
+the catalog entry's additional volumes or host folders are carried as they are (item 8). A missing container or one of
+the three required volumes, or a catalog entry with a database, stops only code-server. No database server.
+1. Versions (D6, revised): the add-on version maps to the four programs that write the data (code-server, Pi, Claude Code,
+   Codex; 0.1.6–0.1.15 all code-server 4.139.1, Pi 0.99.1, Claude Code 2.1.285, Codex 0.167.0 from 0.1.8, none before).
+   `--version` of each runs in one throwaway container of the live image (entrypoint `/bin/sh`, network none); an image
+   absent here is downloaded first as the owner (`hatarget.ensure_image`). None of these version results stops the import:
+   an unknown add-on version (`codeserver.addon-unknown`, CS-01), unreadable program versions
+   (`codeserver.target-versions-unknown`, items: the programs, CS-02), a version command that did not run
+   (`codeserver.version-command-failed`, CS-07) and differing programs (`codeserver.versions-differ`, items:
+   `<program>（HA x, 這台 y）`, CS-03) are notices. A program the add-on did not ship is not compared.
+2. One pass over `data/pi-agent/**`, `data/vscode/User/**` and `data/vscode/extensions/**`; never handed out (NEVER_READ or
+   excluded from the walk): `options.json`, `pi-agent/{auth.json, mcp-auth.json, claude/.credentials.json,
+   codex/auth.json}`, `.ssh/`, `git/`, `.zsh_history`, the legacy `claude/`, `woow-connectors-primary/`,
+   `pi-agent/{connectors, connectors-primary, omnigent}/`. `share.tar.gz` is read only for `projects/**` and only when
+   the catalog lists the workspace.
+3. Moved, HA's entry wins (the IDE volume): `keybindings.json`, `tasks.json`, `mcp.json`, `chatLanguageModels.json`,
+   `snippets/`, `globalStorage/` (without `globalStorage/woowtech.{paseo,omnigent}`, the connector extensions' state, D3),
+   `History/`, `profiles/`, `prompts/`; `settings.json` merged (JSON with comments and trailing commas accepted, written
+   back as plain JSON): this device's settings, HA's keys over them without the HA-only values that break here
+   (`terminal.integrated.defaultProfile.linux` `zsh`, zsh terminal profiles, the Prettier default formatter,
+   `[home-assistant]`/`[esphome]` blocks and `files.associations` to those languages), this device's
+   `security.workspace.trust.*` and `extensions.autoUpdate`, and `acp.agents` = this device's agents plus HA's other
+   ones. Left: `workspaceStorage/`, `caches/`, `machineid`, `*ExtensionsCache.json`, `sync/`, `logs/`.
+4. Moved, this device's entry wins (the agents' volume): `sessions/`, `skills/` (a folder `skills/<name>` that this device
+   has stays whole, HA's is skipped and named), `claude/projects/`, `claude/file-history/`, `codex/sessions/`,
+   `codex/archived_sessions/`, `settings.json`, `models.json`, `codex/session_index.jsonl`,
+   `home/.pi/pi-acp/session-map.json`; `claude/history.jsonl` merged by `timestamp` (each line once; this device's file
+   stays when either side is not JSON lines or their merged content exceeds 64 MiB); `shared/mcp.json` merged (D4 a:
+   HA's servers are added; the same name stays this device's; servers with `headers`/`env` and HA-only hosts in their
+   URLs are named for review, never their values). Left: the logins (D2 a) and `claude/.claude.json`,
+   `codex/config.toml`, `mcp.json`, `trust.json`,
+   `.woow-pi-store`, `*.before-*`, `bin/`, `npm-global/` (programs), every other file below `claude/`, `codex/`, `home/`,
+   `shared/` (caches, locks, state databases); another top-level name with files in it is left with a warning naming it.
+5. Extensions: HA's extension folders listed in its `extensions.json`, except the connector VSIX (`woowtech.*`), the ids
+   this device has, `targetPlatform` for another processor and folders with a program for another processor; this
+   device's `extensions.json` gains them with `location.path` below this device's folder (an unreadable list moves none).
+6. Moved SQLite files (header `SQLite format 3`) are staged with their `-wal`/`-journal` (never `-shm`) and quick-checked by
+   the sandboxed child (`hasqlite`); a damaged one stays in HA (notice `codeserver.databases-skipped`). A child that does
+   not finish (timeout, no network cut, died) is started once more; then the databases in that batch do not move and are
+   one line to confirm, `codeserver.databases-unchecked` (items: their names, CS-12).
+7. Every moved member is owned like the live volume's top folder, permission bits without setuid/setgid; symlinks as link
+   entries when relative and inside their own tree (others skipped and counted: notice `codeserver.symlinks-skipped`).
+   Hard links to earlier moved files remain links (CS-10, CS-13). A link to a file that does not move because this
+   device's version wins, or it is otherwise not moved, becomes a separate copy (`Entry.copy_later`; auto
+   `codeserver.links-copied`), but default-deny applies: links to logins, accounts, device files, programs, connector
+   identities or unknown folders are left out and listed in `files.skipped` (kind `hardlink`); only files that move anyway
+   and package-manager caches below `home/` can be copied. A hard link kept from this device's live export whose target
+   HA replaces gets its own content: a second pass makes the first link a file and the rest links to it
+   (`codeserver.kept-links-copied`, CS-15). A kept link whose target is not a regular file in the export is left out and
+   listed at conversion time (DESIGN B7). Each volume is completed from a live export while the app runs, retaining
+   live owners and modes; a folder both sides have keeps the live owner and mode. The export must be read to its end with
+   its two zero end blocks (`check_tar_end`; `tarfile` alone can accept a tar cut at a header). A failed read is retried
+   three times (`hatarget.retry`), then once with only the app's container that mounts it paused; it is started again in
+   `finally` and clean-up (`TempObjects.put_back_later`; auto `codeserver.service-paused`, items: container; CS-14). If
+   the read still fails, code-server stops and this device's data is unchanged. The workspace dir tar is the live folder
+   pack read the same way (CS-16) plus HA's `projects/**` in a new folder `ha-projects-<HA backup date>` (a suffix when
+   the name exists), owned like the live folder's root. Secrets (`code-server-config`), `woow-code-server.env` and units
+   are the live ones (packaging below). Test mode changes nothing of code-server (it runs no scheduled work).
+8. Additional catalog volumes and host folders are carried as they are (`hatarget.carry`; auto
+   `codeserver.extras-carried`, items: their names; CS-04). If the catalog names host folders other than just the
+   workspace folder, HA's workspace does not move: one line to confirm, `codeserver.workspace-not-moved` (items: those
+   folders, CS-05), checked before this device's data is read; the folders are carried and the customer is reminded to
+   copy HA's projects manually. A catalog entry with a database is `codeserver.target-has-database` (stop, CS-04).
+   No VS Code settings and no agent data in HA's backup is `codeserver.no-data` (stop, CS-08).
+9. Large settings (CS-11): `settings.json`, `shared/mcp.json` or `extensions.json` above 16 MiB (was 4), and
+   `claude/history.jsonl` above 64 MiB (was 32), are left out by `read_or_skip` and listed in `files.skipped` (kind
+   `large`); this device's file stays (`codeserver.files-kept` notices the other settings). If `extensions.json` is too
+   large, no HA extensions move (`codeserver.extensions-skipped`). An unreadable staged extension folder discovered only in
+   conversion (CS-17) leaves out only extensions (`extensions_unreadable`, reminder to reinstall; DESIGN B7: no line
+   in the check).
+
+**Batch 2: add-ons that are not moved** (page only). The Cloudflare Tunnel (`*_cloudflared`; facts `cf-tunnel.md` D1 a:
+its token, certificate and PaaS link belong to the tunnel it serves, and its routes are in options this engine never
+reads or in Cloudflare) and the WOOWTECH MCP admin add-ons (`*_woow_mcp_<product>`; facts `mcp-admin.md` verdict: their
+state is HA's credentials and URLs) stay `other_addons`. The HA backup page and the wizard's first step say for each
+what to do here: re-add every route on this device's tunnel with this device's services and re-link WOOW PaaS, then
+remove the routes from HA and stop HA's add-on; re-configure the product's MCP admin app here (this device's catalog
+name, or install it), stop HA's add-on and re-create the MCP connectors with this device's MCP address.
+
+**Batch 2: Nextcloud** (`woow-nextcloud-office` → `nextcloud`: data dirs `.local/share/nextcloud-office/{postgres,redis,
+html,data}`; facts `phase3/facts/nextcloud.md`, owner decisions D1-D5 applied with their recommended answers).
+1. Where the data is: the add-on member holds the PostgreSQL 16 cluster (`data/postgres`), `data/nextcloud/config/config.php` and the
+   app-store apps (`data/nextcloud/custom_apps/<id>`); the users' files are Nextcloud's `datadirectory` (default `/share/nextcloud`):
+   `/share/<p>` is read from the share folder member (`share.tar[.gz]`, only `<p>/**`), `/data/<p>` and `/config/<p>` from the add-on member
+   (never overlapping the add-on's own items); every folder name is accepted that a person can type (spaces, Chinese ...: no control
+   character, no `..`). Users' files that are NOT in the backup (no share folder: `nextcloud.no-share`; no data folder, or one without
+   its `.ncdata` marker, which may not have been mounted: `nextcloud.no-datadir`; a location no HA backup holds, a network mount or
+   /media: `nextcloud.datadir-elsewhere`) are no refusal (owner rule 3, HAOS parity): ONE line to confirm, whose item is the folder, then
+   the import goes on. The accounts, settings, calendars, contacts and shares move; the converted data folder is empty except for
+   Nextcloud's own `.htaccess`, a `.ncdata` marker made here and this device's Office cache; a reminder says to copy the files and run
+   `occ files:scan --all`; this device's own user files are in the restore's safety backup. A folder that is there but has no marker is not
+   moved (it is started again empty when the walk finds this out). Never read: `data/options.json`, HA's `apps.config.php`, Redis and
+   Collabora data, `config/**`, everything of the share folder outside the data directory.
+2. config.php is PHP code and is never run by the engine: a strict parser accepts what Nextcloud's var_export writes and, since the HAOS
+   parity work (NC-12), the other ways a hand-edited file writes a VALUE: a double-quoted text without a variable (`$` is never accepted
+   unescaped; escapes only `\n \r \t \\ \" \$`), a dot between texts, and the constants `PHP_EOL DIRECTORY_SEPARATOR PATH_SEPARATOR PHP_INT_SIZE
+   PHP_INT_MAX PHP_INT_MIN E_ERROR E_WARNING E_NOTICE E_DEPRECATED E_STRICT E_ALL`; a variable, a function call, another constant or another
+   escape is `nextcloud.config-unreadable` (a stop of Nextcloud only), a missing file `nextcloud.config-missing`. THIS device's config.php
+   that the strict parser cannot read is evaluated by this device's own PHP in its own container (`php -r`, read only; `nextcloud.live-config-php`
+   auto) and the output (`var_export`) is parsed strictly; when that fails too: `nextcloud.live-config-unreadable`. Versions: HA's `version`
+   (4 parts) must equal the live config.php's and its first three parts the live image's `NEXTCLOUD_VERSION` (NC-21, NC-11: stops that stay);
+   a `version` HA's file cannot give is taken from the add-on's version (`VERSIONS`, `nextcloud.version-unreadable` notice; an unknown add-on
+   version `version.addon-unknown` notice, another version `version.different` stop); HA in maintenance mode with the same version is a notice
+   (`nextcloud.maintenance-mode`; the merged file keeps this device's `maintenance`), with another or unknown version a stop
+   (`nextcloud.maintenance-upgrading`); not installed `nextcloud.not-installed` (stops Nextcloud only), `dbtype` pgsql, table prefix `oc_` on both
+   sides, no object storage stay stops. Server-side encryption (an `oc_appconfig` flag or `files_encryption` folders; owner decision D8/S5) is
+   one line to confirm, `nextcloud.server-side-encryption` (items `files_encryption`, `encryption_enabled`: "never tested here"), no refusal.
+   Symlinks in the data directory (`nextcloud.symlinks-skipped`) and `.htaccess` files below its top (`nextcloud.htaccess-skipped`: here the data
+   dir is inside Apache's web root with `AllowOverride All`) are left out and listed (one line to confirm each, every name in the key), the
+   other files move; a hard link to a file that is not moved (the updater's folder, the cached Collabora answers, an `.htaccess`) is copied as
+   a file (`nextcloud.hardlinks-copied` auto). What the reader leaves out of the add-on member and of the data directory (device files, FIFOs,
+   unusable names, too large files, unresolvable hard links) is the one line `files.skipped`.
+3. check: the cluster is streamed into a throwaway volume and opened by a throwaway PostgreSQL 16 exactly like Odoo's (§9 Odoo 1; the files
+   of an online backup are never streamed: `nextcloud.online-backup`); the database named by HA's `dbname` must hold Nextcloud's tables and
+   the root storage `local::<HA datadirectory>/` (lib/private/Files/Storage/Local.php `getId`; longer than 64 bytes → its md5), and no row may
+   already have an id this device's data directory needs. HA's PostgreSQL being NEWER than this device's is not asked (NC-32): the restore
+   tries and a refused restore says so (see 4). Every session in HA's cluster carries PGOPTIONS `-c search_path=pg_catalog`. HA's catalogs
+   are read first (`SHAPE_SQL`, extension members not counted). What it finds beyond Nextcloud's tables, sequences and indexes is split
+   (`shape_objects`): functions (procedures and aggregates included) and triggers are LEFT OUT, one line to confirm
+   `nextcloud.db-objects-skipped` names them (`函式 <schema>.<name>`, `觸發程序 <table>.<name>`, from `OBJECTS_SQL`, names only) and the
+   tables of HA are read as before; any other kind (operator, type, rule, policy, event trigger, view or other relation kind, CHECK constraint,
+   generated column, inheritance, other custom objects, tablespace, a default that is neither a constant nor `nextval()`) stops Nextcloud
+   (`nextcloud.db-objects`) and HA's tables are not read at all. Known Memories identities select reviewed fixed definitions, rebuilt after the ordinary hostile-object gate.
+   The original inventory must be complete and contain distinct exact identities; unknown names require confirmation and
+   changed unknown names reconfirm. `ha_nextcloud_memories` uses definitions reviewed against vendor release v11.1.4,
+   commit `3ec040e55d2cfc8bd0e339c6338946d1513d15ae`, not archive program text. The plain loader creates the pair; target
+   superuser ownership is handed over afterward. Exact body, owner, trusted language, invoker rights, search path, trigger
+   conditions, integer table types, row counts (including oc_memories) and residual shape are checked. The notice is
+   `nextcloud.db-objects-known`; converted `rebuilt_apps` replaces the old manual-repair reminder. Only after success does
+   config.php set the system flag `memories.db.triggers.fcu`; it is not an oc_appconfig value. Existing data/role/password,
+   extension/grant/storage/Office comparisons remain. Unknown omitted programs still produce `left_out_others` reminders.
+   An extension HA's database uses that this device's database image offers (`pg_available_extensions`
+   of the live database) is enabled before the data goes in (`nextcloud.extension-enabled` auto), one it does not offer stops
+   (`nextcloud.extension-missing`); other schemas than `public` are one line to confirm (`nextcloud.schemas-skipped`, the dump is then
+   `pg_dump -n public`). Counts, per-user file lists, Warnings: as before.
+   NC-09: a failed combined query recovers required role/installed-extension lists independently from pg_authid and
+   pg_extension, retaining readable Office settings and the same final equality checks (`nextcloud.catalog-recovered`,
+   notice). pg_available_extensions is availability information, never the installed baseline. Fundamentally unreadable
+   authoritative catalogs stop before reading HA data with an explicit reason; unknown values are not empty baselines.
+4. convert: `pg_dump -Fc`; a NEW cluster from the live database image, environment and secret; the live config.php's `dbuser` role with the
+   LIVE attributes and password verifier (stdin, masked) and the grants Nextcloud's installer gives it. A role that is not in the live database,
+   or has no usable verifier, is made from `dbuser` and `dbpassword` of config.php with a SCRAM-SHA-256 verifier computed here (the password
+   itself is in no statement; `nextcloud.db-role-created` auto; none usable: `nextcloud.db-role-unusable` stop). A SUPERUSER role (NC-08,
+   `nextcloud.db-role-hand-over` auto) is never the role that loads HA's data: the plain role `woowbk_load` (LOGIN NOSUPERUSER, CONNECT and CREATE on
+   public) restores the dump and runs the fix-ups and the reads of HA's tables, then `REASSIGN OWNED BY woowbk_load TO <role>; DROP OWNED BY
+   woowbk_load; DROP ROLE woowbk_load` (as the cluster's superuser, pinned) before the catalogs are verified: the role must have exactly this
+   device's attributes (superuser included) and own every table. The live extensions (`vector`) and the enabled ones of 3 are created first;
+   the dump is restored (`--no-owner --no-acl --exit-on-error --single-transaction`, no EXTENSION entries, superuser-only objects refused) after
+   its `pg_restore -l` list was cross-checked against its own header (`TOC Entries:`; pg-stdin follow-up F4) and written into the container with
+   the retry note in the job log (F3); the list leaves out the entries of the confirmed kinds (FUNCTION, PROCEDURE, AGGREGATE, TRIGGER: what pg_proc holds, and triggers) and the comments on them
+   (`skip_toc`), and the restore is refused before anything is restored when it still holds a kind outside TABLE, TABLE DATA, SEQUENCE, SEQUENCE
+   SET, SEQUENCE OWNED BY, DEFAULT, CONSTRAINT, FK CONSTRAINT, INDEX, COMMENT, ACL, EXTENSION (unknown kinds included: the second gate, NC-45). A
+   restore PostgreSQL refuses says why (NC-32, NC-46): HA's major newer than this device's means "update this device's database first"; nothing is
+   half done. From the restore on every session in the new cluster is pinned the same way; its superuser reads catalogs only (the `SHAPE_SQL`
+   refusal again: NOTHING foreign may be left, now also any per-role or per-database setting) and every statement on HA's tables runs as the
+   Nextcloud role (or the plain loader of a superuser role). Fix-ups in one transaction: the storage ids as before; `richdocuments` and
+   `core.backgroundjobs_mode` as the live database has them (when they cannot be read: `nextcloud.office-settings-unread` notice, HA's stay and
+   are not compared); PostgreSQL settings of this device that the new cluster refuses are reset (or all of them: `RESET ALL`) with
+   `nextcloud.settings-not-carried` notice, the data is untouched. A stopped Nextcloud, database or Redis of this device is started to be read
+   and put back (`target.service-started` auto, `hatarget.ensure_running`; one that cannot be: `target.service-failed` stop).
+5. config.php = the live one (base: URLs, trusted domains, proxies, database credentials, data directory, caches, mail,
+   maintenance window) + HA's `instanceid`, `passwordsalt`, `secret` + HA's `twofactor_enforced*` and
+   `app_install_overwrite` (D1; the three two-factor keys are one policy, MandatoryTwoFactor.php: all of HA's, or all of
+   the live ones when the live enforcement is stricter: HA enforces nothing, or leaves someone out where the live one is
+   for everybody) + a new `data-fingerprint` (md5 of the time, as `occ maintenance:data-fingerprint` writes it; the
+   package's own restore runs that command, scripts/restore.sh:76: sync clients then treat the server as restored and
+   keep local files it lacks), written in Nextcloud's format with the live file's owner and mode; before packaging the
+   live image's PHP (throwaway container, network none, read-only root, the file on stdin) must lint it and return
+   exactly the merged values. html dir = the live pack without `config/config.php` and without the custom apps HA
+   brings, plus the merged file and HA's custom apps (D2; owner www-data of the live image); data dir = HA's data
+   directory (owner www-data, HA's modes, top folder like the live one; the web updater's own `updater-<instanceid>`
+   skipped, previews kept: D5) with
+   Nextcloud's own `.htaccess` (Setup.php `protectDataDirectory`, deny all) written at its top instead of HA's, whether
+   HA had one or not (HA's data directory is outside its web root, here it is inside); Redis dir = its top folder only,
+   owned like the live one. Every dir tar is checked like a restore reads it.
+6. Notes and reminders: the users, files, shares, calendars, contacts and app passwords become HA's; the URL, database
+   password, mail and Office settings stay; HA's custom apps; stop the HA add-on for good (same instance identity); log in
+   with HA's accounts and point sync, CalDAV and CardDAV clients to this device's URL; the new data fingerprint (sync
+   clients keep their local files); public links and federated IDs
+   still name HA; mail settings did not move; a file scan when HA's file lists and files differ; Office not enabled on HA;
+   the MCP lines for `nextcloud-mcp-admin` and
+   「Woow Nextcloud MCP Server」 (`engine_mcp_lines`). Test mode changes nothing else for Nextcloud.
+
+**LiteLLM** (`woow-litellm` → `litellm`: one `postgres` item `main`, container `litellm-postgres`, database and user
+`litellm`; the proxy container `litellm` reads secret `litellm-salt-key` as `LITELLM_SALT_KEY`; owner decision 2026-11-23).
+Revised 2026-11-25 (HAOS parity, lane LITELLM; every finding is a `HaIssue`, ids in `ha_litellm.ISSUES`): the entry is
+one single-database `postgres` item (`catalog-suggest` proposes it for a LiteLLM that is not installed, §4) or, when it has
+no `postgres` item, the cold mode: the database container's data volume is one of the entry's `volumes` and the converted
+backup carries the new cluster itself (cleanly shut down, `pg_controldata` says so) as that volume instead of a dump
+(L-03); every other volume and host folder of the entry is carried as it is (`litellm.extras-carried`, `auto`). The one
+unsupported shapes are two database items or no usable database storage: `litellm.layout-unsupported` (`stop`, says what to choose).
+A scope `instance` entry carries the complete device snapshot with the converted `litellm` DB. Its normalized maintenance
+`postgres` is separate from the app DB; the marked HA restore follows the selective-instance rule below. The proxy is the container whose Quadlet
+file mounts `litellm-salt-key` as `LITELLM_SALT_KEY`, whatever it is called (L-04: `litellm.target-missing` when there is
+none). Its `verify` may hold a `postgres-digest` (the draft adds `db-main`):
+the converted backup records none, so the preflight warns (`digests-missing`) and the import reports `match: null`,
+while the safety backup records it and both rollbacks compare it before the app starts.
+1. Versions (L-31..L-34, L-45: no version number is a gate): the add-on version is mapped to LiteLLM's by a table
+   (0.1.15 → 1.104.0) that only informs (`version.addon-unknown`, `notice`); this device's version is read in the
+   running proxy (`podman exec <proxy>`, read only), else from its image in a throwaway container, and when it cannot
+   be read that is `version.target-unknown` (`notice`); both known and different is `litellm.version-differs`
+   (`notice`); HA's `state.json` `litellm_version` is shown, never compared. What decides is the data: HA's finished
+   Prisma migrations must be exactly the live database's (`litellm.migrations-differ`, `stop`), then the data shape (3).
+   A database with no finished migration yet (the proxy never ran) gets the proxy's first start, waited for and put back
+   (L-08; `litellm.target-migrations` when it stays unreadable). HA's PostgreSQL is 18 (`PG_VERSION`, read by its first
+   64 bytes, L-57), this device's may be any major (L-20, L-53: the new cluster's own answer is the version): the only
+   importer that moves data to an older major, and only as rows (3).
+2. One pass: `data/postgres/**` through `ha_odoo.PgSink` (configuration replaced, recovery/pid files dropped; a symlink
+   such as a tablespace refuses), `data/secrets/salt_key` (one small regular file, `^[A-Za-z0-9_-]{16,256}$` after
+   strip, masked at once), `data/woow/state.json`; never `options.json`, the master key, the UI or database password
+   files, the pre-upgrade dumps. HA's cluster runs in the official PostgreSQL 18.7 image pinned by content
+   (`PG18_IDS`; else `PG18_PINNED` is pulled by digest and must give one of them), hardened like Odoo's (read-only root,
+   network none, noexec data volume at the image's VOLUME path, every library/command setting overridden, event
+   triggers off). HA's per-database and per-role settings beat the command line, so every session the engine opens
+   there sends its own client options, which beat them (`HA_SESSION_OPTIONS`; the superuser's also
+   `HA_SUPERUSER_OPTIONS`): names resolve in `pg_catalog` only, the rows are exported in fixed formats like pg_dump's,
+   no preload library, no event trigger (review SR-1..SR-3); `public._prisma_migrations` is read only as an ordinary
+   table; `backup_label` and `tablespace_map` never reach the volume and refuse (a cold backup has neither; SR-4). The salt
+   must be the one HA's database is bound to (`woow_platform.settings` and the `woow.meta` fingerprint, read by a role
+   without privileges): else `incompatible` -- nothing stored could be decrypted. HA's database must be UTF8
+   (`litellm.encoding`, `stop`) and its data shape (columns, sequences, types of `public` and `woow_platform`) must equal
+   the live database's (`litellm.schema-differs`, `stop`, names the tables; also what is missing, L-21). What it has
+   beyond is never moved and is named: other schemas (`litellm.schemas-skipped`, `confirm`, L-21), objects only a
+   superuser creates (`litellm.superuser-objects`, `confirm`, L-23: they only ever exist inside the throwaway cluster, no
+   statement of the conversion creates or calls one in the new cluster), large objects (`litellm.large-objects`,
+   `notice`, L-24); HA's own `woow` schema is never read beyond the salt fingerprint (L-22). Every session
+   that reads the columns or the schema signature -- HA's cluster, the live database, the schema snapshot and the new
+   cluster -- pins `search_path = pg_catalog` in the query itself (`PIN_SEARCH_PATH`), so type names and expressions
+   render alike on every side (an enum column is `public."JobStatus"` everywhere; without the pin HA's pg_catalog-only
+   sessions and this device's default ones differed, real attempt 7).
+3. Convert: this device's schema is captured like Omnigent's (one exported snapshot of the live database: migrations,
+   columns line, `pg_dump --schema-only`; the live signature before == after == the snapshot's columns, else
+   `incompatible` and nothing changed); a NEW cluster from the live `litellm-postgres` image, environment and secret
+   mount gets its pre-data section; every trusted table's rows are copied as `COPY "<schema>"."<table>" (<trusted
+   columns>) TO STDOUT` in HA's cluster and as one script per table in the new one by `woowbk_restore` (INSERT and
+   sequence values only): `BEGIN; COPY ... FROM STDIN;` the rows `\.` `COMMIT;` and an end mark psql prints only after it
+   has read and run all of it, which must end psql's output (pg-stdin follow-up F2: a tail that did not arrive, a cut
+   last field included, never commits and stops this app); names are quoted whatever they hold and there is no limit on
+   their number (L-10..L-12); a snapshot of this device's schema that came out wrong is taken again, three tries
+   (L-36, L-37, L-39, L-54, L-55); extension versions of the new cluster that differ from this device's are named
+   (`litellm.extension-versions`, `auto`, L-40); each trusted sequence value is set by it, then the post-data section (HA's rows must satisfy this
+   device's constraints). The new cluster's signature equals the live one after the post-data section and after the
+   last write, it holds only its bootstrap superuser (no role or database setting, ALTER SYSTEM value or large object),
+   every table's count and the migrations equal HA's, and the salt row it got equals the salt that moves. Its
+   `pg_dump -Fc` (read in full once) is `postgres/main.dump` (PostgreSQL 17); HA's salt is the item's
+   `secrets{litellm-salt-key}`. `test_mode` changes nothing for LiteLLM.
+4. What stays: the master key, UI password, database password and URL (the other four secrets, read live),
+   `config.yaml`, `litellm.env`, the Quadlet files. The restore's safety backup holds the old salt and database, so an
+   automatic rollback or a later restore of it puts both back. This device's virtual keys are replaced by HA's: the
+   check's `key_users` and a note/reminder name the other catalog apps whose declared config files or Quadlet files set
+   a LiteLLM key or address, whose networks LiteLLM's drop-in `local-agent-networks.conf` joins, or whose Pi agent
+   provider list (`models.json` in the volume a `.container` mounts at its `PI_CODING_AGENT_DIR`, default
+   `/data/pi-agent`: pi-web, Omnigent's runner; read as the owner, inside the owner's home only, only the verdict kept)
+   has a provider whose base URL is this device's LiteLLM (nothing else changes).
+   HA's stored proxy settings (`LiteLLM_Config`) move with the rows and take effect here (`store_model_in_db: true`:
+   stored environment variables are decrypted with the moved salt into the proxy's environment, callbacks are loaded):
+   the check warns and a note names the stored environment variable names and callback names (never a value; review
+   SR-5). Stored settings LiteLLM imports and calls as code are NOT moved (L-13, L-14, L-47, L-49; SR-6; LiteLLM's
+   `get_instance_fn` imports any dotted path): one line to confirm names them (`litellm.hooks-removed`, `confirm`), the new
+   cluster's own query names them again and the confirmed names must be the same (else `confirmation-required`), each
+   is taken out of the new cluster's `LiteLLM_Config` by its whole key or path (never a part of its value) and the same query
+   must then find none (else `job-failed`, nothing packed); the settings are: `post_call_rules`, the `general_settings` `custom_*` hooks, a callback whose name has a dot, a string
+   `callbacks` value, `custom_provider_map[].custom_handler`, a dotted guardrail callback or type (`guardrails` v1 and
+   v2 shapes), a dotted `pass_through_endpoints[].target` that is not `scheme://…`, `litellm_jwtauth.custom_validate`,
+   `router_settings.plugins` and a `key_management_settings.custom_secret_manager` (the vendor's own DB-overlay list
+   plus the router plugins and the custom secret manager file it misses); a dotted callback is found by the query
+   itself, however many plain names come before it. The line names them (labels only) and the conversion
+   stops before reading HA's rows or capturing this device's schema unless it was confirmed. An answer that cannot be read
+   completely (over the output limit, a timeout, not an object) is asked twice; what stays unreadable is not moved:
+   `LiteLLM_Config` stays empty in the new cluster and `litellm.config-unreadable` (`confirm`) says so. Because HA's data
+   directory controls its throwaway cluster's catalog, the conversion asks the same question again in the new cluster after
+   HA's rows are loaded (this device's image and schema, HA's data only as rows); the import note names what that answer
+   found (SR-8). Other schemas in THIS device's database (L-38, owner decision S4) are one line to confirm
+   (`litellm.other-schemas`, found by the check) and the converted backup's app section carries `keep_safety: true`
+   (`adapter.import_manifest(..., keep_safety=True)`; needs `haimport.ITEM_KEYS` to hand it on, else the app stops with
+   `litellm.keep-unsupported`): the restore writes its pre-restore backup as a kept copy (kept.py).
 
 **Packaging**: per app `adapter.import_manifest` adds the live non-data items exactly as a backup reads them (images
 list, secrets, config files, Quadlet files, `catalog_entry`, `catalog_sha256`), so `match_items` finds every item and
-the restore's settings check says `same`; then `flows._package` (§8 "Home Assistant import jobs").
+the restore's settings check says `same`; then `flows._package` (§8 "Home Assistant import jobs"). A conversion's
+`secrets{name: file}` (LiteLLM's salt) replaces that one live secret; it must be declared by the catalog and be one
+regular file of 1..511999 bytes.
+
+**Batch 2: OpenDesign** (branch `feat/ha-import-opendesign-20261123`; `ha_opendesign.py`; owner decision 2026-11-23
+「決定2 A」; facts `phase3/facts/opendesign.md`). Add-on `woow_ha_opendesign` (its slug holds `_`: the member is found by
+the slug after the repository prefix and must carry `system.slug` `woow_ha_opendesign`) → app `open-design`: volumes
+`open-design_open_design_data` (at `/app/.od` of the `open-design` container, `keep-id`) and `open-design_mcp_data`
+(at `/data/mcp`); no database server (the daemon keeps `app.sqlite`, WAL mode, and plain files).
+1. Versions (revised): the data has no version stamp, so the add-on version maps to the WoowTech fork revision of its
+   OpenDesign core (0.2.15 → OpenDesign 0.24.1, fork `05b23f5a5259d4f2c22e5c6e3eb92ce9103ed34a`) and the live
+   image's `io.woow.opendesign.source-revision` label says what this device has (a shorter label must prefix the known
+   revision); `OD_APP_VERSION` is shown. An unknown add-on version (`opendesign.core-unknown`, OP-01), older or newer,
+   is a notice: the daemon can migrate `app.sqlite`
+   forward, and the restore's health check and automatic rollback are the safety net. A missing or unreadable image label
+   (`opendesign.target-core-unknown`, OP-02/OP-05) is also a notice. When both revisions are known and different,
+   `opendesign.core-different` still stops this app (OP-03; installing HA's core is wave 2). If the live image is absent,
+   `hacommon.image_labels` downloads it first via `hatarget.ensure_image`; a missing locally built `localhost/...` image
+   cannot be downloaded and stops this app with an explanation. A Quadlet without `Image=` still stops it.
+2. One pass over `data/opendesign/**` (never `data/options.json`; `data/mcp/**` is excluded from the walk, including as a
+   hard-link target). Moved (owner decisions O4, O5 =
+   the facts' recommended answers): `app.sqlite` with `-wal`/`-journal` (never `-shm`), `projects/ runs/ artifacts/
+   chat-artifact-blobs/ critique-artifacts/ design-systems/ design-templates/ brands/ library/ memory/ skills/ plugins/
+   connectors/`, `mcp-config.json` (every `/data/opendesign` path in its strings remapped to `/app/.od`; the entries
+   this device's integrations write themselves, `woow-paseo` of the Paseo runtime, are never taken from HA: this
+   device's entry stays, O2),
+   `mcp-tokens.json`, `mcp-oauth-clients.json`, `media-config.json`, `app-config.json` (HA's preferences with this
+   device's `installationId`, `agentCliEnv`, `agentCliEnvIntent`; project locations and recent folders below
+   `/data/opendesign` remapped, others dropped with a warning), and HA's `shared/workspaces/**`, `shared/skills/**`
+   copied inert. Left out: `home/` (agent logins, O1), `paseo/`, `integrations/` (Paseo pairing and Omnigent host
+   identity, O2), `installation.json`, `diagnostics/`, `od-next-run-inputs/`, `od-next-task-inputs/`, `agent-runtime/`,
+   `export-render/`, `export-pdf/`, `credentials`, `.backup/`, `shared/mcp`, `shared/plugins`. No OpenDesign folder is
+   `opendesign.no-folder` and no `app.sqlite` is `opendesign.no-database` (stops of this app only, with actions). Unknown
+   top-level entries holding anything but directories are one line to confirm, `opendesign.unknown-entries` (items:
+   their names, at most 2000 tracked; OP-10), and stay in HA. Device files, FIFOs, names the reader cannot hand out,
+   unresolved hard links and files above the limit are one `files.skipped` line. `app-config.json` and `mcp-config.json`
+   above 16 MiB (was 4; OP-13) are left out by `read_or_skip` and listed there; this device's own file stays (notice
+   `opendesign.config-kept`; for `mcp-config.json` its whole file stays). Every moved member is owned like the live
+   volume's top folder, permission bits without setuid/setgid; relative symlinks inside the tree remain links (others
+   skipped and counted). Hard links to earlier moved files remain links; a hard link to a file that does not move is
+   copied as content (OP-11; auto `opendesign.links-copied`) only for files that move anyway or package-manager caches
+   below `home/`. Default-deny leaves out links to logins, Paseo pairing, Omnigent identity, rewritten preferences or
+   unknown folders and lists them in `files.skipped`. Warnings: programs for another processor in the moved trees,
+   skipped symlinks, HA-only hosts in the moved settings, projects imported from a folder
+   (`metadata_json.baseDir`; they will not open here), dropped preferences, active routines (they run here).
+3. The sandboxed child (`hasqlite`) opens `app.sqlite` with its WAL: `quick_check`, the counts of `projects`,
+   `conversations`, `messages`, `routines`, the folder projects and the active routines (fixed queries
+   `opendesign.project_folders`, `opendesign.routines_active`); a damaged database (`opendesign.database-damaged`) or one
+   without `projects` (`opendesign.database-not-opendesign`) stops this app. A child that does not finish is started once
+   more (OP-14); if it still cannot finish, `opendesign.database-unreadable` stops only this app.
+4. `open-design_open_design_data` from scratch: HA's moved tree, plus from a live export of the volume (read while the
+   daemon runs, like Odoo's web data; not a cold snapshot) this device's `home/`, `paseo/`, `integrations/`,
+   `installation.json`, `export-render/`, `export-pdf/` (and its `app-config.json` when HA has none that can be used)
+   and its whole `mcp-config.json` when HA's is too large, with their live owners. Every live export is read to its end
+   and must have its two zero end blocks; a failed read is retried three times, then once with only the app's own
+   containers that mount it paused and started again (OP-15; auto `opendesign.service-paused`). A kept hard link to a
+   replaced file gets its own original content (OP-16; auto `opendesign.kept-links-copied`). `open-design_mcp_data`:
+   the live export read the same way, unchanged (O3: this device's MCP token and tool grants stay). Secrets
+   (`open-design-api-token`, the htpasswd), `open-design.env`, nginx files and units are the live ones (packaging below).
+   Test mode changes nothing of OpenDesign (its routines are not paused; the reminder says so).
+
+Evidence for the OpenDesign/code-server parity lane (2026-11-25): checks and conversion used simulated Podman,
+systemctl, owner runner and catalog; the two real x86 batch-2 backups were inspected read-only. No device import ran.
 
 ## 10. Security rules (reviewers will check each)
 
 1. Helper refuses to run unless `euid == 0`; entrypoint checks its library dir is root-owned and
    not group/world-writable before importing.
-2. No `shell=True`; fixed argv; validated names; sanitized env (`PATH`, `LANG=C.UTF-8`).
+2. No `shell=True`; fixed argv; validated names; sanitized env (`PATH`, `LANG=C.UTF-8`). Podman is `/usr/bin/podman`, else
+   `/usr/local/bin/podman` (an upstream install), chosen once: a root-owned regular file nobody else may write, below
+   directories only root may write.
 3. Owner operations via `runuser -u <owner> --` with `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`;
    root never opens paths inside an owner's home.
 4. Secrets/keys never in argv, environment, logs, job records or error messages.
@@ -1864,9 +3111,13 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
    successful or partial scheduled run. Turning the schedule on while 預設加密備份 is on needs the device key and a
    confirmed emergency kit. Every settings change, run, wait, skip, missed slot, result and deletion is journaled. The
    installer names only `woowtech-cockpit-backup-schedule.timer` in systemctl argv, only on the live root, never runs
-   `systemd-analyze verify`, and the unit names stay outside `woowtech-backup-*`.
+   `systemd-analyze verify`, and runs `apt-get` only with the fixed argv and the four package names of section 3,
+   and the unit names stay outside `woowtech-backup-*`.
 18. Home Assistant backups (branch feat/ha-import) are hostile input read only by the strict readers of §5: nothing of
-   them is ever extracted with tarfile or GNU tar, every name and type is checked before use, memory stays bounded
+   them is ever extracted with tarfile or GNU tar, every name and type is checked before use (HAOS parity 2026-11-25:
+   single entries that cannot be moved are skipped and listed; absolute names, `..`, duplicates, entries below links, sparse
+   files, global headers, unknown types, failed checksums and authentication still stop the app, device nodes are never
+   created, a hard link never gives away a file of NEVER_READ, `addon.json` or an excluded area), memory stays bounded
    (one ~1 MiB chunk, budgets on members and bytes, bounded decompression). The HA key travels only in the stdin field
    `key` and the job key file, is masked in every job log line, progress and error message, and never appears in argv,
    the environment, records or replies. addon.json, `data/options.json`, `data/odoo.conf` and
@@ -1883,6 +3134,31 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
    the role `odoo`, never as a superuser, an entry only a superuser can create refused); HA's n8n SQLite is read only by
    a child that dropped to the account nobody on a copy of its own, never by the job process; symlinks below `nodes/`
    may climb (`..`) only before their names; a disk running full or a cancel stops a container step within seconds.
+   Batch 1: every SQLite file of an HA backup (and the copy of the live Headscale database) is opened only by
+   `hasqlite`'s child (nobody, chroot, no network, limits, defensive, ordinary tables, fixed statements). Virtual tables
+   stop before integrity checks except Hermes's reviewed FTS layouts and Headscale's `rebuild_from=live.sqlite` on
+   `ha.sqlite`/`original.sqlite`. In the latter case, the child's private copy is rebuilt from this device's ordinary
+   table/index DDL; only corresponding ordinary rows are read, with strict UTF-8, equal column layouts, and exact
+   returned values/types. Row identities, autoincrement sequences and user_version are retained. No archived DDL,
+   virtual module, shadow-table contents, trigger or view is executed or carried over; original object names remain
+   in the check for confirmation. Incompatible ordinary data or an untrusted target layout still stops Headscale.
+   The child's other writes are Headscale's checked extra-object cleanup, API keys and policy rows on a database
+   without triggers or views. What it wrote is copied out with
+   O_NOFOLLOW as a regular file with one link; Omnigent's HA data is loaded into this device's own schema (B1-01: HA's
+   DDL, defaults, checks and domains never run; only its table data and sequence values, by a role without
+   privileges, each entry naming a trusted table once; the new cluster's schema and contents audited); HA's EMQX data is opened by the live image without a
+   network, with a read-only root and a `noexec` data volume, its cookie, generated configs, plugins and patches never
+   staged; an absolute symlink is handed out only below an allowed prefix with a clean target and stays a link entry;
+   a hard link only to an earlier file of the same tree that moves; the HA-side secrets of the new add-ons are never
+   read, and Omnigent's account hashes, Headscale's Noise key and Hermes's `.env` values are masked as soon as they are
+   read.
+19. The root commands the HAOS parity work added are `loginctl enable-linger <owner>` (lane F3, `OwnerRunner.ensure_user_manager`) and
+   `usermod --add-subuids/--add-subgids <range> <owner>` with `cat /etc/subuid` and `cat /etc/subgid` to read the tables (lane RESTORE,
+   `OwnerRunner.widen_subids`, §9 "Owner ids outside the account's range": only for the one line the customer confirmed). Each has a fixed
+   argv[0] (`podman.LOGINCTL`, `podman.USERMOD`, `podman.CAT`), an owner name that `OwnerRunner` has checked with `OWNER_RE` (never `root`),
+   a sanitized environment (`ROOT_ENV`), a time limit (60 seconds for `loginctl` and `usermod`) and a bounded output; `loginctl` runs only
+   for a runner made with the real executor. A failed command's message holds only a sentence of `podman.REASONS` or the command's
+   name and exit code, never what it printed.
 
 ## 11. UI (`backup/`) requirements
 
@@ -2005,6 +3281,15 @@ the restore's settings check says `same`; then `flows._package` (§8 "Home Assis
 * Restore wizard: 選擇檔案 → 上傳 → 金鑰（only if `key-required`） → 預檢 → 確認（explicit checkbox,
   lists affected apps, downtime, safety backup; a second checkbox for an unauthenticated upload） → 進度 → 結果（health,
   downtime, data verification table).
+* **HA import with one confirmation (2026-11-25, HAOS parity; `backup/backup.js`).** `#/ha/<id>` goes 選擇應用 → 金鑰 (only when a selected add-on, or the share folder it reads, is encrypted) → 檢查 → 結果與確認 → 匯入.
+  The check result decides the flow: `ha_check.schema === 2` runs this one; a result without it (an older engine, which would refuse the new fields and commands) keeps the two steps 結果與選項 → 轉換 → 還原 and is never sent `choices`, `acknowledged` or `ha-import-start`; there too only the apps that pass are converted (UI-14, UI-15).
+  * 結果與確認: a line 「可以匯入 N 個，不能匯入 M 個」 (an app the check has no result for counts as one that cannot); one card per app with its versions (informing only), its `stop` lines with `action` (the app is left out; the others go on), `choices` (Odoo database: only a database with a stop of its own is disabled, the only one that can move is chosen already; `addon` and `node` radios, then 重新檢查 sends `choices` of `ha-check-start`), `auto` lines under 「系統會自動做」 and `notice` lines under 「匯入後請留意」 (no tick for either). Every `confirm` line of the apps that will be imported (of an Odoo database: only the chosen one's) and of `shared`, in one list 「匯入前請確認」, headed by 「匯入會取代這台這 N 個應用現在的資料。匯入前會自動各做一份備份，失敗會自動退回。」 and, for Odoo with several databases, the databases that stay on HA (S6); ONE checkbox 「我了解上面列的事，開始匯入」 (`aria-describedby` the list) carries them all. The tick belongs to the lines as shown (a signature over id, database and key): a new check, another database or another name unticks it. Without it no start is possible. A `confirm` line without a valid key is shown but never sent (the app then stops with `confirmation-required`).
+  * 匯入 = `ha-import-start {ha_backup_id, apps (only the apps that can go), test_mode, then_restore, overwrite (with then_restore), confirm, request_id, acknowledged {app|_shared: [key of every confirm line shown]}, choices {app: {addon|database|node}}, check_job_id, key?}`; 「只轉換，之後再還原」 is the same with `then_restore: false`. A start that does not answer within its time is sent again with the same `request_id` (up to three times), the status is read in between, and then the page says that the job may be running (UI-22). `key_created` shows the 「已經自動建立加密金鑰」 notice until the key is saved (the key banner stays while `status.key.kit_confirmed` is not true); `confirmation-required` asks for a new check, `key-required`/`wrong-key` go back to the key step (a key with a Tab or another control character is tried as it is; only an empty, too long or NUL-holding key stops the page, UI-12).
+  * The page follows the chain by `result.group.next_job_id` of the job it watches, one row per app of `params.chain.apps` from `result.group.results` / `params.chain.results` (已匯入, 已退回原狀, 沒有成功 (red with the safety backup when it says 需人工處理), 沒有匯入, 沒有開始, 已轉換成備份; waiting and working apps from `params.group`). 「取消匯入」 sends `job-cancel {job_id}`, 「做完這個應用就停止」 `job-cancel {job_id, after_this: true}`. Apps the check left out are rows 「沒有匯入」 with their reason. An app whose result is `skipped` with code `confirmation-required` offers 「重新檢查並確認這個應用」 (a new wizard for that app alone); one with a kept converted backup offers 「還原到這台…」 / 「重新還原這份備份…」.
+  * Every job of an import (`params.group`) shows the whole import in its job view (also after a reload, from `params.chain` and `result.group`), links to the next job and moves on to it by itself; the job view of a job that is not found says that the job may still be running and offers 「重試」 (X-JOB-03).
+  * The restore wizard lists `Preflight.apps[].issues` of each app (a failing app is not offered, the others go on, UI-25), repeats the `confirm` lines of the selected apps above the one confirmation of the restore and sends them as `restore-start.acknowledged`; `confirmation-required` checks again and says that what has to be confirmed changed.
+  * Kept copies (S4, 2026-11-25 evening): a `BackupMeta` with `kept: true` (`list`, `inspect`) gets the chip 保留的複本 and, while the device holds one, the list filter 「保留的複本」 (also found by that word in the search); its delete dialog says what is lost for good (the other databases of the database service, and no way back to before the import) instead of the general pre-restore words. The end of an import, the job view of an import whose `result.group` is over and the restore result of a converted backup (not when that restore is one step of an import: the import's own view shows it, once) list the copies. Per copy: the backup id (linked), date, size, encryption chips, the apps it belongs to and, from `RestoreResult.kept[app]` of the restore jobs the page followed (`databases`, `more`, `put_back`, `not_put_back[{name, reason}]`, `notes`), what is in it and what was put back or not; a copy is named by that result and/or by `from_ha.kept` of the converted backup (`HaImport.kept`, null again once the copy is deleted). 下載 is `download-info` as in the list (an encrypted copy has the menu for the unencrypted version), 刪除複本… is `delete {backup_id}` after the confirmation dialog and is off while any job is active; a copy no longer in `list` shows 「這份複本已經刪除。」. The warnings of an app's restore job (`result.warnings`, e.g. a paused service that did not start again) are listed under the app's row of the import result while that job's record is known to the page.
+  * Before the check the first step promises nothing about this device's key (it cannot know the engine): 「這台還沒有加密金鑰，轉換好的備份要用它加密。檢查完成後，這一頁會說明匯入時會自動建立一把，還是要先到「加密金鑰」設定。」; with `schema: 2` the 結果與確認 page says that the import makes the key (UI-17, D11); the page of an older engine keeps 轉換 off until the key is set up. The first step and the check page also say that the check may start stopped services (for example a database, `hatarget.ensure_running`) for its reading and puts them back when it ends, however it ends (H-c).
 * 預檢, the settings a backup carries (`settings` state `missing`, `unloadable` or `different`): 「審查備份中的應用設定」
   runs `catalog-install {entry}` (the preview) and shows its result (announced once; the notice is not a live alert),
   the file metadata, the impact on existing backups, warnings, the structured changes and text diff against installed

@@ -1,0 +1,29 @@
+{
+  "scope": "r8-scanner-fix-and-attempt3-recovery-preparation",
+  "guarded_tests": 26,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "blocked_calls": 0,
+  "shim_hits": 0,
+  "guard_log_sha256": "38771d3438ab5161ded0fcb97e93a16509fa9db1d880b9ab1a9ff251683443f8",
+  "rendered_scanner_sha256": "a29e16a2ac794092cb7c860ea727f17c779645ccf95fb1e5b26811ee156035b8",
+  "full_rendered_imports_and_parity_checked": true,
+  "required_regular_json_roots": 2,
+  "actual_postfix_device_scan_executed": false,
+  "attempt3_guard_sha256": "87341a26d5538f67ec9102ec172cd33eaf1e9a44f25dda9e6c7aecbc4b943aa3",
+  "attempt3_summary_sha256": "d52c2a6e399ee47806ab927ae68d4e14ca3001c39b83cdf05dc467d31a553457",
+  "protected_case_archives": 12,
+  "protected_ha_reused_never_owned": true,
+  "cookie_values_retained": false,
+  "old_cookie_coverage": false,
+  "new_recovery_receipt_executed": false,
+  "new_page_flow_executed": false,
+  "commercial_acceptance": "not-complete",
+  "files_sha256": {
+    "focus_acceptance_ui.py": "abd94dae7760e273649962bddf43575128f266991b6ca0f1430e2d03d7f5f39e",
+    "focus_acceptance_ui_page.mjs": "89b03ca2e1d97e6b2754280fe773e68d37cc43dff9eba23505265f9f52c3e1c9",
+    "focus_acceptance_ui_recovery.py": "082e7e52d34fdbdeaad23dd14f405fd1caf971c9c4f3e2cc01661ddb8396720c",
+    "focus_acceptance_ui_test.py": "ca66fbafa5a34a48b5634af664b01ecf32672deb872dc30aa7b332d87d9156b1"
+  }
+}

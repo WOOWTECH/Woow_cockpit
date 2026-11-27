@@ -1,0 +1,22 @@
+{
+ "attempt": "t5b-fix",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "-I t5b_plain_explicit.py fix suffix,control",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 1.0,
+ "exit_code": 1,
+ "harness_commit": "50eaf177e249b39d57170e6c8fa5ba0f5ea777f9",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": null,
+ "source_commit": "3ad74cacae3cc77ddb281eb166488ff5af0d15fb",
+ "started": "2026-11-24T13:55:48+0800",
+ "status_lines": [
+  "RuntimeError: labpodman volume failed rc=125: b'Error: volume with name woowbk-secrev-t5b-data already exists: volume already exists\\n'"
+ ],
+ "stdout_sha256": "f47936ea7ff7fd88d578e5ef6155b5dcda0ccc97c87fde107ef244b1b9eebea8",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

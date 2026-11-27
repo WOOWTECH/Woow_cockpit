@@ -1,0 +1,18 @@
+{
+  "existing_real_h2_proof": "tests/backup/evidence/parity-emqx-a-20261125/H2-lab-proof.md",
+  "head_commit": "ea5886c58ef2c6ab1f4e6a4d01908cc9dc4525de",
+  "head_files": {
+    "quadlet/emqx-entrance.container": "820cdfbca0d23c1d25c7bffb34825f70b76b63e9f65ed6a556a462d94cb007b9",
+    "quadlet/emqx.container": "c1a1c64c84e07bf5eb05d6f0abaf50c0747150aec5fcc548e2edc0704d894c3f",
+    "scripts/common.sh": "71dbfd2359ac992d3ce10a3e75b9f87f7f9cbce65f229b959f902747290458af",
+    "scripts/install.sh": "df78f5129c3e43b412bd584c946639c757867bb51204d145d6748de75dee9440",
+    "scripts/lib/quadlet-lib.sh": "1d50ecbbf77ed9da40fad5644d1731901003379a8eca6b0e3e87f0ab0b847018",
+    "scripts/upgrade.sh": "5bdbabd56534a20da663f0c88b60ee92cdc862b54d555d91f081147f35091521",
+    "tests/smoke.sh": "a14d0f562875027db0c2659f6bf9ba09412fe49aab6e1bf9b0ca50588c7a8e2b"
+  },
+  "installer_upgrader_executed": false,
+  "local_draft_commit": "5c748a6617cbb4847e8b4eca1e4b1f8841f4b864",
+  "local_draft_pushed_by_this_worker": false,
+  "new_smoke_executed": false,
+  "working_tracked_files_match_head": true
+}

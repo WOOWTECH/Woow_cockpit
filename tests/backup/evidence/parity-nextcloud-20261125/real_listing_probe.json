@@ -1,0 +1,26 @@
+{
+ "archive_settings_shown": 0,
+ "check_listing": 1131,
+ "entry_lines": 1131,
+ "header_toc_entries": 1136,
+ "held_back": 5,
+ "kinds": [
+  "ACL",
+  "COMMENT",
+  "CONSTRAINT",
+  "DEFAULT",
+  "EXTENSION",
+  "FK CONSTRAINT",
+  "INDEX",
+  "SEQUENCE",
+  "SEQUENCE OWNED BY",
+  "SEQUENCE SET",
+  "TABLE",
+  "TABLE DATA"
+ ],
+ "kinds_outside_the_allowed": [],
+ "lines": 1146,
+ "lines_not_entries_or_comments": 0,
+ "lines_when_programs_are_left_out": 1146,
+ "superuser_only_kinds": []
+}

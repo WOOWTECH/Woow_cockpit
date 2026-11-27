@@ -58,8 +58,11 @@ FORMAT = 1            # the v1 format number (`.woowbackup`)
 FORMAT_V2 = 2         # the native format (`.tar`)
 FORMATS = (FORMAT, FORMAT_V2)
 MAX_HEADER = 4096
-MAX_MANIFEST = 1024 * 1024
-MAX_MEMBERS = 4000
+# Bomb guards, not verdicts on the data (X-AR-03, HAOS parity 2026-11-25: HAOS has none). They were 1 MiB, 4,000 entries and
+# 2 TiB; now what no ordinary backup reaches. An extraction still checks the declared size of what it writes against the
+# free space (reserve included) before it writes anything, and every entry is read against its declared size and sha256.
+MAX_MANIFEST = 16 * 1024 * 1024
+MAX_MEMBERS = 40_000
 
 FAMILY = b'WOOWTECH-BACKUP/'
 AGE_MAGIC = b'age-encryption.org/v1\n'
@@ -151,7 +154,7 @@ class Limits:
     """Reader limits. `free_bytes(path) -> int` overrides statvfs (tests inject it)."""
     max_members: int = MAX_MEMBERS
     max_manifest: int = MAX_MANIFEST
-    max_total_bytes: int = 2 * 1024 ** 4
+    max_total_bytes: int = 16 * 1024 ** 4
     reserve_bytes: int = 512 * 1024 * 1024
     free_bytes: object = None
 
@@ -487,7 +490,18 @@ def _postgres_instance(item, w, app_id, ref):
     # `bootstrap_user` (2026-11-14, review F5): the instance's bootstrap superuser at backup time; optional (archives
     # written before it have none).
     _obj(item, w, ('id', 'scope', 'database', 'server_version', 'major', 'entry', 'databases', 'roles'),
-         ('bootstrap_user',))
+         ('bootstrap_user', 'ha_database', 'ha_access'))
+    if 'ha_database' in item:
+        _need(app_id in ('n8n', 'litellm'), f'{w}.ha_database invalid app')
+        _str(item['ha_database'], f'{w}.ha_database', PG_DB_RE, max_len=63)
+        _need(app_id != 'litellm' or item['ha_database'] == 'litellm', f'{w}.ha_database invalid')
+    if 'ha_access' in item:
+        from . import ha_instance_access
+        _need('ha_database' in item, f'{w}.ha_access requires HA database')
+        try:
+            ha_instance_access.validate(item['ha_access'], app_id)
+        except (ValueError, TypeError, UnicodeError):
+            _need(False, f'{w}.ha_access invalid')
     if 'bootstrap_user' in item:
         _printable(item['bootstrap_user'], f'{w}.bootstrap_user', max_len=63)
     _str(item['database'], f'{w}.database', PG_DB_RE, max_len=63)
@@ -503,6 +517,8 @@ def _postgres_instance(item, w, app_id, ref):
                      'entry'), ('template',))
         if 'template' in db:
             _bool(db['template'], f'{d}.template')
+        if db.get('name') == item.get('ha_database'):
+            _need(not db.get('template', False), f'{d}.template invalid HA application database')
         _str(db['name'], f'{d}.name', PG_DB_RE, max_len=63)
         _need(db['name'] not in ('template0', 'template1'), f'{d}.name invalid')
         _need(db['name'] not in names, f'{d}.name duplicate')
@@ -521,6 +537,8 @@ def _postgres_instance(item, w, app_id, ref):
             _printable(ext['name'], f'{e}.name')
             _printable(ext['version'], f'{e}.version')
         ref(app_id, 'postgres', db['entry'], f'{d}.entry')
+    if 'ha_database' in item:
+        _need(item['ha_database'] in names, f'{w}.ha_database missing database')
     _list(item['roles'], f'{w}.roles', 1000)
     for i, role in enumerate(item['roles']):
         r = f'{w}.roles[{i}]'
@@ -570,10 +588,10 @@ def _validate_app(app, where, ref, by_path):
     """One app section (v1 manifest `apps[]`, v2 per-app manifest `app`). `ref(app_id, section, entry, where)` checks
     an entry reference."""
     # `data_dirs` (host directories), `verify_digests` and `catalog_entry` (2026.11.15.2) are optional: archives
-    # written before them have none.
+    # written before them have none; so is `import_check` (2026-11-23: a Home Assistant import's readback).
     _obj(app, where, ('id', 'name', 'adapter', 'adapter_version', 'catalog_sha256', 'owner', 'images',
                       'postgres', 'volumes', 'secrets', 'config_files', 'quadlet_files', 'verify_snapshot'),
-         ('data_dirs', 'verify_digests', 'catalog_entry'))
+         ('data_dirs', 'verify_digests', 'catalog_entry', 'import_check', 'keep_safety'))
     _str(app['id'], f'{where}.id', APP_ID_RE, max_len=41)
     app_id = app['id']
     _str(app['name'], f'{where}.name', min_len=1, max_len=200)
@@ -658,12 +676,52 @@ def _validate_app(app, where, ref, by_path):
     if 'catalog_entry' in app:
         _catalog_entry(app['catalog_entry'], f'{where}.catalog_entry', app_id)
 
+    if 'import_check' in app:
+        _import_check(app['import_check'], f'{where}.import_check', app_id)
+
+    if 'keep_safety' in app:  # RESTORE lane (L-38): the restore keeps its pre-restore backup (kept.py); only `true`
+        _need(app['keep_safety'] is True, f'{where}.keep_safety must be true')
+
     snapshot = app['verify_snapshot']
     _need(isinstance(snapshot, dict) and len(snapshot) <= 20, f'{where}.verify_snapshot must be an object')
     for key, value in snapshot.items():
         _str(key, f'{where}.verify_snapshot key', VERIFY_ID_RE, max_len=64)
         _need(isinstance(value, dict), f'{where}.verify_snapshot.{key} must be an object')
         _json_value(value, f'{where}.verify_snapshot.{key}')
+
+
+IMPORT_CHECK_ROOT_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}\Z')
+# kind -> (app id, the exact table names of its readback); haimport.IMPORT_CHECKS dispatches the same kinds.
+IMPORT_CHECK_KINDS = {'emqx-readback': ('emqx', ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl',
+                                                 'emqx_admin', 'emqx_app', 'emqx_psk', 'emqx_banned_rules'))}
+
+
+def _import_check(item, where, app_id):
+    """`import_check` of an app section [format]: {kind, version 1, config_roots {root: sha256}, tables {table: [rows,
+    sha256|null]}} -- the readback a converted Home Assistant backup's restore compares (CONTRACT sections 5, 9)."""
+    _obj(item, where, ('kind', 'version', 'config_roots', 'tables'))
+    _need(item['kind'] in IMPORT_CHECK_KINDS and IMPORT_CHECK_KINDS[item['kind']][0] == app_id,
+          f'{where}.kind is not a readback of this app')
+    _int(item['version'], f'{where}.version', 1, 1)
+    roots = item['config_roots']
+    _need(isinstance(roots, dict) and 1 <= len(roots) <= 128, f'{where}.config_roots must be an object of 1-128 roots')
+    for name, digest in roots.items():
+        _str(name, f'{where}.config_roots key', IMPORT_CHECK_ROOT_RE, max_len=64)
+        _str(digest, f'{where}.config_roots.{name}', SHA256_RE, max_len=64)
+    tables = item['tables']
+    _obj(tables, f'{where}.tables', IMPORT_CHECK_KINDS[item['kind']][1])
+    for name, value in tables.items():
+        _need(isinstance(value, list) and len(value) == 2, f'{where}.tables.{name} must be [rows, digest]')
+        _int(value[0], f'{where}.tables.{name} rows', -1, 2 ** 31)
+        if value[0] < 0:
+            _need(value[1] is None, f'{where}.tables.{name} of a missing table has a digest')
+        else:
+            _str(value[1], f'{where}.tables.{name} digest', SHA256_RE, max_len=64)
+
+
+def validate_import_check(item, app_id):
+    """The same validation for a conversion about to write it (BackupError invalid-manifest)."""
+    _import_check(item, 'import_check', app_id)
 
 
 MAX_CATALOG_ENTRY = 256 * 1024  # catalog.MAX_ENTRY_BYTES: the largest entry a device installs

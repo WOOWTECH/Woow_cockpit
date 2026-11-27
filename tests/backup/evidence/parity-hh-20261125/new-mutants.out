@@ -1,0 +1,27 @@
+iteration 2: hand mutants of the new alias code (hm_hh.py through guard.py; a COPY of the tree, never the worktree)
+control (unmodified): rc=0 tests=26 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 s
+H03 caught (tests=16 failures=3 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_
+H29 caught (tests=1 failures=0 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H30 caught (tests=2 failures=0 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H31 caught (tests=1 failures=0 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H32 caught (tests=2 failures=1 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H33 caught (tests=2 failures=2 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H34 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H35 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H36 caught (tests=2 failures=1 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H37 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H38 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H39 caught (tests=1 failures=0 errors=1 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+H40 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_n
+CH2 unnoticed (control ok) (tests=16 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 
+problems: none
+rc=0
+control (unmodified): rc=0 tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 sh
+P1 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+P2 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+P3 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+P4 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+P5 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+P6 caught (tests=1 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_na
+problems: none
+rc=0

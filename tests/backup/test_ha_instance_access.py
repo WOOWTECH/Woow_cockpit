@@ -1,0 +1,292 @@
+"""Structured instance access: app data objects only, bounded facts and quoted identifiers."""
+import copy
+import contextlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+from woowbackup import ha_instance_access as access
+from woowbackup import ha_n8n
+from woowbackup import ha_litellm, hatarget, tempctr
+from woowbackup.flows import Cancelled
+from woowbackup.podman import Result
+from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter
+from woowbackup.errors import BackupError
+from .test_adapter_ha_instance import access_plan
+
+
+class LiteLlmStandardEndpointTests(unittest.TestCase):
+    def actual_probe(self, companions, *, url='postgresql://litellm:private-password@litellm-postgres:5432/litellm'):
+        with tempfile.TemporaryDirectory() as directory:
+            proc = Path(directory)/'3141599'; proc.mkdir()
+            (proc/'cmdline').write_bytes(b'/usr/local/bin/python\0/usr/local/bin/litellm\0--port\0' b'4000\0')
+            env = dict(DATABASE_URL=url, **companions)
+            (proc/'environ').write_bytes(b'\0'.join((k+'='+v).encode() for k,v in env.items()))
+            iterdir = Path.iterdir
+            def processes(path):
+                return iter([proc]) if str(path) == '/proc' else iterdir(path)
+            output = io.StringIO()
+            with mock.patch.object(Path, 'iterdir', processes), contextlib.redirect_stdout(output):
+                exec(compile(ha_litellm.CONNECTION_PROBE, 'actual-litellm-probe', 'exec'), {})
+            self.assertNotIn('private-password', output.getvalue())
+            return json.loads(output.getvalue())
+
+    def test_standard_package_companions_and_optional_aliases_agree_with_actual_url(self):
+        standard = {'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm','DATABASE_USERNAME':'litellm'}
+        for extra in ({}, {'DATABASE_USER':'litellm','DATABASE_PORT':'5432'}):
+            self.assertEqual(self.actual_probe(dict(standard, **extra)),
+                             {'database':'litellm','user':'litellm','host':'litellm-postgres','port':5432})
+        self.assertEqual(self.actual_probe(standard, url='postgresql://litellm:private-password@litellm-postgres/litellm')['port'], 5432)
+
+    def test_each_conflicting_companion_and_alternative_url_refuses(self):
+        standard = {'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm','DATABASE_USERNAME':'litellm'}
+        for name, value in (('DATABASE_HOST','remote'), ('DATABASE_NAME','another'),
+                            ('DATABASE_USERNAME','another'), ('DATABASE_USER','another'),
+                            ('DATABASE_PORT','5433'), ('DATABASE_PORT','0'), ('DATABASE_PORT',' 5432'),
+                            ('DATABASE_PORT',''), ('DIRECT_URL','postgresql://litellm:x@litellm-postgres/litellm'),
+                            ('DATABASE_URL_FILE','/run/secrets/database-url'), ('CONFIG_FILE_PATH','/other.yaml')):
+            with self.subTest(name=name, value=value), self.assertRaises(SystemExit):
+                self.actual_probe(dict(standard, **{name:value}))
+
+    def test_explicit_url_port_zero_cannot_default_to_5432(self):
+        with self.assertRaises(SystemExit):
+            self.actual_probe({}, url='postgresql://litellm:private-password@litellm-postgres:0/litellm')
+
+    def test_compiled_endpoint_still_requires_declared_same_pg_network_and_local_port(self):
+        from .test_ha_litellm import QUADLETS
+        endpoint = self.actual_probe({'DATABASE_HOST':'litellm-postgres','DATABASE_NAME':'litellm',
+                                      'DATABASE_USERNAME':'litellm'})
+        runner = SimpleNamespace(podman=lambda *_a, **_kw: Result(0,json.dumps(endpoint).encode(),b''))
+        pg = {'container':'litellm-postgres'}
+        self.assertEqual(ha_litellm.read_app_connection(runner,QUADLETS,postgres=pg),endpoint)
+        for changed in (dict(QUADLETS, **{'litellm.container':QUADLETS['litellm.container'].replace(
+                b'Network=litellm.network', b'Network=another.network')}),):
+            with self.assertRaises(BackupError):
+                ha_litellm.read_app_connection(runner,changed,postgres=pg)
+        endpoint['port'] = 5433
+        with self.assertRaises(BackupError):
+            ha_litellm.read_app_connection(runner,QUADLETS,postgres=pg)
+
+
+class AccessPlanTests(unittest.TestCase):
+    def test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides(self):
+        # Execute the production fixed probe, redirecting ONLY /proc enumeration to bounded synthetic process files.
+        # URL/YAML parsing, file reads and redaction run unchanged; no podman response stands in for this resolver.
+        # The probe parses the config with PyYAML (inside the LiteLLM container), so this interpreter needs it too.
+        self.assertIsNotNone(importlib.util.find_spec('yaml'), 'PyYAML is required to run the LiteLLM probe')
+        with tempfile.TemporaryDirectory() as directory:
+            proc=Path(directory)/'3141599'; proc.mkdir()
+            config=Path(directory)/'config.yaml'
+            current=b'DATABASE_URL=postgresql://app:private-password@litellm-postgres:5432/litellm\0'
+            def probe(args,body):
+                (proc/'cmdline').write_bytes(b'\0'.join(a.encode() for a in ['/usr/local/bin/litellm',*args]))
+                (proc/'environ').write_bytes(current)
+                config.write_text(body)
+                original=Path.iterdir
+                def iterdir(path):
+                    return iter([proc]) if str(path)=='/proc' else original(path)
+                output=io.StringIO()
+                with mock.patch.object(Path,'iterdir',iterdir),contextlib.redirect_stdout(output):
+                    exec(compile(ha_litellm.CONNECTION_PROBE,'fixed-litellm-probe','exec'),{})
+                self.assertNotIn('private-password',output.getvalue())
+                return json.loads(output.getvalue())
+            valid='general_settings:\n  database_url: os.environ/DATABASE_URL\n'
+            for args in (['--config',str(config)],['--config='+str(config)],['-c',str(config)]):
+                self.assertEqual(probe(args,valid),{'database':'litellm','user':'app','host':'litellm-postgres','port':5432})
+            for body in ('general_settings:\n  database_url: postgresql://app:x@other/another\n',
+                         'environment_variables:\n  DATABASE_URL: postgresql://app:x@litellm-postgres/another\n'):
+                with self.assertRaises(SystemExit):
+                    probe(['--config='+str(config)],body)
+            with self.assertRaises(SystemExit):
+                probe(['--database_url=postgresql://app:x@litellm-postgres/another'],'{}')
+
+    def test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped(self):
+        from .test_ha_litellm import QUADLETS
+        sources = dict(QUADLETS, **{'queue.container': b'[Container]\nContainerName=queue\n'})
+        names = {'litellm.service':'litellm', 'litellm-postgres.service':'litellm-postgres', 'queue.service':'queue'}
+        pg = {'container':'litellm-postgres'}
+        app = SimpleNamespace(id='litellm', name='LiteLLM', postgres=[pg])
+        for phase, failure in ((None,None), ('litellm',BackupError('job-failed','partial start')),
+                               ('litellm-postgres',Cancelled()), ('read',Cancelled())):
+            original = {'litellm':False, 'litellm-postgres':False, 'queue':True}
+            state, events, temps = dict(original), [], []
+            class Runner:
+                owner='appowner'; uid=1000; home='/home/appowner'
+                def systemctl(self, *args, **kwargs):
+                    if args[0]=='show':
+                        rows=[]
+                        for unit in args[args.index('--')+1:]:
+                            active='active' if state[names[unit]] else 'inactive'
+                            deps='litellm-postgres.service queue.service' if unit=='litellm.service' else ''
+                            rows.append(f'Id={unit}\nLoadState=loaded\nActiveState={active}\nRequires={deps}\nWants=\nBindsTo=')
+                        return Result(0,'\n\n'.join(rows).encode(),b'')
+                    container=names[args[-1]]
+                    events.append((args[0],container))
+                    state[container]=args[0]=='start'
+                    if args[0]=='start' and container==phase: raise failure
+                    if args[0]=='stop': assert 'abort' not in kwargs
+                    return Result(0,b'',b'')
+                def podman(self,*args,**kwargs):
+                    if args[:2]==('container','inspect'):
+                        return Result(0,b'true' if state[args[-1]] else b'false',b'')
+                    if args[0]=='exec' and 'pg_isready' in args:
+                        return Result(0 if state[args[1]] else 1,b'',b'')
+                    if ha_litellm.CONNECTION_PROBE in args:
+                        assert state['litellm'] and state['litellm-postgres']
+                        if phase=='read': raise failure
+                        return Result(0,json.dumps({'database':'litellm','user':'app_login',
+                            'host':'litellm-postgres','port':5432}).encode(),b'')
+                    raise AssertionError(args[:2])
+            real_temp=tempctr.TempObjects
+            def construct(*args,**kwargs):
+                value=real_temp(*args,**kwargs); temps.append(value); return value
+            adapter=QuadletPostgresAdapter(app,Runner(),lambda _line:None)
+            with mock.patch.object(hatarget,'ensure_user_manager',lambda *_a:None), \
+                    mock.patch.object(tempctr,'TempObjects',side_effect=construct):
+                if failure:
+                    with self.assertRaises(type(failure)):
+                        adapter._read_ha_app_connection(pg,sources)
+                else:
+                    self.assertEqual(adapter._read_ha_app_connection(pg,sources)['database'],'litellm')
+            self.assertEqual(state,original)
+            self.assertNotIn(('stop','queue'),events)
+            if phase!='litellm-postgres':
+                self.assertLess(events.index(('start','litellm-postgres')),events.index(('start','litellm')))
+            state['litellm']=True
+            self.assertEqual(temps[0].cleanup(),[])
+            self.assertTrue(state['litellm'],'scoped callbacks cannot later stop the restored proxy')
+
+    def test_endpoint_lifecycle_finishes_before_restore_and_on_error_or_cancel(self):
+        from .test_adapter import QUADLETS
+        sources = dict(QUADLETS)
+        sources['woowbk-demo-app.container'] += b'Network=woowbk-demo.network\n'
+        runner = SimpleNamespace(owner='appowner', uid=1000, home='/home/appowner')
+        app = SimpleNamespace(id='n8n')
+        adapter = QuadletPostgresAdapter(app, runner, lambda _line: None)
+        pg = {'container': 'woowbk-demo-db'}
+        for failure in (None, BackupError('job-failed', 'bounded failure'), Cancelled()):
+            state, temps = {'running': False}, []
+            def prepare(work, current, *, quadlets):
+                self.assertIs(current, app)
+                self.assertIs(quadlets, sources)
+                temp = work.temp(app)
+                temps.append(temp)
+                temp.put_back_later('main', lambda: state.update(running=False))
+                state['running'] = True
+                if failure:
+                    raise failure
+                return {'database': 'notes', 'user': 'app', 'host': 'woowbk-demo-db', 'port': 5432}
+            with mock.patch.object(ha_n8n, 'prepare_app_endpoint', prepare, create=True), \
+                    mock.patch.object(ha_n8n, 'main_container', return_value='woowbk-demo-app', create=True):
+                if failure:
+                    with self.assertRaises(type(failure)) as caught:
+                        adapter._read_ha_app_connection(pg, sources)
+                    self.assertIs(caught.exception, failure)
+                else:
+                    self.assertEqual(adapter._read_ha_app_connection(pg, sources)['database'], 'notes')
+            self.assertFalse(state['running'], 'scoped cleanup already completed')
+            state['running'] = True  # ordinary restore has now started the restored application
+            self.assertEqual(temps[0].cleanup(), [])
+            self.assertTrue(state['running'], 'no deferred callback may stop the restored application')
+
+    def test_valid_app_access_and_installed_extension_facts(self):
+        for app_id in ('n8n', 'litellm'):
+            plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login', extension=True)
+            self.assertIs(access.validate(plan, app_id), plan)
+
+    def test_pg17_maintain_is_a_valid_table_privilege_and_only_there(self):
+        # Real LiteLLM on PostgreSQL 17.11 (dev-d): the owner's default table ACL holds MAINTAIN and the old whitelist refused
+        # it, so no PG17 database could ever be converted ("permission information incomplete or unsupported").
+        default_acl = 'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'
+        for app_id in ('n8n', 'litellm'):
+            plan = access_plan('db_owner', table_owner='table_owner')
+            plan['relations'][0][-1] = [['table_owner', p, False] for p in default_acl.split(',')]
+            plan['relations'].append(['public', 'events', 'p', 'table_owner', [['table_owner', 'MAINTAIN', False]]])
+            self.assertIs(access.validate(plan, app_id), plan)
+            script = access.restore_sql(plan, plan, 'notes')
+            self.assertIn('GRANT MAINTAIN ON TABLE "public"."marker" TO "table_owner";', script)
+            self.assertIn('GRANT MAINTAIN ON TABLE "public"."events" TO "table_owner";', script)
+        plan = access_plan('db_owner', table_owner='table_owner')
+        for place in ('sequence', 'schema', 'database', 'column'):
+            bad = copy.deepcopy(plan)
+            if place == 'sequence':
+                bad['relations'].append(['public', 'marker_id_seq', 'S', 'table_owner', [['table_owner', 'MAINTAIN', False]]])
+            elif place == 'schema':
+                bad['schemas'][0][-1].append(['app', 'MAINTAIN', False])
+            elif place == 'database':
+                bad['database'][1].append(['app', 'MAINTAIN', False])
+            else:
+                bad['columns'][0][-1].append(['app', 'MAINTAIN', False])
+            with self.subTest(place=place), self.assertRaises(ValueError):
+                access.validate(bad, 'litellm')
+
+    def test_malformed_program_or_omitted_schema_facts_are_rejected(self):
+        plan = access_plan('db_owner', table_owner='table_owner')
+        mutations = [lambda p: p.update(programs=['arbitrary SQL']),
+                     lambda p: p['schemas'].append(['omitted', 'db_owner', []]),
+                     lambda p: p['relations'][0].__setitem__(2, 'f'),
+                     lambda p: p['relations'][0].__setitem__(0, 'omitted'),
+                     lambda p: p['relations'][0][-1].append(['app', 'SUPERUSER', False]),
+                     lambda p: p['relations'][0][-1].append(['app', 'SELECT', 1]),
+                     lambda p: p['extensions'].append(['vector', 'missing; SQL', 'public']),
+                     lambda p: p['extensions'].append(['vector', '1.0', 'omitted'])]
+        for mutate in mutations:
+            bad = copy.deepcopy(plan)
+            mutate(bad)
+            with self.subTest(mutate=mutate), self.assertRaises((ValueError, TypeError)):
+                access.validate(bad, 'litellm')
+        with self.assertRaises(ValueError):
+            access.validate(plan, 'hermes')
+
+    def test_replay_intersects_moved_objects_and_never_recreates_programs_or_omitted_data(self):
+        plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login')
+        plan['relations'].append(['public', 'old_table_omitted', 'r', 'table_owner', []])
+        present = copy.deepcopy(plan)
+        present['relations'].pop()
+        script = access.restore_sql(plan, present, 'litellm')
+        self.assertIn('ALTER TABLE "public"."marker" OWNER TO "table_owner";', script)
+        self.assertIn('GRANT INSERT ON TABLE "public"."marker" TO "app_login";', script)
+        self.assertIn('GRANT CREATE ON SCHEMA "public" TO "app_login";', script)
+        self.assertNotIn('old_table_omitted', script)
+        self.assertNotIn('CREATE SCHEMA', script)
+        self.assertNotIn('FUNCTION', script)
+        self.assertNotIn('omitted', access.capture_sql('litellm'))
+
+    def test_catalog_identifiers_are_quoted_as_data(self):
+        self.assertEqual(access.ident('a";b'), '"a"";b"')
+        self.assertEqual(access.literal("v'1"), "'v''1'")
+
+    def test_column_privileges_remain_narrow_and_keep_grant_options(self):
+        plan = access_plan('db_owner', table_owner='table_owner')
+        plan['columns'] = [['public', 'marker', 'value', [['app_login', 'SELECT', True]]]]
+        access.validate(plan, 'n8n')
+        script = access.restore_sql(plan, plan, 'n8n')
+        self.assertIn('GRANT SELECT ("value") ON TABLE "public"."marker" TO "app_login" WITH GRANT OPTION;', script)
+        self.assertNotIn('GRANT SELECT ON TABLE "public"."marker" TO "app_login";', script)
+
+    def test_password_rotation_only_masks_known_password_components(self):
+        pairs = [(b'DB_POSTGRESDB_PASSWORD=old\nDB_POSTGRESDB_DATABASE=notes\n',
+                  b'DB_POSTGRESDB_PASSWORD=new\nDB_POSTGRESDB_DATABASE=notes\n'),
+                 (b'DATABASE_URL=postgresql://app:old@pg:5432/litellm\n',
+                  b'DATABASE_URL=postgresql://app:new@pg:5432/litellm\n')]
+        for before, after in pairs:
+            self.assertTrue(access.password_only_change(before, after))
+            self.assertFalse(access.password_only_change(before, after.replace(b'notes', b'other').replace(b'/litellm', b'/other')))
+        self.assertFalse(access.password_only_change(b'UNKNOWN_PASSWORD=old\n', b'UNKNOWN_PASSWORD=new\n'))
+        self.assertFalse(access.password_only_change(b'DATABASE_URL=postgresql://app:pw@pg/litellm\n',
+                                                    b'DATABASE_URL=postgresql://app:pw@other/litellm\n'))
+
+    def test_backend_binding_refuses_an_equally_named_foreign_database(self):
+        from .test_adapter import QUADLETS
+        quadlets = dict(QUADLETS)
+        quadlets['woowbk-demo-app.container'] += b'Network=woowbk-demo.network\n'
+        postgres = {'container': 'woowbk-demo-db'}
+        self.assertTrue(access.local_backend({'host': 'woowbk-demo-db', 'port': 5432}, quadlets,
+                                            'woowbk-demo-app.container', postgres))
+        self.assertFalse(access.local_backend({'host': 'foreign-db', 'port': 5432}, quadlets,
+                                             'woowbk-demo-app.container', postgres))

@@ -1,0 +1,13 @@
+{
+  "source_commit": "caf82966e6212862c609034cec71958f6b38652c",
+  "scope": "real ARM integrated object API MQTT restore with corrected native ACL preservation after exact lab cache reclaim",
+  "exit": 1,
+  "elapsed_seconds": 250.3862567639444,
+  "stdout_sha256": "543cdd52d3143e006951236e83cf7aaf7f5195e6082f77a0cf7e20f0e1b0cfe5",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_TARGET_RUNTIME_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

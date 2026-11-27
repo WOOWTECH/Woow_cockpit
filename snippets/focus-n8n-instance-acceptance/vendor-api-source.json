@@ -1,0 +1,26 @@
+{
+  "vendor_release": "n8n@2.43.6",
+  "revision": "ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5",
+  "sources": [
+    {
+      "path": "packages/cli/src/workflows/workflows.controller.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/cli/src/workflows/workflows.controller.ts",
+      "sha256": "4e9927db1426d717e3f0c9c420359ff611f194ac015e8205908e99a2e8842871"
+    },
+    {
+      "path": "packages/cli/src/workflows/workflow-execution.service.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/cli/src/workflows/workflow-execution.service.ts",
+      "sha256": "8869984fea1ba961b21171a8aa7daca52cdf395abc89669293139f433eaa6f4b"
+    },
+    {
+      "path": "packages/@n8n/api-types/src/dto/workflows/manual-run.dto.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/@n8n/api-types/src/dto/workflows/manual-run.dto.ts",
+      "sha256": "f9e91ea1868a82f28234cbafd4f12a7d5989c48e0d1674b3512467ee3c30fa7e"
+    },
+    {
+      "path": "packages/cli/src/executions/executions.controller.ts",
+      "url": "https://raw.githubusercontent.com/n8n-io/n8n/ffbb9ec54fc02e7f8b54a0b6f41d0a84d0a817f5/packages/cli/src/executions/executions.controller.ts",
+      "sha256": "130d4d538e8381e675e124ab71735491c14a14b17c509cc8c4f865c2fb0d4555"
+    }
+  ]
+}

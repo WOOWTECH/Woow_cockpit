@@ -1,0 +1,14 @@
+{
+  "blocked": 0,
+  "errors": 0,
+  "failures": 0,
+  "first_run": "15 tests, 1 failure: multi-target rm guard admitted a foreign positional target; corrected exact positional parsing; second15 and third19 pass",
+  "kind": "offline-only",
+  "log": "/tmp/parity-focus-20261127/emqx-r4-offline-final.guardlog",
+  "log_sha256": "76f8fc64197c926e21de06b87ec810297328219318a02783644fc0409cd9ced2",
+  "native_claim": false,
+  "run_native": "absent",
+  "shim_hits": 0,
+  "skipped": 0,
+  "tests": 19
+}

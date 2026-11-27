@@ -1,0 +1,11 @@
+# The only network of this stack. Headplane reaches the control plane by container name
+# (http://headscale:8080), which aardvark-dns answers because both containers sit on this
+# network - so the Headscale API is never published to the host for Headplane's benefit.
+#
+# NetworkName= is mandatory: without it podman 4.9.3 would create "systemd-headscale".
+[Unit]
+Description=Woow Headscale network
+
+[Network]
+NetworkName=headscale-net
+Label=io.woowtech.app=headscale

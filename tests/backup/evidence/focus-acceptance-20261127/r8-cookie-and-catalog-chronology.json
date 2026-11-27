@@ -1,0 +1,57 @@
+{
+  "scope": "r8-functional-and-independent-cookie-evidence",
+  "acceptance_passed": false,
+  "commercial_acceptance": "not-complete",
+  "page4": {
+    "driver_commit": "14ebdf8e8b81ed21cdcd67c61338cdafffbcc62f",
+    "product_source": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+    "exit": 1,
+    "passed": 59,
+    "total": 63,
+    "functional_browser_scenario_proved": true,
+    "cookie_hygiene_same_run_proved": false,
+    "actual_cookie_values_retained": false
+  },
+  "probe01": {
+    "exit": 1,
+    "elapsed_seconds": 20.3,
+    "actual_ws_version": "362",
+    "pinned_primary_version": "337",
+    "result_unchanged": true
+  },
+  "catalog_return": {
+    "checks_passed": 25,
+    "catalog_original": true,
+    "guard_and_failed_files_unchanged": true,
+    "archives_HA_unchanged": true,
+    "wrapper_sha256": "ceb5fa417fe393f463b4658422bc5b370350c7118a8c6fb918e7b7225237923e"
+  },
+  "probe02": {
+    "exit": 0,
+    "elapsed_seconds": 29.8,
+    "actual_ws_version": "362",
+    "pinned_primary_version": "362",
+    "source_commit": "90395e4365a937ad6fd8904dc47c5dd488f750a0",
+    "observations_complete": true,
+    "registered_and_session_hits": 0,
+    "public_marker_jobs_hits": 8,
+    "public_marker_job_files": 8,
+    "host_hits": 0,
+    "records": 648,
+    "archive_index_sidecars": 17,
+    "regular_json_roots": 2
+  },
+  "different_session_cookies_between_runs": true,
+  "proves_old_page4_cookie_absence": false,
+  "retroactive_pass_claimed": false,
+  "design_assessment": "DESIGN G4 R8 functional browser scenario is evidenced by page4; G5 keeps failed attempts. Independent new-cookie proof cannot establish absent old page4 cookies or make its instrumented result pass.",
+  "artifacts_sha256": {
+    "r8-cookie-probe01.json": "495f5a540f0eba9479dab56b2a7699e2420bce9fb4ec21249b4ac269625e837c",
+    "r8-cookie-probe01-result.json": "bea6eb859bb28f69797e42d9a1eefa73c99bdc6d705cdf80c5e7fcef476c98ca",
+    "r8-cookie-probe01-receipt.json": "c557013ade3b35a54554b7218144fbd3650214f9e5290d1d236d03d353fdc891",
+    "r8-cookie-probe02.json": "3235c6d028c6ef1ffe181c74305548d38284357866cc463c4b8d7e0e36ef867e",
+    "r8-cookie-probe02-result.json": "91797d3bfd7efee47aa986e942e0d262eca4c9ab30edc5b0ff3fe94ed4c7b3a6",
+    "r8-cookie-probe02-receipt.json": "6355a40ca3636f88fa1107d507368165e16cd11c12c5877eb2e73a17890230e7",
+    "r8-owned-catalog-return.json": "420b9d4fe582af93eef3aa37b958d6b71b57a0580e8775eda39c0478720490fb"
+  }
+}

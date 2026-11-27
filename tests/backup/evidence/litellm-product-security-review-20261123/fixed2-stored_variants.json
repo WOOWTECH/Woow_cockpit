@@ -1,0 +1,227 @@
+{
+ "after_analyse": [],
+ "after_first_connection": {},
+ "after_salt_binding": [],
+ "binding": "match",
+ "blockers": [],
+ "case": "stored_variants",
+ "container": {
+  "cap_add": [],
+  "cap_drop": [],
+  "memory": 1073741824,
+  "mounts": [
+   "volume:/var/lib/postgresql:noexec,nosuid,nodev,rbind"
+  ],
+  "network_mode": "none",
+  "pids_limit": 512,
+  "ports": {},
+  "privileged": false,
+  "read_only_root": true,
+  "security_opt": [
+   "no-new-privileges"
+  ],
+  "user": ""
+ },
+ "elapsed_seconds": 73.5,
+ "found": {
+  "migrations": [
+   "20250326162113_baseline"
+  ],
+  "schemas": [
+   "woow",
+   "woow_platform"
+  ],
+  "superuser": []
+ },
+ "image_pg18": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+ "markers_final": {},
+ "notes": [],
+ "scan": {
+  "pg_version": "18",
+  "salt_valid": true,
+  "symlinks": 0
+ },
+ "session_settings": {
+  "datestyle": "ISO, MDY",
+  "event_triggers": "off",
+  "extra_float_digits": "3",
+  "review": null,
+  "search_path": "pg_catalog",
+  "session_preload_libraries": "",
+  "shared_preload_libraries": ""
+ },
+ "source": {
+  "commit": "bbf26a83eb5d2f439ef63146e5be3c250755680d",
+  "ha_litellm_sha256": "f81c9b46dff5e3d86adf71a4a4fae3e4eeadfc5eb93c84cd3b8a77a42d535c13",
+  "tracked_changes": false
+ },
+ "staged_config_rows": {
+  "builtins_exec": 1,
+  "custom_auth": false,
+  "post_call_rules": true,
+  "rows": 1
+ },
+ "steps": [
+  "start_ha_cluster",
+  "analyse",
+  "salt_binding",
+  "read_schema",
+  "export_rows"
+ ],
+ "stored_hooks_blocker": null,
+ "stored_settings": {
+  "callbacks": [],
+  "env": [],
+  "hooks": [],
+  "sections": [
+   "litellm_settings"
+  ]
+ },
+ "stored_settings_line": null,
+ "user_row_as_exported": [
+  "u1",
+  "proxy_admin",
+  "0.123456789012345",
+  "2026-11-05 10:00:00",
+  "2026-11-05 10:00:00+00"
+ ],
+ "variants": {
+  "big_env_plus_hook": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 8.53,
+   "unreadable": true
+  },
+  "callbacks_absolute_path_module": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings 回呼 /tmp/woowbk_review.fn"
+   ],
+   "returned": "dict",
+   "seconds": 0.43
+  },
+  "callbacks_string": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.callbacks"
+   ],
+   "returned": "dict",
+   "seconds": 1.01
+  },
+  "control_pass_through_url": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.38
+  },
+  "control_plain_names": {
+   "blocker": false,
+   "callbacks": [
+    "langfuse",
+    "otel"
+   ],
+   "env_count": 1,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.29
+  },
+  "custom_provider_map": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.custom_provider_map"
+   ],
+   "returned": "dict",
+   "seconds": 0.53
+  },
+  "guardrails_v1_callbacks": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.guardrails"
+   ],
+   "returned": "dict",
+   "seconds": 1.26
+  },
+  "guardrails_v2_module": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.guardrails"
+   ],
+   "returned": "dict",
+   "seconds": 2.81
+  },
+  "jwt_custom_validate": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "general_settings.litellm_jwtauth.custom_validate"
+   ],
+   "returned": "dict",
+   "seconds": 0.79
+  },
+  "pass_through_module_target": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "general_settings.pass_through_endpoints"
+   ],
+   "returned": "dict",
+   "seconds": 0.62
+  },
+  "post_call_rules_baseline": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "litellm_settings.post_call_rules"
+   ],
+   "returned": "dict",
+   "seconds": 0.43
+  },
+  "router_settings_plugins": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [
+    "router_settings.plugins"
+   ],
+   "returned": "dict",
+   "seconds": 0.32
+  },
+  "success_callback_string": {
+   "blocker": false,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.63
+  },
+  "timeout_scaled_plus_hook": {
+   "blocker": true,
+   "callbacks": [],
+   "env_count": 0,
+   "hooks": [],
+   "returned": "dict",
+   "seconds": 0.15,
+   "unreadable": true
+  }
+ },
+ "volumes_left_behind": [],
+ "warnings": []
+}

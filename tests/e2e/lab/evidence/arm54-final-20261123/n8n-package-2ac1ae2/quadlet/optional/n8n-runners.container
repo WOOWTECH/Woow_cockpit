@@ -1,0 +1,46 @@
+# n8n-runners.container: external task runners (JavaScript and Python) for the Code node.
+#
+# Installed when N8N_RUNNERS_MODE=external (the default) in ~/.config/n8n/n8n.env.
+# Upstream recommends external mode for any instance that holds real credentials: in
+# internal mode user code runs as a child of n8n, with n8n's privileges. External mode
+# also enables the Python Code node and removes the "Python 3 is missing" warning.
+# scripts/install.sh --no-runners switches to internal mode and removes this unit.
+[Unit]
+Description=n8n task runners
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+PartOf=n8n.target
+# Start the launcher first. On stop, systemd reverses this order so n8n can
+# finish executions and close the broker before the launcher exits.
+Before=n8n.service
+
+[Container]
+ContainerName=n8n-runners
+# MUST equal the n8nio/n8n version in n8n.container.
+Image=docker.io/n8nio/runners:2.43.6
+Network=n8n.network
+Volume=%h/.config/n8n/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+Environment=N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679
+Environment=GENERIC_TIMEZONE=@@GENERIC_TIMEZONE@@
+Environment=TZ=@@TZ@@
+Secret=n8n-runners-auth-token,type=env,target=N8N_RUNNERS_AUTH_TOKEN
+Label=io.woowtech.app=n8n
+LogDriver=journald
+# task-runner-launcher health server: GET :5680/healthz (alpine base, busybox wget).
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:5680/healthz || exit 1
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=60s
+PodmanArgs=--stop-timeout=60
+
+[Service]
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

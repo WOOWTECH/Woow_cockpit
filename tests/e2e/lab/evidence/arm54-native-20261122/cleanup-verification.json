@@ -1,0 +1,45 @@
+{
+  "free_bytes_after_cleanup": 18531344384,
+  "inventory": {
+    "containers": [
+      "5784c5abfffc34f5a82a5c6a8f630570b45f7237e43ed2ba66e3a06f93ff140d woow-auth-gateway ghcr.io/woowtech/woow-auth-gateway@sha256:95a0cc70a07a4c645d16c8007777b7d8a375456487e2dd82670aab21ae4c8f61 running 8088/tcp, 30142/tcp",
+      "d64ceea166a16c4f0b81057e0c632a822d66caffeecd4be4c05c5434b61e4c18 matter-server ghcr.io/matter-js/matterjs-server@sha256:210235a28770968ee66f768eeca74056485816e39fb928ee341655c4f4d236cf running 5580/tcp",
+      "a8238f069c338263e039f15a7a12f561693620fe29a321533da6183a9b6f9433 homeassistant ghcr.io/home-assistant/home-assistant@sha256:f72c32d77faf0ff7279d0305a0fc18a92d5630458ca1c7bd2fa393cd9dd66975 running "
+    ],
+    "images": [
+      "sha256:94c0c4b623cbce9d329a2e08308a1e9e484823c63864a25c34b11c2f12e3bf09 ghcr.io/matter-js/matterjs-server:<none>",
+      "sha256:1ec61404255402cb5939ce30638a46c094a194f4526c805924f4e99eb6da9e6c ghcr.io/woowtech/woow-auth-gateway:<none>",
+      "sha256:c47b4550935df1a6ddf1e97b5fd3d861e5a551b0a753433194b7343c7e55d9e1 ghcr.io/home-assistant/home-assistant:<none>"
+    ],
+    "networks": [
+      "podman"
+    ],
+    "store": [
+      "/var/lib/containers/storage /run/containers/storage"
+    ],
+    "volumes": []
+  },
+  "original_started_at_after": [
+    {
+      "id": "5784c5abfffc34f5a82a5c6a8f630570b45f7237e43ed2ba66e3a06f93ff140d",
+      "running": true,
+      "started": "2026-11-10T17:31:02.880429627+08:00"
+    },
+    {
+      "id": "d64ceea166a16c4f0b81057e0c632a822d66caffeecd4be4c05c5434b61e4c18",
+      "running": true,
+      "started": "2026-11-10T17:31:02.896490161+08:00"
+    },
+    {
+      "id": "a8238f069c338263e039f15a7a12f561693620fe29a321533da6183a9b6f9433",
+      "running": true,
+      "started": "2026-11-15T13:14:48.075002727+08:00"
+    }
+  ],
+  "originals_started_before_probe_and_still_running": true,
+  "probe_started_epoch": 1795310499.4627838,
+  "workspace_mounts_remaining": false,
+  "workspace_removed": true,
+  "default_inventory_equal_after_cleanup": true,
+  "status": "passed"
+}

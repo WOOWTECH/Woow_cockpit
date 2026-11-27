@@ -1,0 +1,12 @@
+{
+  "source_commit": "aaa37480be48814aa3fe3c17e78162555233e872",
+  "version": "2026.11.19.2",
+  "installed_engine_files_matching": 39,
+  "actual_result_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/arm-revalidation-20261121/20261121T082929/results.json",
+  "result_sha256": "ce06a69c870aa55f2f672367fe0ba0fb7e940cd39851dbc6e282f5871720d1c1",
+  "passed": 31,
+  "failed": 0,
+  "scope": "actual ARM encrypted/plain/encrypted-uncompressed upload and check; not restore acceptance",
+  "restore_status": "in_progress_no_result_claim",
+  "driver_sha256": "54d7a691d2a2219a31b965ae06b0eb69af45b87ae7fa456f6ef897e8ba85c738"
+}

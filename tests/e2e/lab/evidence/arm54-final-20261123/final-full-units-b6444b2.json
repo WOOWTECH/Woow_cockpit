@@ -1,0 +1,36 @@
+{
+ "assessment": "test_litellm_lab_runner (5): the guard refuses the lab runner's own child process (blocked Popen:child), the same 5 the integration records at 2b5fee1 (its full tests/backup: 2 failures + 3 errors); test_bounded_large_archive.HarnessSafetyTests.test_runtime_space_loss_aborts_and_cleans (1): its child reported ImportError once; NOT reproduced: the module alone 9/9 and the first nine modules of the suite in suite order 247/247 on the same commit (both guarded), so a flake of that child under host load; neither module is touched by this lane",
+ "blocked": 6,
+ "commercial_acceptance": "not-complete",
+ "errors": 3,
+ "failures": 3,
+ "not_ok_by_module": {
+  "test_bounded_large_archive": [
+   "FAIL HarnessSafetyTests.test_runtime_space_loss_aborts_and_cleans"
+  ],
+  "test_litellm_lab_runner": [
+   "FAIL LabRunnerTests.test_abort_is_forwarded",
+   "FAIL LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+   "ERROR LabRunnerTests.test_exact_reader_capture_boundary",
+   "ERROR LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+   "ERROR LabRunnerTests.test_stderr_and_failures_are_not_returned"
+  ]
+ },
+ "reruns": {
+  "first nine tests/backup modules in suite order": "tests=247 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+  "tests.backup.test_bounded_large_archive alone": "tests=9 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+ },
+ "skipped": 6,
+ "source_commit": "b6444b21f34367a7a10e65ebfa3f74d88ccc7a0a",
+ "source_note": "b6444b2 = merge of the integration tip e92e8ae into this branch; every later commit of the branch changes evidence/README/status only",
+ "subsets_on_the_same_code": {
+  "affected-units (13 modules) on 78ac3c2 (= b6444b2 minus the integration merge e92e8ae)": "tests=422 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0",
+  "merged-units (21 EMQX modules + the modules this lane touched + lane tests) on b6444b2": "tests=722 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+ },
+ "tests": 1814,
+ "what": "guarded full tests/backup (scratchpad guarded_unittest.py: no host podman/ssh/systemctl/runuser/sudo process) of the final code of test/arm54-integrated-20261124, run in the suite form (team heavy.sh + the host heavy-tests lock), PYTHONPATH=.:backup-engine:tests/e2e/lab",
+ "when": [
+  "start 2026-11-24 16:14:18",
+  "end 2026-11-24 16:18:34"
+ ]
+}

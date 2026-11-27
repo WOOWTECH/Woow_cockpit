@@ -1,0 +1,36 @@
+{
+  "scope": "lab woowbk-dev-d only; archived journal files older than 24h on its tmpfs /var/log/journal",
+  "operation": "journalctl --vacuum-time=24h (no service, unit, config or container change)",
+  "script_sha256": "98d043919cfb93b12cb15daf309724e0738e2830e2e16ba1da19120b5bfc3b10",
+  "before": {
+    "current": 2158182400,
+    "max": 4294967296,
+    "anon": 1031028736,
+    "file": 1072975872,
+    "shmem": 926359552,
+    "events": {
+      "oom": 5,
+      "oom_kill": 4,
+      "oom_group_kill": 0
+    },
+    "journal_tmpfs_used_bytes": 835321856,
+    "journal_files": 32
+  },
+  "exit": 0,
+  "after": {
+    "current": 1741561856,
+    "max": 4294967296,
+    "anon": 1034174464,
+    "file": 652288000,
+    "shmem": 452861952,
+    "events": {
+      "oom": 5,
+      "oom_kill": 4,
+      "oom_group_kill": 0
+    },
+    "journal_tmpfs_used_bytes": 361779200,
+    "journal_files": 15
+  },
+  "limits_unchanged": true,
+  "oom_events_unchanged": true
+}

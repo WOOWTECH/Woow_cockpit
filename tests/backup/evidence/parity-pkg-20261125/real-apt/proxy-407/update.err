@@ -1,0 +1,2 @@
+E: Failed to fetch http://repo.example:80/./Packages  407  Proxy Authentication Required [IP: 192.0.2.2 80]
+E: Some index files failed to download. They have been ignored, or old ones used instead.

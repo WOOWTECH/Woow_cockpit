@@ -1,0 +1,30 @@
+{
+  "before_free": 21414612992,
+  "archived": [
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/parity-read",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/parity-read.tar.gz",
+      "sha256": "bf3a3efd97cc0a63aa8ccc1c0b18ebc1340b210c36290a957a3b40a2d17f6f6d",
+      "verified_regular_files": 11060,
+      "archive_bytes": 31551868,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/parity-read.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/litellm-secreview",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/litellm-secreview.tar.gz",
+      "sha256": "29142657ff89d340de59d99957991233651c72bf4125931e5eddda720722bcbc",
+      "verified_regular_files": 2796,
+      "archive_bytes": 55888890,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/litellm-secreview.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/litellm-product",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/litellm-product.tar.gz",
+      "sha256": "680163136876ba5e279b315f606e1a12cc793b21dd0cff8547e4ddb9a0cb069b",
+      "verified_regular_files": 3393,
+      "archive_bytes": 36055004,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/completed-lane-work/litellm-product.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    }
+  ],
+  "after_free": 21645344768
+}

@@ -1,0 +1,32 @@
+{
+  "candidate_commit": "1de6fd365967397253c2836eafb73dc564ea3dfc",
+  "source_owner_tests": {
+    "run": 9,
+    "passed": 9,
+    "failed": 0,
+    "skipped": 0
+  },
+  "target_owner_tests": {
+    "run": 6,
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0
+  },
+  "source_replay_cold_audit_regressions": {
+    "run": 18,
+    "passed": 18,
+    "failed": 0,
+    "skipped": 0
+  },
+  "diagnostic_boundary_tests": {
+    "run": 3,
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0
+  },
+  "scope": "generated fixtures and consumer boundaries; audit regression includes synthetic native HOCON; not actual target producer or restore",
+  "real_arm_configuration": "refused at native syntax traversal; attempts retained",
+  "real_arm_cold_history": "28 files/57502 bytes passed; historical values only",
+  "public_guard_enabled": true,
+  "commercial_acceptance_complete": false
+}

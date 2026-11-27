@@ -1,0 +1,15 @@
+{
+  "status": "passed",
+  "source_base": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "actual_snapshot_sha256": "f932172545103868d3f0ee36bae59050b6fd6bd0b2f1cbff9a67b876572ea933",
+  "actual_pinned_file_hashes_match": true,
+  "original_d09_named_passes": true,
+  "original_d09_pinned_refuses_incompatible": true,
+  "fixed_named_and_pinned_layout_roles_equal": true,
+  "saved_catalogs_accepted": 12,
+  "product_module_sha256": "bcc39687e4828c25c4f336f527e57cc7ca13429d35870bbed88abcee4d817d1c",
+  "device_commands": 0,
+  "image_operations": 0,
+  "fixture_bytes_read": 0,
+  "private_complete_proof_sha256": "012611001df81f244ba112b0920e021d17421ba0b0659d537047c740b29e27e5"
+}

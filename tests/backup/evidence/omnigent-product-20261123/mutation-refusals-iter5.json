@@ -1,0 +1,1011 @@
+{
+ "source_commit": "04d8e50",
+ "what": "every refusal of the module",
+ "module": "woowbackup/ha_omnigent.py",
+ "module_sha256": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+ "modules_sha256": {
+  "woowbackup/ha_omnigent.py": "694da4e91afb2f0e119f0cd8c777984f6bf53ccc51eac0e2140f46325b6fb327",
+  "woowbackup/hacommon.py": "ad058935b6a772cb7ac3ed48950aa76cec47a60747bfecbb09bfe84d78085d86",
+  "woowbackup/jobs.py": "c6e62948131bacedf70036bc2d7ef5d6839b5949e91adddcc68df6edf06c036d"
+ },
+ "tests": [
+  "tests.backup.test_ha_omnigent",
+  "tests.backup.test_ha_omnigent_candidate",
+  "tests.backup.test_ha_omnigent_trusted",
+  "tests.backup.test_b1_01_guard",
+  "tests.backup.test_ha_omnigent_server_volume",
+  "tests.backup.test_ha_omnigent_install"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 80,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "R118",
+   "protection": "dump_user: raise BackupError('job-failed', '這台的使用者命名空間沒有可用來匯出 HA 資料庫的帳號 ID，無法安全地轉換。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20
+  },
+  {
+   "id": "R156",
+   "protection": "scan_member: raise BackupError('incompatible', 'HA 的 Omnigent 資料庫檔案含有硬連結，無法安全地搬過來。', member=name[:200])",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31
+  },
+  {
+   "id": "R184.1",
+   "protection": "scan_member: not ha_odoo._under(entry.linkname, ARTIFACTS)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31
+  },
+  {
+   "id": "R184.2",
+   "protection": "scan_member: entry.linkname == ARTIFACTS",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": false,
+   "failures": 0,
+   "tests": 80,
+   "redundant": "habackup.iter_entries hands out no hard link to a folder, and nothing below a file"
+  },
+  {
+   "id": "R185",
+   "protection": "scan_member: raise BackupError('incompatible', 'HA 的 Omnigent 檔案區有指向其他資料的硬連結，無法安全地搬過來。', member=name[:200])",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 31
+  },
+  {
+   "id": "R201",
+   "protection": "scan_member: raise BackupError('incompatible', 'HA 的 Omnigent 資料庫使用了另外的表空間（tablespace）或符號連結，目前無法搬過來。', member=tab",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 30
+  },
+  {
+   "id": "R220.1",
+   "protection": "__init__: app.postgres",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R220.2",
+   "protection": "__init__: app.data_dirs",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R221",
+   "protection": "__init__: problems.append('應用設定含有資料庫匯出項目或主機資料夾（不是冷備份的 Omnigent）')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R222.1",
+   "protection": "__init__: db_file is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R222.2",
+   "protection": "__init__: server_file is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R222.3",
+   "protection": "__init__: runner_file is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R223",
+   "protection": "__init__: problems.append('找不到 PostgreSQL、伺服器或 runner 的 Quadlet 檔')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R225",
+   "protection": "__init__: raise BackupError('incompatible', f'這台的 Omnigent 應用設定不是 HA 匯入支援的樣子：{\"；\".join(problems)}。', app=app.i",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R243.1",
+   "protection": "__init__: sorted(declared) != sorted({self.db_volume, server_volume, pi_volume} - {None})",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R243.2",
+   "protection": "__init__: len(declared) != 3",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R244.3",
+   "protection": "__init__: self.database != DATABASE",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R244.4",
+   "protection": "__init__: not self.pgdata",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": false,
+   "failures": 0,
+   "tests": 80,
+   "redundant": "none only without a data mount, and the volume comparison before it refuses that"
+  },
+  {
+   "id": "R244.5",
+   "protection": "__init__: not tempctr.TARGET_RE.fullmatch(self.pgdata)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R245.6",
+   "protection": "__init__: not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,62}', self.db_user)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R246",
+   "protection": "__init__: raise BackupError('incompatible', '這台的 Omnigent 資料卷、資料庫設定和 Quadlet 檔不一致，無法匯入。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R253",
+   "protection": "tempctr_image: raise BackupError('incompatible', '這台 Omnigent 的 Quadlet 設定缺少映像。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 24
+  },
+  {
+   "id": "R299",
+   "protection": "live_users: raise BackupError('job-failed', '無法讀取這台 Omnigent 的帳號。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R372",
+   "protection": "analyse: raise BackupError('incompatible', 'HA 的 Omnigent 沒有 omnigent 資料庫。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R375",
+   "protection": "analyse: raise BackupError('job-failed', '無法讀取 HA 的 Omnigent 資料庫。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R394",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫有 Omnigent 不會建立的資料表（{hacommon.names(unknown)}），無法安全地搬過來。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5
+  },
+  {
+   "id": "R396",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫缺少資料表（{hacommon.names(missing)}），版本或資料可能不完整。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R400",
+   "protection": "verdict: odd.append(f'其他結構描述（{hacommon.names([str(s) for s in objects[\"schemas\"]], 5)}）')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R402",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫含有 Omnigent 不會建立的物件（{\"、\".join(odd)}），無法安全地搬過來。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "R404",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫含有只有資料庫超級使用者才能建立的物件（{hacommon.names(found[\"superuser\"])}），' '無法安全",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R409",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫使用了這台不支援的擴充功能：{hacommon.names(odd_extensions)}。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R411",
+   "protection": "verdict: blockers.append('HA 的 Omnigent 資料庫不是 UTF8 編碼。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R412.1",
+   "protection": "verdict: ha_major is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R412.2",
+   "protection": "verdict: target_major is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R412.3",
+   "protection": "verdict: ha_major > target_major",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R413",
+   "protection": "verdict: blockers.append(f'HA 的 PostgreSQL 是 {ha_major or \"未知\"} 版，這台是 {target_major or \"未知\"} 版；只能從相同或較舊的版本搬過來",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R415.1",
+   "protection": "verdict: not ha_alembic",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R415.2",
+   "protection": "verdict: live_alembic_value is None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 29
+  },
+  {
+   "id": "R415.3",
+   "protection": "verdict: sorted(ha_alembic) != sorted(live_alembic_value)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 7
+  },
+  {
+   "id": "R416",
+   "protection": "verdict: blockers.append(f'資料庫結構版本不同：HA 是 {hacommon.names(ha_alembic, 5) or \"未知\"}，這台是 ' f'{\"、\".join(live_alem",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 7
+  },
+  {
+   "id": "R419",
+   "protection": "verdict: blockers.append('HA 備份裡找不到 Omnigent 的登入金鑰（accounts-cookie-secret），它應在 /data/omnigent-home/.omnigent/",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "R426",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 資料庫有格式不明的檔案位置（{hacommon.names(bad, 3)}），無法安全地搬過來。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "R428",
+   "protection": "verdict: blockers.append(f'HA 的 Omnigent 有 {len(lost)} 個代理程式包或檔案不在備份的檔案區裡（例如 {hacommon.names(lost, 3)}）；' '可能",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "R523",
+   "protection": "check: blockers.insert(0, blocker)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 7
+  },
+  {
+   "id": "R527",
+   "protection": "check: blockers.append(schema_blocker(differ))",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 2
+  },
+  {
+   "id": "R563.1",
+   "protection": "data_only_toc: not match",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58
+  },
+  {
+   "id": "R563.2",
+   "protection": "data_only_toc: match.group(1) in seen",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58
+  },
+  {
+   "id": "R564",
+   "protection": "data_only_toc: raise BackupError('incompatible', 'HA 的資料庫匯出清單格式不正確。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58
+  },
+  {
+   "id": "R570.1",
+   "protection": "data_only_toc: not entry",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 63
+  },
+  {
+   "id": "R570.2",
+   "protection": "data_only_toc: entry.group(2) not in allowed",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 10
+  },
+  {
+   "id": "R570.3",
+   "protection": "data_only_toc: entry.groups()[:2] in named",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 10
+  },
+  {
+   "id": "R571",
+   "protection": "data_only_toc: raise BackupError('incompatible', 'HA 的資料庫匯出清單有不屬於這台 Omnigent 資料庫結構的資料項目，' '無法安全地搬過來。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 10
+  },
+  {
+   "id": "R576",
+   "protection": "data_only_toc: raise BackupError('incompatible', 'HA 的資料庫匯出清單沒有資料。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 58
+  },
+  {
+   "id": "R592.1",
+   "protection": "schema_columns: not isinstance(value, list)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R592.2",
+   "protection": "schema_columns: not value",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R592.3",
+   "protection": "schema_columns: any(not isinstance(row, list) or len(row) != 6 for row in value)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R593",
+   "protection": "schema_columns: raise BackupError('incompatible', '無法確認 Omnigent 的資料表結構。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R655.1",
+   "protection": "capture_consistent_target_schema: not expected_alembic",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 48
+  },
+  {
+   "id": "R655.2",
+   "protection": "capture_consistent_target_schema: any(not isinstance(v, str) or not ALEMBIC_RE.fullmatch(v) for v in expected_alembic)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 48
+  },
+  {
+   "id": "R656",
+   "protection": "capture_consistent_target_schema: raise BackupError('incompatible', '目標 Omnigent 的結構版本不明。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 48
+  },
+  {
+   "id": "R677",
+   "protection": "capture_consistent_target_schema: raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id) from None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61
+  },
+  {
+   "id": "R678.1",
+   "protection": "capture_consistent_target_schema: not isinstance(columns, list)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61
+  },
+  {
+   "id": "R678.2",
+   "protection": "capture_consistent_target_schema: not columns",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61
+  },
+  {
+   "id": "R678.3",
+   "protection": "capture_consistent_target_schema: any(not isinstance(v, list) or len(v) != 6 for v in columns)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61
+  },
+  {
+   "id": "R679",
+   "protection": "capture_consistent_target_schema: raise BackupError('incompatible', '目標 Omnigent 的結構快照格式不正確。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 61
+  },
+  {
+   "id": "R691",
+   "protection": "capture_consistent_target_schema: raise",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 54
+  },
+  {
+   "id": "R730.1",
+   "protection": "require_sequence_sets: body",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 21
+  },
+  {
+   "id": "R730.2",
+   "protection": "require_sequence_sets: not (line in SCRIPT_HEADER or SCRIPT_HEADER_RE.fullmatch(line))",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "R731",
+   "protection": "require_sequence_sets: raise BackupError('incompatible', SEQUENCE_SET_ODD)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "R732.1",
+   "protection": "require_sequence_sets: len(names) != count",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 21
+  },
+  {
+   "id": "R732.2",
+   "protection": "require_sequence_sets: len(set(names)) != count",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 21
+  },
+  {
+   "id": "R732.3",
+   "protection": "require_sequence_sets: not set(names) <= set(sequences or ())",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "R733",
+   "protection": "require_sequence_sets: raise BackupError('incompatible', SEQUENCE_SET_ODD)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "R757",
+   "protection": "load_into_new_cluster: raise BackupError('incompatible', DATA_REFUSED, stage='data') from None",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39
+  },
+  {
+   "id": "R758",
+   "protection": "load_into_new_cluster: raise",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 39
+  },
+  {
+   "id": "R791",
+   "protection": "restore_trusted_data: raise BackupError('incompatible', 'HA 與目標 Omnigent 的資料表欄位結構不同。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "R821",
+   "protection": "carry_accounts_restricted: raise BackupError('job-failed', '無法確認 Omnigent 帳號。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R956.1",
+   "protection": "_signature: not isinstance(value, dict)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R956.2",
+   "protection": "_signature: set(value) != set(SIGNATURE_KEYS)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R957",
+   "protection": "_signature: raise BackupError('incompatible', '無法確認 Omnigent 的資料庫結構。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R973.1",
+   "protection": "live_schema: not isinstance(columns, list)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R973.2",
+   "protection": "live_schema: not columns",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R973.3",
+   "protection": "live_schema: any(not isinstance(r, list) or len(r) != 6 for r in columns)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R974",
+   "protection": "live_schema: raise BackupError('incompatible', '無法確認這台 Omnigent 的資料表結構。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R979",
+   "protection": "live_schema: raise BackupError('incompatible', '無法讀取這台 Omnigent 的資料庫結構版本。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R1017",
+   "protection": "trusted_schema: raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 34
+  },
+  {
+   "id": "R1020.1",
+   "protection": "trusted_schema: columns != before.columns",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 42
+  },
+  {
+   "id": "R1020.2",
+   "protection": "trusted_schema: after != before",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 36
+  },
+  {
+   "id": "R1022",
+   "protection": "trusted_schema: raise BackupError('incompatible', SCHEMA_CHANGED, app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 36
+  },
+  {
+   "id": "R1031",
+   "protection": "require_schema: raise BackupError('job-failed', f'新的 PostgreSQL 叢集的資料庫結構和這台 Omnigent 的不同（{\"、\".join(differ)}），' '已停止，",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 26
+  },
+  {
+   "id": "R1071",
+   "protection": "require_answers: raise BackupError('incompatible', f'{HA_ANSWERS_DIFFER}不一致的項目：{\"、\".join(differ[:10])}。', stage='answ",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 35
+  },
+  {
+   "id": "R1079",
+   "protection": "audit_new_cluster: raise BackupError('job-failed', '無法檢查新的 PostgreSQL 叢集。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 27
+  },
+  {
+   "id": "R1082",
+   "protection": "audit_new_cluster: problems.append('多出的資料庫角色')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 43
+  },
+  {
+   "id": "R1086",
+   "protection": "audit_new_cluster: problems.append(label)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 43
+  },
+  {
+   "id": "R1088",
+   "protection": "audit_new_cluster: raise BackupError('job-failed', f'新的 PostgreSQL 叢集含有不應存在的內容（{\"、\".join(problems)}），已停止，' '這台的應用沒有任何變更",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 43
+  },
+  {
+   "id": "R1101.1",
+   "protection": "require_registered_secrets: len(declared) != len(set(declared))",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45
+  },
+  {
+   "id": "R1101.2",
+   "protection": "require_registered_secrets: not referenced <= set(declared)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45
+  },
+  {
+   "id": "R1102",
+   "protection": "require_registered_secrets: raise BackupError('incompatible', 'Omnigent 的 Quadlet 機密未完整登記於應用設定，無法建立可回復候選。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 45
+  },
+  {
+   "id": "R1114",
+   "protection": "convert: raise BackupError('incompatible', f'Omnigent 不能搬過來：{blocker}', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 13
+  },
+  {
+   "id": "R1132",
+   "protection": "convert: raise BackupError('incompatible', f'Omnigent 不能搬過來：{blockers[0]}', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 15
+  },
+  {
+   "id": "R1158",
+   "protection": "convert: raise BackupError('incompatible', f'Omnigent 不能搬過來：{schema_blocker(differ)}', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 37
+  },
+  {
+   "id": "R1174",
+   "protection": "convert: raise BackupError('job-failed', '測試匯入沒有暫停全部 Omnigent 排程。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 19
+  },
+  {
+   "id": "R1182.1",
+   "protection": "convert: differ",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "R1182.2",
+   "protection": "convert: sorted(now_alembic or []) != sorted(found['alembic'])",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "R1183",
+   "protection": "convert: raise BackupError('job-failed', f'Omnigent 匯入後的資料和 HA 不同，已停止：{\"、\".join(differ[:10]) or \"結構版本\"}。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "R1189",
+   "protection": "convert: raise BackupError('job-failed', f'新的 PostgreSQL 叢集沒有正常關閉（結束碼 {code}）。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 9
+  },
+  {
+   "id": "R1194",
+   "protection": "convert: raise BackupError('job-failed', '新的 PostgreSQL 叢集沒有正常關閉。')",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 18
+  },
+  {
+   "id": "R1221",
+   "protection": "_convert_candidate: raise BackupError('incompatible', '目標資料庫結構變更未暫停，無法擷取安全快照。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 46
+  },
+  {
+   "id": "R1240",
+   "protection": "server_volume: raise BackupError('job-failed', '這台 Omnigent 伺服器資料卷的根目錄權限已改變。', app=app.id)",
+   "module": "woowbackup/ha_omnigent.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 70
+  }
+ ],
+ "all_caught": true,
+ "seconds": 1267.6
+}

@@ -1,0 +1,626 @@
+"""Item C, Omnigent (lane arm54-2): the REAL RPi5 HA backup (slug 45670371, add-on woow-omnigent 0.1.23) through the
+PRODUCTION engine on .54 into the test owner's rootless Omnigent 0.21.0 (arm64) under his user systemd.
+
+usage (through arm54_final_control.py run): arm54_final_owner_omnigent.py <workspace>
+
+One attempt = (1) remove what an earlier attempt of this script left (units, quadlets, containers, volumes, secrets,
+the engine directory is moved aside), (2) deploy the target from the Woow Omnigent package quadlets 6e4f0c0 as the
+owner (systemctl --user), (3) the engine: key-init, catalog-suggest (cold variant) + catalog-install, upload-begin/
+-finish, ha-check-start, ha-convert-start, restore-start, job-status, list through cli.main as root, every job
+executed by `run-job <id>` in its own process with the production dependencies (OwnerRunner); (4) logins and data,
+restart, rollback (restore-start of the restore's own safety backup); (5) the Omnigent units are stopped at the end.
+
+Public guard (never bypassed, asserted): the public HA check reports SECURITY_BLOCKER and the public convert job
+fails with it. The conversion of record is the INTERNAL candidate: a job created by the same public ha-convert-start
+request, executed in-process by jobs.run_job with the production deps and a handler table whose 'backup' entry is
+haimport._run_omnigent_candidate(ctx, params, schema_ddl_quiesced=True); the caller's quiescence = omnigent-server
+(the only schema writer) is stopped right after the product's live discovery (_prepare) and before any capture, and
+started again after the conversion. Restore and rollback are the public restore-start jobs.
+
+Stated deviations: runner placeholder (the package's runner image is a local build without arm64; the pinned
+PostgreSQL image is tagged localhost/woow-omnigent-runner:0.21.0-2 and the runner quadlet gets Entrypoint=/bin/sleep,
+Exec=infinity, PodmanArgs=--image-volume=ignore; the Pi agent is out of scope); published port 127.0.0.1:28000 in the
+owner's private network namespace (lo only); the catalog draft gets the loopback health URL when suggest finds none.
+Secrets: HA's test logins arrive in a 0600 file read and unlinked at start; the target's passwords are generated here
+and only reach the owner's podman secrets; tokens stay in memory; the output is scanned for every value before it
+is printed and replaced by a fixed failure if one is found."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import traceback
+import urllib.error
+import urllib.request
+import uuid
+from unittest import mock
+
+from arm54_final_runtime import ROOT, private_dir, report, sha256_file
+import arm54_final_owner_common as oc
+
+from woowbackup import cli, habackup, haimport, ha_omnigent, jobs  # noqa: E402
+from woowbackup.paths import Paths  # noqa: E402
+
+ATTESTED = {'45670371': '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4'}
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+PATHS = Paths(base=ROOT / 'engine')
+PACKAGE = ROOT / 'source/tests/e2e/lab/evidence/arm54-final-20261123/omnigent-package-6e4f0c0/quadlet'
+PG_IMAGE = ('docker.io/library/postgres:16.15-alpine3.24'
+            '@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139')
+SERVER_IMAGE = ('ghcr.io/omnigent-ai/omnigent-server:v0.21.0'
+                '@sha256:9bba2964f015ddbb61da0924267effd1801c0db8f44ecec95f401f24d9a3f90c')
+RUNNER_IMAGE = 'localhost/woow-omnigent-runner:0.21.0-2'
+DB, SERVER, RUNNER = 'omnigent-postgres', 'omnigent-server', 'omnigent-runner'
+UNITS = (DB + '.service', SERVER + '.service', RUNNER + '.service')
+DBVOL, SERVERVOL, PIVOL = 'omnigent-postgres-data', 'omnigent-server-data', 'omnigent-pi-data'
+VOLUMES = (DBVOL, SERVERVOL, PIVOL)
+VOLUME_UNITS = ('omnigent-postgres-volume.service', 'omnigent-server-volume.service', 'omnigent-pi-volume.service')
+SECRET_NAMES = ('omnigent-postgres-password', 'omnigent-database-url', 'omnigent-admin-password',
+                'omnigent-runner-password')
+TARGET_ADMIN, RUNNER_USER = 'a54-target-admin', 'a54-runner'
+PORT = 28000
+RENDER = {'@@OMNIGENT_BIND@@': '127.0.0.1', '@@OMNIGENT_PORT@@': str(PORT), '@@OMNIGENT_ACCOUNTS_BASE_URL@@': '',
+          '@@OMNIGENT_ADMIN_USERNAME@@': TARGET_ADMIN, '@@OMNIGENT_RUNNER_USERNAME@@': RUNNER_USER,
+          '@@OMNIGENT_PI_VOLUME@@': 'omnigent-pi.volume'}
+RUNNER_PLACEHOLDER = ('# lane arm54-2 placeholder (no arm64 runner image; the Pi agent is out of scope)\n'
+                      'Entrypoint=/bin/sleep\nExec=infinity\nPodmanArgs=--image-volume=ignore\n')
+BASE_URL = 'http://127.0.0.1:%d' % PORT
+HEALTH = BASE_URL + '/health'
+QUADLET_DIR = '.config/containers/systemd'
+RUN_JOB = '''import sys
+sys.path.insert(0, %r)
+from woowbackup import cli
+from woowbackup.paths import Paths
+sys.exit(cli.main(['run-job', sys.argv[1]], paths=Paths(base=%r)))
+''' % (str(ROOT / 'source/backup-engine'), str(ROOT / 'engine'))
+
+checks, facts, jobs_seen = {}, {}, {}
+PRIVATE = []
+out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete', 'owner': oc.OWNER,
+       'runner': 'production OwnerRunner (runuser + rootless Podman + systemd --user) via the root CLI and run-job',
+       'conversion': 'internal candidate (haimport._run_omnigent_candidate) in the production job runner; public '
+                     'import guard asserted closed',
+       'source': {'host': '192.168.2.34', 'slug': CHAIN['slug'], 'archive_sha256': ATTESTED.get(CHAIN['slug']),
+                  'addon': 'woow-omnigent 0.1.23'},
+       'checks': checks, 'facts': facts, 'jobs': jobs_seen}
+started = time.monotonic()
+launched = []
+WORK = private_dir('work', 'owner-omni-%d' % int(time.time()))
+
+
+def private(value):
+    if isinstance(value, str):
+        value = value.encode()
+    if isinstance(value, bytes) and len(value.strip()) >= 6:
+        PRIVATE.append(value)
+        PRIVATE.append(value.strip())
+    return value
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def rid(tag):
+    return 'a54m-%s-%s' % (tag, uuid.uuid4().hex[:12])
+
+
+def call(command, request=None):
+    buf = io.StringIO()
+    svc = cli.Services(PATHS, launcher=launched.append, unit_active=lambda unit: False)
+    code = cli.main([command], stdin=io.StringIO(json.dumps(request or {})), stdout=buf, services=svc)
+    reply = json.loads(buf.getvalue().strip().splitlines()[-1])
+    if code != 0 or not reply.get('ok'):
+        err = reply.get('error') or {}
+        facts['cli_refusal'] = {'command': command, 'code': err.get('code'),
+                                'message': oc.LONG_TOKEN.sub('<masked>', str(err.get('message')))[:400]}
+        raise RuntimeError('cli-refused')
+    return reply
+
+
+def job_view(label, job_id, run_exit, seconds):
+    status = call('job-status', {'job_id': job_id})
+    job, log = status['job'], status.get('log') or []
+    lines = log if isinstance(log, list) else str(log).splitlines()
+    jobs_seen[label] = {'job_id': job_id, 'type': job.get('type'), 'state': job.get('state'), 'run_job_exit': run_exit,
+                        'seconds': seconds, 'error': (job.get('error') or {}).get('code'),
+                        'log_tail': [oc.safe_tail(str(l), 200) for l in lines[-6:]]}
+    return job
+
+
+def run_job(label, start_command, request, timeout, expect='succeeded'):
+    before = len(launched)
+    job_id = call(start_command, request)['job_id']
+    must('%s_launched_once' % label, launched[before:] == [job_id])
+    t0 = time.monotonic()
+    p = subprocess.run(['/usr/bin/python3', '-I', '-c', RUN_JOB, job_id], capture_output=True, timeout=timeout,
+                       env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'})
+    job = job_view(label, job_id, p.returncode, round(time.monotonic() - t0, 1))
+    if expect == 'succeeded':
+        must('%s_succeeded' % label, job.get('state') == 'succeeded', state=job.get('state'),
+             error=jobs_seen[label]['error'], message=oc.safe_tail((job.get('error') or {}).get('message'), 300))
+    return job
+
+
+def verification_view(result):
+    return [(e.get('app'), e.get('match'), [(c.get('id'), c.get('match')) for c in e.get('checks') or []])
+            for e in result.get('verification') or [] if isinstance(e, dict)]
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def http(method, path, body=None, token=None, digest=False, timeout=30):
+    """One request to the target server on the owner's private loopback (this process joined that namespace)."""
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    if token:
+        headers['Authorization'] = 'Bearer ' + token
+    request = urllib.request.Request(BASE_URL + path, data=data, headers=headers, method=method)
+    try:
+        with OPENER.open(request, timeout=timeout) as response:
+            raw = response.read(4 * 1024 * 1024 + 1)
+            assert len(raw) <= 4 * 1024 * 1024, 'response-too-large'
+            if digest:
+                return response.status, {'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw)}
+            try:
+                return response.status, (json.loads(raw) if raw else None)
+            except ValueError:
+                return response.status, None
+    except urllib.error.HTTPError as error:
+        return error.code, None
+    except (urllib.error.URLError, OSError):
+        return None, None
+
+
+def wait_server(seconds=300):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if http('GET', '/health', timeout=10)[0] == 200:
+            return True
+        time.sleep(3)
+    raise AssertionError('server-not-ready')
+
+
+def login(user, password):
+    status, body = http('POST', '/auth/login', {'username': user, 'password': password})
+    token = body.get('token') if status == 200 and isinstance(body, dict) else None
+    if isinstance(body, dict):
+        for key in ('token', 'refresh_token', 'access_token'):
+            if isinstance(body.get(key), str):
+                private(body[key])
+    return status, token
+
+
+def items(body, *keys):
+    if isinstance(body, list):
+        return body
+    if isinstance(body, dict):
+        for key in keys + ('data', 'items', 'results'):
+            if isinstance(body.get(key), list):
+                return body[key]
+    return []
+
+
+def sql(statement):
+    return oc.podman('exec', '-i', DB, 'psql', '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-U', 'omnigent', '-d',
+                     'omnigent', '-f', '-', input=statement.encode(), timeout=60).stdout.decode().strip()
+
+
+def volume_tar(members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tar:
+        for name, data, mode in members:
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def export_file(volume, path):
+    with open(path, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        oc.podman('volume', 'export', volume, stdout=handle, timeout=600)
+    return path
+
+
+def tar_files(path):
+    found = {}
+    with tarfile.open(path) as tar:
+        for member in tar:
+            if member.isfile():
+                found[member.name.removeprefix('./')] = hashlib.sha256(tar.extractfile(member).read()).hexdigest()
+    return found
+
+
+def server_cookie():
+    data = oc.podman('exec', SERVER, 'cat', '/data/artifacts/accounts-cookie-secret', check=False).stdout or b''
+    private(data)
+    return data
+
+
+def source_cookie():
+    with habackup.open_backup(ARCHIVE) as opened:
+        member = opened.layout.addon('1b7b4ce7_woow-omnigent')
+        with opened.open_member(member.name, None) as stream:
+            select = habackup.Select(include=('data/omnigent-home/.omnigent/artifacts/accounts-cookie-secret',),
+                                     symlinks=(), hardlinks=False)
+            for entry in habackup.iter_entries(stream, select, habackup.Report()):
+                return private(entry.read_all(4096))
+    return None
+
+
+def active(unit):
+    return oc.systemctl('is-active', unit, check=False).stdout.decode().strip()
+
+
+def start_stack():
+    for unit in UNITS:
+        oc.systemctl('start', unit, timeout=400)
+    wait_server()
+
+
+def stop_stack():
+    oc.systemctl('stop', *reversed(UNITS), timeout=400, check=False)
+
+
+def remove_previous():
+    """Whatever an earlier attempt of this script left in the owner's account (idempotent)."""
+    qdir = Path(oc.account().pw_dir) / QUADLET_DIR
+    left = sorted(p.name for p in qdir.iterdir() if p.name.startswith('omnigent')) if qdir.is_dir() else []
+    facts['previous_attempt_left'] = {'quadlets': len(left), 'engine_dir': (ROOT / 'engine').exists()}
+    if left:
+        stop_stack()
+        oc.systemctl('stop', *VOLUME_UNITS, 'omnigent-network.service', timeout=200, check=False)
+        oc.owner(['/bin/rm', '-f', *[str(qdir / name) for name in left]], timeout=60)
+        oc.systemctl('daemon-reload', timeout=120)
+    for name in (RUNNER, SERVER, DB):
+        oc.podman('rm', '--force', '--time', '10', name, timeout=120, check=False)
+    for volume in VOLUMES:
+        oc.podman('volume', 'rm', '--force', volume, timeout=60, check=False)
+    for name in SECRET_NAMES:
+        oc.podman('secret', 'rm', name, timeout=60, check=False)
+    oc.podman('network', 'rm', '--force', 'omnigent', timeout=60, check=False)
+    if (ROOT / 'engine').exists():
+        n = 1
+        while (ROOT / ('engine-before-omnigent-%d' % n)).exists():
+            n += 1
+        os.rename(ROOT / 'engine', ROOT / ('engine-before-omnigent-%d' % n))
+        facts['engine_moved_to'] = 'engine-before-omnigent-%d' % n
+
+
+def verify_restored(phase, expect, creds, passwords, ha_cookie, pi_files, server_marker):
+    pre = phase + '_'
+    status, info = http('GET', '/v1/info')
+    must(pre + 'info_version', status == 200 and (info or {}).get('server_version') == '0.21.0'
+         and (info or {}).get('needs_setup') is False, status=status)
+    a_status, admin = login(*creds['admin'])
+    m_status, member = login(*creds['member'])
+    t_status, target = login(TARGET_ADMIN, passwords['admin'])
+    must(pre + 'ha_admin_login_ok', a_status == 200 and bool(admin), status=a_status)
+    must(pre + 'ha_member_login_ok', m_status == 200 and bool(member), status=m_status)
+    must(pre + 'target_admin_login_kept', t_status == 200 and bool(target), status=t_status)
+    wrong, _tok = login(creds['admin'][0], passwords['admin'])
+    must(pre + 'ha_admin_rejects_target_admin_login_value', wrong in (400, 401, 403), status=wrong)
+    s, me = http('GET', '/auth/me', token=admin)
+    must(pre + 'ha_admin_identity', s == 200 and (me or {}).get('id') == creds['admin'][0]
+         and (me or {}).get('is_admin') is True)
+    s, mm = http('GET', '/auth/me', token=member)
+    must(pre + 'ha_member_identity', s == 200 and (mm or {}).get('id') == creds['member'][0]
+         and not (mm or {}).get('is_admin'))
+    s, users = http('GET', '/auth/users', token=admin)
+    ids = {(u.get('id'), bool(u.get('is_admin'))) for u in items(users, 'users') if isinstance(u, dict)}
+    want = {(u['id'], bool(u['is_admin'])) for u in expect['users']} | {(TARGET_ADMIN, True)}
+    must(pre + 'users_include_ha_users_and_kept_admin', s == 200 and want <= ids, listed=len(ids))
+    s, agent = http('GET', '/v1/agents/' + expect['agent']['id'], token=admin)
+    must(pre + 'ha_agent', s == 200 and (agent or {}).get('name') == expect['agent']['name'])
+    s, task = http('GET', '/v1/scheduled-tasks/' + expect['scheduled_task']['id'], token=admin)
+    t = task or {}
+    must(pre + 'ha_scheduled_task', s == 200 and t.get('name') == expect['scheduled_task']['name']
+         and t.get('state') == expect['scheduled_task']['state'] and t.get('rrule') == expect['scheduled_task']['rrule']
+         and t.get('last_run_at') is None, state=t.get('state'))
+    sid = expect['admin_session']['id']
+    s, session = http('GET', '/v1/sessions/' + sid, token=admin)
+    must(pre + 'ha_admin_session_title', s == 200 and ((session or {}).get('title') or (session or {}).get('name'))
+         == expect['admin_session']['title'])
+    s, labels = http('GET', '/v1/sessions/' + sid + '/labels', token=admin)
+    label_text = json.dumps(labels, ensure_ascii=False)
+    must(pre + 'ha_admin_session_label_b1', s == 200 and '"b1"' in label_text
+         and json.dumps(expect['admin_session']['labels']['b1'], ensure_ascii=False) in label_text)
+    s, comments = http('GET', '/v1/sessions/' + sid + '/comments', token=admin)
+    must(pre + 'ha_admin_session_comments', s == 200 and len(items(comments, 'comments'))
+         == expect['admin_session']['comments'])
+    att = expect['attachment']
+    s, content = http('GET', '/v1/sessions/%s/resources/files/%s/content' % (sid, att['file_id']), token=admin,
+                      digest=True)
+    must(pre + 'ha_attachment_sha256', s == 200 and (content or {}).get('sha256') == att['sha256']
+         and (content or {}).get('bytes') == att['bytes'], status=s)
+    s, msessions = http('GET', '/v1/sessions', token=member)
+    mids = {x.get('id') for x in items(msessions, 'sessions', 'conversations') if isinstance(x, dict)}
+    must(pre + 'ha_member_session', s == 200 and expect['member_sessions'][0]['id'] in mids)
+    must(pre + 'alembic_is_ha', sql('SELECT version_num FROM alembic_version;') == expect['alembic'])
+    counts = {t_: int(sql('SELECT count(*) FROM %s;' % t_)) for t_ in ha_omnigent.TABLES}
+    expected = dict(expect['db_counts'], users=expect['db_counts']['users'] + 1)
+    grows = 'account_tokens'
+    differ = sorted(k for k, v in expected.items() if k != grows and counts.get(k) != v)
+    must(pre + 'table_counts_equal_ha_plus_kept_admin', not differ and counts[grows] >= expected[grows],
+         differing=differ, tables=len(expected))
+    cookie = server_cookie()
+    must(pre + 'ha_cookie_installed', bool(cookie) and cookie == ha_cookie)
+    pi_now = tar_files(export_file(PIVOL, WORK / ('pi-' + phase + '.tar')))
+    must(pre + 'runner_pi_volume_unchanged', pi_now == pi_files, files=len(pi_now))
+    marker = oc.podman('exec', SERVER, 'cat', '/data/a54-target-marker.txt', check=False).stdout
+    must(pre + 'target_server_settings_kept', marker == server_marker)
+    for unit in UNITS:
+        must(pre + 'unit_active_' + unit.split('.')[0], active(unit) == 'active')
+
+
+creds_path = ROOT / 'input/omni-creds.json'
+try:
+    out['phase'] = 'inputs'
+    acct = oc.account()
+    must('owner_present', acct is not None)
+    pid = oc.manager_pid(acct.pw_uid)
+    must('archive_is_the_attested_rpi5_backup', CHAIN['slug'] in ATTESTED and not CHAIN.get('key_file')
+         and sha256_file(ARCHIVE) == ATTESTED[CHAIN['slug']])
+    raw = json.loads(creds_path.read_text())
+    creds_path.unlink()
+    creds = {'admin': tuple(raw['admin']), 'member': tuple(raw['member'])}
+    for _user, password in creds.values():
+        private(password)
+    expect = json.loads((ROOT / 'input/omni-expect.json').read_text())
+    must('logins_match_recorded_source', creds['admin'][0] == expect['admin'] and creds['member'][0] == expect['member']
+         and creds['admin'][0] == next(u['id'] for u in expect['users'] if u['is_admin']))
+    ha_cookie = source_cookie()
+    must('source_cookie_read', bool(ha_cookie))
+    host_mnt, host_net = os.stat('/proc/1/ns/mnt').st_ino, oc.netns_inode(1)
+    facts['engine_tools'] = oc.enter_tools_namespace(ROOT)
+    oc.join_netns(pid)
+    must('engine_in_private_mount_and_owner_netns', os.stat('/proc/self/ns/mnt').st_ino != host_mnt
+         and oc.netns_inode(os.getpid()) == oc.netns_inode(pid) != host_net)
+
+    out['phase'] = 'previous-attempt'
+    remove_previous()
+    oc.systemctl('stop', 'headscale.service', timeout=300, check=False)  # memory: one stack at a time on .54
+    facts['headscale_unit_after_stop'] = active('headscale.service')
+
+    out['phase'] = 'target-images'
+    pg_id = json.loads(oc.podman('image', 'inspect', PG_IMAGE, timeout=60).stdout)[0]['Id']
+    server_info = json.loads(oc.podman('image', 'inspect', SERVER_IMAGE, timeout=60).stdout)[0]
+    must('owner_images_arm64', server_info.get('Architecture') == 'arm64')
+    oc.podman('tag', pg_id, RUNNER_IMAGE, timeout=60)
+    facts['runner_placeholder_image'] = {'tag': RUNNER_IMAGE, 'is_pinned_pg_image': True, 'id': pg_id[:12]}
+
+    out['phase'] = 'target-deploy'
+    files = {}
+    for path in sorted(PACKAGE.iterdir()):
+        text = path.read_text()
+        for key, value in RENDER.items():
+            text = text.replace(key, value)
+        assert '@@' not in text, 'unrendered-placeholder'
+        if path.name == 'omnigent-runner.container':
+            assert text.count('Image=' + RUNNER_IMAGE + '\n') == 1, 'runner-image-line-changed'
+            text = text.replace('Image=' + RUNNER_IMAGE + '\n', 'Image=' + RUNNER_IMAGE + '\n' + RUNNER_PLACEHOLDER)
+        files[QUADLET_DIR + '/' + path.name] = ('0644', text)
+    publish = [line for _m, t in files.values() for line in t.splitlines() if line.startswith('PublishPort=')]
+    must('published_only_on_loopback', publish == ['PublishPort=127.0.0.1:%d:8000' % PORT], publish=publish)
+    oc.write_owner_files(files)
+    passwords = {'db': secrets.token_urlsafe(32), 'admin': secrets.token_urlsafe(32), 'runner': secrets.token_urlsafe(32)}
+    for value in passwords.values():
+        private(value)
+    db_url = 'postgresql://omnigent:%s@omnigent-postgres:5432/omnigent' % passwords['db']
+    private(db_url)
+    for name, value in zip(SECRET_NAMES, (passwords['db'], db_url, passwords['admin'], passwords['runner'])):
+        oc.podman('secret', 'create', name, '-', input=value.encode(), timeout=60)
+    oc.systemctl('daemon-reload', timeout=120)
+    for unit in VOLUME_UNITS:
+        oc.systemctl('start', unit, timeout=120)
+    pi_marker = b'a54 owner target runner identity marker 20261123\n'
+    server_marker = b'a54 owner target server runtime settings marker 20261123\n'
+    oc.podman('volume', 'import', PIVOL, '-', input=volume_tar([('a54-runner-marker.txt', pi_marker, 0o600)]),
+              timeout=120)
+    oc.podman('volume', 'import', SERVERVOL, '-', input=volume_tar([('a54-target-marker.txt', server_marker, 0o644)]),
+              timeout=120)
+    start_stack()
+    for unit in UNITS:
+        must('target_unit_active_' + unit.split('.')[0], active(unit) == 'active')
+    status, info = http('GET', '/v1/info')
+    must('target_info', status == 200 and (info or {}).get('server_version') == '0.21.0'
+         and (info or {}).get('needs_setup') is False, status=status)
+    t_status, target_token = login(TARGET_ADMIN, passwords['admin'])
+    must('target_admin_login_before_import', t_status == 200 and bool(target_token))
+    s, users = http('GET', '/auth/users', token=target_token)
+    listed = {u.get('id') for u in items(users, 'users') if isinstance(u, dict)}
+    ha_ids = {u['id'] for u in expect['users']}
+    must('target_live_users_own_admin_no_ha_user', s == 200 and TARGET_ADMIN in listed and not listed & ha_ids,
+         listed=len(listed))
+    ha_status, _tok = login(*creds['admin'])
+    must('ha_admin_unknown_before_import', ha_status in (400, 401, 403), status=ha_status)
+    must('target_alembic_equals_ha', sql('SELECT version_num FROM alembic_version;') == expect['alembic'])
+    target_user_rows = int(sql('SELECT count(*) FROM users;'))
+    facts['target_user_rows_before_import'] = target_user_rows
+    target_cookie = server_cookie()
+    must('target_has_own_cookie', bool(target_cookie) and target_cookie != ha_cookie)
+    pi_files = tar_files(export_file(PIVOL, WORK / 'pi-pre.tar'))
+    must('host_netns_has_no_test_listener', b':%d' % PORT not in subprocess.run(
+        ['nsenter', '--net=/proc/1/ns/net', 'ss', '-H', '-lnt'], capture_output=True, timeout=30).stdout)
+
+    out['phase'] = 'engine-setup'
+    PATHS.data.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    call('key-init')
+    suggested = call('catalog-suggest', {'owner': oc.OWNER})
+    apps = [a for a in suggested.get('apps') or [] if a.get('id') == 'omnigent']
+    must('product_suggest_found_omnigent', len(apps) == 1,
+         ids=[[a.get('id'), len(a.get('variants') or [])] for a in suggested.get('apps') or []])
+    variant = next((v for v in apps[0].get('variants') or [] if v.get('id') == 'cold'), None)
+    must('suggest_has_cold_variant_valid', variant is not None and variant.get('valid') is True,
+         variants=[(v.get('id'), v.get('valid'), v.get('field')) for v in apps[0].get('variants') or []])
+    entry = json.loads(json.dumps(variant['entry']))
+    facts['suggested'] = {k: entry.get(k) for k in ('owner', 'units', 'writer_units', 'volumes', 'secrets', 'health',
+                                                    'postgres', 'data_dirs')}
+    facts['suggested']['verify'] = [(v.get('id'), v.get('type')) for v in entry.get('verify') or []]
+    facts['suggest_notes'] = sorted({n.get('code') for n in apps[0].get('notes') or []})
+    changes = []
+    if not entry.get('health'):
+        entry['health'] = [{'type': 'http', 'url': HEALTH, 'expect_status': 200, 'timeout_seconds': 240}]
+        changes.append('health URL %s added (suggest found none)' % HEALTH)
+    facts['installed_entry_changes'] = changes
+    preview = call('catalog-install', {'entry': entry})
+    must('catalog_preview_valid', preview.get('valid') is True and bool(preview.get('new_sha256'))
+         and preview.get('expected_sha256') is None, error=(preview.get('error') or {}).get('code'))
+    call('catalog-install', {'entry': entry, 'confirm': True, 'expected_sha256': preview['expected_sha256']})
+
+    out['phase'] = 'ha-upload'
+    begun = call('upload-begin', {'filename': 'rpi5-%s.tar' % CHAIN['slug'], 'size': ARCHIVE.stat().st_size})
+    shutil.copyfile(ARCHIVE, begun['path'])
+    ha = call('upload-finish', {'upload_id': begun['upload_id']}).get('ha_backup') or {}
+    must('ha_backup_registered_with_omnigent', bool(ha.get('id')) and 'omnigent' in json.dumps(ha.get('importable_apps')))
+
+    out['phase'] = 'public-guard'
+    job = run_job('ha_check', 'ha-check-start', {'ha_backup_id': ha['id'], 'apps': ['omnigent'],
+                                                  'request_id': rid('check')}, 900)
+    row = next((a for a in ((job.get('result') or {}).get('ha_check') or {}).get('apps') or []
+                if a.get('app_id') == 'omnigent'), {})
+    must('public_check_reports_security_blocker', row.get('ok') is False
+         and (row.get('blockers') or [None])[0] == ha_omnigent.SECURITY_BLOCKER,
+         blockers=len(row.get('blockers') or []), arch=row.get('arch'), version=row.get('version'),
+         target_version=row.get('target_version'))
+    facts['public_check_other_blockers'] = [oc.safe_tail(b, 160) for b in (row.get('blockers') or [])[1:]]
+    job = run_job('public_convert', 'ha-convert-start', {'ha_backup_id': ha['id'], 'apps': ['omnigent'],
+                                                          'test_mode': False, 'confirm': True,
+                                                          'request_id': rid('public')}, 900, expect='failed')
+    err = job.get('error') or {}
+    must('public_convert_refused_with_security_blocker', job.get('state') == 'failed'
+         and err.get('code') == 'incompatible' and ha_omnigent.SECURITY_BLOCKER in str(err.get('message')))
+    for unit in UNITS:
+        must('target_untouched_by_refusal_' + unit.split('.')[0], active(unit) == 'active')
+
+    out['phase'] = 'candidate-convert'
+    reply = call('ha-convert-start', {'ha_backup_id': ha['id'], 'apps': ['omnigent'], 'test_mode': False,
+                                      'confirm': True, 'request_id': rid('candidate')})
+    candidate_id = reply['job_id']
+    quiesced = {}
+    real_prepare = ha_omnigent._prepare
+
+    def prepare_then_quiesce(work_, app_):
+        result = real_prepare(work_, app_)
+        quiesced['live_version'], quiesced['live_alembic'] = result[1], result[2]
+        # DDL quiescence (the caller's contract): the server, the only schema writer, stops before any capture.
+        oc.systemctl('stop', RUNNER + '.service', SERVER + '.service', timeout=300)
+        quiesced['server_stopped'] = active(SERVER + '.service') != 'active'
+        return result
+
+    def candidate(ctx, params):
+        with mock.patch.object(ha_omnigent, '_prepare', prepare_then_quiesce):
+            return haimport._run_omnigent_candidate(ctx, params, schema_ddl_quiesced=True)
+
+    t0 = time.monotonic()
+    record = jobs.run_job(PATHS, candidate_id, handlers={'backup': candidate})
+    job = job_view('candidate_convert', candidate_id, None, round(time.monotonic() - t0, 1))
+    must('candidate_convert_succeeded', job.get('state') == 'succeeded' and record.get('state') == 'succeeded',
+         error=jobs_seen['candidate_convert']['error'],
+         message=oc.safe_tail((job.get('error') or {}).get('message'), 300))
+    must('live_discovery_from_running_server_then_quiesced', quiesced.get('live_version') == '0.21.0'
+         and quiesced.get('live_alembic') == [expect['alembic']] and quiesced.get('server_stopped') is True)
+    converted = job.get('result') or {}
+    backup_id = converted.get('backup_id')
+    must('candidate_backup_made_encrypted', bool(backup_id) and converted.get('encrypted') is True,
+         apps=converted.get('apps'))
+    must('candidate_listed_with_ha_origin', any(b.get('id') == backup_id for b in call('list').get('backups') or []))
+    start_stack()  # the app runs again before its restore, as on any device
+
+    out['phase'] = 'restore'
+    job = run_job('restore', 'restore-start', {'backup_id': backup_id, 'apps': ['omnigent'], 'confirm': True,
+                                                'request_id': rid('restore')}, 1800)
+    restored = job.get('result') or {}
+    safety = restored.get('safety_backup_id')
+    facts['restore'] = {'changed': restored.get('changed'), 'rolled_back': restored.get('rolled_back'),
+                        'safety_backup_id': safety, 'health': [(c.get('id'), c.get('status')) for c in restored.get('health') or []],
+                        'verification': verification_view(restored), 'timing': restored.get('timing'),
+                        'warnings': len(restored.get('warnings') or [])}
+    must('restore_changed_not_rolled_back_with_safety', restored.get('changed') is True
+         and restored.get('rolled_back') is False and bool(safety))
+    must('restore_health_checks_ok', bool(restored.get('health'))
+         and all(c.get('status') == 'ok' for c in restored.get('health')))
+    must('restore_verification_no_mismatch', all(e.get('match') is not False for e in restored.get('verification') or []))
+    wait_server()
+    verify_restored('installed', expect, creds, passwords, ha_cookie, pi_files, server_marker)
+
+    out['phase'] = 'restart'
+    stop_stack()
+    start_stack()
+    verify_restored('restarted', expect, creds, passwords, ha_cookie, pi_files, server_marker)
+
+    out['phase'] = 'rollback'
+    job = run_job('rollback', 'restore-start', {'backup_id': safety, 'apps': ['omnigent'], 'confirm': True,
+                                                 'request_id': rid('rollback')}, 1800)
+    rolled = job.get('result') or {}
+    facts['rollback'] = {'changed': rolled.get('changed'), 'rolled_back': rolled.get('rolled_back'),
+                         'health': [(c.get('id'), c.get('status')) for c in rolled.get('health') or []],
+                         'verification': verification_view(rolled)}
+    entries = rolled.get('verification') or []
+    must('rollback_restore_ok', rolled.get('changed') is True and rolled.get('rolled_back') is False
+         and all(c.get('status') == 'ok' for c in rolled.get('health') or [])
+         and all(e.get('match') is not False for e in entries))
+    wait_server()
+    t_status, target_token = login(TARGET_ADMIN, passwords['admin'])
+    ha_status, _tok = login(*creds['admin'])
+    s, users = http('GET', '/auth/users', token=target_token)
+    a_status, _agent = http('GET', '/v1/agents/' + expect['agent']['id'], token=target_token)
+    listed = {u.get('id') for u in items(users, 'users') if isinstance(u, dict)}
+    must('rollback_restores_pre_import_target', t_status == 200 and ha_status in (400, 401, 403) and s == 200
+         and TARGET_ADMIN in listed and not listed & ha_ids and a_status in (403, 404)
+         and server_cookie() == target_cookie and sql('SELECT count(*) FROM users;') == str(target_user_rows),
+         target=t_status, ha=ha_status, agent=a_status)
+
+    out['phase'] = 'engine-leftovers'
+    temp = oc.podman('ps', '-a', '--format', '{{.Names}}').stdout.decode().split()
+    must('no_throwaway_containers_left', all(not n.startswith('woowbk-') for n in temp), containers=temp)
+    staging = sorted(os.listdir(PATHS.staging)) if PATHS.staging.exists() else []
+    must('no_staging_left', staging == [], staging=staging)
+    out['status'] = 'passed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001
+    out['error'] = type(error).__name__
+    out['error_where'] = [[Path(f.filename).name, f.lineno, f.name] for f in traceback.extract_tb(error.__traceback__)[-4:]]
+    if isinstance(error, (AssertionError, RuntimeError, oc.OwnerCommandFailed)):
+        out['error_detail'] = oc.safe_tail(str(error), 400)
+finally:
+    if creds_path.exists():
+        creds_path.unlink()
+        facts['login_file_removed_late'] = True
+    try:
+        stop_stack()  # memory on .54: the stack does not stay up after an attempt (files stay for the cleanup)
+        facts['units_after_attempt'] = {u: active(u) for u in UNITS}
+    except Exception:  # noqa: BLE001
+        facts['units_after_attempt'] = 'unknown'
+    shutil.rmtree(WORK, ignore_errors=True)
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    needles = {v for v in PRIVATE if len(v) >= 6}
+    encoded = json.dumps(out, sort_keys=True).encode()
+    if any(v in encoded or json.dumps(v.decode('latin-1'))[1:-1].encode() in encoded for v in needles):
+        out = {'status': 'failed', 'failed_check': 'secret_in_output_suppressed', 'commercial_acceptance': 'not-complete'}
+    report(ROOT / 'owner-omnigent-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

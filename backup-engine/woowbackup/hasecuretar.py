@@ -20,18 +20,19 @@ keyed BLAKE2b-256 of the empty message (person "SecureTarv3"). Output is byte-id
 every well-formed member (haimport/ref/verify.py) except where that library is wrong: v1 is unpadded only when its
 last block is not valid PKCS7 (an uncompressed v1 tar; the library dropped its last read buffer).
 
-Hardened beyond the library: the member size in the outer tar must match the header exactly (v2: plaintext size
-rounded up to the next block; v3: plaintext size + 17 B per chunk), v2 padding and plaintext size are checked, v3
-chunks must be exactly 1 MiB except the last and carry exactly the tags the writer uses. A wrong key is reported
-before any plaintext is returned (v3: validation key, exact; v1/v2: the first 512 decrypted bytes must look like
-gzip or tar, as securetar and Supervisor check it, a heuristic). Memory stays bounded (one ~1 MiB chunk at a time;
-Argon2id uses the format's fixed 16 MiB).
+Hardened beyond the library: the member must hold everything its header announces (v2: plaintext size rounded up to the
+next block; v3: plaintext size + 17 B per chunk), v2 padding and plaintext size are checked, v3 chunks must be exactly
+1 MiB except the last and carry exactly the tags the writer uses. Bytes after what the header announces are never read
+(HAOS parity, KEY-13: the content is complete without them; v1 has no header, so there everything is content). A wrong
+key is reported before any plaintext is returned (v3: validation key, exact; v1/v2: the first 512 decrypted bytes must
+look like gzip or tar, as securetar and Supervisor check it, a heuristic). Memory stays bounded (one ~1 MiB chunk at a
+time; Argon2id uses the format's fixed 16 MiB).
 
 PyNaCl (v3, Ubuntu `python3-nacl`) and cryptography (v1/v2, `python3-cryptography`) are imported only when a member
 of that kind is read; a missing package is an `internal-error` that names the package. Errors are BackupError codes
-of errors.CODES: `wrong-key`, `corrupt-archive` (truncated, tampered or malformed), `unsupported-format` (a SecureTar
-version other than 2 or 3), `invalid-request` (a key that is not text). The key is never part of a message, a detail
-or a repr.
+of errors.CODES: `wrong-key`, `corrupt-archive` (truncated, tampered or malformed: `broken`, with the detail `scope`
+"member" because it concerns one member only), `unsupported-format` (a SecureTar version other than 2 or 3),
+`invalid-request` (a key that is not text). The key is never part of a message, a detail or a repr.
 """
 import hashlib
 import hmac
@@ -63,7 +64,9 @@ TAR_MAGIC_AT = 257
 MAX_PASSWORD = 4096
 
 WRONG_KEY_MESSAGE = 'HA 備份金鑰不正確，請確認後再試一次。'
-CORRUPT_MESSAGE = 'HA 備份檔已損毀或遭到修改，無法使用。'
+CORRUPT_MESSAGE = 'HA 備份檔已損毀或遭到修改，無法使用。'                # the whole file
+MEMBER_MESSAGE = ('HA 備份裡這一項的資料讀不出來（檔案不完整、損毀或遭到修改），所以不會使用它。'
+                  '請在 HA 重新備份後再匯入；這台的應用不會變更。')       # one member of it
 UNSUPPORTED_MESSAGE = '這份 HA 備份使用不支援的加密格式，請更新這台設備的備份元件。'
 KEY_REQUIRED_MESSAGE = '這份 HA 備份已加密，請輸入 HA 備份金鑰。'
 BAD_KEY_MESSAGE = '不是有效的 HA 備份金鑰。'
@@ -72,7 +75,13 @@ CRYPTOGRAPHY_MISSING = '系統缺少 python3-cryptography，無法解開 2026 �
 
 
 def corrupt(reason, **details):
+    """The whole HA backup file cannot be used."""
     return BackupError('corrupt-archive', CORRUPT_MESSAGE, reason=reason, **details)
+
+
+def broken(reason, **details):
+    """One member of the file (an add-on or a folder) cannot be read; the others can. `scope` tells it apart."""
+    return BackupError('corrupt-archive', MEMBER_MESSAGE, reason=reason, scope='member', **details)
 
 
 def wrong_key(reason):
@@ -85,7 +94,7 @@ def key_required(**details):
 
 def _unsupported(version):
     return BackupError('unsupported-format', UNSUPPORTED_MESSAGE, reason='unsupported SecureTar version',
-                       version=version)
+                       scope='member', version=version)
 
 
 # ---------------------------------------------------------------- what a member is
@@ -113,15 +122,16 @@ def sniff(head):
 
 
 def ciphertext_ok(kind, member_size, head):
-    """True when `member_size` (the member's size in the outer tar) fits the header in `head` (>= 48 bytes): v1 = salt +
-    whole blocks, v2 = header + plaintext size rounded up to the next block (PKCS7 always pads), v3 = header +
-    plaintext size + 17 B per 1 MiB chunk (at least one). Checked when a backup is described, before any key."""
+    """True when a member of `member_size` bytes in the outer tar can hold what the header in `head` (>= 48 bytes)
+    announces: v1 = salt + whole blocks, v2 = header + plaintext size rounded up to the next block (PKCS7 always pads),
+    v3 = header + plaintext size + 17 B per 1 MiB chunk (at least one). A member that is shorter was cut off (KEY-07);
+    what a longer one holds after that is never read (KEY-13). Checked when a backup is described, before any key."""
     if kind == 'v1':
         return member_size > HEADER_SIZE[1] and (member_size - HEADER_SIZE[1]) % AES_BLOCK == 0
     if len(head) < FILE_ID_SIZE + METADATA_SIZE:
         return False
     (plaintext,) = METADATA.unpack(bytes(head[FILE_ID_SIZE:FILE_ID_SIZE + METADATA_SIZE]))
-    return member_size == HEADER_SIZE[2 if kind == 'v2' else 3] + _ciphertext_size(kind, plaintext)
+    return member_size >= HEADER_SIZE[2 if kind == 'v2' else 3] + _ciphertext_size(kind, plaintext)
 
 
 def _ciphertext_size(kind, plaintext):
@@ -223,26 +233,26 @@ class _Source:
 
 def read_header(src, member_size):
     """(kind, plaintext size or None, cipher init bytes) of the member at the current position of `src`; checks that
-    the member size fits the header (see ciphertext_ok)."""
+    the member holds what its header announces (see ciphertext_ok)."""
     first = src.read_exact(FILE_ID_SIZE)
     if len(first) < FILE_ID_SIZE:
-        raise corrupt('member shorter than a SecureTar header')
+        raise broken('member shorter than a SecureTar header')
     kind = sniff(first)
     if kind == 'unsupported':
         raise _unsupported(first[len(MAGIC)])
     if kind not in ('v2', 'v3'):
         if member_size <= HEADER_SIZE[1] or (member_size - HEADER_SIZE[1]) % AES_BLOCK:
-            raise corrupt('legacy ciphertext is not a whole number of blocks')
+            raise broken('legacy ciphertext is not a whole number of blocks')
         return 'v1', None, first
     meta = src.read_exact(METADATA_SIZE)
     if len(meta) < METADATA_SIZE:
-        raise corrupt('truncated SecureTar header')
+        raise broken('truncated SecureTar header')
     (plaintext,) = METADATA.unpack(meta)
     init = src.read_exact(AES_BLOCK if kind == 'v2' else V3_INIT.size)
     if len(init) < (AES_BLOCK if kind == 'v2' else V3_INIT.size):
-        raise corrupt('truncated SecureTar header')
-    if member_size != HEADER_SIZE[int(kind[1])] + _ciphertext_size(kind, plaintext):
-        raise corrupt('member size does not match the SecureTar header', kind=kind)
+        raise broken('truncated SecureTar header')
+    if member_size < HEADER_SIZE[int(kind[1])] + _ciphertext_size(kind, plaintext):
+        raise broken('member size does not match the SecureTar header', kind=kind)
     return kind, plaintext, init
 
 
@@ -254,11 +264,12 @@ class DecryptReader(io.RawIOBase):
     """Readable plaintext of one encrypted inner tar.
 
     `src`: any object with read(n) positioned at the member's first byte (e.g. habackup's member slice); `member_size`:
-    the member's size in the outer tar (all of it is the encrypted file: header + ciphertext); `keys`: Keys of the
-    backup. The constructor reads the header and checks the key: wrong-key is raised before any plaintext exists.
-    Reads return what was authenticated so far (v3) or decrypted (v1/v2); `finish()` reads to the end and runs the
-    final checks (v3 final tag, v2 padding and plaintext size, v1 whole blocks), so a caller that needs the complete
-    member calls it after the last read. `kind` is 'v1', 'v2' or 'v3'; `plaintext_size` is None for v1.
+    the member's size in the outer tar (header + ciphertext; v2/v3: what follows the announced ciphertext is never
+    read); `keys`: Keys of the backup. The constructor reads the header and checks the key: wrong-key is raised before
+    any plaintext exists. Reads return what was authenticated so far (v3) or decrypted (v1/v2); `finish()` reads to the
+    end of the ciphertext and runs the final checks (v3 final tag, v2 padding and plaintext size, v1 whole blocks), so
+    a caller that needs the complete member calls it after the last read. `kind` is 'v1', 'v2' or 'v3';
+    `plaintext_size` is None for v1.
     """
 
     def __init__(self, src, member_size, keys, *, name=None):
@@ -268,6 +279,8 @@ class DecryptReader(io.RawIOBase):
         self.name = name
         self._src = _Source(src, member_size)
         self.kind, self.plaintext_size, init = read_header(self._src, member_size)
+        if self.kind != 'v1':
+            self._src.left = _ciphertext_size(self.kind, self.plaintext_size)
         self._buf = b''
         self._done = False
         self._chunks = self._v3(init, keys) if self.kind == 'v3' else self._cbc(init, keys)
@@ -280,7 +293,7 @@ class DecryptReader(io.RawIOBase):
         decryptor = _aes_cbc_decryptor(key, _sha256_rounds(key + salt)[:AES_BLOCK])
         first = self._src.read_exact(CHECK_BLOCK)
         if not first or len(first) % AES_BLOCK:
-            raise corrupt('truncated ciphertext')
+            raise broken('truncated ciphertext')
         pending = decryptor.update(first)
         if not _looks_like_gzip_or_tar(pending):
             raise wrong_key('decrypted data is neither gzip nor tar')
@@ -291,26 +304,26 @@ class DecryptReader(io.RawIOBase):
             if not data:
                 break
             if len(data) % AES_BLOCK:
-                raise corrupt('truncated ciphertext')
+                raise broken('truncated ciphertext')
             pending += decryptor.update(data)
             if len(pending) > AES_BLOCK:  # the last block (padding) stays back until the end
                 out, pending = pending[:-AES_BLOCK], pending[-AES_BLOCK:]
                 produced += len(out)
                 yield out
         if self._src.left:
-            raise corrupt('truncated ciphertext')
+            raise broken('truncated ciphertext')
         pending += decryptor.finalize()
         pad = pending[-1] if pending else 0
         valid = 1 <= pad <= AES_BLOCK and pending[-pad:] == bytes([pad]) * pad
         if self.kind == 'v2':
             if not valid:
-                raise corrupt('invalid PKCS7 padding')
+                raise broken('invalid PKCS7 padding')
             pending = pending[:-pad]
         elif valid:  # v1: an uncompressed tar ends in zeros and was never padded (module notes)
             pending = pending[:-pad]
         produced += len(pending)
         if self.kind == 'v2' and produced != self.plaintext_size:
-            raise corrupt('plaintext size differs from the SecureTar header')
+            raise broken('plaintext size differs from the SecureTar header')
         if pending:
             yield pending
 
@@ -327,14 +340,14 @@ class DecryptReader(io.RawIOBase):
             want = min(V3_CHUNK, left)
             data = self._src.read_exact(want + V3_ABYTES)
             if len(data) != want + V3_ABYTES:
-                raise corrupt('truncated ciphertext')
+                raise broken('truncated ciphertext')
             try:
                 message, tag = bindings.crypto_secretstream_xchacha20poly1305_pull(state, data, None)
             except (nacl_exceptions.CryptoError, ValueError, RuntimeError):
-                raise corrupt('secretstream authentication failed (corrupt or tampered)') from None
+                raise broken('secretstream authentication failed (corrupt or tampered)') from None
             last = index == chunks - 1
             if tag != (V3_TAG_FINAL if last else V3_TAG_MESSAGE) or len(message) != want:
-                raise corrupt('unexpected secretstream tag or chunk size')
+                raise broken('unexpected secretstream tag or chunk size')
             left -= want
             if message:
                 yield message
@@ -356,15 +369,13 @@ class DecryptReader(io.RawIOBase):
         return size
 
     def finish(self):
-        """Read the rest of the member (discarded) and run the final checks; raises corrupt-archive on any defect."""
+        """Read the rest of the ciphertext (discarded) and run the final checks; corrupt-archive on any defect."""
         self._buf = b''
         while not self._done:
             try:
                 next(self._chunks)
             except StopIteration:
                 self._done = True
-        if self._src.left:
-            raise corrupt('data after the end of the encrypted stream')
 
     def close(self):
         if not self.closed:

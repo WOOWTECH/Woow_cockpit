@@ -1,0 +1,32 @@
+[options]
+; Rendered by scripts/install.sh into the odoo18-odoo-conf podman secret, which is mounted read-only
+; at /etc/odoo/odoo.conf (uid 100, mode 0400). The tokens are filled from the odoo18-postgres-password
+; and odoo18-admin-password secrets and from ~/.config/odoo18/odoo18.env; config/odoo.conf.render-vars
+; lists them. The rendered file only ever exists inside podman's secret store. Never commit one.
+; Prebuilt PaaS-compatible images place curated modules in /opt/woow/addons. The directory is
+; absent from the stock image; Odoo ignores that missing path while keeping the host addons mount.
+addons_path = /usr/lib/python3/dist-packages/odoo/addons,/opt/woow/addons,/opt/woow/ha-addons,/mnt/extra-addons
+data_dir = /var/lib/odoo
+db_host = odoo18-db
+db_port = 5432
+db_user = odoo
+db_password = @@POSTGRES_PASSWORD@@
+admin_passwd = @@ODOO_ADMIN_PASSWORD@@
+list_db = @@WOOW_ODOO_LIST_DB@@
+@@DB_NAME_LINE@@
+@@DB_FILTER_LINE@@
+log_level = info
+; Both werkzeug and the port 8072 longpolling logger include query strings in INFO request lines.
+; Keep warnings/errors while omitting reset/signup/WebSocket request tokens.
+log_handler = werkzeug:WARNING,longpolling:WARNING
+workers = @@WOOW_ODOO_WORKERS@@
+max_cron_threads = @@WOOW_ODOO_MAX_CRON_THREADS@@
+db_maxconn = @@WOOW_ODOO_DB_MAXCONN@@
+limit_memory_hard = 2684354560
+limit_memory_soft = 2147483648
+limit_time_cpu = @@WOOW_ODOO_LIMIT_TIME_CPU@@
+limit_time_real = @@WOOW_ODOO_LIMIT_TIME_REAL@@
+limit_time_real_cron = @@WOOW_ODOO_LIMIT_TIME_REAL_CRON@@
+limit_request = @@WOOW_ODOO_LIMIT_REQUEST@@
+proxy_mode = True
+@@SMTP_LINES@@

@@ -1,0 +1,65 @@
+{
+ "after_one_row_removed": [
+  false,
+  "資料表 litellm:public.LiteLLM_VerificationToken: 資料列 40 → 39 [job-failed]"
+ ],
+ "after_one_value_changed": [
+  false,
+  "資料表 litellm:public.LiteLLM_UserTable: 內容不同（筆數相同） [job-failed]"
+ ],
+ "after_restore": [
+  true,
+  ""
+ ],
+ "after_setting_it_back": [
+  true,
+  ""
+ ],
+ "bytes": {
+  "dump": 3198710,
+  "listing": 10859
+ },
+ "case": "postgres-digest on LiteLLM 1.104.0 tables",
+ "column_types": [
+  "JobStatus",
+  "_text",
+  "bool",
+  "bytea",
+  "float8",
+  "int4",
+  "int8",
+  "jsonb",
+  "text",
+  "timestamp",
+  "timestamptz",
+  "varchar"
+ ],
+ "containers_left": [],
+ "digest_seconds": 4.52,
+ "dump_seconds": 6.69,
+ "image_pg17": "sha256:094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+ "migrations_applied": 189,
+ "ok": true,
+ "product_sha256": {
+  "adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+  "digests.py": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9"
+ },
+ "restore_seconds": 8.31,
+ "rows_per_table": 40,
+ "server": "17.11",
+ "source": {
+  "commit": "baac85d3e4992d14d871938bc594b54cc90b2356",
+  "ha_litellm_sha256": "f601e109f624adc7e1bac970296bfe341d58b350eaa662adc38f8972f6d3322b",
+  "tracked_changes": false
+ },
+ "spend_rows": 50000,
+ "summary": {
+  "databases": 1,
+  "roles": 0,
+  "rows": 53360,
+  "sequences": 1,
+  "tables": 85
+ },
+ "two_reads_equal": true,
+ "wheel_sha256": "b1208c9991546e7b01b5d22ffa7ae3eb6c53c92bf388f8e54433868d234a2b05"
+}

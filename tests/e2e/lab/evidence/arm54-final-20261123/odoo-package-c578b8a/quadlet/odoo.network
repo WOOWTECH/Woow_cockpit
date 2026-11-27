@@ -1,0 +1,7 @@
+# Same name as the compose deployment, so existing hosts adopt it in place.
+[Unit]
+Description=Woow Odoo 18 network
+
+[Network]
+NetworkName=odoo18-network
+Label=io.woowtech.stack=odoo18

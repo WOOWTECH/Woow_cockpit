@@ -1,0 +1,3 @@
+Woow_podman_odoo (WOOWTECH) commit c578b8a (2026-11-10, "Merge pull request #9"), files copied with git show from
+~/migration-w2/Woow_podman_odoo (the checkout tests/e2e/lab/deploy-prodlike.sh copies; quadlets + odoo.conf.template only).
+Used by arm54_final_odoo.py (lane arm54-2, item B Odoo) with SUBSTITUTE images (owner decision 3A), not the product service.

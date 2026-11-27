@@ -1,0 +1,29 @@
+{
+  "base_commit": "5c99b00",
+  "target": "192.168.2.54",
+  "native_arch": "aarch64",
+  "archive_roundtrip": "passed",
+  "archive_format": 2,
+  "encryption": "none",
+  "service_restore_acceptance": false,
+  "service_image_native_execution": "passed",
+  "service_product_version_gate": "blocked",
+  "blocker": "無法讀取這台 Headscale 的版本。",
+  "public_import_guards": "unchanged",
+  "minimum_observed_free_bytes": 18174074880,
+  "reserve_bytes": 12884901888,
+  "cleanup": "passed with read-only timestamp verification correction",
+  "original_inventory_equal": true,
+  "originals_running_since_before_probe": true,
+  "local_safety_tests": {
+    "tests": 3,
+    "seconds": 0.005,
+    "result": "OK"
+  },
+  "limitations": [
+    "No HA application data conversion, installer, service restore, rollback, client reconnect or ACL/auth tests",
+    "No encrypted archive (age/zstd absent on ARM); no large or >8GiB member test",
+    "No real originals, existing service images/secrets/volumes, Hermes review or runner/model configuration changes",
+    "Capacity observed at phase boundaries and constrained by small known image/payload sizes; no filesystem quota enforcement added"
+  ]
+}

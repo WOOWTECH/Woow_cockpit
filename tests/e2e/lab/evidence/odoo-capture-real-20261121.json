@@ -1,0 +1,148 @@
+{
+  "slot": "odoo-capture-20261121",
+  "harness_commit": "e49d809",
+  "isolation_guard": "f37716b retained",
+  "real_run": true,
+  "overall_acceptance": false,
+  "status": "unverified_differences",
+  "run_id": "c08282ccabeb4a08ac796c86109120a4",
+  "conversion_job": "j20261121T061445Z-f7d19167",
+  "restore_job": "j20261121T061531Z-8ece36cc",
+  "converted_backup_id": "20261121T061529Z-79541a67",
+  "archive_sha256": "a5fb626820a0947482a394094cd004715eb348fc92cec760c0dc7d9546f420e5",
+  "engine_sha256": "99ce282e5f014f626fe3ddfe4327448efb888e12bb5586acafe70b328bdeaa04",
+  "sql_sha256": "06c98d3a07d6a307c193c1123fb20b00c23c13e1ddba277071541f009b0e3556",
+  "preflight": {
+    "active_jobs": [],
+    "20261118T095247Z-388c9bd7": {
+      "key_available": true,
+      "preflight_failed": []
+    },
+    "20261118T095520Z-33eb7474": {
+      "key_available": true,
+      "preflight_failed": []
+    },
+    "20261121T003443Z-8dc913e5": {
+      "key_available": true,
+      "preflight_failed": []
+    },
+    "exact_archive_matches": true
+  },
+  "sql_execution": "All six stages succeeded on real PG16.15 / PG17.11; no SQL correction or rerun needed.",
+  "strict_comparison_exit": 1,
+  "fetch_compare_exit": 1,
+  "comparison": {
+    "converted_cold->quiescent": {
+      "events": 0,
+      "tables": {}
+    },
+    "converted_cold->runtime": {
+      "events": 0,
+      "tables": {}
+    },
+    "restored_cold->converted_cold": {
+      "events": 3,
+      "tables": {
+        "public.ir_config_parameter": {
+          "row_events": 3,
+          "changed_cells": 2,
+          "schema_events": 0
+        }
+      }
+    },
+    "runtime->quiescent": {
+      "events": 0,
+      "tables": {}
+    },
+    "source_cold->quiescent": {
+      "events": 3,
+      "tables": {
+        "public.ir_config_parameter": {
+          "row_events": 3,
+          "changed_cells": 2,
+          "schema_events": 0
+        }
+      }
+    },
+    "source_cold->restored_cold": {
+      "events": 0,
+      "tables": {}
+    }
+  },
+  "interpretation": "Only restored_cold -> converted_cold has differences: ir_config_parameter one added row, one removed row, one changed row (two cells). No exemptions applied. New result does not retroactively certify historical four-table differences.",
+  "runtime_limits": {
+    "converted_to_runtime_seconds": 43.863,
+    "runtime_to_quiescent_capture_window_seconds": 4.449,
+    "note": "Bounded early-start observation only, not long-term cron/GC equivalence."
+  },
+  "n8n": {
+    "new_execution": true,
+    "source_converted_backup": "20261121T003443Z-8dc913e5",
+    "same_new_odoo_conversion_job": false,
+    "note": "New restore and authenticated runtime probe in this slot using original ARM converted backup; not a historical pass reused.",
+    "login": true,
+    "runtime_nodes_checked": 1,
+    "package_version_matches": true,
+    "checks_passed": 5,
+    "checks_failed": 0,
+    "evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/odoo-capture-20261121-n8n/20261121T141718/results.json"
+  },
+  "final_audit": {
+    "passed": 10,
+    "failed": 0,
+    "checks": [
+      {
+        "check": "no active jobs",
+        "ok": true
+      },
+      {
+        "check": "odoo exact baseline marker restored",
+        "ok": true
+      },
+      {
+        "check": "n8n exact baseline marker restored",
+        "ok": true
+      },
+      {
+        "check": "import data absent",
+        "ok": true
+      },
+      {
+        "check": "all four baseline endpoints 200",
+        "ok": true
+      },
+      {
+        "check": "no throwaway container, volume or network left",
+        "ok": true
+      },
+      {
+        "check": "no staging folder and no key file left",
+        "ok": true
+      },
+      {
+        "check": "no test secret in the engine's records, logs, index, registry or the device journal",
+        "ok": true
+      },
+      {
+        "check": "original failure evidence hashes unchanged",
+        "ok": true
+      },
+      {
+        "check": "outer isolation still none ports empty",
+        "ok": true
+      }
+    ],
+    "evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/odoo-capture-20261121-final/20261121T142205/results.json"
+  },
+  "resources": {
+    "min_sampled_host_available_kib": 4079540,
+    "max_sampled_cgroup_bytes": 2190544896,
+    "cgroup_limit_bytes": 3221225472,
+    "final_memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 64"
+  },
+  "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/odoo-capture-20261121",
+  "per_cell_values_published": false,
+  "slot_released": true,
+  "next_work": "Validate the three exact configuration row events against actual settings_sql inputs and timestamp/ID effects with schema/cell evidence; keep unknown deltas failed. No blanket table exemption.",
+  "historical": "Original 31/32 hashes retained. Old 117/117 and earlier candidate runs are not claimed as new passes."
+}

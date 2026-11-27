@@ -1,0 +1,6 @@
+import hashlib, json, os
+p = os.path.join('/var/tmp/woow-arm54-final-20261123-bb3d979o', 'input', 'omni-creds.json')
+st = os.stat(p)
+e = os.path.join('/var/tmp/woow-arm54-final-20261123-bb3d979o', 'input', 'omni-expect.json')
+print(json.dumps({'staged_login_file_private': st.st_mode & 0o777 == 0o600 and st.st_size > 0,
+                  'expectation_sha256_equal': hashlib.sha256(open(e, 'rb').read()).hexdigest() == '288e21968edb1c540251a10107dcc05e64bd1f60d9f5bbd3f8b5ccd87bdcbf58'}))

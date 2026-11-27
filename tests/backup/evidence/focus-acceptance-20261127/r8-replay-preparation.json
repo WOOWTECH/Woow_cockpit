@@ -1,0 +1,31 @@
+{
+  "scope": "r8-replay-preparation-only",
+  "new_real_attempt_started": false,
+  "commercial_acceptance": "not-complete",
+  "product_source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "independent_recovery_receipt_sha256": "2d38f989848830193133967002449dafee97c3816ce9d75a2f0b95e0c39a0824",
+  "guarded_python_tests": 16,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "blocked_calls": 0,
+  "shim_hits": 0,
+  "guard_log_sha256": "c45c03a0269cf1e09cbd5d744da889029cf544385e6eb1bd6365d8bea1823abd",
+  "protocol_assertions": 11,
+  "python_syntax": "PASS",
+  "node_syntax": "PASS",
+  "local_exact_receipt_validation": "PASS",
+  "local_validation_changed_old_guard": false,
+  "cookie_finally_changes_real_proof": "pending-reviewed-replay",
+  "old_cookie_coverage": "absent-not-retroactively-proved",
+  "old_failed_evidence_retained": true,
+  "retained_ha_reuse_grants_ownership": false,
+  "protected_old_archive_count": 6,
+  "driver_files_sha256": {
+    "focus_acceptance_ui.py": "fdbd974056d3109bd21d476a65af9a56ddcc56a49338d982c2d68c1f49c00bd3",
+    "focus_acceptance_ui_page.mjs": "b4d647e3d4deb8b9b1f653b3d9a502e0ce8600a97a814c0906defbdb3d58e2ce",
+    "focus_acceptance_ui_protocol.mjs": "cd1fb48570b33cada1274ff09f0fbb31f471b3fe67d7bbb96509ed9ea17f9047",
+    "focus_acceptance_ui_protocol_test.mjs": "976baa8c6b922182611b6b0dc938e528c681288a7a6c8a9e15cbac480b64bdf6",
+    "focus_acceptance_ui_test.py": "5d97ddcb04144488641ceec93de9c59bae66c86116cc076ae6e7c17e6af9c717"
+  }
+}

@@ -1,0 +1,109 @@
+{
+  "status": "passed",
+  "source_commit": "ea17ae7964201e43c0a3f318019dfa97652fa86a",
+  "phase": "image-recovery-only",
+  "source_unchanged": true,
+  "original_five_loaded": true,
+  "inactive_units_quadlets_catalog_baseline_metadata_preserved": true,
+  "images": [
+    {
+      "identity": {
+        "architecture": "amd64",
+        "id": "e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+        "os": "linux",
+        "repo_digests": [
+          "localhost/woow-nextcloud@sha256:556d83bbfabe8fc6845c25256fc9e6dc442c9ae8172aed9504545f9a81a28d21"
+        ],
+        "repo_tags": [
+          "localhost/woow-nextcloud:35.0.1-office2"
+        ],
+        "size": 1969011273
+      },
+      "present": true,
+      "ref": "localhost/woow-nextcloud:35.0.1-office2"
+    },
+    {
+      "identity": {
+        "architecture": "amd64",
+        "id": "a35ff1de149aeae0b1c9ecc83ab9406bd14a788cd61284e95b88b602df4a6ba3",
+        "os": "linux",
+        "repo_digests": [
+          "docker.io/collabora/code@sha256:f04b2039382ff899540f05e2f640483d9490d56526e6c1798295927da6b8361d"
+        ],
+        "repo_tags": [
+          "docker.io/collabora/code:26.04.4.2.1"
+        ],
+        "size": 1329396233
+      },
+      "present": true,
+      "ref": "docker.io/collabora/code:26.04.4.2.1"
+    },
+    {
+      "identity": {
+        "architecture": "amd64",
+        "id": "9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7",
+        "os": "linux",
+        "repo_digests": [
+          "docker.io/pgvector/pgvector@sha256:70c70fd744a0dbb0a97785984030de12ba5ee1f6ebd63a8ef702bcbe630a2205"
+        ],
+        "repo_tags": [
+          "docker.io/pgvector/pgvector:0.8.6-pg16"
+        ],
+        "size": 446252742
+      },
+      "present": true,
+      "ref": "docker.io/pgvector/pgvector:0.8.6-pg16"
+    },
+    {
+      "identity": {
+        "architecture": "amd64",
+        "id": "d1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad",
+        "os": "linux",
+        "repo_digests": [
+          "docker.io/library/redis@sha256:8ed261fba35bfab06217addd8f22780a9718c5ff4dd536b8b97f0a96e2132b82"
+        ],
+        "repo_tags": [
+          "docker.io/library/redis:8.10.1-alpine"
+        ],
+        "size": 119452063
+      },
+      "present": true,
+      "ref": "docker.io/library/redis:8.10.1-alpine"
+    },
+    {
+      "identity": {
+        "architecture": "amd64",
+        "id": "696695300a3c18a324c07ecb41f220e8c470302148b0378770cf5c70e6458ea0",
+        "os": "linux",
+        "repo_digests": [
+          "docker.io/nginxinc/nginx-unprivileged@sha256:bc0cd70542260291426bda2000e7b3cf6a256770df3042eb59718f3e938bb8be"
+        ],
+        "repo_tags": [
+          "docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine"
+        ],
+        "size": 54264746
+      },
+      "present": true,
+      "ref": "docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine"
+    }
+  ],
+  "free_bytes": 29423489024,
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472,
+  "pulls": 0,
+  "host_source_operations": [
+    "inspect",
+    "save"
+  ],
+  "live_baseline_validation": "requires-reviewed-wake",
+  "private_receipt": "~/.woowbk-lab/evidence/focus-nextcloud-r6-recovery/20261127T071755",
+  "minimum_completed_transfer_free_mib": 28070,
+  "lab_only_ignore_chown_config_id": "sha256:e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+  "lab_only_ignore_chown_reason": "original-nextcloud-image-uid65534-outside-unchanged-nested-range",
+  "images_retained": true,
+  "wake": false,
+  "installer": false,
+  "source_deployment": false,
+  "fixtures_copied": false,
+  "actual_phase_complete": true
+}

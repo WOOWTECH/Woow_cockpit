@@ -1,0 +1,24 @@
+{
+  "authorization": "Owner authorized removal of unnecessary test-environment images/caches; services are tests, not production.",
+  "before_available_bytes": 28354396160,
+  "after_available_bytes": 34652192768,
+  "net_available_gain_bytes": 6297796608,
+  "removed_obsolete_image_tags": 55,
+  "cache_directories_removed": 4,
+  "active_mcp_cache_directories_retained": 3,
+  "containers_unchanged": true,
+  "volumes_unchanged": true,
+  "pnpm_prune_exit": 0,
+  "root_system_logs": "completed: owner ran the reviewed --apply script in an authenticated terminal; filesystem and journal verified afterward",
+  "host_active_syslog": "retained; no truncation or deletion",
+  "original_ha_fixtures_and_backups": "retained",
+  "root_system_logs_observation": {
+    "observed_at_local": "2026-11-27T05:25:08+08:00",
+    "rotated_syslog_original_exists": false,
+    "retained_gzip": "/var/log/syslog.1.manual-20261126.gz",
+    "retained_gzip_bytes": 1448355671,
+    "journal_disk_usage_report": "975.7M",
+    "host_available_bytes": 37152419840,
+    "attribution": "This is an observation, not a root-cleanup-only net gain; other processes write to this filesystem."
+  }
+}

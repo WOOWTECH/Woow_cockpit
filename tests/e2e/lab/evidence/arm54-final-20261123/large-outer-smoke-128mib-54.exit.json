@@ -1,0 +1,1 @@
+{"commercial_acceptance": "not-complete", "elapsed_seconds": 24.3, "exit": 0, "script_args": ["--mib", "128", "--deadline", "1200"], "source_commit": "e3f0667627bfbce4e7f0cee6dc128d5f126e36f1", "stdout_sha256": "623efc581899aec75889bb3d47ea40a22bbc76f895452194f18970f184518eee", "tree_dirty": false}

@@ -18,7 +18,7 @@ sudo python3 scripts/manage.py install --service-owner "$(id -un)"
 sudo python3 scripts/manage.py verify
 ```
 
-開啟 `https://<設備 IP>:9090`，使用該設備的 Linux 帳號登入。安裝不建立共用帳密、不更改既有密碼。若已有 Cockpit 362 以上，可略過 bootstrap，先查看 `plan`；略過時請自行安裝備份與還原需要的 `age` 與 `zstd`。
+開啟 `https://<設備 IP>:9090`，使用該設備的 Linux 帳號登入。安裝不建立共用帳密、不更改既有密碼。若已有 Cockpit 362 以上，可略過 bootstrap，先查看 `plan`；備份與還原需要的套件（age、zstd、python3-nacl、python3-cryptography）缺少時，`install` 會用 apt 自動補裝（要連得到套件庫）；補不了時更新照常進行，並說明缺什麼、為什麼、怎麼辦（`sudo python3 scripts/manage.py status` 隨時可查看）。
 
 安裝會一併放入「備份與還原」頁（「工具 → 備份與還原」），但不含任何可備份的應用：每個應用需要經審查的目錄項目，**正式應用尚未啟用**。詳見[備份與還原](docs/backup.md)。
 
@@ -64,7 +64,7 @@ sudo python3 scripts/manage.py verify
 
 ## 開發驗證
 
-部署本身只需 Python 3 標準函式庫；備份與還原另需 `age` 與 `zstd`；瀏覽器驗證才需要 Node.js 和 Chromium。
+部署本身只需 Python 3 標準函式庫；備份與還原另需 `age`、`zstd`、`python3-nacl`、`python3-cryptography`（`install` 會自動補裝）；瀏覽器驗證才需要 Node.js 和 Chromium。
 
 ```bash
 python3 -m unittest discover -s tests -t . -v

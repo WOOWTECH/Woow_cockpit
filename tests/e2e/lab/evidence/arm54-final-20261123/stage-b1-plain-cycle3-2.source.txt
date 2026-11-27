@@ -1,0 +1,15 @@
+import hashlib, json, os, pathlib
+root = pathlib.Path('/var/tmp/woow-arm54-final-20261123-yy981xjf')
+def sha(p):
+    d = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for b in iter(lambda: f.read(1 << 20), b''):
+            d.update(b)
+    return d.hexdigest()
+out = {name: sha(root / 'input' / name) == want for name, want in sorted({'chain-b1-plain.json': '4fd2fcc676cd64ce4c09addd7a5375e5434c83f89986370ce35b0d51850b9d60', 'ha-backup-b1-plain.tar': '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4', 'omni-expect.json': '288e21968edb1c540251a10107dcc05e64bd1f60d9f5bbd3f8b5ccd87bdcbf58'}.items())}
+for name, label in (('omni-creds.json', 'staged_login_file_private'), ('ha-key', 'staged_backup_unlock_file_private'), ('n8n-creds.json', 'staged_n8n_login_file_private'),
+                    ('emqx-creds.json', 'staged_emqx_login_file_private')):
+    path = root / 'input' / name
+    out[label] = (not path.exists()) or (path.stat().st_mode & 0o777 == 0o600 and path.stat().st_size > 0)
+print(json.dumps(out, sort_keys=True))
+assert all(out.values()), 'staged-archive-differs'

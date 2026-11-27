@@ -1,0 +1,53 @@
+{
+ "attempt": "t16r-fix8-x86",
+ "backup_engine_tree": "325f1f74038611bf5b53f545405e3c6ef3d39cb2",
+ "code": "sec/emqx-secreview8-20261124 (iteration 8: stored-form check, O-2, O-3)",
+ "command": "-I t16_real_check.py fix8 x86",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 57.2,
+ "exit_code": 0,
+ "harness_commit": "c2e601c23f562af91981ab15f00d505e245ce827",
+ "iteration": 8,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "arch": "x86",
+  "check": {
+   "blockers": [],
+   "device_hashing": "sha256/suffix",
+   "device_profile": [
+    "file",
+    "built_in_database"
+   ],
+   "ha_hashing": {
+    "enable": true,
+    "name": "sha256",
+    "salt": "suffix"
+   },
+   "ha_mqtt_users": 3,
+   "ha_plain": {
+    "clear": 0,
+    "elsewhere": 0
+   },
+   "warnings": [
+    "other:a32b63396d72",
+    "other:05fbc39fb471"
+   ]
+  },
+  "codebase": "fix8",
+  "containers_left": 0,
+  "elapsed_s": 56.8,
+  "fixture": "woow-b1-x86-emqx-stopped-enc.tar",
+  "fixture_sha256_prefix": "0a53e93888209316",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T16R real batch-1 HA backup through the product check path (iteration 8)"
+ },
+ "source_commit": "a1f194742d21b1041dbd23db2e36a05c20d5283e",
+ "started": "2026-11-24T20:37:53+0800",
+ "status_lines": [],
+ "stdout_sha256": "34bc4a94e9cbeb5dda92ec13d60227e9a58e0fbe3928f2dba2f23c80465f3a31",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

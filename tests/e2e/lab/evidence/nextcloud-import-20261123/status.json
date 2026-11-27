@@ -1,0 +1,168 @@
+{
+ "lane": "nextcloud-import",
+ "date": "2026-11-24",
+ "branch": "feat/ha-import-nextcloud-20261123 (local, not pushed)",
+ "base": "integration/ha-import-batch1-20261123 82ac971, merged with its 88e7e6b, ba637b7, 97c22c9, af92b38 and 0562c55",
+ "owner_decision": "決定2 A: HA -> Podman import for Nextcloud; facts nextcloud.md D1-D5 recommended answers applied",
+ "commercial_acceptance": "not-complete",
+ "engine": {
+  "module": "backup-engine/woowbackup/ha_nextcloud.py",
+  "registry": "haapps.IMPORTERS nextcloud (woow-nextcloud-office), MCP admin nextcloud-mcp-admin, HA add-on 'Woow Nextcloud MCP Server'",
+  "share_folder": "users' files read only from HA's share member under the datadirectory (/share/nextcloud); a backup without the share folder or without the data dir/.ncdata is refused with a clear sentence",
+  "office": "richdocuments wopi keys and core.backgroundjobs_mode kept exactly as the live database has them; HA's cached Collabora answers replaced by this device's own, the refresh job made due (documents open right after the import)",
+  "data_fingerprint": "new data-fingerprint in the converted config.php (= occ maintenance:data-fingerprint, NC 35.0.1 core/Command/Maintenance/DataFingerprint.php:34-35)",
+  "public_guards_changed": "none",
+  "users_files_private": "data/.htaccess is always Nextcloud's own (Setup.php:649-678); any other .htaccess in HA's data directory is refused (measured on dev-e: nextcloud-webroot-probe.json)",
+  "two_factor": "the three two-factor keys are one policy (MandatoryTwoFactor.php): HA's, or the live ones when stricter",
+  "database_code": "nothing of HA's database runs as code with the superuser (pinned sessions, dump kinds, SHAPE_SQL, fix-ups and reads as the Nextcloud role, role attributes, grants, database list verified); this device's own database is read pinned; nextcloud_sandbox_review.py attacks the real steps",
+  "file_lists": "per user the database's file list is compared with the files in the backup; a difference is a warning and a reminder (occ files:scan)",
+  "online_backup": "backup_label/tablespace_map are refused before the cluster is started",
+  "storages": "the root storage row and every local storage below the data directory (Team folders, groupfolders 23.0.2 FolderStorageManager.php) get this device's path and keep their numbers; an id already taken is refused",
+  "updater_folder": "only updater-<instanceid> is skipped (BackgroundCleanupUpdaterBackupsJob.php:44); a user may be called updater-... (User/Manager.php:835-849)"
+ },
+ "tests": {
+  "unit_test_ha_nextcloud": "47 OK (fakes)",
+  "mutations": "all 88 one-place changes of ha_nextcloud.py in one run on c9b1e26 (nextcloud-mutations.json: 43 of the first self review, 13 of the Office fix and the file lists, 32 of the Team folders change): 88/88 killed. Earlier partial runs: 43/43 (b7761a2), 32/32 (4fb7af7). The earlier \"59/59 with the Office fix\" had no full run behind it; this run replaces it.",
+  "affected_ha_modules": "130 OK (nextcloud, registry, suggest, cli) on the tree merged with integration 0562c55",
+  "backup_full": "tests/backup on 501a13f (guarded: host podman and other host tools refused): 1766 run, 0 failures, 0 errors, 6 skipped, 0 refused calls, 313 s",
+  "real_sql_pg16": "every importer SQL statement on a real PostgreSQL 16 (lab, network none)",
+  "page": "no page file changed since integration-3's full page suite (backup/backup.js equals the integration's)"
+ },
+ "real_runs": [
+  {
+   "evidence": "nextcloud-x86-noshare-attempt1.json",
+   "source": "162a51c",
+   "exit": 1,
+   "elapsed_seconds": 486.0,
+   "result": "33/34: the product's refusal correct; the FAIL was the harness's expected calendar/contact counts (1dd0106)"
+  },
+  {
+   "evidence": "nextcloud-x86-noshare-attempt2.json",
+   "source": "1dd0106",
+   "exit": 0,
+   "elapsed_seconds": 376.5,
+   "result": "34/34 PASS: the real backup without HA's share folder is refused at check and convert; dev-e unchanged"
+  },
+  {
+   "evidence": "nextcloud-x86-noshare-attempt3.json",
+   "source": "6ecb7a0",
+   "exit": 0,
+   "elapsed_seconds": 125.3,
+   "result": "34/34 PASS: the same on the code after the self review"
+  },
+  {
+   "evidence": "nextcloud-x86-noshare-attempt4.json",
+   "source": "7e969f0",
+   "exit": 0,
+   "elapsed_seconds": 150.7,
+   "result": "34/34 PASS: the refusal run on the lane tip (integration 0562c55 merged, the Team folders fix)"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt1.json",
+   "source": "863179e",
+   "exit": 1,
+   "elapsed_seconds": 2617.6,
+   "result": "85/86: every import, client, restart, rollback and cleanup check PASS; the FAIL was the leak scan's scope (the public link token in dev-e's own web access logs, scoped in 3ade81d)"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt2.json",
+   "source": "3ade81d",
+   "exit": 1,
+   "elapsed_seconds": 881.2,
+   "result": "20/21: stopped by the host-floor guard before the check (other lanes' disk use); dev-e untouched"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt3.json",
+   "source": "aaed6cf",
+   "exit": 1,
+   "elapsed_seconds": 2179.2,
+   "result": "32/35: the host floor touched while the safety backup was packaged; the recovery put dev-e's own Nextcloud back (harness fix c91b3c1)"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt4.json",
+   "source": "02f5d40",
+   "exit": 0,
+   "elapsed_seconds": 2754.5,
+   "result": "87/87 PASS: nothing of HA's database runs as code with the superuser; it outlived the 03:33 kill of all agents"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt5.json",
+   "source": "94caf03",
+   "exit": 1,
+   "elapsed_seconds": 2174.7,
+   "result": "95/103: the new Office check found a real gap: right after the import documents did not open (HTTP 500) until cron refreshed the Office app's cached Collabora answers; everything else PASS (fixed in acf1bbd)"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt6.json",
+   "source": "fbcf7dd",
+   "exit": 0,
+   "elapsed_seconds": 2408.8,
+   "result": "109/109 PASS: the Office fix, `occ files:scan` and the setup check"
+  },
+  {
+   "evidence": "nextcloud-x86-share-attempt7.json",
+   "source": "6a67eef",
+   "exit": 0,
+   "elapsed_seconds": 2697.3,
+   "result": "113/113 PASS: the integrated engine (integration af92b38) with the Team folders fix, and the page's own catalog draft unedited (its data checks included)"
+  }
+ ],
+ "share_run_checks": [
+  "status.php 35.0.1.1 no maintenance no db upgrade",
+  "4 marker files sha256 (CJK, nested, 4 MiB)",
+  "per-user manifest digests of all 4 HA users == the backup's",
+  "OCS: HA password and HA app password 200, wrong 401",
+  "second user reads the shared file",
+  "public link with password; 401 without and with a wrong password",
+  "CalDAV event and CardDAV contact by UID",
+  "older version on disk and in the versions API",
+  "richdocuments wopi keys and cron mode == dev-e's own",
+  "Office capabilities == dev-e's own account's",
+  "Collabora discovery on the gateway",
+  "new data fingerprint == config.php's",
+  "root storage local::/var/www/html/data/, tables owned by oc_admin",
+  "restart then the same checks",
+  "automatic rollback (one-shot ExecStartPre failure) then the same checks",
+  "manual rollback: dev-e's markers back, HA-only users gone, own login",
+  "cleanup: no job objects, staging, key files; HA record deleted",
+  "file lists: of HA's database == the files in the backup (no warning)",
+  "web root: nothing below /data/ is served, data/.htaccess is Nextcloud's own (static control served), Nextcloud's own setup check says protected",
+  "occ files:scan --all: nothing new, nothing removed, no error",
+  "Office editing: the second HA user's document opened in this device's Collabora over WOPI and the websocket, its text read back, an edit saved into Nextcloud (wrong token 403); lab relay for Collabora's call back to 127.0.0.1:18081",
+  "catalog draft: attempt 7 runs with the page's own draft entry, unedited; the safety backup's data checks are equal at the manual rollback"
+ ],
+ "not_covered": [
+  "a browser (the Cockpit page itself; the Office page's JavaScript)",
+  "Collabora's call back over a real network address (dev-e's public address is its own loopback; a lab relay stands in for that hop)",
+  "a whole import of a real HA backup that holds a Team folder (none available; the storage change is proven with the real app on synthetic data)",
+  "TOTP / two-factor logins (none in the test backup); passkeys and security keys are bound to HA's address",
+  "ARM (the add-on is amd64-only)",
+  "server-side encryption and object storage (refused by design, unit tested only)"
+ ],
+ "read_only_probes": {
+  "noshare-member-scan.json": "the add-on member of the real no-share backup",
+  "nextcloud-x86-share-shape-probe.json": "database shape and dump kinds of the real HA database",
+  "nextcloud-x86-share-lists-probe.json": "file lists of HA's real database == the files in the share member for every user (221 files); no .htaccess below the top, no symlink, no encryption",
+  "nextcloud-webroot-probe.json": "dev-e: without data/.htaccess a user's picture is served without a login; a folder with its own .htaccess is served and its PHP runs",
+  "file times (scratch probe 2026-11-24 10:53, counts only)": "89 files and 9 folders of two HA users have a later file time on HA's disk than in HA's own database, so the first occ files:scan updates rows there too; HA's times are kept as they are"
+ },
+ "attack_runs": {
+  "evidence": [
+   "nextcloud-sandbox-review-attempt1.json",
+   "nextcloud-sandbox-review-attempt2.json",
+   "nextcloud-sandbox-review-attempt3.json"
+  ],
+  "result": "attempt 3 on the final importer (4fb7af7): 16/16 cases as expected (controls included); no attacker code ran as the superuser"
+ },
+ "team_folders_probe": {
+  "evidence": [
+   "nextcloud-team-folders-attempt1.json",
+   "nextcloud-team-folders-attempt2.json"
+  ],
+  "result": "real Nextcloud 35.0.1.1 + real groupfolders 23.0.2, synthetic data, throwaway container on dev-e: without the fix the Team folder's file is HTTP 500 and its share 503, with storage_moves everything is the same (attempt 2: clean tree)"
+ },
+ "owner_items": [
+  "HA Nextclouds that had the Memories app are refused (it creates a database function and a trigger); leaving exactly these two out would relax a security check: owner decision"
+ ],
+ "state": "2026-11-24 15:45: done. Share attempts 4, 6 and 7 are fully green (87/87, 109/109, 113/113); attempt 7 ran the integrated engine (integration af92b38) with the Team folders change and the page's own catalog draft, unedited (backup-engine tree 5445ad92). The refusal run is 34/34 three times, the last one (attempt 4) on the lane tip 7e969f0 (integration 0562c55, engine tree febd20ea). Sandbox attack review 16/16, Team folders probe 8/8 twice, full tests/backup 1766 OK, all 88 one-place mutants of ha_nextcloud.py killed in one run on c9b1e26. Closing work on dev-e: baseline verify 7/7, journal cleanup, leak re-scan 0 hits, its Nextcloud hibernated (0 containers, every unit inactive, checked again 14:44), isolation true none {}. commercial_acceptance stays not-complete (see not_covered)."
+}

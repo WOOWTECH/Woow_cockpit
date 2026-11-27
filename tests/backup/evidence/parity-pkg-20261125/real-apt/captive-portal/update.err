@@ -1,0 +1,2 @@
+E: Failed to fetch http://repo.example:80/./InRelease  Clearsigned file isn't valid, got 'NOSPLIT' (does the network require authentication?)
+E: The repository 'http://repo.example:80 ./ InRelease' is not signed.

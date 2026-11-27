@@ -1,0 +1,292 @@
+{
+  "date": "2026-11-21",
+  "commercial_acceptance": false,
+  "public_import_guards": "retained",
+  "scope": {
+    "direction": "HA to Podman",
+    "pi_agent": "excluded",
+    "production_changes": false,
+    "production_changes_note_20261123": "production_changes=false means no production service, secret, image or catalog was changed. On 2026-11-23 test_emqx_mnesia_acl_target_variant (it calls emqx_native_runtime.run_native) ran 5x in lane emqx-main and 3x in lane emqx-filepolicy on 2026-11-23, each a transient --rm network=none container of the pinned EMQX image; per those lanes' records no service, secret, image or catalog was changed. This cannot be re-checked independently, because host production inventory access is not permitted. Never run run_native tests on the host."
+  },
+  "verified_increments": [
+    {
+      "service": "Headscale",
+      "commit": "c972720",
+      "evidence": "headscale-owner-20261120/README.md",
+      "scope": "synthetic HA conversion with original-client automatic reconnect and private-source registration",
+      "results": [
+        "automatic reconnect: 55 seconds / 23 attempts",
+        "node identities and Noise key preserved",
+        "target API200/source API401",
+        "16 acknowledged authorization/private-source events",
+        "original 8 container IDs / 54 volumes / 5 networks unchanged",
+        "outer network none and no ports"
+      ],
+      "limitations": [
+        "synthetic client shutdown SIGKILL warning retained",
+        "private synthetic fixtures retained mode0700",
+        "not original HA backup, installer or rollback acceptance",
+        "submitted logs may be empty; configtest-generated private keys not covered"
+      ]
+    },
+    {
+      "service": "Omnigent",
+      "commit": "a4b83c5",
+      "evidence": "omnigent-cold-chain/run-install.jsonl",
+      "scope": "synthetic schema, real cold PG archive/candidate/output installation/restart",
+      "results": [
+        "users2/admin1/conversations1",
+        "active tasks0",
+        "loader roles0",
+        "snapshot error holders0",
+        "cleanup verified"
+      ]
+    },
+    {
+      "service": "Omnigent credentials",
+      "commit": "3c8bd4b",
+      "evidence": "omnigent-credentials/run-ensure.jsonl",
+      "scope": "fresh real app identity and one real controlled runner ensure cycle",
+      "results": [
+        "four auth events registered",
+        "valid token makes no request",
+        "expired cached token refreshed without fallback login",
+        "evidence/log hits0",
+        "cleanup verified"
+      ],
+      "autonomous_runner_coverage": false
+    },
+    {
+      "service": "LiteLLM",
+      "commit": "fdaaaa9",
+      "evidence": "litellm-candidate/pg17-bounded-runner.json",
+      "scope": "synthetic PG17 salt query contract with bounded process capture",
+      "cases_passed": 9,
+      "migration_tested": false
+    },
+    {
+      "service": "EMQX adapter",
+      "commit": "c8aa16f",
+      "scope": "synthetic HA backup through internal candidate builder and packager to real adapter install and automatic rollback",
+      "result": "source worktree real run exit0; independent container/volume/secret/unit cleanup passed; main integration fixture tests 5/5",
+      "ha_converter_joined": true,
+      "evidence": "emqx-ha-adapter-joined/run-20261120T114554Z-1475341.jsonl",
+      "real_test_source_commit": "288a808975a973d54a09a71f7decc8ca216ca676"
+    },
+    {
+      "service": "Omnigent real application",
+      "commit": "8243b54",
+      "evidence": "omnigent-real-app-chain/run-independent-verified.jsonl",
+      "scope": "independently initialized real source/target app schemas, cold candidate installation and app authentication",
+      "results": [
+        "source and preserved target login accepted",
+        "old source token and new token identify same user",
+        "invalid token rejected",
+        "cookie bytes preserved",
+        "cleanup verified"
+      ],
+      "limitations": [
+        "synthetic Target preparation",
+        "outer Supervisor envelope not yet verified",
+        "login/cookie secret registration incomplete"
+      ]
+    },
+    {
+      "service": "LiteLLM PG18 experiments",
+      "commit": "ad0cbfb",
+      "evidence": "litellm-candidate/pg18-synthetic-compat.json",
+      "scope": "PG18.7 salt SQL plus fixed single-table PG18-to-PG17 experiment",
+      "salt_cases_passed": 9,
+      "fixed_data_cases_passed": 4,
+      "cleanup_verified": true,
+      "full_litellm_migration_tested": false,
+      "ha_source_minor": "18.6"
+    }
+  ],
+  "explicit_failed_suite": {
+    "source_commit": "fdaaaa9",
+    "evidence": "emqx-legacy-contract/current.txt",
+    "run": 13,
+    "passed": 3,
+    "failures": 9,
+    "errors": 1,
+    "skipped": 0,
+    "classification": "legacy public-entry contracts conflict with retained preservation guard; not all-green"
+  },
+  "remaining": [
+    "EMQX real original HA backup and supported configuration variants; public guard retained",
+    "Omnigent outer Supervisor envelope, real Target discovery, application data markers and complete secret coverage",
+    "Headscale original-backup/installer/rollback acceptance and remaining scan limits (configtest keys and unavailable logs)",
+    "LiteLLM full application schema and true salt/key migration, decryptability and rollback",
+    "all required dynamic credential sources across autonomous service operation",
+    "real original HA backups, architecture/archive variants and final-version acceptance",
+    "Odoo/n8n final-version evidence (older acceptance is not automatically current)",
+    "Hermes independent manual safety review remains unverified"
+  ],
+  "external_restrictions": [
+    "Do not retry Hermes independent FTS/SQLite review via another route after prior auto-review rejection.",
+    "Host production Podman inventory/image access was rejected; no alternative host entry used. Lab-only tools remain permitted."
+  ],
+  "prepared_not_real_verified": [
+    {
+      "service": "LiteLLM image",
+      "public_base_digest": "sha256:37066242e6b8327fdd627682a66a9ae2a599553b4d5a84c905c6d8b9eb35c01e",
+      "loaded_dev_d_image_id": "bfbade18821e5fcf7291e148fddf4013711c50f347def2cf9128534de2443cde",
+      "scope": "anonymous public download and offline lab load completed; custom app build pending"
+    }
+  ],
+  "odoo_n8n_revalidation_20261121": {
+    "status": "restore_completed_acceptance_failed",
+    "driver_commit": "f37716b",
+    "local_boundary_tests": {
+      "run": 3,
+      "passed": 3
+    },
+    "actual_entry_result": "31/32; n8n community node probe timeout; baseline restored",
+    "dev_c_observed": {
+      "state": "running",
+      "network": "none",
+      "ports": {}
+    },
+    "historical_arm_evidence": {
+      "path": "~/.woowbk-lab/evidence/arm-ha-import-run2/20261119T091730/results.json",
+      "run": 117,
+      "passed": 117,
+      "failed": 0,
+      "current_version_revalidation": false
+    },
+    "remaining_scope": [
+      "n8n community node timeout",
+      "strict Odoo four-table difference verification",
+      "remaining archive scenarios on final version",
+      "multi-GB and >8GiB member limits",
+      "ARM target device",
+      "cross-physical-device restore"
+    ],
+    "tested_source_commit": "aaa37480be48814aa3fe3c17e78162555233e872",
+    "installed_engine_hash_matches": 39,
+    "actual_result_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/arm-restore-revalidation-20261121/20261121T083157/results.json",
+    "passed": 31,
+    "failed": 1,
+    "table_comparison": {
+      "identical": 201,
+      "total": 205,
+      "unverified_differences": [
+        "bus_bus",
+        "ir_cron_progress",
+        "ir_config_parameter",
+        "ir_cron"
+      ]
+    }
+  },
+  "latest_external_worktree_results": [
+    {
+      "service": "Omnigent",
+      "commit": "c7b7bb4",
+      "result": "synthetic Supervisor real-app chain pass; main integration pending",
+      "limits": [
+        "replayed target info",
+        "logs unavailable",
+        "installer rollback pending"
+      ]
+    },
+    {
+      "service": "LiteLLM",
+      "commit": "7a1b67c",
+      "result": "offline build succeeded; actual app OOM exit137 at768MiB; cleanup verified",
+      "limits": [
+        "API decrypt migration and rollback untested"
+      ]
+    }
+  ],
+  "resumed_work_20261121": {
+    "main_commit": "092a92e",
+    "omnigent_internal_installer_local_checks": {
+      "run": 17,
+      "passed": 17,
+      "scope": "local fixture boundary tests; not real installation acceptance"
+    },
+    "litellm_test_source": "66eab5c",
+    "litellm_attempt13": "no final report at observation; not accepted",
+    "public_guards": "retained",
+    "manual_hermes_review": "still pending; not retried"
+  },
+  "latest_integrated_omnigent": {
+    "commit": "31d6806",
+    "real_test_source": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+    "evidence": "omnigent-install-rollback/omni-install-20261121/03/run.jsonl",
+    "real_synthetic_install_and_rollback": "passed",
+    "prior_failed_attempts_preserved": 2,
+    "postintegration_tests": {
+      "harness_install_app": 44,
+      "event_transport": 8
+    },
+    "commercial_acceptance": false,
+    "limits": [
+      "synthetic backup",
+      "captured info replay",
+      "DDL quiescence caller requirement",
+      "no general crash recovery acceptance"
+    ]
+  },
+  "emqx_real_cold_source_20261121": {
+    "commit": "79dfbc0",
+    "evidence": "emqx-cold-encrypted-preflight-20261121.json",
+    "actual_fixture_architectures": [
+      "amd64",
+      "aarch64"
+    ],
+    "inner_state": "stopped",
+    "addon_version": "5.9.1",
+    "upstream_version": "5.8.9",
+    "local_tests_passed": 24,
+    "scope": "full streaming decryption and selected header validation; no service or restore",
+    "restore_allowed": false,
+    "semantic_validation": "pending"
+  },
+  "current_parallel_work_20261121": [
+    {
+      "agent": "Linnaeus",
+      "id": "01a1fea0-4acd-7a41-b092-2474eafdfd2b",
+      "task": "EMQX private key CLI boundary verification",
+      "mode": "local only"
+    },
+    {
+      "agent": "Cicero",
+      "id": "01a1fea0-745b-7d73-ac2c-e269385748d0",
+      "task": "Headscale installer-phase client continuity",
+      "mode": "implementation; lab slot not yet granted"
+    }
+  ],
+  "litellm_default_uid_gate": {
+    "required_uid": 65534,
+    "observed_nested_uid_gid_max": 55000,
+    "status": "execution environment unsuitable; no mapping changes made",
+    "actual14_scope": "UID1000 synthetic rehearsal only, not default product identity"
+  },
+  "headscale_installer_current": {
+    "candidate_main_commit": "f26abcc",
+    "tested_source_commit": "ad9ccb389a56bfd55918dad1bc788fc473835a8c",
+    "status": "real_synthetic_install_rollback_passed",
+    "command": "bash tests/e2e/lab/headscale-product-test.sh --installer",
+    "lab": "dev-d",
+    "isolation": "true none {}",
+    "observed_memory_current": 1997647872,
+    "memory_max": 4294967296,
+    "postintegration_local_tests": 15,
+    "local_initial_launch_error": "PYTHONPATH omitted; corrected invocation passed",
+    "evidence_worktree": "/home/woowtechopenclaw/work/headscale-isolated-derp/tests/e2e/lab/evidence/headscale-installer-live",
+    "agent": "01a1fd81-e91b-7233-8676-dacecaba49c8",
+    "commercial_acceptance": false,
+    "evidence_commit": "e66a82a",
+    "real_exit": 0,
+    "independent_inventory_equal": true,
+    "limits": [
+      "clients stopped before installer: installer-phase continuity untested",
+      "customer HA backup untested",
+      "Headplane UI untested",
+      "synthetic fixture and staged engine retained privately",
+      "two client SIGKILL teardown warnings preserved"
+    ]
+  }
+}

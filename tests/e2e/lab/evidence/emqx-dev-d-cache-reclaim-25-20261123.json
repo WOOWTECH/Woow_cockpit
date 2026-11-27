@@ -1,0 +1,40 @@
+{
+  "scope": "exact named dev-d delegated cgroup only",
+  "operation": "128MiB cache reclaim swappiness zero",
+  "script_sha256": "753874240101ea8ff59093a8e0a45b90b0be08288e1a66690ba027e93f60692b",
+  "before": {
+    "current": 2217725952,
+    "max": 4294967296,
+    "anon": 1014693888,
+    "file": 1142444032,
+    "shmem": 877404160,
+    "events": {
+      "low": 0,
+      "high": 0,
+      "max": 6708,
+      "oom": 5,
+      "oom_kill": 4,
+      "oom_group_kill": 0,
+      "sock_throttled": 65
+    }
+  },
+  "write_complete": true,
+  "after": {
+    "current": 2071302144,
+    "max": 4294967296,
+    "anon": 1014693888,
+    "file": 1011535872,
+    "shmem": 877404160,
+    "events": {
+      "low": 0,
+      "high": 0,
+      "max": 6708,
+      "oom": 5,
+      "oom_kill": 4,
+      "oom_group_kill": 0,
+      "sock_throttled": 65
+    }
+  },
+  "limits_unchanged": true,
+  "oom_events_unchanged": true
+}

@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "base_commit": "3fe2ff3d8dba1ac1eb18e5c23aa00475d70bd6e2",
+  "branch": "test/final-private-dispatch-20261122",
+  "result": "32/32 focused local methods passed",
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "expected_failures": 0,
+  "unexpected_successes": 0,
+  "commercial_acceptance": false,
+  "service_runtime_verified": false,
+  "selection": "Explicit 5 Omnigent candidate/dispatch, 5 registry/safety boundaries, 16 EMQX caller, 6 source-binding/completion methods. No discovery or -k filters; all selected IDs must execute and succeed.",
+  "changes": [
+    "Replaced 512-byte/1-byte prefix assertions with complete iter_entries/report.complete and identity/body checks.",
+    "Verified readable v3 prefix followed by rejected tampered final chunk; separately verified early truncated-member rejection and gzip CRC rejection.",
+    "Observed independent completed preflight and builder streams through the actual EMQX reader (spy delegates every parse).",
+    "After private EMQX candidate build, public conversion still refuses without further runtime calls.",
+    "Omnigent public route rejects six combinations of test_mode and request-supplied candidate selectors, never invoking private converter.",
+    "Builder-failure cleanup assertion now checks no private directory survives, not only absence of a top-level candidate-output.",
+    "Documented per-consumer stream completion requirement in ha_real_fixture.py docstring. No runtime implementation changes."
+  ],
+  "real_local": [
+    "Generated archives and bounded file I/O",
+    "Actual product tar/gzip parsing",
+    "Actual PyNaCl v3 encrypt/decrypt and authentication failure",
+    "Actual private binding/builder/packager Python methods",
+    "Actual Omnigent flow and adapter Python methods"
+  ],
+  "simulated_or_injected": [
+    "Omnigent SQL/schema/PG, OwnerRunner transport, HTTP and package encryption fixtures",
+    "EMQX broker/export/target import and TempObjects runtime fixtures",
+    "Source-stat mutation injected in test_changed_source_refused",
+    "EMQX cleanup, packaging and cancellation failures injected",
+    "No actual service process, Podman command, lab or remote target used"
+  ],
+  "initial_run": {
+    "tests_run": 31,
+    "passed_methods": 30,
+    "errors": 1,
+    "preserved_result": "initial-results.json",
+    "preserved_log": "initial-unittest.txt",
+    "cause": "New truncation test expected a readable prefix, but the real product rejected header/ciphertext size mismatch at open_backup. Split into explicit early-rejection method; retained all refusal assertions. No product change."
+  },
+  "final_result": "results.json",
+  "final_log": "unittest.txt",
+  "bound_repo_python_files": 50,
+  "hash_scope": "Before/after hashes of observed repo Python modules loaded prior to execution, including caller, engine and fake helpers; not complete image/environment dependency closure.",
+  "command": "PYTHONDONTWRITEBYTECODE=1 WOOWBK_REQUIRE_HA_CRYPTO=1 PYTHONPATH=backup-engine:tests/e2e/lab:. python3 tests/backup/run_final_private_dispatch.py",
+  "next_minimal_real_work": {
+    "cleanup": "Banach owns the ARM cleanup lifecycle if service work is blocked; this lane did not access or claim it.",
+    "r2": "No runtime change here requires replaying old service suites. To close the remaining real EMQX source gap, the target owner can schedule one reviewed cold-v3 source through the private build/package path with actual broker/runtime, complete-stream source binding and independent cleanup evidence. This is pending, not authorized/executed by this report; public conversion guards remain blocked.",
+    "limitations": "Local generated-data success does not validate real customer archive provenance, service semantics, production activation or commercial acceptance."
+  },
+  "restrictions": {
+    "old_unrelated_suites": false,
+    "labs": false,
+    "target_54": false,
+    "hermes_rejected_review": false,
+    "main_modified": false
+  }
+}

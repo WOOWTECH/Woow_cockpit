@@ -1,0 +1,15 @@
+{
+  "controller_exit": 1,
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "elapsed_seconds": 1.727363158017397,
+      "fixed_phase": "budget",
+      "isolation_cleanup": "passed",
+      "restore_executed": false,
+      "result": "refused",
+      "scope": "actual-issued-target-only",
+      "source_commit": "149c2a0155ba1fc897c5425ce754741645fdcbfb"
+    }
+  ]
+}

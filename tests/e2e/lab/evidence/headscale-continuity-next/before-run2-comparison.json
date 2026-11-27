@@ -1,0 +1,15 @@
+{
+  "containers": true,
+  "volumes": true,
+  "networks": true,
+  "secrets": true,
+  "running": true,
+  "jobs": true,
+  "labelled-tests": true,
+  "job-volumes": true,
+  "job-networks": true,
+  "units": true,
+  "original-processes": true,
+  "isolation": true,
+  "cleanup_paths_equal": true
+}

@@ -1,0 +1,26 @@
+{
+ "source_commit": "044264f81da10d2072dd6ba0668ca609cc28a47f",
+ "scope": "r8-real-cockpit-three-app",
+ "exit": 1,
+ "elapsed_seconds": 36.1,
+ "stdout_sha256": "db1cfaf701d62f432988691d1f062fb0cabec3912a75444fde3835636b12e22f",
+ "fixed_status": [
+  "source: both reviewed checkouts clean: PASS",
+  "fixture: original recorded full encrypted HA hash matches: PASS",
+  "browser: existing package and Chromium ready: PASS",
+  "resources: device headroom at least1900MiB: PASS",
+  "resources: host available memory at least1200MiB: PASS",
+  "resources: host keeps13GiB plus bounded phase writes: PASS",
+  "source: installed helper and every module equal frozen source: PASS",
+  "source: installed actual page equals frozen source: PASS",
+  "Cockpit: existing socket active: PASS",
+  "before: no active backup job: PASS",
+  "before: app services already active and image configs present: PASS",
+  "before: schedule inactive or failed: PASS",
+  "replay: original catalog units images and timer still match independent receipt: FAIL",
+  "R8: bounded real page flow completed: FAIL",
+  "preconditions: old guard retained without device mutation: PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

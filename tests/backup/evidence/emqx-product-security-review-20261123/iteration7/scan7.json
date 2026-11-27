@@ -1,0 +1,49 @@
+{
+ "time": "2026-11-24 18:26 +0800",
+ "dirs": {
+  "committed evidence (all iterations)": {
+   "files": 84,
+   "hits": 0
+  },
+  "harness folder": {
+   "files": 21,
+   "hits": 0
+  },
+  "SR-5 lane evidence (emqx-sr5-20261124)": {
+   "files": 6,
+   "hits": 0
+  },
+  "EMQX product attempts folder (incl. attempt-sr5-*)": {
+   "files": 41,
+   "hits": 0
+  },
+  "iteration 7 scratch evidence": {
+   "files": 24,
+   "hits": 0
+  },
+  "iteration 7 run outputs": {
+   "files": 30,
+   "hits": 0
+  },
+  "SR-5 private run logs 20261124T161203": {
+   "files": 16,
+   "hits": 0
+  },
+  "SR-5 private run logs 20261124T161757": {
+   "files": 4,
+   "hits": 0
+  },
+  "SR-5 private run logs 20261124T162320": {
+   "files": 15,
+   "hits": 0
+  },
+  "SR-5 private run logs 20261124T163039": {
+   "files": 21,
+   "hits": 0
+  },
+  "SR-5 private run logs 20261124T164629": {
+   "files": 4,
+   "hits": 0
+  }
+ }
+}

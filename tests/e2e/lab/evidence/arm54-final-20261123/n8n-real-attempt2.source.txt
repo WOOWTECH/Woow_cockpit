@@ -1,0 +1,654 @@
+"""Lane arm54-2 item B (n8n part): a real RPi5 HA backup of 2026-11-19 (add-ons odoo18ce 0.4.13 + woow-n8n 2.43.6)
+-> unmodified product n8n check and convert (the public path; n8n has no import guard) -> restored n8n 2.43.6 (arm64,
+queue mode) on .54 -> HA's n8n owner logs in with HA's password, workflows/credential (decrypted with HA's moved key)/
+executions/community node; full restart; rollback.
+
+Provenance (owner decision 2026-11-23, 「Odoo/n8n 用 A」): the backups are no longer on .34; the 2026-11-19 records
+are the provenance: the engine's ha_backup_id `ha-<sha256[:20]>` with name and date in dev-c's catalog
+(converted on 2026-11-19 01:23Z/01:26Z), equal to these bytes (`provenance-arm` evidence on the coordinator).
+Runner scope (stated): rootful Podman with a private store (RootfulRunner), NOT the production OwnerRunner/rootless
+path. The restore follows the product adapter's order with the adapter's own data methods (_recreate_volume for the
+two declared volumes, removal of the database volume, _wait_for_postgres, _check_target_major, _ensure_database,
+_restore_database); systemd units and health timers are not used here (containers started directly).
+Target: Woow n8n package quadlets (2ac1ae2, the host's package commit) rendered like scripts/app.sh app_render does
+in queue mode (n8n.container + queue/n8n-main.fragment, queue units, runners mode external) and translated to podman
+run; stated deviations: ONE pod with network none instead of the n8n bridge network (the main container's
+DB_POSTGRESDB_HOST / QUEUE_BULL_REDIS_HOST point at the pod's loopback; --add-host did not reach /etc/hosts in a
+network-none pod, attempt n8n-build), no published port, no health timers (readiness polled here), memory
+caps; only n8n-postgres, n8n-valkey and n8n (main) run (worker, task runners and webhook processor are not started:
+they process executions, not data). All target containers are stopped while the product check and convert run
+(they only read the quadlets, the env file and the volumes' ownership; this protects .54's memory).
+Network: this process joins the pod's network namespace (libc setns), so every request below reaches the restored
+n8n at 127.0.0.1:5678; the namespace has only `lo`.
+Secrets: HA's n8n owner password, the credential's value and the HA backup key arrive in 0600 files read and unlinked
+at start; the target's passwords are generated here and only reach podman secrets of the private store; the auth
+cookie stays in memory; the output and the product log are scanned for every value before printing."""
+import ctypes
+import hashlib
+import json
+import os
+from pathlib import Path
+import secrets
+import shlex
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import time
+import traceback
+import urllib.error
+import urllib.request
+from types import MethodType, SimpleNamespace
+
+from arm54_final_runtime import DRIVER, LABEL, ROOT, RootfulRunner, private_dir, report, sha256_file, store_objects
+
+from woowbackup import habackup, haimport, ha_n8n, hasecuretar, tempctr  # noqa: E402
+from woowbackup.adapters.quadlet_postgres import QuadletPostgresAdapter  # noqa: E402
+from woowbackup.errors import BackupError  # noqa: E402
+
+# The 2026-11-19 RPi5 backups (slug -> sha256 whose first 20 hex digits are the 2026-11-19 ha_backup_id records).
+RECORDED = {'8e51e2ed': '546aecf3be5a13642603bd901d49ee4de01313049d4cddf8805ef8c2b973be44',
+            '4f5c7337': 'a5fb626820a0947482a394094cd004715eb348fc92cec760c0dc7d9546f420e5'}
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+KEY_FILE = ROOT / 'input' / CHAIN['key_file'] if CHAIN.get('key_file') else None
+CREDS_FILE = ROOT / 'input/n8n-creds.json'
+KEYS = None
+PACKAGE = ROOT / 'source/tests/e2e/lab/evidence/arm54-final-20261123/n8n-package-2ac1ae2'
+N8N_IMAGE = 'docker.io/n8nio/n8n:2.43.6'
+PG_IMAGE = 'docker.io/library/postgres:16.15-alpine'
+VALKEY_IMAGE = 'docker.io/valkey/valkey:8.1.11-alpine'
+POD = 'a54n-n8n-pod'
+DB, VALKEY, MAIN = 'n8n-postgres', 'n8n-valkey', 'n8n'
+DATAVOL, PGVOL, VALKEYVOL = 'n8n_n8n_data', 'n8n_postgres_data', 'n8n_valkey_data'
+VOLUMES = (DATAVOL, PGVOL, VALKEYVOL)
+SECRET_NAMES = ('n8n-db-password', 'n8n-runners-auth-token', 'n8n-valkey-password')
+OWNER_EMAIL = 'ha-probe@probe.invalid'   # HA's n8n owner (the 2026-11-19 conversion record names it)
+CREDENTIAL = 'HA probe header'
+COMMUNITY_PACKAGE = 'n8n-nodes-globals'
+FIX_WORKFLOW = 'WOOW 匯入測試 - 需修正'
+TARGET_OWNER = 'a54-target-owner@probe.invalid'
+RENDER = {'HOST_BIND': '127.0.0.1', 'HOST_PORT': '15678', 'WEBHOOK_PORT': '15679', 'WORKER_CONCURRENCY': '5',
+          'GENERIC_TIMEZONE': 'Asia/Taipei', 'TZ': 'Asia/Taipei'}
+MEMORY = {DB: '256m', VALKEY: '64m', MAIN: '1g'}
+JOB_CHECK, JOB_CONVERT = 'j20261123T120000Z-a54b0c01', 'j20261123T120000Z-a54b0c02'
+BASE_URL = 'http://127.0.0.1:5678'
+BROWSER_ID = 'arm54-final-n8n'
+CLONE_NEWNET = 0x40000000
+ENV_DIR = ROOT / '.config/n8n'   # the runner's home is the workspace: %h/.config/n8n/... of the package
+
+r = RootfulRunner()
+checks = {}
+facts = {}
+PRIVATE = []
+LOGS = []
+SPECS = {}
+out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete', 'store_driver': DRIVER,
+       'runner': 'rootful private store (RootfulRunner); not production OwnerRunner/rootless',
+       'source': {'device': 'RPi5 HAOS 192.168.2.34 (2026-11-19; backups no longer there)', 'slug': CHAIN['slug'],
+                  'archive_sha256': RECORDED.get(CHAIN['slug']), 'addons': 'odoo18ce 0.4.13, woow-n8n 2.43.6',
+                  'encrypted_backup': KEY_FILE is not None,
+                  'provenance': 'owner-accepted 2026-11-19 records (ha_backup_id = ha-<sha256[:20]>)'},
+       'checks': checks, 'facts': facts}
+started = time.monotonic()
+
+
+def private(value):
+    if isinstance(value, str):
+        value = value.encode()
+    if isinstance(value, bytes) and len(value.strip()) >= 6:
+        PRIVATE.append(value)
+        PRIVATE.append(value.strip())
+    return value
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def podman(*args, **kw):
+    return r.podman(*args, **kw)
+
+
+def text(*args, **kw):
+    return podman(*args, **kw).stdout.decode('utf-8', 'replace')
+
+
+def mem_available():
+    for line in Path('/proc/meminfo').read_text().splitlines():
+        if line.startswith('MemAvailable:'):
+            return int(line.split()[1]) * 1024
+    return None
+
+
+MEM = []
+
+
+def sample_mem():
+    value = mem_available()
+    if value is not None:
+        MEM.append(value)
+        assert value > 400 * 1024 ** 2, 'memory-headroom-refused'   # never push .54's originals towards OOM
+
+
+# ---------------------------------------------------------------- target (package quadlets, rendered)
+
+def render(data):
+    for key, value in RENDER.items():
+        data = data.replace('@@%s@@' % key, value)
+    assert '@@' not in data, 'unrendered-placeholder'
+    return data
+
+
+def package_quadlets():
+    """Queue mode exactly like app_render: base units + queue units, n8n-main.fragment appended to n8n.container,
+    the optional runners unit (N8N_RUNNERS_MODE=external), no webhook processor (N8N_QUEUE_WEBHOOK_PROCESSOR=false)."""
+    q = PACKAGE / 'quadlet'
+    files = {}
+    for path in sorted(q.glob('*.container')) + sorted(q.glob('*.volume')) + sorted(q.glob('*.network')):
+        files[path.name] = path.read_text()
+    files['n8n-runners.container'] = (q / 'optional/n8n-runners.container').read_text()
+    for path in sorted((q / 'queue').glob('*.container')) + sorted((q / 'queue').glob('*.volume')):
+        files[path.name] = path.read_text()
+    files['n8n.container'] += (q / 'queue/n8n-main.fragment').read_text()
+    files.pop('n8n-webhook.container', None)
+    return {name: render(body) for name, body in files.items()}
+
+
+def env_file():
+    """~/.config/n8n/n8n.env from the package example with the host's choices (queue mode, runners external)."""
+    lines = []
+    for line in (PACKAGE / 'config/n8n.env.example').read_text().splitlines():
+        if line.startswith('EXECUTIONS_MODE='):
+            line = 'EXECUTIONS_MODE=queue'
+        lines.append(line)
+    return '\n'.join(lines) + '\n'
+
+
+def volume_name(quadlets, source):
+    if source.endswith('.volume'):
+        return [v for k, v in tempctr.parse_unit(quadlets[source]).get('Volume', []) if k == 'VolumeName'][-1]
+    return source
+
+
+def container_args(quadlets, name):
+    parsed = tempctr.parse_unit(quadlets[name]).get('Container', [])
+    args, used, command = ['--detach', '--pod', POD, '--label', LABEL, '--pull=never'], set(), []
+    container_name = image_ref = None
+    for key, value in parsed:
+        used.add(key)
+        if key == 'ContainerName':
+            container_name = value
+        elif key == 'Image':
+            image_ref = value
+        elif key == 'Volume':
+            source, _sep, rest = value.partition(':')
+            source = source.replace('%h', str(ROOT))
+            args += ['--volume', volume_name(quadlets, source) + ':' + rest]
+        elif key == 'Environment':
+            for item in shlex.split(value):
+                args += ['--env', item]
+        elif key == 'EnvironmentFile':
+            args += ['--env-file', value.lstrip('-').replace('%h', str(ROOT))]
+        elif key == 'Secret':
+            args += ['--secret', value]
+        elif key == 'Exec':
+            command = shlex.split(value)
+    skipped = sorted(used - {'ContainerName', 'Image', 'Volume', 'Environment', 'EnvironmentFile', 'Secret', 'Exec'})
+    if container_name == MAIN:
+        # Stated deviation: one pod network namespace instead of the n8n bridge network; the package's host names
+        # n8n-postgres / n8n-valkey are the pod's loopback (later --env wins over the quadlet's Environment=).
+        args += ['--env', 'DB_POSTGRESDB_HOST=127.0.0.1', '--env', 'QUEUE_BULL_REDIS_HOST=127.0.0.1']
+    args += ['--name', container_name, '--memory', MEMORY[container_name], '--pids-limit', '1024']
+    return container_name, args + [image_ref, *command], image_ref, skipped
+
+
+# ---------------------------------------------------------------- HTTP in the pod's namespace
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+
+
+def http(method, path, body=None, cookie=None, timeout=30):
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json', 'browser-id': BROWSER_ID}
+    if cookie:
+        headers['Cookie'] = 'n8n-auth=' + cookie
+    request = urllib.request.Request(BASE_URL + path, data=data, headers=headers, method=method)
+    try:
+        with OPENER.open(request, timeout=timeout) as response:
+            raw = response.read(8 * 1024 * 1024 + 1)
+            assert len(raw) <= 8 * 1024 * 1024, 'response-too-large'
+            jar = [h for k, h in response.headers.items() if k.lower() == 'set-cookie']
+            try:
+                return response.status, (json.loads(raw) if raw else None), jar
+            except ValueError:
+                return response.status, None, jar
+    except urllib.error.HTTPError as error:
+        return error.code, None, []
+    except (urllib.error.URLError, OSError):
+        return None, None, []
+
+
+def wait_ready(seconds=600):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if http('GET', '/healthz/readiness', timeout=10)[0] == 200:
+            return True
+        sample_mem()
+        time.sleep(3)
+    raise AssertionError('n8n-not-ready')
+
+
+def login(email, password):
+    status, _body, jar = http('POST', '/rest/login', {'emailOrLdapLoginId': email, 'password': password})
+    cookie = None
+    for header in jar:
+        first = header.split(';', 1)[0]
+        if first.startswith('n8n-auth='):
+            cookie = first[len('n8n-auth='):]
+    if cookie:
+        private(cookie)
+    return status, cookie
+
+
+def data_of(body):
+    if isinstance(body, dict) and isinstance(body.get('data'), list):
+        return body['data']
+    if isinstance(body, dict) and isinstance(body.get('data'), dict) and isinstance(body['data'].get('data'), list):
+        return body['data']['data']
+    return body if isinstance(body, list) else []
+
+
+def sql(statement):
+    return podman('exec', '-i', DB, 'psql', '-X', '-A', '-t', '-v', 'ON_ERROR_STOP=1', '-U', 'n8n', '-d', 'n8n',
+                  '-f', '-', input=statement.encode(), timeout=120).stdout.decode().strip()
+
+
+def setns_pod():
+    infra = text('pod', 'inspect', POD, '--format', '{{.InfraContainerID}}').strip()
+    pid = int(text('inspect', infra, '--format', '{{.State.Pid}}').strip())
+    libc = ctypes.CDLL(None, use_errno=True)
+    fd = os.open('/proc/%d/ns/net' % pid, os.O_RDONLY)
+    try:
+        if libc.setns(fd, CLONE_NEWNET) != 0:
+            raise OSError(ctypes.get_errno(), 'setns')
+    finally:
+        os.close(fd)
+    return sorted(name for _index, name in socket.if_nameindex())
+
+
+def wait_db(seconds=240):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        p = podman('exec', DB, 'pg_isready', '-h', '127.0.0.1', '-p', '5432', '-U', 'n8n', '-d', 'n8n',
+                   check=False, timeout=20)
+        if p.returncode == 0:
+            return True
+        time.sleep(2)
+    raise AssertionError('db-not-ready')
+
+
+def wait_valkey(seconds=120):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        p = podman('exec', VALKEY, '/bin/sh', '/usr/local/bin/start-valkey.sh', 'health', check=False, timeout=20)
+        if p.returncode == 0:
+            return True
+        time.sleep(2)
+    raise AssertionError('valkey-not-ready')
+
+
+def start(name):
+    podman('run', *SPECS[name][1], timeout=300)
+    sample_mem()
+    {DB: wait_db, VALKEY: wait_valkey, MAIN: wait_ready}[name]()
+
+
+def stop_all(remove=True):
+    for name in (MAIN, VALKEY, DB):
+        podman('stop', '--time', '60', name, check=False, timeout=120)
+        if remove:
+            podman('rm', '--force', '--volumes', name, check=False, timeout=60)
+
+
+def export_file(volume, path):
+    with open(path, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        podman('volume', 'export', volume, stdout=handle, timeout=900, max_output=4 * 1024 ** 3)
+    return path
+
+
+def import_file(volume, path):
+    with open(path, 'rb') as handle:
+        podman('volume', 'import', volume, '-', input=handle, timeout=900)
+
+
+def tar_member(path, wanted):
+    with tarfile.open(path) as tar:
+        for member in tar:
+            if member.isfile() and member.name.removeprefix('./') == wanted:
+                return member.mode & 0o7777, member.uid, tar.extractfile(member).read()
+    return None, None, None
+
+
+def decrypted_credential(name):
+    """n8n's own CLI in the running main container (the REST API redacts secrets); the export exists only inside
+    the container and is removed; only found/match leave this function."""
+    try:
+        podman('exec', MAIN, 'n8n', 'export:credentials', '--all', '--decrypted', '--output=/tmp/a54-creds.json',
+               timeout=600, max_output=1024 * 1024)
+        raw = podman('exec', MAIN, 'cat', '/tmp/a54-creds.json', timeout=60, max_output=4 * 1024 * 1024).stdout
+    finally:
+        podman('exec', MAIN, 'rm', '-f', '/tmp/a54-creds.json', check=False, timeout=60)
+    rows = json.loads(raw or b'[]')
+    row = next((x for x in rows if x.get('name') == name), None)
+    value = ((row or {}).get('data') or {}).get('value')
+    if isinstance(value, str):
+        private(value)
+    return row is not None, value
+
+
+def community_nodes(cookie):
+    """The moved community package: its database rows and every node type answering /rest/node-types."""
+    packages = sql('SELECT "packageName" || \' \' || "installedVersion" FROM installed_packages ORDER BY 1;')
+    nodes = [line.split('|') for line in sql('SELECT type, "latestVersion" FROM installed_nodes ORDER BY 1;')
+             .splitlines() if line]
+    loaded = 0
+    for node_type, version in nodes:
+        status, body, _jar = http('POST', '/rest/node-types', {'nodeInfos': [{'name': node_type,
+                                                                              'version': int(version)}]}, cookie)
+        described = data_of(body) if status == 200 else []
+        versions = described[0].get('version') if len(described) == 1 else None
+        versions = versions if isinstance(versions, list) else [versions]
+        if len(described) == 1 and described[0].get('name') in (node_type, node_type.split('.', 1)[-1]) \
+                and int(version) in versions:
+            loaded += 1
+    return packages.splitlines(), len(nodes), loaded
+
+
+def package_names(packages):
+    """The product reports community packages as {name, version} objects (ha_n8n packages_of)."""
+    return sorted(p.get('name') if isinstance(p, dict) else p for p in packages or [])
+
+
+def verify_restored(phase, creds, converted, target_password):
+    sample_mem()
+    status, cookie = login(OWNER_EMAIL, creds['owner_password'])
+    must(phase + '_ha_owner_logs_in_with_ha_password', status == 200 and bool(cookie), status=status)
+    t_status, _t = login(TARGET_OWNER, target_password)
+    must(phase + '_target_owner_replaced', t_status in (401, 403), status=t_status)
+    s, body, _jar = http('GET', '/rest/workflows', cookie=cookie)
+    workflows = data_of(body)
+    names = sorted(w.get('name') for w in workflows if isinstance(w, dict))
+    active = sum(1 for w in workflows if isinstance(w, dict) and w.get('active'))
+    must(phase + '_workflows', s == 200 and len(workflows) == converted['counts'].get('workflows')
+         and active == converted['counts'].get('workflows_active') and FIX_WORKFLOW in names,
+         workflows=len(workflows), active=active)
+    s, body, _jar = http('GET', '/rest/credentials', cookie=cookie)
+    listed = [c.get('name') for c in data_of(body) if isinstance(c, dict)]
+    must(phase + '_credential_listed', s == 200 and CREDENTIAL in listed, credentials=len(listed))
+    found, value = decrypted_credential(CREDENTIAL)
+    must(phase + '_credential_decrypts_to_ha_value', found and value == creds['credential_value'])
+    counts = {t: int(sql('SELECT count(*) FROM %s;' % t)) for t in ('workflow_entity', 'credentials_entity',
+                                                                  'execution_entity', '"user"', 'project')}
+    must(phase + '_row_counts', counts['workflow_entity'] == converted['counts'].get('workflows')
+         and counts['credentials_entity'] == converted['counts'].get('credentials')
+         and counts['execution_entity'] == converted['counts'].get('executions'), counts=counts)
+    packages, node_count, loaded = community_nodes(cookie)
+    must(phase + '_community_node_loads', any(p.startswith(COMMUNITY_PACKAGE + ' ') for p in packages)
+         and node_count >= 1 and loaded == node_count, packages=packages, nodes=node_count, loaded=loaded)
+    mode, uid, key = tar_member(export_file(DATAVOL, private_dir('work', phase) / 'data.tar'), 'config')
+    private(key or b'')
+    must(phase + '_data_volume_key_is_ha_key', key is not None and json.loads(key).get('encryptionKey')
+         == converted['ha_key'] and mode == 0o600, uid=uid)
+
+
+try:
+    out['phase'] = 'inputs'
+    before = store_objects(r)
+    facts['store_before_run'] = {k: len(v) for k, v in before.items()}
+    for name in before['volumes']:
+        r.podman('volume', 'rm', '--force', name, check=False, timeout=60)
+    must('store_clean_before_run', not store_objects(r)['volumes'] and not before['containers'] and not before['pods'])
+    must('archive_sha256_equals_recorded_2026_11_19', CHAIN['slug'] in RECORDED and CHAIN.get('sha256')
+         == RECORDED[CHAIN['slug']] and sha256_file(ARCHIVE) == RECORDED[CHAIN['slug']])
+    if KEY_FILE is not None:
+        key_text = haimport.read_key_file(KEY_FILE)
+        private(key_text)
+        KEYS = hasecuretar.Keys(key_text)
+        del key_text
+        os.unlink(KEY_FILE)
+        import nacl
+        facts['nacl'] = {'version': getattr(nacl, '__version__', None),
+                         'from_workspace_wheel': Path(nacl.__file__).resolve().is_relative_to(ROOT / 'pydeps')}
+    raw = json.loads(CREDS_FILE.read_text())
+    CREDS_FILE.unlink()
+    creds = {'owner_password': raw['owner_password'], 'credential_value': raw['credential_value']}
+    for value in creds.values():
+        private(value)
+    images = text('images', '--format', '{{.Repository}}:{{.Tag}}')
+    must('images_present', all(ref in images for ref in (N8N_IMAGE, PG_IMAGE, VALKEY_IMAGE)))
+    facts['mem_available_start'] = mem_available()
+
+    out['phase'] = 'target-deploy'
+    quadlets = package_quadlets()
+    ENV_DIR.mkdir(parents=True, mode=0o700, exist_ok=True)
+    (ENV_DIR / 'n8n.env').write_text(env_file())
+    shutil.copyfile(PACKAGE / 'config/start-valkey.sh', ENV_DIR / 'start-valkey.sh')
+    os.chmod(ENV_DIR / 'start-valkey.sh', 0o644)
+    SPECS[DB] = container_args(quadlets, 'n8n-postgres.container')
+    SPECS[VALKEY] = container_args(quadlets, 'n8n-valkey.container')
+    SPECS[MAIN] = container_args(quadlets, 'n8n.container')
+    must('package_images', SPECS[DB][2] == PG_IMAGE and SPECS[VALKEY][2] == VALKEY_IMAGE
+         and SPECS[MAIN][2] == N8N_IMAGE)
+    facts['quadlet_keys_not_translated'] = {name: SPECS[name][3] for name in SPECS}
+    passwords = {name: secrets.token_urlsafe(32) for name in SECRET_NAMES}
+    target_password = 'A1' + secrets.token_urlsafe(18)
+    for value in list(passwords.values()) + [target_password]:
+        private(value)
+    for name in SECRET_NAMES:
+        podman('secret', 'create', '--label', LABEL, name, '-', input=passwords[name].encode(), timeout=60)
+    for volume in VOLUMES:
+        podman('volume', 'create', '--label', LABEL, volume, timeout=60)
+    podman('pod', 'create', '--name', POD, '--label', LABEL, '--network', 'none', timeout=120)
+    podman('pod', 'start', POD, timeout=120)
+    infra = text('pod', 'inspect', POD, '--format', '{{.InfraContainerID}}').strip()
+    must('pod_network_none', text('inspect', infra, '--format', '{{.HostConfig.NetworkMode}}').strip() == 'none')
+    facts['netns_links'] = setns_pod()
+    addrs = subprocess.run(['ip', '-o', 'addr', 'show'], capture_output=True, text=True, timeout=30).stdout.split('\n')
+    facts['netns_addressed'] = sorted({line.split()[1] for line in addrs if line.strip()})
+    must('process_in_pod_netns_only_lo_configured', facts['netns_addressed'] == ['lo'])
+    for name in (DB, VALKEY, MAIN):
+        start(name)
+    for name in (DB, VALKEY, MAIN):
+        info = json.loads(text('inspect', name))[0]
+        must('no_published_ports_' + name, not info['HostConfig'].get('PortBindings')
+             and info['HostConfig'].get('NetworkMode', '').startswith('container:'))
+    status, _body, _jar = http('POST', '/rest/owner/setup', {'email': TARGET_OWNER, 'firstName': 'Target',
+                                                            'lastName': 'Owner', 'password': target_password})
+    must('target_owner_setup', status == 200, status=status)
+    t_status, t_cookie = login(TARGET_OWNER, target_password)
+    must('target_owner_login_before_import', t_status == 200 and bool(t_cookie))
+    ha_status, _c = login(OWNER_EMAIL, creds['owner_password'])
+    must('ha_owner_unknown_before_import', ha_status in (401, 403), status=ha_status)
+    target_rows = {t: sql('SELECT count(*) FROM %s;' % t) for t in ('workflow_entity', 'credentials_entity',
+                                                                  '"user"')}
+    facts['target_rows_before_import'] = target_rows
+    target_key_mode, _uid, target_key = tar_member(export_file(DATAVOL, private_dir('work', 'pre') / 'data.tar'),
+                                                   'config')
+    private(target_key or b'')
+    must('target_has_own_generated_key', target_key is not None)
+    app = SimpleNamespace(id='n8n', name='n8n 工作流程', owner='arm54-rootful-private-store',
+                          volumes=[{'name': DATAVOL}, {'name': VALKEYVOL}], data_dirs=[], secrets=[],
+                          postgres=[{'id': 'main', 'container': DB, 'user': 'n8n', 'database': 'n8n',
+                                     'scope': 'database', 'unit': 'n8n-postgres.service', 'data_volume': PGVOL}],
+                          units=['n8n-postgres.service', 'n8n-valkey.service', 'n8n.service'],
+                          health=[{'type': 'http', 'url': 'http://127.0.0.1:15678/healthz/readiness',
+                                   'timeout_seconds': 120}])
+    stop_all()  # stated: the target is stopped while the product reads the backup and builds the import
+
+    out['phase'] = 'product-check'
+    staging = private_dir('work', 'staging')
+    adapter = QuadletPostgresAdapter(app, r, LOGS.append)
+    temps = {'current': tempctr.TempObjects(r, JOB_CHECK, memory='768m', pids=1024, cpus='1')}
+    conversion = temps['current']
+    opened = habackup.open_backup(ARCHIVE)
+    work = SimpleNamespace(ha=opened, keys=KEYS, _addons={}, staging=staging,
+                           guard=haimport.SpaceGuard([staging, ROOT], 12 * 1024 ** 3 + 128 * 1024 ** 2),
+                           quadlets=lambda a: quadlets, runner=lambda a: r, adapter=lambda a: adapter,
+                           temp=lambda a: temps['current'], abort=lambda: None, checkpoint=sample_mem,
+                           phase=lambda p: None, log=LOGS.append)
+    for method in ('addon_member', 'addon_info', 'open'):
+        setattr(work, method, MethodType(getattr(haimport.Work, method), work))
+    try:
+        checked = ha_n8n.check(work, app)
+    finally:
+        left = conversion.cleanup()
+    must('check_temp_objects_removed', not left)
+    section = checked['n8n']
+    facts['product_check'] = {k: section.get(k) for k in ('owner_email', 'workflows', 'workflows_active',
+                                                          'credentials', 'executions', 'users', 'projects',
+                                                          'community_packages')}
+    facts['product_check_warnings'] = len(checked['warnings'])
+    must('product_check_no_blocker', checked['blockers'] == [], blockers=len(checked['blockers']))
+    must('product_check_versions_equal', checked['target_version'] == '2.43.6')
+    must('product_check_source_facts', section['owner_email'] == OWNER_EMAIL and section['workflows'] == 3
+         and section['workflows_active'] == 1 and section['credentials'] == 1 and section['executions'] >= 1
+         and package_names(section['community_packages']) == [COMMUNITY_PACKAGE]
+         and any(w.get('name') == FIX_WORKFLOW for w in section['workflows_to_fix']))
+
+    out['phase'] = 'product-convert'
+    shutil.rmtree(staging / 'n8n-work', ignore_errors=True)
+    conversion = temps['current'] = tempctr.TempObjects(r, JOB_CONVERT, memory='768m', pids=1024, cpus='1')
+    converted_dir = private_dir('work', 'converted')
+    try:
+        converted = ha_n8n.convert(work, app, False, converted_dir)
+    finally:
+        left = conversion.cleanup()
+        opened.close()
+        opened = None
+    must('convert_temp_objects_removed', not left)
+    must('convert_items', sorted(converted['volumes']) == sorted([DATAVOL, VALKEYVOL])
+         and list(converted['postgres']) == ['main'] and converted['owner_email'] == OWNER_EMAIL
+         and package_names(converted['packages']) == [COMMUNITY_PACKAGE])
+    facts['converted'] = {'counts': converted['counts'], 'pg_major': converted['postgres']['main']['major'],
+                          'dump_bytes': os.path.getsize(converted['postgres']['main']['file']),
+                          'workflows_to_fix': len(converted['workflows_to_fix'])}
+    _m, _u, ha_key_doc = tar_member(converted['volumes'][DATAVOL], 'config')
+    private(ha_key_doc or b'')
+    converted['ha_key'] = json.loads(ha_key_doc)['encryptionKey']
+    private(converted['ha_key'])
+    must('converted_key_is_not_target_key', ha_key_doc != target_key)
+
+    out['phase'] = 'restore'
+    safety = private_dir('work', 'safety')
+    for volume in VOLUMES:   # harness rollback copy (cold: every container is stopped)
+        export_file(volume, safety / (volume + '.tar'))
+    for volume in (DATAVOL, VALKEYVOL):
+        adapter._recreate_volume(volume, converted['volumes'][volume])
+    podman('volume', 'rm', '-f', PGVOL, timeout=120)       # like the adapter: the database starts from a new cluster
+    podman('volume', 'create', '--label', LABEL, PGVOL, timeout=60)
+    start(DB)
+    pg = app.postgres[0]
+    adapter._wait_for_postgres(pg)
+    adapter._check_target_major(pg, {'postgres': [{'id': 'main', 'major': converted['postgres']['main']['major']}]})
+    adapter._ensure_database(pg)
+    adapter._restore_database(pg, converted['postgres']['main']['file'])
+    start(VALKEY)
+    start(MAIN)
+    verify_restored('installed', creds, converted, target_password)
+
+    out['phase'] = 'restart'
+    stop_all()
+    for name in (DB, VALKEY, MAIN):
+        start(name)
+    verify_restored('restarted', creds, converted, target_password)
+
+    out['phase'] = 'rollback'
+    stop_all()
+    for volume in VOLUMES:
+        podman('volume', 'rm', volume, timeout=120)
+        podman('volume', 'create', '--label', LABEL, volume, timeout=60)
+        import_file(volume, safety / (volume + '.tar'))
+    for name in (DB, VALKEY, MAIN):
+        start(name)
+    t_status, t_cookie = login(TARGET_OWNER, target_password)
+    ha_status, _c = login(OWNER_EMAIL, creds['owner_password'])
+    rows = {t: sql('SELECT count(*) FROM %s;' % t) for t in ('workflow_entity', 'credentials_entity', '"user"')}
+    _m, _u, key_after = tar_member(export_file(DATAVOL, private_dir('work', 'rolled') / 'data.tar'), 'config')
+    private(key_after or b'')
+    must('rollback_restores_pre_import_target', t_status == 200 and ha_status in (401, 403) and rows == target_rows
+         and key_after == target_key, target=t_status, ha=ha_status)
+    stop_all()
+    out.update(status='passed' if all(checks.values()) else 'partial', phase='done',
+               false_checks=sorted(k for k, v in checks.items() if not v))
+except Exception as error:  # noqa: BLE001
+    out['error_code'] = type(error).__name__
+    out['error_where'] = [[Path(f.filename).name, f.lineno, f.name]
+                          for f in traceback.extract_tb(error.__traceback__)[-4:]]
+    if isinstance(error, AttributeError):
+        out['missing_attribute'] = getattr(error, 'name', None)
+    if isinstance(error, (AssertionError, KeyError)):
+        out['failed_check'] = str(error)[:80]
+    if hasattr(error, 'code'):
+        out['product_error_code'] = error.code
+finally:
+    cleanup = {}
+    for staged in (KEY_FILE, CREDS_FILE):
+        if staged is not None and staged.exists():
+            cleanup['staged_file_removed_late'] = True
+            staged.unlink()
+    if 'opened' in dir() and opened is not None:
+        opened.close()
+    if 'conversion' in dir() and conversion is not None:
+        cleanup['temp_left'] = len(conversion.cleanup())
+    for name in (MAIN, VALKEY, DB):
+        r.podman('rm', '--force', '--volumes', '--time', '10', name, check=False, timeout=60)
+    r.podman('pod', 'rm', '--force', POD, check=False, timeout=120)
+    for volume in VOLUMES:
+        r.podman('volume', 'rm', '--force', volume, check=False, timeout=60)
+    for name in SECRET_NAMES:
+        r.podman('secret', 'rm', name, check=False, timeout=60)
+    shutil.rmtree(ROOT / 'work', ignore_errors=True)
+    shutil.rmtree(ROOT / '.config', ignore_errors=True)
+    objects = store_objects(r)
+    cleanup.update(store_after={k: len(v) for k, v in objects.items()}, work_removed=not (ROOT / 'work').exists(),
+                   no_lab_containers=not objects['containers'], no_lab_pods=not objects['pods'],
+                   no_lab_volumes=not objects['volumes'], no_lab_secrets=not objects['secrets'],
+                   creds_file_removed=not CREDS_FILE.exists(),
+                   unlock_file_removed=KEY_FILE is None or not KEY_FILE.exists())
+    out['cleanup'] = cleanup
+    if out['status'] == 'passed' and not all(cleanup[k] for k in ('no_lab_containers', 'no_lab_pods', 'no_lab_volumes',
+                                                                  'no_lab_secrets', 'creds_file_removed',
+                                                                  'unlock_file_removed')):
+        out['status'] = 'failed'
+        out['failed_check'] = 'cleanup'
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['podman_commands'] = len(r.commands)
+    out['free_bytes_min'] = min(r.free) if r.free else None
+    out['mem_available_min'] = min(MEM) if MEM else None
+    out['product_log_lines'] = len(LOGS)
+    needles = {v for v in PRIVATE if len(v) >= 6}
+    out['product_log_secret_hits'] = sum(line.encode().count(v) for line in LOGS for v in needles)
+    encoded = json.dumps(out, sort_keys=True, ensure_ascii=False).encode()
+    commands = json.dumps(r.commands).encode()
+    if any(v in encoded or json.dumps(v.decode('latin-1'))[1:-1].encode() in encoded for v in needles) or \
+            any(v in commands for v in needles):
+        out = {'status': 'failed', 'failed_check': 'secret_in_output_suppressed', 'commercial_acceptance': 'not-complete'}
+    report(ROOT / 'n8n-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+    sys.exit(0 if out['status'] == 'passed' else 1)

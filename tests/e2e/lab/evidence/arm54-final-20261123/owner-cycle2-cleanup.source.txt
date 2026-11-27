@@ -1,0 +1,91 @@
+"""Remove everything this lane created on .54: private-store containers/pods/volumes/images, leftover helper
+processes and the whole 0700 workspace (inputs with the real HA archive and the client state copy included).
+The default store and the original containers are never addressed."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+from arm54_final_runtime import ROOT, RootfulRunner, store_objects
+
+r = RootfulRunner()
+out = {'status': 'failed', 'workspace': str(ROOT), 'commercial_acceptance': 'not-complete'}
+started = time.monotonic()
+# A cycle that was killed before the 2026-11-24 07:23 reboot of .54 (cycle c9): Podman refuses a store whose run
+# directory was written in an earlier boot and asks for exactly these two directories to be deleted. Only with this
+# argument, only inside this run's own workspace, and only when Podman says so and nothing uses the workspace.
+AFTER_REBOOT = '--after-reboot' in sys.argv[2:]
+BOOT_ID_REFUSAL = b'current system boot ID differs from cached boot ID'
+
+
+def reset_runtime_after_reboot():
+    first = r.podman('ps', '-a', '--format', '{{.Names}}', check=False, timeout=60)
+    out['after_reboot'] = {'podman_exit': first.returncode, 'boot_id_refusal': BOOT_ID_REFUSAL in first.stderr}
+    if not first.returncode:
+        return
+    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    assert out['after_reboot']['boot_id_refusal'], 'another-store-error'
+    assert not pids_naming_root() and not any(str(ROOT) in m for m in mounts), 'workspace-in-use'
+    for name in ('run', 'tmp'):
+        path = ROOT / name
+        assert path.is_dir() and not path.is_symlink() and path.parent == ROOT, 'runtime-directory-refused'
+        shutil.rmtree(path)
+        path.mkdir(mode=0o700)
+    out['after_reboot']['runtime_directories_reset'] = ['run', 'tmp']
+
+
+def pids_naming_root():
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cmd = (entry / 'cmdline').read_bytes()
+        except OSError:
+            continue
+        if str(ROOT).encode() in cmd:
+            found.append(int(entry.name))
+    return sorted(found)
+
+
+try:
+    if AFTER_REBOOT:
+        reset_runtime_after_reboot()
+    before = store_objects(r)
+    out['store_before'] = {k: len(v) for k, v in before.items()}
+    for name in before['containers']:
+        r.podman('rm', '--force', '--time', '10', name, check=False, timeout=120)
+    for name in before['pods']:
+        r.podman('pod', 'rm', '--force', name, check=False, timeout=120)
+    for name in store_objects(r)['volumes']:
+        r.podman('volume', 'rm', '--force', name, check=False, timeout=120)
+    for name in before['secrets']:
+        r.podman('secret', 'rm', name, check=False, timeout=60)
+    r.podman('rmi', '--all', '--force', check=False, timeout=600)
+    after = store_objects(r)
+    out['store_after'] = {k: len(v) for k, v in after.items()}
+    leftover = pids_naming_root()
+    for pid in leftover:
+        try:
+            os.kill(pid, 15)
+        except ProcessLookupError:
+            pass
+    time.sleep(2)
+    out['helper_processes_found'] = len(leftover)
+    out['helper_processes_left'] = len(pids_naming_root())
+    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    out['mounts_naming_workspace'] = sum(str(ROOT) in m for m in mounts)
+    if not any(after.values()) and not out['helper_processes_left'] and not out['mounts_naming_workspace']:
+        shutil.rmtree(ROOT)
+    out['workspace_removed'] = not ROOT.exists()
+    out['status'] = 'passed' if out['workspace_removed'] else 'failed'
+except Exception as error:  # noqa: BLE001
+    out['error_code'] = type(error).__name__
+finally:
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['free_bytes'] = shutil.disk_usage('/var/tmp').free
+    print(json.dumps(out, sort_keys=True))
+    sys.exit(0 if out['status'] == 'passed' else 1)

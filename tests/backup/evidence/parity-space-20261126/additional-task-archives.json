@@ -1,0 +1,46 @@
+{
+  "before_free": 22850899968,
+  "archived": [
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/vi1",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/vi1.tar.gz",
+      "sha256": "e567849f1661f5261e403da4b4ba51906a6ce87ceaa308ddcaf80daa52582f85",
+      "verified_regular_files": 2131,
+      "archive_bytes": 28474224,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/vi1.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/verif8",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/verif8.tar.gz",
+      "sha256": "b18a9be4b362efc144826b6d6729fd60bfa99f721a85bfefeb2c05aa4b1760c3",
+      "verified_regular_files": 1547,
+      "archive_bytes": 27417356,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/verif8.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/final-verify",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/final-verify.tar.gz",
+      "sha256": "cdc921418ed5579fc4479899fca508d78b996bcbe3e07d0245f93938ce0d3057",
+      "verified_regular_files": 3567,
+      "archive_bytes": 18953311,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/final-verify.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/emqx-product",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/emqx-product.tar.gz",
+      "sha256": "883946d06007cc77047f383c2752ada8164fba1ecc0ed14cdebba32d85bf09ea",
+      "verified_regular_files": 9648,
+      "archive_bytes": 34721804,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/emqx-product.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    },
+    {
+      "source": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/emqx-secreview",
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/emqx-secreview.tar.gz",
+      "sha256": "d67fa95a04cfc42e2e9dbfbd9322eeba08656fa417bb318c6cad400bc503da80",
+      "verified_regular_files": 5685,
+      "archive_bytes": 18313627,
+      "restore_command": "tar -xzf /home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/verifier-extra-2/emqx-secreview.tar.gz -C /tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad"
+    }
+  ],
+  "after_free": 20417175552
+}

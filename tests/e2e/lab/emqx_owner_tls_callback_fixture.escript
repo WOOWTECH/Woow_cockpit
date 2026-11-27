@@ -1,0 +1,30 @@
+#!/usr/bin/env escript
+%%! +S 1:1 +A 1 -noshell
+main([Path]) ->
+    code:add_paths(filelib:wildcard("/opt/emqx/lib/*/ebin")),
+    {ok,Raw} = file:read_file(Path),
+    [_,T0] = binary:split(Raw, <<"Typed = fun F(V,D) when D =< 16 ->">>),
+    [T1,_] = binary:split(T0, <<"<<\"5.8.9\">> =">>),
+    Source = "Typed = fun F(V,D) when D =< 16 ->" ++ binary_to_list(T1) ++
+        "{Typed,ConfigSecrets,InertTlsCallback}.",
+    {ok,Tokens,_} = erl_scan:string(Source),
+    {ok,Exprs} = erl_parse:parse_exprs(Tokens),
+    {value,{Typed,Normalize,Inert},_} = erl_eval:exprs(Exprs,erl_eval:new_bindings()),
+    Callback = fun emqx_tls_psk:lookup/3,
+    Options = #{user_lookup_fun => {Callback,undefined}},
+    Input = #{listeners => #{ssl => #{default => #{ssl_options => Options}},
+                            wss => #{default => #{ssl_options => Options}}}},
+    {Plain,[]} = Normalize(Input,0,[],[]),
+    false = code:is_loaded(emqx_tls_psk),
+    unsupported_function = try Typed(Callback,0), accepted catch error:R0 -> R0 end,
+    P = [{map,listeners},{map,ssl},{map,default},{map,ssl_options},{map,user_lookup_fun},{tuple,0}],
+    {ok,_} = Inert(Callback,P),
+    lists:foreach(fun({F,Path0}) -> unsupported = Inert(F,Path0) end,
+        [{Callback,[]},{Callback,[{map,custom}]},
+         {Callback,[{map,listeners},{map,ssl},{map,custom},{map,ssl_options},{map,user_lookup_fun},{tuple,0}]},
+         {fun emqx_tls_psk:lookup/2,P},{fun erlang:node/0,P},
+         {fun(_,_,_) -> put(callback_executed,true),<<"private-env">> end,P}]),
+    undefined = get(callback_executed),
+    {ok,AllTokens,_} = erl_scan:string(unicode:characters_to_list(Raw)),
+    {ok,_} = erl_parse:parse_exprs(AllTokens),
+    io:format("~s",[emqx_utils_json:encode(Typed(Plain,0))]).

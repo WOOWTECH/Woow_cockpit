@@ -1,0 +1,33 @@
+{
+  "source_commit": "94d9d55f93c30c02ef020c7868bcc3dd38142943",
+  "scope": "actual fresh pinned broker schema-proven dashboard HTTPS absence and full files; no real source restore",
+  "exit": 1,
+  "elapsed_seconds": 50.40403343201615,
+  "stdout_sha256": "31173474d58d3d0687bb7f4522f417b5e073416c6796bfce4d39b80f22d0a69d",
+  "stderr_bytes_not_published": 0,
+  "reports": [
+    {
+      "checks": {
+        "actual_native_expression_and_projection": "passed",
+        "all_five_target_categories_registered": "passed",
+        "broker_cleanup": "passed",
+        "broker_ready": "passed",
+        "clients_cleanup": "passed",
+        "fresh_ticker_identity_suspended_after": "passed",
+        "fresh_ticker_identity_suspended_before": "passed",
+        "native_fixed_expression_parsed": "passed",
+        "native_full_inventory_not_two_table_subset": "passed",
+        "no_clients_after_capture": "passed",
+        "no_clients_before_capture": "passed",
+        "private_files_cleanup": "passed"
+      },
+      "ha_commercial_acceptance": "not-claimed",
+      "native_transport": "passed",
+      "result": "failed",
+      "scope": "synthetic-broker-owner-target",
+      "target_completeness": "not-assessed"
+    }
+  ],
+  "postflight_passed": true,
+  "restore_executed": false
+}

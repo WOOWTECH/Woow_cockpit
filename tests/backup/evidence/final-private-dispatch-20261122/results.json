@@ -1,0 +1,456 @@
+{
+  "schema": 1,
+  "base_commit": "3fe2ff3d8dba1ac1eb18e5c23aa00475d70bd6e2",
+  "checkout_head_during_run": "3fe2ff3d8dba1ac1eb18e5c23aa00475d70bd6e2",
+  "scope": "R2 focused local changed-caller/private-dispatch/source-completion regression",
+  "commercial_acceptance": false,
+  "real_service_acceptance": false,
+  "command": "PYTHONDONTWRITEBYTECODE=1 WOOWBK_REQUIRE_HA_CRYPTO=1 PYTHONPATH=backup-engine:tests/e2e/lab:. python3 tests/backup/run_final_private_dispatch.py",
+  "selected_methods": [
+    {
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_full_synthetic_backup_candidate",
+      "coverage": "Private dispatch and public guard; synthetic PG/schema/owner transport"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_candidate_requires_ddl_quiescence",
+      "coverage": "Private dispatch and public guard; synthetic PG/schema/owner transport"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+      "coverage": "Private dispatch and public guard; synthetic PG/schema/owner transport"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+      "coverage": "Private dispatch and public guard; synthetic PG/schema/owner transport"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "coverage": "Private dispatch and public guard; synthetic PG/schema/owner transport"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_install.InstallTests.test_install_requires_registered_candidate_before_touch",
+      "coverage": "Real Python flow/adapter methods; FakeOwner, HTTP, PG/snapshot and encryption fixtures"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_install.InstallTests.test_corrupt_registry_refuses_before_owner_commands",
+      "coverage": "Real Python flow/adapter methods; FakeOwner, HTTP, PG/snapshot and encryption fixtures"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_install.InstallTests.test_other_app_origin_refuses_before_owner_commands",
+      "coverage": "Real Python flow/adapter methods; FakeOwner, HTTP, PG/snapshot and encryption fixtures"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_install.InstallTests.test_registered_but_missing_secret_prevents_packaging",
+      "coverage": "Real Python flow/adapter methods; FakeOwner, HTTP, PG/snapshot and encryption fixtures"
+    },
+    {
+      "id": "tests.backup.test_ha_omnigent_install.InstallTests.test_failed_safety_export_restarts_writers_without_candidate_import",
+      "coverage": "Real Python flow/adapter methods; FakeOwner, HTTP, PG/snapshot and encryption fixtures"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_builder_completes_its_own_source_stream_after_preflight",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_public_conversion_stays_blocked_after_private_candidate_build",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_real_builder_failure_cleans_roles_without_packaging",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_cleanup_failure_refuses_result",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_source_change_during_build_refuses_result_after_cleanup",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_wrong_app_and_malformed_digest_refused_before_transport",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_private_staging_required_before_transport",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_volume_path_escape_and_alias_refused_before_transport",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_exclusive_work_directory_ignores_preexisting_output_links",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_temp_factory_failure_removes_private_directory",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_job_refused_before_transport",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_packaging_failure_and_cancellation_remove_partial_files",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_emqx_real_candidate.RealCallerTests.test_private_cleanup_error_is_fixed_field_and_does_not_return_result",
+      "coverage": "Real local source/decrypt/parser/builder/package; fake broker/runtime/TempObjects"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_private_copy_and_actual_source_binding",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_real_v3_decrypt_stream_and_binding",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_late_v3_authentication_failure_is_not_a_prefix_read_pass",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_truncated_v3_member_refused_before_binding",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_gzip_trailer_corruption_refuses_source_binding",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    },
+    {
+      "id": "test_ha_real_fixture.FixtureGateTests.test_changed_source_refused",
+      "coverage": "Real generated local archives, file I/O, parser and v3 crypto; no service transport"
+    }
+  ],
+  "executed_methods": [
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_full_synthetic_backup_candidate",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_candidate_requires_ddl_quiescence",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_install_requires_registered_candidate_before_touch",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_corrupt_registry_refuses_before_owner_commands",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_other_app_origin_refuses_before_owner_commands",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_registered_but_missing_secret_prevents_packaging",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_failed_safety_export_restarts_writers_without_candidate_import",
+    "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity",
+    "test_emqx_real_candidate.RealCallerTests.test_builder_completes_its_own_source_stream_after_preflight",
+    "test_emqx_real_candidate.RealCallerTests.test_public_conversion_stays_blocked_after_private_candidate_build",
+    "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+    "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+    "test_emqx_real_candidate.RealCallerTests.test_real_builder_failure_cleans_roles_without_packaging",
+    "test_emqx_real_candidate.RealCallerTests.test_cleanup_failure_refuses_result",
+    "test_emqx_real_candidate.RealCallerTests.test_source_change_during_build_refuses_result_after_cleanup",
+    "test_emqx_real_candidate.RealCallerTests.test_wrong_app_and_malformed_digest_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_private_staging_required_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_volume_path_escape_and_alias_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_exclusive_work_directory_ignores_preexisting_output_links",
+    "test_emqx_real_candidate.RealCallerTests.test_temp_factory_failure_removes_private_directory",
+    "test_emqx_real_candidate.RealCallerTests.test_invalid_job_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_packaging_failure_and_cancellation_remove_partial_files",
+    "test_emqx_real_candidate.RealCallerTests.test_private_cleanup_error_is_fixed_field_and_does_not_return_result",
+    "test_ha_real_fixture.FixtureGateTests.test_private_copy_and_actual_source_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_real_v3_decrypt_stream_and_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_late_v3_authentication_failure_is_not_a_prefix_read_pass",
+    "test_ha_real_fixture.FixtureGateTests.test_truncated_v3_member_refused_before_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_gzip_trailer_corruption_refuses_source_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_changed_source_refused"
+  ],
+  "passed_methods": [
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_full_synthetic_backup_candidate",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_candidate_requires_ddl_quiescence",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+    "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_install_requires_registered_candidate_before_touch",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_corrupt_registry_refuses_before_owner_commands",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_other_app_origin_refuses_before_owner_commands",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_registered_but_missing_secret_prevents_packaging",
+    "tests.backup.test_ha_omnigent_install.InstallTests.test_failed_safety_export_restarts_writers_without_candidate_import",
+    "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity",
+    "test_emqx_real_candidate.RealCallerTests.test_builder_completes_its_own_source_stream_after_preflight",
+    "test_emqx_real_candidate.RealCallerTests.test_public_conversion_stays_blocked_after_private_candidate_build",
+    "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+    "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+    "test_emqx_real_candidate.RealCallerTests.test_real_builder_failure_cleans_roles_without_packaging",
+    "test_emqx_real_candidate.RealCallerTests.test_cleanup_failure_refuses_result",
+    "test_emqx_real_candidate.RealCallerTests.test_source_change_during_build_refuses_result_after_cleanup",
+    "test_emqx_real_candidate.RealCallerTests.test_wrong_app_and_malformed_digest_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_private_staging_required_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_volume_path_escape_and_alias_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_exclusive_work_directory_ignores_preexisting_output_links",
+    "test_emqx_real_candidate.RealCallerTests.test_temp_factory_failure_removes_private_directory",
+    "test_emqx_real_candidate.RealCallerTests.test_invalid_job_refused_before_transport",
+    "test_emqx_real_candidate.RealCallerTests.test_packaging_failure_and_cancellation_remove_partial_files",
+    "test_emqx_real_candidate.RealCallerTests.test_private_cleanup_error_is_fixed_field_and_does_not_return_result",
+    "test_ha_real_fixture.FixtureGateTests.test_private_copy_and_actual_source_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_real_v3_decrypt_stream_and_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_late_v3_authentication_failure_is_not_a_prefix_read_pass",
+    "test_ha_real_fixture.FixtureGateTests.test_truncated_v3_member_refused_before_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_gzip_trailer_corruption_refuses_source_binding",
+    "test_ha_real_fixture.FixtureGateTests.test_changed_source_refused"
+  ],
+  "subtests": [
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps (apps=['omnigent'], guarantee=False)",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps (apps=['omnigent'], guarantee=1)",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps (apps=['omnigent'], guarantee='yes')",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_private_entry_rejects_truthy_quiescence_and_mixed_apps (apps=['omnigent', 'emqx'], guarantee=True)",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion (declarations=[])",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion (declarations=[{'name': 'omnigent-postgres-password'}])",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_unregistered_quadlet_secret_refuses_before_conversion (declarations=[{'name': 'omnigent-postgres-password'}, {'name': 'omnigent-postgres-password'}])",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=False, selector=True)",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=False, selector='omnigent')",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=False, selector={'enabled': True})",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=True, selector=True)",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=True, selector='omnigent')",
+      "passed": true
+    },
+    {
+      "parent": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion",
+      "id": "tests.backup.test_ha_omnigent_candidate.CandidateFlowTests.test_request_fields_cannot_enable_public_conversion (test_mode=True, selector={'enabled': True})",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity (version='5.9.0', arch='aarch64')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_actual_binding_builder_and_packager_use_source_identity (version='5.8.9', arch='amd64')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='hot')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='plain')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='version')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='digest')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='wrong-key')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_invalid_sources_refused_before_temp_objects (case='missing-key')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required (label=None, image='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required (label='5.8.8', image='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')",
+      "passed": true
+    },
+    {
+      "parent": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required",
+      "id": "test_emqx_real_candidate.RealCallerTests.test_target_label_and_pin_are_required (label='5.8.9', image='emqx:latest')",
+      "passed": true
+    }
+  ],
+  "tests_run": 32,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "expected_failures": 0,
+  "unexpected_successes": 0,
+  "elapsed_seconds": 40.621761618880555,
+  "passed": true,
+  "source_sha256_before": {
+    "backup-engine/woowbackup/__init__.py": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+    "backup-engine/woowbackup/adapters/__init__.py": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+    "backup-engine/woowbackup/adapters/base.py": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+    "backup-engine/woowbackup/adapters/quadlet_postgres.py": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/catalog.py": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+    "backup-engine/woowbackup/digests.py": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+    "backup-engine/woowbackup/errors.py": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+    "backup-engine/woowbackup/flows.py": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+    "backup-engine/woowbackup/ha_emqx.py": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+    "backup-engine/woowbackup/ha_emqx_settings.py": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+    "backup-engine/woowbackup/ha_headscale.py": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+    "backup-engine/woowbackup/ha_n8n.py": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+    "backup-engine/woowbackup/ha_odoo.py": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+    "backup-engine/woowbackup/ha_omnigent.py": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+    "backup-engine/woowbackup/haapps.py": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+    "backup-engine/woowbackup/habackup.py": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+    "backup-engine/woowbackup/hacommon.py": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+    "backup-engine/woowbackup/haimport.py": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+    "backup-engine/woowbackup/hasecuretar.py": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+    "backup-engine/woowbackup/hasqlite.py": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+    "backup-engine/woowbackup/hastore.py": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+    "backup-engine/woowbackup/jobs.py": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+    "backup-engine/woowbackup/keys.py": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+    "backup-engine/woowbackup/nested.py": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+    "backup-engine/woowbackup/paths.py": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+    "backup-engine/woowbackup/podman.py": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+    "backup-engine/woowbackup/storage.py": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+    "backup-engine/woowbackup/tempctr.py": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+    "backup-engine/woowbackup/util.py": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+    "tests/__init__.py": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+    "tests/backup/__init__.py": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+    "tests/backup/hab1fakes.py": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+    "tests/backup/hafakes.py": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+    "tests/backup/hafixtures.py": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+    "tests/backup/run_final_private_dispatch.py": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+    "tests/backup/tarfixtures.py": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+    "tests/backup/test_adapter.py": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+    "tests/backup/test_catalog.py": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+    "tests/backup/test_flows.py": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+    "tests/backup/test_ha_import.py": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+    "tests/backup/test_ha_omnigent.py": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+    "tests/backup/test_ha_omnigent_candidate.py": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+    "tests/backup/test_ha_omnigent_install.py": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+    "tests/backup/test_jobs.py": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+    "tests/e2e/lab/emqx_ha_candidate.py": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+    "tests/e2e/lab/emqx_real_candidate.py": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+    "tests/e2e/lab/ha_real_fixture.py": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+    "tests/e2e/lab/test_emqx_real_candidate.py": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+    "tests/e2e/lab/test_ha_real_fixture.py": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad"
+  },
+  "source_sha256_after": {
+    "backup-engine/woowbackup/__init__.py": "8d53348f729a9c49e0c6a36ce2ac8925599321b6bd83b271a08fc75d54b0fc01",
+    "backup-engine/woowbackup/adapters/__init__.py": "01e63131886127202a5fd33f89bc0264d06b42f268df3960d8f261bd329da3fe",
+    "backup-engine/woowbackup/adapters/base.py": "6c78557a6612faf73f8f1a6b1f98476d401aed173c674c57a8a22f5dcde6b567",
+    "backup-engine/woowbackup/adapters/quadlet_postgres.py": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/catalog.py": "38d30ed7db8a7e1c903b4096e2f55cff11a191a85bf43cde60808e55b8e5a72c",
+    "backup-engine/woowbackup/digests.py": "89d0b2048c8b2c499e787c5d18f8ea6d1755e0a645b522a1e7837bb7458f10d9",
+    "backup-engine/woowbackup/errors.py": "c3b66b1c53505c784d697bf0b1a52c55b302cf9081dc7db9eb3ac57e8f2c5e73",
+    "backup-engine/woowbackup/flows.py": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+    "backup-engine/woowbackup/ha_emqx.py": "00b90c3a97bd7832cd7bd455e71da0dc6536d77493bec36c1dd0eac3343f770f",
+    "backup-engine/woowbackup/ha_emqx_settings.py": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb",
+    "backup-engine/woowbackup/ha_headscale.py": "ca834c2b99e39783a33c3d363f6647822c2fa99befdff3b2ce2b241ec971a9b8",
+    "backup-engine/woowbackup/ha_n8n.py": "4c143f314ea36d04b54cb4d7de6fc17d2f04baf46402d4f079e1becd3d5e4c86",
+    "backup-engine/woowbackup/ha_odoo.py": "f2b5d0fadf8486f1c5b62c3eff509fb79c5f7aafaa99f582f549863cca214e37",
+    "backup-engine/woowbackup/ha_omnigent.py": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+    "backup-engine/woowbackup/haapps.py": "298a2f634084fc130701abe3c3ef1da9713ca112128c551fc635714c0015f98e",
+    "backup-engine/woowbackup/habackup.py": "d07cc1ad26558e1638c622c7175dafb72dc0bca555778f502e493470d6171545",
+    "backup-engine/woowbackup/hacommon.py": "ec5073c8af67e18a293c2669627bf0ef3b0bfbeef833db64c1d3415de6246652",
+    "backup-engine/woowbackup/haimport.py": "27a32eb950bddc322a4c47313a48ed91fa7f2ada82d70cfef08bfcc503710cec",
+    "backup-engine/woowbackup/hasecuretar.py": "bc68328893ac4130a2f3e670464fab5cfc596962f305ab01529dda73c337b1cc",
+    "backup-engine/woowbackup/hasqlite.py": "f6e6aef2e142608e0ac911b0a6105b8c85f9f2a659dc4991180f70773a4ed7d4",
+    "backup-engine/woowbackup/hastore.py": "68d2936ac71335482d4f9d4868cd64e4aee48d4417bd90ec48a5d54f0bb07de5",
+    "backup-engine/woowbackup/jobs.py": "77c56e70e3ff0bbea2066a3c42aa360fe219f1329b0e54c4063efd6fb140c492",
+    "backup-engine/woowbackup/keys.py": "9ab11bb4c11b36e3589c069af43ad9b7500d6596bf39932612d384a40c28379e",
+    "backup-engine/woowbackup/nested.py": "7b00f09fd0d8e5ba116fccc09233411c6ee7946092daf711df1c72f43db86ee4",
+    "backup-engine/woowbackup/paths.py": "4ff2b0556ef53ecc6c231d66ea2650189f6af8e13b16d616cdeabc2c4ee8e4b0",
+    "backup-engine/woowbackup/podman.py": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f",
+    "backup-engine/woowbackup/storage.py": "2a0db85627e0fea7ec2b1bd7a4234313b79ece6fc646bd1506bc4bf1a0773ccd",
+    "backup-engine/woowbackup/tempctr.py": "21a6baa2c72feb59cf0a3cc3ee7b25c13da1bbd3066a094a0a1ebbaf309c35cd",
+    "backup-engine/woowbackup/util.py": "4b82e496e594d25ef6c80cf2937b1d78df7e6a5ecda249e6f166146ee4d76279",
+    "tests/__init__.py": "a522069d2ddf9e0abdca2c86cc0720c8d81bbcac34d592d348c7906871f41a42",
+    "tests/backup/__init__.py": "9ae7d73d9ef3ebdd7a1f4425f25307f65443bdc0bc2db06e33ad826243ca5812",
+    "tests/backup/hab1fakes.py": "9c9dfa92ac161b1b459ab09c5e1c7d4859f55517dda587bbcc065a04716646f4",
+    "tests/backup/hafakes.py": "81a22b742ec77df46e4cb24ab19951ef455c9066e95d474dce713349d9e1b2fb",
+    "tests/backup/hafixtures.py": "ad831de1fcbbdacfbc6168cbeff1283e5e7d913af3f51c00c232095fd3c47a61",
+    "tests/backup/run_final_private_dispatch.py": "b24fd0069efb016272d737149e3177ca3d1bd0dc6233faec46c4ca12cd5f5d43",
+    "tests/backup/tarfixtures.py": "78c1cd50370589279bcc7b8aecbd452641d4b63d8796a2863d6b77edbe66cd49",
+    "tests/backup/test_adapter.py": "219577ddfdc7a0f65f8039c8af315c0aa3f868b36764ed81fe6ad330646e1541",
+    "tests/backup/test_catalog.py": "4fe3eee9d0a73502255859d995780ef26ac0fa0c6222a6e8e95658841988d61b",
+    "tests/backup/test_flows.py": "bca3c74135fd49ab7f6cf8fc4e903a5a2d498e0abdc8e5d7c8fa2877dfd77747",
+    "tests/backup/test_ha_import.py": "fd35ab57b8334a6e5babb8c97fa243e11b2ecda4b836be40efce976ef27b53e1",
+    "tests/backup/test_ha_omnigent.py": "cd8effdb2f3e50ae921bb7be35c4c9474eeeab44167c309a50f78503ab70ef8b",
+    "tests/backup/test_ha_omnigent_candidate.py": "54eeab48426fde5a46ce99c7e41eddaa495a389a79ecbdef80df561932cc1b90",
+    "tests/backup/test_ha_omnigent_install.py": "7da1e066393690e3e559dfc417ab155324c4850ea117d3dbe7ebfca4bb08f377",
+    "tests/backup/test_jobs.py": "93f15334b43b4d4c47fbb3e6cae4810041883adfeeaca9a4023805207f663d3d",
+    "tests/e2e/lab/emqx_ha_candidate.py": "cb6b78716d488186bc3973c8ba29b01d8d2f70c2c446cb6c6dca45f6a558a61b",
+    "tests/e2e/lab/emqx_real_candidate.py": "6a3db3c6f647dc83adb464f98cc87247021dd10344368c1334114ec177fa99a9",
+    "tests/e2e/lab/ha_real_fixture.py": "c5d4289232c90bfca629db631aa463a0926a6ab45b24064729b98a279b06070b",
+    "tests/e2e/lab/test_emqx_real_candidate.py": "7e871893660b48bd0330ed74c70852756b95fa182ed39a094595222682079d5b",
+    "tests/e2e/lab/test_ha_real_fixture.py": "e7e8c0b0939888f879634e6ffbadc8b580bf111cdd77c54f4cbf4359e1cad8ad"
+  },
+  "source_binding_limit": "Observed repo Python modules loaded before execution; not a full transitive/runtime/image closure. Mocked modules are hashed but are not live service evidence.",
+  "python": "3.12.3",
+  "pynacl": "1.5.0",
+  "cryptography": "41.0.7",
+  "log": "tests/backup/evidence/final-private-dispatch-20261122/unittest.txt",
+  "log_sha256": "18024e4385d0574bf67d8bb11ccb7519ba803eb4fad2607c8a7dfc9191e28d96",
+  "raw_captured_output_sha256": "18024e4385d0574bf67d8bb11ccb7519ba803eb4fad2607c8a7dfc9191e28d96",
+  "log_normalization": "Trailing whitespace removed only; no test result or traceback filtered.",
+  "restrictions": {
+    "lab_access": false,
+    "target_54_access": false,
+    "hermes_review": false,
+    "old_full_suite": false
+  },
+  "next_real_check": "No real acceptance claimed. Banach owns ARM cleanup lifecycle. Real EMQX cold-source build/package remains a separately owner-scheduled check; do not repeat old service suites solely for these local assertion changes."
+}

@@ -1,0 +1,13 @@
+{
+  "source_commit": "b21fcf797589173e050ceb561e6f1047cbaa5a38",
+  "scope": "real x86 HA backup Mnesia ACL three-round real restore",
+  "exit": 0,
+  "elapsed_seconds": 827.984,
+  "stdout_sha256": "6a289ca5d193e91cd258081090243fe73fc64011082c0b1f8ac0302863a62de4",
+  "fixed_status": [
+    "REAL OWNER RESTORE ROLLBACK PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

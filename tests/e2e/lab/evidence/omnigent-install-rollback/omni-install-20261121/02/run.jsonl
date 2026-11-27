@@ -1,0 +1,16 @@
+{"device_loopback_only": true, "each_memory_mib": 128, "image_id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873", "max_pg_containers": 2, "outer_isolation_operator_confirmed": true, "stage": "preflight"}
+{"created_and_read": true, "stage": "source_session_marker"}
+{"app_image": "545fa9ea7c1946bbca7df95448b8d2d172777ad861b41599ef69a81b3b32e6d5", "login": true, "stage": "real_source_bootstrap"}
+{"stage": "source_cold"}
+{"member_found": true, "real_parser": true, "stage": "supervisor_envelope"}
+{"stage": "target_started"}
+{"independently_initialized": true, "login": true, "stage": "real_target_bootstrap"}
+{"capture_removed": true, "holders": 0, "kind": "statement_timeout", "stage": "snapshot_failure"}
+{"capture_removed": true, "holders": 0, "kind": "invalid_metadata", "stage": "snapshot_failure"}
+{"stage": "candidate_started"}
+{"info_response_replayed": true, "real_prepare": true, "real_target_resolver": true, "schema_ddl_quiesced": true, "stage": "target_discovery", "synthetic_catalog": true, "synthetic_quadlets": true}
+{"path": "/tmp/woowbk-omni-install-jlmcqv3m", "stage": "installer_private_evidence_retained"}
+{"complete": true, "stage": "installer_cleanup"}
+{"stage": "cleanup", "synthetic_objects_removed": true}
+{"containers_volumes_secrets_unchanged": true, "stage": "installer_inventory"}
+{"error_type": "RuntimeError", "frames": [{"file": "omnigent_install_rollback.py", "function": "<module>", "line": 422}, {"file": "omnigent_install_rollback.py", "function": "main", "line": 413}, {"file": "omnigent_real_app_chain.py", "function": "main", "line": 498}, {"file": "omnigent_install_rollback.py", "function": "install_and_rollback", "line": 285}, {"file": "omnigent_install_rollback.py", "function": "validate_runtime", "line": 160}, {"file": "omnigent_install_rollback.py", "function": "check", "line": 130}], "stage": "installer_failed"}

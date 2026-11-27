@@ -1,0 +1,528 @@
+"""Item C, Headscale (lane arm54-2): the REAL RPi5 HA backup (slug 45670371, attested on the RPi5) through the
+PRODUCTION engine on .54 into the test owner's rootless Headscale that runs under his user systemd.
+
+Every engine step is the root helper command the Cockpit page sends (one JSON request, one JSON reply, run as root,
+cli.main with Paths(base=<workspace>/engine) because the product is not installed on .54): key-init, catalog-suggest,
+catalog-install, upload-begin/-finish, ha-check-start, ha-convert-start, restore-start, job-status, list. Each job is
+executed by `run-job <id>` in its own process (the launcher records the id instead of calling systemd-run of the
+installed helper) with the production dependencies: flows.default_deps -> default_adapter_factory ->
+OwnerRunner('woowbk54t') -> runuser + rootless Podman + `systemctl --user` units, health checks and digests.
+
+Stated deviations: the catalog entry is the product's own catalog-suggest draft with headplane.service removed from
+units/writer_units (not started: no arm64 image) and two loopback health URLs added (suggest finds no HTTP HealthCmd);
+the engine process joins the owner's private network namespace (see arm54_final_owner_common). The real B1 tailscale
+client (state of node b1-ts-alice made against the RPi5) runs rootful in that namespace (userspace networking) and
+reaches the restored server through local routes for the RPi5's and .54's addresses plus a relay to the published
+loopback port. Restart = `systemctl --user restart headscale.service`; rollback = restore of the restore's own safety
+backup through restore-start. No secret value is printed; only fixed status keys and facts."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import time
+import uuid
+
+from arm54_final_runtime import BASE, ENV, ROOT, private_dir, report, sha256_file
+import arm54_final_owner_common as oc
+
+from woowbackup import cli, habackup, podman as product_podman  # noqa: E402
+from woowbackup.paths import Paths  # noqa: E402
+
+ATTESTED = {'45670371': '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4'}
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+PATHS = Paths(base=ROOT / 'engine')
+CLIENT_IMAGE = 'docker.io/tailscale/tailscale@sha256:8934bed5f68e80c5f9c881f62c65909223ee660432946c10ad212d958fc2c2bb'
+CLIENT = 'a54o-ts-client'
+LABEL = 'io.woowtech.test=arm54-final-20261123'
+TS = ['exec', CLIENT, 'tailscale', '--socket=/var/run/tailscale/tailscaled.sock']
+HEALTH = ['http://127.0.0.1:28080/health', 'http://127.0.0.1:29090/metrics']
+RUNNER = '''import sys
+sys.path.insert(0, %r)
+from woowbackup import cli
+from woowbackup.paths import Paths
+sys.exit(cli.main(['run-job', sys.argv[1]], paths=Paths(base=%r)))
+''' % (str(ROOT / 'source/backup-engine'), str(ROOT / 'engine'))
+
+checks, facts, jobs = {}, {}, {}
+WORK = private_dir('work', 'owner-hs-%d' % int(time.time()))  # every attempt writes into its own directory
+
+
+def wdir(*parts):
+    path = WORK.joinpath(*parts)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return path
+
+
+out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete', 'owner': oc.OWNER,
+       'runner': 'production OwnerRunner (runuser + rootless Podman + systemd --user) via the root CLI and run-job',
+       'source': {'slug': CHAIN['slug'], 'archive_sha256': ATTESTED.get(CHAIN['slug']), 'host': '192.168.2.34'},
+       'checks': checks, 'facts': facts, 'jobs': jobs}
+started = time.monotonic()
+launched = []
+relay = None
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def rid(tag):
+    return 'a54o-%s-%s' % (tag, uuid.uuid4().hex[:12])
+
+
+def call(command, request=None):
+    buf = io.StringIO()
+    svc = cli.Services(PATHS, launcher=launched.append, unit_active=lambda unit: False)
+    code = cli.main([command], stdin=io.StringIO(json.dumps(request or {})), stdout=buf, services=svc)
+    reply = json.loads(buf.getvalue().strip().splitlines()[-1])
+    if code != 0 or not reply.get('ok'):
+        err = reply.get('error') or {}
+        # Product error messages carry no secret (CONTRACT section 10 rule 4); long key-like runs are masked anyway.
+        facts['cli_refusal'] = {'command': command, 'code': err.get('code'),
+                                'message': oc.LONG_TOKEN.sub('<masked>', str(err.get('message')))[:400],
+                                'details': sorted((err.get('details') or {}).keys())}
+        raise RuntimeError('cli-refused')
+    return reply
+
+
+def run_job(label, start_command, request, timeout):
+    before = len(launched)
+    reply = call(start_command, request)
+    job_id = reply['job_id']
+    must('%s_launched_once' % label, launched[before:] == [job_id])
+    t0 = time.monotonic()
+    p = subprocess.run(['/usr/bin/python3', '-I', '-c', RUNNER, job_id], capture_output=True, timeout=timeout,
+                       env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'})
+    status = call('job-status', {'job_id': job_id})
+    job, log = status['job'], status.get('log') or []
+    lines = log if isinstance(log, list) else str(log).splitlines()
+    jobs[label] = {'job_id': job_id, 'type': job.get('type'), 'state': job.get('state'), 'run_job_exit': p.returncode,
+                   'seconds': round(time.monotonic() - t0, 1), 'error': (job.get('error') or {}).get('code'),
+                   'log_tail': [oc.safe_tail(str(l), 200) for l in lines[-6:]]}
+    (wdir('job-logs') / (label + '.json')).write_text(json.dumps({'job': job, 'log': log}))
+    must('%s_succeeded' % label, job.get('state') == 'succeeded', state=job.get('state'),
+         error=jobs[label]['error'], message=oc.safe_tail((job.get('error') or {}).get('message'), 300))
+    return job.get('result') or {}
+
+
+def h(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+
+NODE_ID_COLS = ('id', 'ipv4', 'ipv6', 'hostname', 'given_name', 'user_id', 'register_method', 'auth_key_id', 'expiry')
+NODE_KEY_COLS = ('machine_key', 'node_key')
+
+
+def db_facts(directory):
+    con = sqlite3.connect(str(directory / 'db.sqlite'))  # a private copy; WAL replay needs a writable -shm
+    try:
+        con.execute('PRAGMA query_only=1')
+        integrity = con.execute('PRAGMA integrity_check').fetchone()[0]
+        users = sorted(con.execute('select id, name from users').fetchall())
+        nodes = []
+        for row in con.execute('select %s, %s from nodes order by id' % (', '.join(NODE_ID_COLS), ', '.join(NODE_KEY_COLS))):
+            ident = dict(zip(NODE_ID_COLS, row[:len(NODE_ID_COLS)]))
+            ident.update({c + '_sha': h(v) for c, v in zip(NODE_KEY_COLS, row[len(NODE_ID_COLS):])})
+            nodes.append(ident)
+        preauth = sorted((r[0], r[1], r[2], r[3], r[4], h(r[5]), h(r[6]), h(r[7])) for r in con.execute(
+            'select id, user_id, reusable, ephemeral, used, prefix, hash, key from pre_auth_keys'))
+        api = sorted(h(r[0]) for r in con.execute('select prefix from api_keys'))
+        node_keys = {r[0]: r[1] for r in con.execute('select id, node_key from nodes')}
+        counts = {t: con.execute('select count(*) from "%s"' % t).fetchone()[0]
+                  for t in ('users', 'nodes', 'pre_auth_keys', 'api_keys', 'policies')}
+    finally:
+        con.close()
+    return {'integrity': integrity, 'users': users, 'nodes': nodes, 'pre_auth_keys': preauth,
+            'api_key_prefixes_sha': api, 'counts': counts}, node_keys
+
+
+def unpack_db(tar_path, directory):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    noise = records = None
+    names = []
+    with tarfile.open(tar_path) as tar:
+        for member in tar:
+            name = member.name.removeprefix('./')
+            names.append(name)
+            if member.isfile() and name in ('db.sqlite', 'db.sqlite-wal'):
+                (directory / name).write_bytes(tar.extractfile(member).read())
+            elif member.isfile() and name == 'noise_private.key':
+                noise = tar.extractfile(member).read().strip()
+            elif member.isfile() and name == 'extra_records.json':
+                records = tar.extractfile(member).read()
+    return noise, records, names
+
+
+def source_member_files(directory):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    wanted = {'data/db.sqlite': 'db.sqlite', 'data/db.sqlite-wal': 'db.sqlite-wal'}
+    got = {}
+    with habackup.open_backup(ARCHIVE) as opened:
+        member = opened.layout.addon('1b7b4ce7_woow-headscale')
+        with opened.open_member(member.name, None) as stream:
+            select = habackup.Select(include=('data/db.sqlite', 'data/db.sqlite-wal', 'data/noise_private.key',
+                                              'config/dns_records.json'), symlinks=(), hardlinks=False)
+            for entry in habackup.iter_entries(stream, select, habackup.Report()):
+                data = entry.read_all(64 * 1024 ** 2)
+                if entry.name in wanted:
+                    (directory / wanted[entry.name]).write_bytes(data)
+                else:
+                    got[entry.name] = data
+    return got
+
+
+def export_volume(volume, dest):
+    with open(dest, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        oc.podman('volume', 'export', volume, stdout=handle, timeout=300)
+    return dest
+
+
+def server_view():
+    def cli_json(*args):
+        return json.loads(oc.podman('exec', 'headscale', 'headscale', *args, '-o', 'json', timeout=60).stdout or b'null')
+    users = cli_json('users', 'list') or []
+    nodes = cli_json('nodes', 'list') or []
+    return ({int(u.get('id')): u.get('name') for u in users},
+            {int(n.get('id')): {'ips': n.get('ip_addresses'), 'name': n.get('given_name'), 'online': n.get('online'),
+                                'user': (n.get('user') or {}).get('name')} for n in nodes})
+
+
+API_PROBE = r'''import json, sys, urllib.request, urllib.error
+key = sys.stdin.read().strip()
+req = urllib.request.Request('http://127.0.0.1:28080/api/v1/user', headers={'Authorization': 'Bearer ' + key})
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+        print(json.dumps({'status': resp.status, 'users': sorted(u.get('name') for u in body.get('users', []))}))
+except urllib.error.HTTPError as e:
+    print(json.dumps({'status': e.code}))
+'''
+
+
+def api_probe():
+    p = subprocess.run(['python3', '-I', '-c', API_PROBE], input=(ROOT / 'owner-state/target-api-key').read_bytes(),
+                       capture_output=True, timeout=30)
+    return json.loads(p.stdout.decode().strip().splitlines()[-1])
+
+
+RELAY = r'''import socket, sys, threading
+target = (sys.argv[1], int(sys.argv[2]))
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+def serve(ls):
+    while True:
+        conn, _ = ls.accept()
+        try:
+            peer = socket.create_connection(target, timeout=10)
+        except OSError:
+            conn.close()
+            continue
+        threading.Thread(target=pipe, args=(conn, peer), daemon=True).start()
+        threading.Thread(target=pipe, args=(peer, conn), daemon=True).start()
+threads = []
+for spec in sys.argv[3:]:
+    host, port = spec.rsplit(':', 1)
+    ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ls.bind((host, int(port)))
+    ls.listen(64)
+    t = threading.Thread(target=serve, args=(ls,), daemon=True)
+    t.start()
+    threads.append(t)
+print('relay-ready', flush=True)
+for t in threads:
+    t.join()
+'''
+
+
+def rootful(*args, timeout=120, check_rc=True):
+    p = subprocess.run(BASE + [str(a) for a in args], env=ENV, capture_output=True, timeout=timeout)
+    if check_rc and p.returncode:
+        raise RuntimeError('rootful podman %s rc=%d %s' % (args[0], p.returncode, oc.safe_tail(p.stderr)))
+    return p
+
+
+def ts_status():
+    p = rootful(*TS, 'status', '--json', timeout=30, check_rc=False)
+    try:
+        data = json.loads(p.stdout or b'{}')
+    except ValueError:
+        return {'BackendState': None}
+    me = data.get('Self') or {}
+    return {'BackendState': data.get('BackendState'), 'AuthURL': bool(data.get('AuthURL')), 'ID': me.get('ID'),
+            'HostName': me.get('HostName'), 'TailscaleIPs': me.get('TailscaleIPs'), 'PublicKey': me.get('PublicKey'),
+            'Online': me.get('Online')}
+
+
+def wait_running(seconds):
+    seen, state = [], {}
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        state = ts_status()
+        if not seen or seen[-1] != state.get('BackendState'):
+            seen.append(state.get('BackendState'))
+        if state.get('BackendState') == 'Running' and state.get('TailscaleIPs'):
+            break
+        time.sleep(2)
+    return state, seen
+
+
+try:
+    out['phase'] = 'preflight'
+    acct = oc.account()
+    must('owner_present', acct is not None)
+    uid = acct.pw_uid
+    pid = oc.manager_pid(uid)
+    must('archive_is_the_attested_rpi5_backup', CHAIN['slug'] in ATTESTED and not CHAIN.get('key_file')
+         and sha256_file(ARCHIVE) == ATTESTED[CHAIN['slug']])
+    must('product_podman_path_resolves_to_usr_local', product_podman.PODMAN == '/usr/local/bin/podman')
+    host_inode = oc.netns_inode(1)
+    oc.join_netns(pid)
+    must('engine_joined_owner_private_netns', oc.netns_inode(os.getpid()) == oc.netns_inode(pid) != host_inode)
+    must('target_healthy_before', oc.http_status(pid, HEALTH[0]) == '200')
+    users_target, nodes_target = server_view()
+    must('target_state_before', sorted(users_target.values()) == ['target-only'] and not nodes_target)
+    pre = api_probe()
+    must('target_api_key_works_before', pre.get('status') == 200 and pre.get('users') == ['target-only'])
+    target_pre_dir = wdir('target-pre-db')
+    export_volume('headscale-data', WORK / 'target-pre-data.tar')
+    unpack_db(WORK / 'target-pre-data.tar', target_pre_dir)
+    target_db, _ = db_facts(target_pre_dir)
+
+    out['phase'] = 'engine-setup'
+    if (ROOT / 'engine').exists():  # an earlier attempt of this cycle that stopped before any backup was made
+        assert not (PATHS.archives.exists() and any(PATHS.archives.iterdir())), 'engine-has-backups-refused'
+        shutil.rmtree(ROOT / 'engine')
+        facts['engine_dir_reset_from_earlier_attempt'] = True
+    PATHS.data.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    call('key-init')
+    suggested = call('catalog-suggest', {'owner': oc.OWNER})
+    apps = [a for a in suggested.get('apps') or [] if any((v.get('entry') or {}).get('id') == 'headscale'
+                                                           for v in a.get('variants') or [])]
+    must('product_suggest_found_headscale', len(apps) == 1, apps=len(suggested.get('apps') or []))
+    variant = next(v for v in apps[0]['variants'] if v['entry']['id'] == 'headscale')
+    entry = json.loads(json.dumps(variant['entry']))
+    facts['suggested'] = {k: entry.get(k) for k in ('owner', 'units', 'writer_units', 'volumes', 'secrets', 'health')}
+    facts['suggested']['quadlet_files'] = (entry.get('quadlet') or {}).get('files')
+    facts['suggested']['config_files'] = [c.get('path') for c in entry.get('config_files') or []]
+    facts['suggested']['verify_items'] = len(entry.get('verify') or [])
+    facts['suggest_hints'] = len(apps[0].get('hints') or [])
+    must('suggest_owner_and_valid', entry.get('owner') == oc.OWNER and variant.get('valid') is True,
+         problem=variant.get('problem'), field=variant.get('field'))
+    for key in ('units', 'writer_units'):
+        entry[key] = [u for u in entry.get(key) or [] if u != 'headplane.service']
+    if not entry.get('health'):
+        entry['health'] = [{'type': 'http', 'url': url, 'expect_status': 200, 'timeout_seconds': 180} for url in HEALTH]
+    facts['installed_entry_changes'] = ['headplane.service removed from units/writer_units',
+                                        'health URLs %s added' % HEALTH]
+    preview = call('catalog-install', {'entry': entry})
+    facts['catalog_preview_keys'] = sorted(k for k in preview if k != 'ok')
+    must('catalog_preview_has_sha', bool(preview.get('expected_sha256')))
+    call('catalog-install', {'entry': entry, 'confirm': True, 'expected_sha256': preview['expected_sha256']})
+
+    out['phase'] = 'ha-upload'
+    size = ARCHIVE.stat().st_size
+    begun = call('upload-begin', {'filename': 'rpi5-%s.tar' % CHAIN['slug'], 'size': size})
+    shutil.copyfile(ARCHIVE, begun['path'])
+    finished = call('upload-finish', {'upload_id': begun['upload_id']})
+    ha = finished.get('ha_backup') or {}
+    facts['ha_backup'] = {k: ha.get(k) for k in ('id', 'name', 'date', 'importable_apps', 'size')}
+    must('ha_backup_registered_with_headscale', bool(ha.get('id')) and 'headscale' in json.dumps(ha.get('importable_apps')))
+
+    out['phase'] = 'ha-check'
+    checked = run_job('ha_check', 'ha-check-start', {'ha_backup_id': ha['id'], 'apps': ['headscale'],
+                                                       'request_id': rid('check')}, 900)
+    app_rows = (checked.get('ha_check') or {}).get('apps') or []
+    row = next((a for a in app_rows if a.get('app_id') == 'headscale'), {})
+    must('ha_check_ok_no_blockers', row.get('ok') is True and not row.get('blockers'),
+         blockers=len(row.get('blockers') or []), warnings=len(row.get('warnings') or []), arch=row.get('arch'),
+         version=row.get('version'), target_version=row.get('target_version'), row_keys=sorted(row)[:20])
+    facts['check_headscale'] = {k: (row.get('headscale') or {}).get(k) for k in
+                                ('headscale_version', 'users', 'nodes', 'pre_auth_keys', 'api_keys', 'server_url',
+                                 'target_server_url', 'dns_records', 'target_version')}
+
+    out['phase'] = 'ha-convert'
+    converted = run_job('ha_convert', 'ha-convert-start', {'ha_backup_id': ha['id'], 'apps': ['headscale'],
+                                                           'test_mode': False, 'request_id': rid('convert')}, 1800)
+    backup_id = converted.get('backup_id')
+    must('converted_backup_made_encrypted', bool(backup_id) and converted.get('encrypted') is True,
+         size=converted.get('size'), apps=converted.get('apps'))
+    listing = call('list')
+    must('converted_backup_listed_from_ha', any(b.get('id') == backup_id for b in listing.get('backups') or []))
+
+    out['phase'] = 'restore'
+    restored = run_job('restore', 'restore-start', {'backup_id': backup_id, 'apps': ['headscale'],
+                                                     'request_id': rid('restore')}, 1800)
+    safety = restored.get('safety_backup_id')
+    facts['restore'] = {'changed': restored.get('changed'), 'rolled_back': restored.get('rolled_back'),
+                        'safety_backup_id': safety, 'safety_pending': restored.get('safety_pending'),
+                        'health': [(c.get('id'), c.get('status')) for c in restored.get('health') or []],
+                        'verification': [(c.get('id'), c.get('status')) for c in restored.get('verification') or []],
+                        'warnings': len(restored.get('warnings') or []), 'timing': restored.get('timing')}
+    must('restore_changed_not_rolled_back_with_safety', restored.get('changed') is True
+         and restored.get('rolled_back') is False and bool(safety))
+    must('restore_health_checks_ok', len(restored.get('health') or []) == 2
+         and all(c.get('status') == 'ok' for c in restored.get('health')))
+    must('restore_digest_verification_ok', all(c.get('status') == 'ok' for c in restored.get('verification') or [])
+         and len(restored.get('verification') or []) >= 1)
+    active = oc.systemctl('is-active', 'headscale.service', check=False).stdout.decode().split()
+    must('unit_active_under_owner_systemd', active == ['active'])
+
+    out['phase'] = 'integrity'
+    source_files = source_member_files(wdir('source-db'))
+    source_db, source_node_keys = db_facts(WORK / 'source-db')
+    restored_dir = wdir('restored-db')
+    export_volume('headscale-data', WORK / 'restored-data.tar')
+    noise, records, names = unpack_db(WORK / 'restored-data.tar', restored_dir)
+    rest_db, _ = db_facts(restored_dir)
+    must('restored_db_integrity_ok', rest_db['integrity'] == 'ok' and source_db['integrity'] == 'ok',
+         counts=rest_db['counts'])
+    must('restored_users_equal_ha', rest_db['users'] == source_db['users'], users=[n for _i, n in source_db['users']])
+    must('restored_nodes_identity_equal_ha', rest_db['nodes'] == source_db['nodes'],
+         nodes=[{k: n[k] for k in ('id', 'ipv4', 'ipv6', 'given_name', 'user_id')} for n in source_db['nodes']])
+    must('restored_preauth_equal_ha', rest_db['pre_auth_keys'] == source_db['pre_auth_keys'],
+         count=len(source_db['pre_auth_keys']))
+    must('noise_identity_is_ha_key', bool(noise) and noise == source_files.get('data/noise_private.key', b'').strip())
+    must('dns_records_are_ha_records', records is not None and records == source_files.get('config/dns_records.json'))
+    must('api_keys_are_target_keys_not_ha', rest_db['api_key_prefixes_sha'] == target_db['api_key_prefixes_sha']
+         and not set(rest_db['api_key_prefixes_sha']) & set(source_db['api_key_prefixes_sha']))
+    must('ha_headplane_api_key_never_read', 'data/.headplane_api_key' in habackup.NEVER_READ)
+    plane = export_volume('headplane-data', WORK / 'restored-plane.tar')
+    with tarfile.open(plane) as tar:
+        marker = {m.name.removeprefix('./'): tar.extractfile(m).read() for m in tar if m.isfile()}
+    must('target_headplane_data_kept', marker.get('target-marker.txt') == b'arm54-owner-target-headplane-marker-20261123\n')
+    users_after, nodes_after = server_view()
+    expected_nodes = {n['id']: sorted([n['ipv4'], n['ipv6']]) for n in source_db['nodes']}
+    must('server_lists_ha_users_and_nodes', sorted(users_after.values()) == sorted(n for _i, n in source_db['users'])
+         and {k: sorted(v['ips']) for k, v in nodes_after.items()} == expected_nodes)
+    api_after = api_probe()
+    must('target_api_key_still_works', api_after.get('status') == 200
+         and api_after.get('users') == sorted(n for _i, n in source_db['users']))
+
+    out['phase'] = 'real-client'
+    for host in ('192.168.2.34', '192.168.2.54'):
+        subprocess.run(['ip', 'route', 'add', 'local', host + '/32', 'dev', 'lo', 'table', 'local'], check=True,
+                       capture_output=True, timeout=30)
+    relay = subprocess.Popen(['python3', '-I', '-c', RELAY, '127.0.0.1', '28080', '192.168.2.34:28080',
+                              '192.168.2.54:28080'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+    must('relay_ready', relay.stdout.readline().strip() == b'relay-ready')
+    for argv in (['ip', 'tuntap', 'add', 'dev', 'eth0', 'mode', 'tun'], ['ip', 'addr', 'add', '10.254.54.2/24', 'dev', 'eth0'],
+                 ['ip', 'link', 'set', 'eth0', 'up']):
+        subprocess.run(argv, check=True, capture_output=True, timeout=30)
+    routes = subprocess.run(['ip', 'route'], capture_output=True, text=True, timeout=30).stdout
+    must('owner_netns_has_no_default_route', not any(l.startswith('default') for l in routes.splitlines()))
+    state_dir, run_dir = wdir('client-state'), wdir('client-run')
+    with tarfile.open(ROOT / 'input/client-state.tar') as tar:
+        for member in tar:
+            p = Path(member.name)
+            assert not p.is_absolute() and '..' not in p.parts and (member.isfile() or member.isdir())
+            dest = state_dir / p
+            if member.isdir():
+                dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+            else:
+                dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with open(dest, 'xb') as handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(tar.extractfile(member).read())
+    rootful('run', '--detach', '--network', 'ns:/proc/%d/ns/net' % pid, '--name', CLIENT, '--label', LABEL,
+            '--pull=never', '--security-opt', 'no-new-privileges', '--memory', '256m', '--pids-limit', '256',
+            '--volume', '%s:/var/lib/tailscale' % state_dir, '--volume', '%s:/var/run/tailscale' % run_dir,
+            '--entrypoint', 'tailscaled', CLIENT_IMAGE, '--tun=userspace-networking',
+            '--state=/var/lib/tailscale/tailscaled.state', '--statedir=/var/lib/tailscale',
+            '--socket=/var/run/tailscale/tailscaled.sock', '--no-logs-no-support', '--encrypt-state=false', timeout=180)
+    expected_key = source_node_keys.get(2)
+    ips = sorted([n for n in source_db['nodes'] if n['id'] == 2][0][k] for k in ('ipv4', 'ipv6'))
+
+    def continuity(name, seconds=120):
+        state, seen = wait_running(seconds)
+        _u, nodes = server_view()
+        node = nodes.get(2) or {}
+        must(name, state.get('BackendState') == 'Running' and not state.get('AuthURL') and state.get('ID') == '2'
+             and sorted(state.get('TailscaleIPs') or []) == ips and state.get('PublicKey') == expected_key
+             and state.get('HostName') == 'b1-ts-alice' and node.get('online') is True
+             and len(nodes) == len(source_db['nodes']),
+             client={k: v for k, v in state.items() if k != 'PublicKey'}, states=seen, server_node=node)
+
+    continuity('client_keeps_node_identity_on_original_url')
+    rootful(*TS, 'down', timeout=60)
+    rootful(*TS, 'up', '--login-server', 'http://192.168.2.54:28080', '--hostname', 'b1-ts-alice', timeout=120,
+            check_rc=False)
+    continuity('client_repointed_to_target_url_keeps_identity')
+
+    out['phase'] = 'restart'
+    oc.systemctl('restart', 'headscale.service', timeout=400)
+    ok, last = oc.wait_http(pid, HEALTH[0], 180)
+    must('healthy_after_owner_unit_restart', ok, last=last)
+    continuity('client_reconnects_after_server_restart', 180)
+    users_r, nodes_r = server_view()
+    must('data_same_after_restart', users_r == users_after and set(nodes_r) == set(nodes_after))
+
+    out['phase'] = 'rollback'
+    rootful('stop', '--time', '10', CLIENT, timeout=60, check_rc=False)
+    rolled = run_job('rollback', 'restore-start', {'backup_id': safety, 'apps': ['headscale'],
+                                                    'request_id': rid('rollback')}, 1800)
+    facts['rollback'] = {'changed': rolled.get('changed'), 'rolled_back': rolled.get('rolled_back'),
+                         'health': [(c.get('id'), c.get('status')) for c in rolled.get('health') or []],
+                         'verification': [(c.get('id'), c.get('status')) for c in rolled.get('verification') or []],
+                         'safety_backup_id': rolled.get('safety_backup_id')}
+    must('rollback_restore_ok', rolled.get('changed') is True and rolled.get('rolled_back') is False
+         and all(c.get('status') == 'ok' for c in rolled.get('health') or []))
+    users_b, nodes_b = server_view()
+    must('target_state_back_after_rollback', sorted(users_b.values()) == ['target-only'] and not nodes_b)
+    back = api_probe()
+    must('target_api_key_works_after_rollback', back.get('status') == 200 and back.get('users') == ['target-only'])
+    export_volume('headplane-data', WORK / 'rollback-plane.tar')
+    with tarfile.open(WORK / 'rollback-plane.tar') as tar:
+        marker = {m.name.removeprefix('./'): tar.extractfile(m).read() for m in tar if m.isfile()}
+    must('target_headplane_marker_after_rollback', marker.get('target-marker.txt') ==
+         b'arm54-owner-target-headplane-marker-20261123\n')
+
+    out['phase'] = 'engine-leftovers'
+    temp = oc.podman('ps', '-a', '--format', '{{.Names}}').stdout.decode().split()
+    must('no_throwaway_containers_left', all(not n.startswith('woowbk-') for n in temp), containers=temp)
+    staging = sorted(os.listdir(PATHS.staging)) if PATHS.staging.exists() else []
+    must('no_staging_left', staging == [], staging=staging)
+    out['status'] = 'passed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001 - phase + type only; secrets never reach the report
+    out['error'] = type(error).__name__
+    out['error_detail'] = oc.safe_tail(str(error), 600)
+finally:
+    if relay is not None:
+        relay.terminate()
+    rootful('rm', '-f', '-t', '5', CLIENT, timeout=60, check_rc=False)
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    report(ROOT / 'owner-headscale-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

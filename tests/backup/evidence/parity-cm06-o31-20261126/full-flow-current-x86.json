@@ -1,0 +1,168 @@
+{
+  "source_commit": "a2069c2017eaf25323393c9b52af59f7a1613515",
+  "events": [
+    {
+      "changed_paths": 0,
+      "clean_tree": true,
+      "stage": "source"
+    },
+    {
+      "held": true,
+      "stage": "dev_d_lock",
+      "waited_seconds": 0
+    },
+    {
+      "network": "none",
+      "published_ports": 0,
+      "running": true,
+      "stage": "isolation",
+      "verified": true,
+      "when": "before"
+    },
+    {
+      "arch": "x86",
+      "fixture_sha256_matches_record": true,
+      "stage": "real_source"
+    },
+    {
+      "replaced_by_product_trusted_schema": true,
+      "stage": "public_guard"
+    },
+    {
+      "independently_initialised": true,
+      "quadlet_units": 3,
+      "stage": "target_deployed",
+      "target_admin_login": true
+    },
+    {
+      "product_publish": true,
+      "sha256_matches_fixture": true,
+      "stage": "ha_store_published"
+    },
+    {
+      "encrypted": true,
+      "internal_entry": true,
+      "live_alembic": true,
+      "live_info_from_running_server": true,
+      "real_adapter_discovery": true,
+      "real_ha_store": true,
+      "server_stopped_before_schema_capture": true,
+      "stage": "candidate_converted",
+      "test_mode": false
+    },
+    {
+      "differ": {},
+      "equal_to_ha_plus_kept": [
+        "agents",
+        "comments",
+        "connections",
+        "conversation_items",
+        "conversation_labels",
+        "conversations",
+        "device_grants",
+        "files",
+        "hosts",
+        "omnigent_conversation_metadata",
+        "policies",
+        "preferences",
+        "projects",
+        "scheduled_task_runs",
+        "scheduled_tasks",
+        "session_permissions",
+        "user_daily_cost",
+        "users"
+      ],
+      "secret_named_tables_equal": true,
+      "stage": "installed_counts_before_login"
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "installed",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "restarted",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "agent": true,
+      "alembic": true,
+      "attachment_sha256": true,
+      "ha_admin_login": true,
+      "ha_admin_refuses_target_password": true,
+      "ha_cookie_installed": true,
+      "ha_member_login": true,
+      "member_session": true,
+      "paused_task": true,
+      "phase": "rolled_back",
+      "runner_pi_volume_unchanged": true,
+      "session_title_labels_comment": true,
+      "stage": "installed_app_verified",
+      "table_counts": 19,
+      "target_admin_login": true
+    },
+    {
+      "db_and_server_markers": true,
+      "one_shot_systemd_failure": true,
+      "real_flow": true,
+      "stage": "automatic_rollback"
+    },
+    {
+      "engine_log_lines": 81,
+      "hits": 0,
+      "journals_scanned": 3,
+      "login_credential_sources": 20,
+      "registered_values": 31,
+      "stage": "secret_scan"
+    },
+    {
+      "complete": true,
+      "private_engine_root_removed": true,
+      "stage": "cleanup"
+    },
+    {
+      "arch": "x86",
+      "result": "PASS",
+      "stage": "omnigent_real_ha"
+    },
+    {
+      "containers_volumes_secrets_unchanged": true,
+      "lock_seconds": 678,
+      "stage": "inventory"
+    },
+    {
+      "network": "none",
+      "published_ports": 0,
+      "running": true,
+      "stage": "isolation",
+      "verified": true,
+      "when": "after"
+    }
+  ],
+  "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,32 @@
+{
+ "lane": "N8N",
+ "rows": {
+  "N8-01": {
+   "status": "done",
+   "tests": [
+    "tests/backup/test_ha_n8n.py::ColdFlowTests.test_the_cluster_is_the_volume_and_there_is_no_dump",
+    "tests/backup/test_ha_n8n.py::ColdFlowTests.test_the_new_cluster_and_the_import_get_the_password_from_the_podman_secret_never_as_a_value",
+    "tests/backup/test_ha_n8n.py::ColdFlowTests.test_a_cluster_that_was_not_shut_down_cleanly_is_never_used",
+    "tests/backup/test_ha_n8n.py::ColdTargetTests.test_what_cannot_be_made_like_this_devices_own_cluster_stops_n8n",
+    "tests/backup/test_ha_n8n.py::ReferenceHostTests.test_the_cold_entry_is_filled_too_with_the_secret_of_the_database_password",
+    "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_resolves_the_app_database_separately",
+    "tests/backup/test_ha_n8n.py::ConvertFlowTests.test_instance_conversion_keeps_credentials_key_and_all_live_databases",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+    "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup",
+    "tests/backup/test_ha_n8n.py::ConnectionTests.test_probe_ignores_its_own_huge_command_line_in_the_process_list",
+    "tests/backup/test_ha_n8n.py::ConnectionTests.test_a_foreign_oversized_command_line_still_fails_closed",
+    "tests/backup/test_ha_n8n.py::SequenceTests.test_every_owned_sequence_is_moved_after_the_import_and_before_any_data_leaves",
+    "tests/backup/test_ha_n8n.py::SequenceTests.test_a_missing_answer_stops_n8n_before_any_data_leaves"
+   ],
+   "note": "整個執行個體轉換與匯入已在實機（dev-c，n8n 2.43.6）完整驗收：85 項檢查全過（轉換、不一致拒絕、真實匯入、屬主登入與手動執行、憑證解密、重啟、故意失敗自動回滾、原狀回復、機密掃描）。實測找出並修好兩個產品錯誤：連線探針讀到自己、匯入後自動編號未調整。證據 tests/backup/evidence/focus-instances-20261127/n8n-instance-flow-attempt7.json。"
+  }
+ }
+}

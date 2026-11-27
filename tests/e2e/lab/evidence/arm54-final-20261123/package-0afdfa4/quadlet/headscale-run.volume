@@ -1,0 +1,9 @@
+# /var/run/headscale: the gRPC unix socket the `headscale` CLI talks to. Ephemeral - it is
+# a volume rather than a tmpfs only so `podman exec headscale headscale ...` and the
+# HealthCmd keep working across restarts. Nothing here is backed up.
+[Unit]
+Description=Woow Headscale runtime socket volume
+
+[Volume]
+VolumeName=headscale-run
+Label=io.woowtech.app=headscale

@@ -1,0 +1,20 @@
+{
+  "aliases_referenced_by_manifest": 0,
+  "config_id": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "config_sha256_verified": true,
+  "first_failed_artifact_preserved": true,
+  "loads": 0,
+  "manifest_layer_files_regular": true,
+  "ordered_uncompressed_layer_sha256_verified": 11,
+  "pulls": 0,
+  "reason": "source-archive-header-refused",
+  "reason_is_fixed_whitelisted_constant": true,
+  "redundant_symlink_aliases": 11,
+  "source_store_mutations": 0,
+  "status": "diagnosed",
+  "type_counts_hex": {
+    "30": 36,
+    "32": 11
+  },
+  "validator_reason": "unsafe-docker-member"
+}

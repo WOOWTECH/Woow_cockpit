@@ -1,0 +1,28 @@
+{
+ "schema_version": 1,
+ "kind": "lab-device-journal-cleanup",
+ "device": "woowbk-dev-e",
+ "when_start": "2026-11-24T13:44:23+0800",
+ "start_epoch": 1795499063.77,
+ "reason": "nextcloud-import: the dead test public-link token of the share attempts in the access-log entries of dev-e (nextcloud-gateway.service, nextcloud-app.service), after the last share attempt (7)",
+ "isolation_before": "true none {}",
+ "before": {
+  "disk_usage": "46.0M",
+  "journal_files": 4,
+  "oldest_entry_epoch": 1795475676.469723,
+  "entries": 32339
+ },
+ "rotate_exit": 0,
+ "vacuum_exit": 0,
+ "vacuum_summary_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+ "after": {
+  "disk_usage": "16.0M",
+  "journal_files": 2,
+  "oldest_entry_epoch": 1795499069.969866,
+  "entries": 4
+ },
+ "elapsed_seconds": 11.9,
+ "ok": true,
+ "what_this_is": "lab hygiene: every archived journal file of dev-e deleted after rotation; log content never read or kept",
+ "commercial_acceptance": "not-complete"
+}

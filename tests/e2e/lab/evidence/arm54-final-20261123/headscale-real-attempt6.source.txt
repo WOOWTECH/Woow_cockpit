@@ -1,0 +1,722 @@
+"""Real RPi5 HA backup (slug 45670371) -> unmodified product Headscale check + converter -> restored native ARM
+Headscale on .54 -> the real B1 tailscale client (node b1-ts-alice) reconnects.
+
+Runner scope (stated, not hidden): rootful Podman with a private store (RootfulRunner), not the production
+OwnerRunner/rootless path; the restore step replaces the volumes the way the product restore does, but is
+driven here (no systemd user units on this target). The target deployment uses the unmodified Woow Headscale
+package quadlets/templates (commit 0afdfa4) with two isolation deviations: no published ports, and an embedded
+DERP map instead of the public DERP URL (Headscale 0.29.4 refuses to start without a DERP map,
+hscontrol/app.go:646-659, and the target has no network).
+
+Network: one pod with network none holds the namespace. The client keeps its original control URL
+(http://192.168.2.34:28080). Inside that namespace only, `local` routes for 192.168.2.34/32 and 192.168.2.54/32
+on lo (routes, not interface addresses) deliver to a wildcard relay to the restored server, so the real RPi5 is
+never contacted. VPN root cause check: the client is started while the namespace has no usable interface address
+(lo 127.0.0.1 only; Tailscale pauses its control client: ipn/ipnlocal/local.go:1157 AnyInterfaceUp,
+net/netmon/state.go:598-617 at cbc74fe), while the control endpoint is proven reachable over that same path;
+then exactly one variable changes: an unrouted TUN interface eth0 (10.254.54.2/24, no carrier, no route out).
+Attempt 1 showed that an address alias on lo already counts as "network up" (state.go:612-617 only skips
+loopback *addresses*), so the baseline uses local routes. No TS_ASSUME_NETWORK_UP_FOR_TEST. Secret values
+(keys, state, API keys) never leave this process; HA's Headplane API key is never read (habackup.NEVER_READ)."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import tarfile
+import time
+from types import MethodType, SimpleNamespace
+
+from arm54_final_runtime import LABEL, ROOT, RootfulRunner, private_dir, report, sha256_file, store_objects
+
+from woowbackup import habackup, haimport, ha_headscale, hasecuretar, nested, tempctr  # noqa: E402
+
+# Only RPi5 backups whose bytes were attested against the RPi5 (source-provenance-34.json) are accepted.
+ATTESTED = {'45670371': '1e6a4665315bc69fd114f8d43f7d429aecab53f07d07793ecf8c2c057a92c5d4',
+            'a2dc9bfd': '6d0647f0acb2e0d95043d66852c08bbc020d409d4f6747f817c10f94e2c33d1c'}
+CHAIN = json.loads((ROOT / 'input/chain.json').read_text())
+ARCHIVE = ROOT / 'input' / CHAIN['archive']
+ARCHIVE_SHA256 = ATTESTED[CHAIN['slug']]
+KEY_FILE = ROOT / 'input' / CHAIN['key_file'] if CHAIN.get('key_file') else None
+PACKAGE = ROOT / 'source/tests/e2e/lab/evidence/arm54-final-20261123/package-0afdfa4'
+IMAGE = 'localhost/woow-headscale:0.29.4-r1'
+CLIENT_IMAGE = 'docker.io/tailscale/tailscale@sha256:8934bed5f68e80c5f9c881f62c65909223ee660432946c10ad212d958fc2c2bb'
+POD, SERVER, CLIENT = 'a54f-hs-pod', 'a54f-headscale', 'a54f-ts-client'
+VOLUMES = ('headscale-data', 'headplane-data', 'headscale-run')
+SOURCE_URL_HOST, TARGET_URL_HOST = '192.168.2.34', '192.168.2.54'
+TS = ['exec', CLIENT, 'tailscale', '--socket=/var/run/tailscale/tailscaled.sock']
+JOB = 'j20261123T090000Z-a54f0001'
+SECRET_WORDS = ('PWD', 'PASS', 'KEY', 'TOKEN', 'SECRET', 'CRED', 'AUTH', 'SIG')
+
+r = RootfulRunner()
+checks = {}
+facts = {}
+out = {'status': 'failed', 'phase': 'start', 'commercial_acceptance': 'not-complete',
+       'runner': 'rootful private store (RootfulRunner); not production OwnerRunner/rootless',
+       'source': {'host': SOURCE_URL_HOST, 'slug': CHAIN['slug'], 'archive_sha256': ARCHIVE_SHA256,
+                  'encrypted_backup': KEY_FILE is not None},
+       'checks': checks, 'facts': facts}
+relay_proc = None
+started = time.monotonic()
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def podman(*args, **kw):
+    return r.podman(*args, **kw)
+
+
+def text(*args, **kw):
+    return podman(*args, **kw).stdout.decode('utf-8', 'replace')
+
+
+def infra_pid():
+    infra = text('pod', 'inspect', POD, '--format', '{{.InfraContainerID}}').strip()
+    return int(text('inspect', infra, '--format', '{{.State.Pid}}').strip())
+
+
+def netns(*argv, input=None, timeout=30, check_rc=True):
+    p = subprocess.run(['nsenter', '--net=/proc/%d/ns/net' % infra_pid(), *argv], input=input, capture_output=True,
+                       timeout=timeout)
+    if check_rc and p.returncode:
+        raise RuntimeError('netns-command-failed')
+    return p
+
+
+# ---------------------------------------------------------------- target deployment (package files, rendered)
+
+RENDER = {
+    '@@HEADSCALE_SERVER_URL@@': 'http://%s:28080' % TARGET_URL_HOST,
+    '@@HEADSCALE_IPV4_PREFIX@@': '"100.64.0.0/10"', '@@HEADSCALE_IPV6_PREFIX@@': '"fd7a:115c:a1e0::/48"',
+    '@@HEADSCALE_NODE_EXPIRY@@': '0', '@@HEADSCALE_MAGIC_DNS@@': 'true', '@@HEADSCALE_BASE_DOMAIN@@': 'ts.local',
+    '@@HEADSCALE_DNS_NAMESERVERS_YAML@@': '"1.1.1.1", "1.0.0.1"', '@@HEADSCALE_POLICY_MODE@@': 'database',
+    '@@HEADSCALE_LOG_LEVEL@@': 'info',
+    '@@HEADSCALE_PUBLISH@@': '127.0.0.1:28080', '@@HEADSCALE_METRICS_PUBLISH@@': '127.0.0.1:29090',
+    '@@HEADPLANE_PUBLISH@@': '127.0.0.1:23000',
+}
+DERP_PACKAGE = '''derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 24h
+'''
+DERP_ISOLATED = '''derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: arm54
+    region_name: ARM54 isolated
+    stun_listen_addr: 127.0.0.1:3478
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  urls: []
+  paths: []
+  auto_update_enabled: false
+'''
+
+
+def render(data):
+    for key, value in RENDER.items():
+        data = data.replace(key, value)
+    assert '@@' not in data, 'unrendered-placeholder'
+    return data
+
+
+def deploy_target():
+    config = private_dir('.config', 'headscale', 'headscale')
+    template = (PACKAGE / 'config/templates/headscale/config.yaml').read_text()
+    body = render(template)
+    lines = [line for line in body.splitlines() if not line.lstrip().startswith('#')]
+    body = '\n'.join(lines) + '\n'
+    assert DERP_PACKAGE in body, 'package-derp-block-changed'
+    body = body.replace(DERP_PACKAGE, DERP_ISOLATED)
+    (config / 'config.yaml').write_text(body)
+    (config / 'policy.json').write_bytes((PACKAGE / 'config/templates/headscale/policy.json').read_bytes())
+    os.chmod(config / 'config.yaml', 0o644)
+    os.chmod(config / 'policy.json', 0o644)
+    quadlets = {}
+    for path in sorted((PACKAGE / 'quadlet').iterdir()):
+        quadlets[path.name] = render(path.read_text()).encode()
+    facts['target_config_sha256'] = hashlib.sha256((config / 'config.yaml').read_bytes()).hexdigest()
+    facts['target_deviations'] = ['no published ports (network none)', 'embedded DERP map instead of public URL']
+    return config, quadlets
+
+
+def volume_tar(members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tar:
+        for name, data, mode in members:
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def import_bytes(volume, data):
+    podman('volume', 'import', volume, '-', input=data, timeout=300)
+
+
+def import_file(volume, path):
+    with open(path, 'rb') as handle:
+        podman('volume', 'import', volume, '-', input=handle, timeout=600)
+
+
+def export_file(volume, path):
+    with open(path, 'xb') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        podman('volume', 'export', volume, stdout=handle, timeout=600, max_output=2 * 1024 ** 3)
+
+
+def start_server(config):
+    podman('run', '--detach', '--pod', POD, '--name', SERVER, '--label', LABEL, '--pull=never',
+           '--security-opt', 'no-new-privileges', '--memory', '384m', '--pids-limit', '256',
+           '--env', 'GOMEMLIMIT=300MiB',
+           '--volume', 'headscale-data:/var/lib/headscale', '--volume', 'headscale-run:/var/run/headscale',
+           '--volume', '%s:/etc/headscale:ro' % config, IMAGE, 'serve', timeout=120)
+    for _ in range(60):
+        if podman('exec', SERVER, 'headscale', 'health', check=False, timeout=15).returncode == 0:
+            return True
+        time.sleep(1)
+    raise AssertionError('server-health')
+
+
+def stop_server():
+    podman('stop', '--time', '20', SERVER, timeout=60)
+    podman('rm', SERVER, timeout=60)
+
+
+def cli_json(*args):
+    return json.loads(text('exec', SERVER, 'headscale', *args, '-o', 'json', timeout=60) or 'null')
+
+
+def server_view():
+    users = cli_json('users', 'list') or []
+    nodes = cli_json('nodes', 'list') or []
+    return ({int(u.get('id')): u.get('name') for u in users},
+            {int(n.get('id')): {'ips': n.get('ip_addresses'), 'name': n.get('given_name'), 'online': n.get('online'),
+                                'user': (n.get('user') or {}).get('name')} for n in nodes})
+
+
+# ---------------------------------------------------------------- database facts (hashes only for key columns)
+
+NODE_ID_COLS = ('id', 'ipv4', 'ipv6', 'hostname', 'given_name', 'user_id', 'register_method', 'auth_key_id', 'expiry')
+NODE_KEY_COLS = ('machine_key', 'node_key')
+
+
+def h(value):
+    return hashlib.sha256(str(value).encode()).hexdigest()[:16]
+
+
+def db_facts(directory):
+    con = sqlite3.connect(str(directory / 'db.sqlite'))  # a private copy; WAL replay needs a writable -shm
+    try:
+        con.execute('PRAGMA query_only=1')
+        integrity = con.execute('PRAGMA integrity_check').fetchone()[0]
+        tables = sorted(r[0] for r in con.execute("select name from sqlite_master where type='table'"))
+        counts = {t: con.execute('select count(*) from "%s"' % t).fetchone()[0] for t in tables
+                  if t != 'sqlite_sequence'}
+        users = sorted(con.execute('select id, name from users').fetchall())
+        nodes = []
+        for row in con.execute('select %s, %s from nodes order by id' % (', '.join(NODE_ID_COLS), ', '.join(NODE_KEY_COLS))):
+            ident = dict(zip(NODE_ID_COLS, row[:len(NODE_ID_COLS)]))
+            ident.update({c + '_sha': h(v) for c, v in zip(NODE_KEY_COLS, row[len(NODE_ID_COLS):])})
+            nodes.append(ident)
+        preauth = sorted((r[0], r[1], r[2], r[3], r[4], h(r[5]), h(r[6]), h(r[7])) for r in con.execute(
+            'select id, user_id, reusable, ephemeral, used, prefix, hash, key from pre_auth_keys'))
+        api = sorted(h(r[0]) for r in con.execute('select prefix from api_keys'))
+        version = [r[0] for r in con.execute('select version from database_versions')]
+        node_keys = {r[0]: r[1] for r in con.execute('select id, node_key from nodes')}
+    finally:
+        con.close()
+    return {'integrity': integrity, 'tables': tables, 'counts': counts, 'users': users, 'nodes': nodes,
+            'pre_auth_keys': preauth, 'api_key_prefixes_sha': api, 'version': version}, node_keys
+
+
+def unpack_db(volume_tar_path, directory):
+    """db.sqlite (+ -wal) of a data-volume tar into `directory` (0700); returns the noise key bytes too."""
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    noise = records = None
+    with tarfile.open(volume_tar_path) as tar:
+        for member in tar:
+            name = member.name.removeprefix('./')
+            if member.isfile() and name in ('db.sqlite', 'db.sqlite-wal'):
+                (directory / name).write_bytes(tar.extractfile(member).read())
+            elif member.isfile() and name == 'noise_private.key':
+                noise = tar.extractfile(member).read().strip()
+            elif member.isfile() and name == 'extra_records.json':
+                records = tar.extractfile(member).read()
+    return noise, records
+
+
+def source_member_files(directory):
+    """The HA add-on member's db/wal/noise/records/headplane API key via the product's strict member stream."""
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    wanted = {'data/db.sqlite': 'db.sqlite', 'data/db.sqlite-wal': 'db.sqlite-wal'}
+    got = {}
+    with habackup.open_backup(ARCHIVE) as opened:
+        member = opened.layout.addon('1b7b4ce7_woow-headscale')
+        with opened.open_member(member.name, KEYS) as stream:
+            select = habackup.Select(include=('data/db.sqlite', 'data/db.sqlite-wal', 'data/noise_private.key',
+                                              'config/dns_records.json', 'data/.headplane_api_key'),
+                                     symlinks=(), hardlinks=False)
+            for entry in habackup.iter_entries(stream, select, habackup.Report()):
+                data = entry.read_all(64 * 1024 ** 2)
+                if entry.name in wanted:
+                    (directory / wanted[entry.name]).write_bytes(data)
+                else:
+                    got[entry.name] = data
+    return got
+
+
+# ---------------------------------------------------------------- tailscale client
+
+def ts_status():
+    p = podman(*TS, 'status', '--json', check=False, timeout=30)
+    try:
+        data = json.loads(p.stdout or b'{}')
+    except ValueError:
+        return {'BackendState': None}
+    me = data.get('Self') or {}
+    return {'BackendState': data.get('BackendState'), 'AuthURL': bool(data.get('AuthURL')), 'ID': me.get('ID'),
+            'HostName': me.get('HostName'), 'TailscaleIPs': me.get('TailscaleIPs'), 'PublicKey': me.get('PublicKey'),
+            'Online': me.get('Online'), 'UserID': me.get('UserID')}
+
+
+def public(state):
+    return {k: v for k, v in state.items() if k != 'PublicKey'}
+
+
+def wait_running(seconds):
+    seen = []
+    deadline = time.monotonic() + seconds
+    state = {}
+    while time.monotonic() < deadline:
+        state = ts_status()
+        if not seen or seen[-1] != state.get('BackendState'):
+            seen.append(state.get('BackendState'))
+        if state.get('BackendState') == 'Running' and state.get('TailscaleIPs'):
+            break
+        time.sleep(2)
+    return state, seen
+
+
+def start_client(state_dir, run_dir):
+    podman('run', '--detach', '--pod', POD, '--name', CLIENT, '--label', LABEL, '--pull=never',
+           '--security-opt', 'no-new-privileges', '--memory', '256m', '--pids-limit', '256',
+           '--volume', '%s:/var/lib/tailscale' % state_dir, '--volume', '%s:/var/run/tailscale' % run_dir,
+           '--entrypoint', 'tailscaled', CLIENT_IMAGE, '--tun=userspace-networking',
+           '--state=/var/lib/tailscale/tailscaled.state', '--statedir=/var/lib/tailscale',
+           '--socket=/var/run/tailscale/tailscaled.sock', '--no-logs-no-support', '--encrypt-state=false',
+           timeout=120)
+
+
+def client_log_predicates():
+    data = podman('logs', CLIENT, check=False, timeout=60, max_output=64 * 1024 ** 2)
+    blob = (data.stdout or b'') + (data.stderr or b'')
+    low = blob.lower()
+    return {'needs_login': b'needslogin' in low, 'auth_url': b'authurl is' in low,
+            'paused_logged': b'paused' in low, 'link_change_logged': b'linkchange' in low}
+
+
+RELAY = r'''
+import socket, sys, threading
+target = (sys.argv[1], int(sys.argv[2]))
+def pipe(a, b):
+    try:
+        while True:
+            data = a.recv(65536)
+            if not data:
+                break
+            b.sendall(data)
+    except OSError:
+        pass
+    finally:
+        for s in (a, b):
+            try:
+                s.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+def serve(ls):
+    while True:
+        conn, _ = ls.accept()
+        try:
+            peer = socket.create_connection(target, timeout=10)
+        except OSError:
+            conn.close()
+            continue
+        threading.Thread(target=pipe, args=(conn, peer), daemon=True).start()
+        threading.Thread(target=pipe, args=(peer, conn), daemon=True).start()
+threads = []
+for spec in sys.argv[3:]:
+    host, port = spec.rsplit(':', 1)
+    ls = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    ls.bind((host, int(port)))
+    ls.listen(64)
+    t = threading.Thread(target=serve, args=(ls,), daemon=True)
+    t.start()
+    threads.append(t)
+print('relay-ready', flush=True)
+for t in threads:
+    t.join()
+'''
+
+HEALTH_PROBE = r'''
+import sys, urllib.request
+try:
+    with urllib.request.urlopen('http://%s:28080/health' % sys.argv[1], timeout=10) as resp:
+        print(resp.status)
+except Exception as e:
+    print(type(e).__name__)
+'''
+
+API_PROBE = r'''
+import json, sys, urllib.request, urllib.error
+key = sys.stdin.read().strip()
+req = urllib.request.Request('http://127.0.0.1:8080/api/v1/user', headers={'Authorization': 'Bearer ' + key})
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+        print(json.dumps({'status': resp.status, 'users': sorted(u.get('name') for u in body.get('users', []))}))
+except urllib.error.HTTPError as e:
+    print(json.dumps({'status': e.code}))
+'''
+
+
+def api_probe(key_bytes):
+    p = netns('python3', '-I', '-c', API_PROBE, input=key_bytes, timeout=30)
+    return json.loads(p.stdout.decode().strip().splitlines()[-1])
+
+
+def netns_snapshot():
+    links = netns('ip', '-br', 'link').stdout.decode().split('\n')
+    routes = netns('ip', 'route').stdout.decode().strip()
+    return {'links': sorted(' '.join(l.split()[:2]) for l in links if l.strip()),
+            'ipv4_routes': routes.splitlines() if routes else []}
+
+
+# ---------------------------------------------------------------- main
+
+try:
+    out['phase'] = 'inputs'
+    must('archive_sha256_equals_source_attested', CHAIN.get('sha256') == ARCHIVE_SHA256
+         and sha256_file(ARCHIVE) == ARCHIVE_SHA256)
+    KEYS = None
+    if KEY_FILE is not None:
+        KEYS = hasecuretar.Keys(haimport.read_key_file(KEY_FILE))  # product key reader; masked from now on
+        os.unlink(KEY_FILE)
+    images = text('images', '--format', '{{.Repository}}:{{.Tag}} {{.Digest}}')
+    must('images_present', IMAGE in images and CLIENT_IMAGE.split('@')[1] in images)
+    config, quadlets = deploy_target()
+    app = SimpleNamespace(id='headscale', name='Headscale', owner='arm54-rootful-private-store',
+                          volumes=[{'name': 'headscale-data'}, {'name': 'headplane-data'}], postgres=[], data_dirs=[])
+
+    out['phase'] = 'target-deploy'
+    for volume in VOLUMES:
+        podman('volume', 'create', '--label', LABEL, volume, timeout=60)
+    import_bytes('headscale-data', volume_tar([('extra_records.json',
+                                                (PACKAGE / 'config/templates/headscale/extra_records.json').read_bytes(),
+                                                0o644)]))
+    marker = b'arm54-target-headplane-marker-20261123\n'
+    import_bytes('headplane-data', volume_tar([('target-marker.txt', marker, 0o600)]))
+    podman('pod', 'create', '--name', POD, '--label', LABEL, '--network', 'none', timeout=120)
+    podman('pod', 'start', POD, timeout=120)
+    infra = text('pod', 'inspect', POD, '--format', '{{.InfraContainerID}}').strip()
+    must('pod_network_none', text('inspect', infra, '--format', '{{.HostConfig.NetworkMode}}').strip() == 'none')
+    start_server(config)
+    info = json.loads(text('inspect', SERVER))[0]
+    must('server_no_published_ports', not info['HostConfig'].get('PortBindings')
+         and info['HostConfig'].get('NetworkMode', '').startswith('container:'))
+    podman('exec', SERVER, 'headscale', 'users', 'create', 'target-only', timeout=60)
+    created = text('exec', SERVER, 'headscale', 'apikeys', 'create', '--expiration', '2d', timeout=60).strip()
+    target_key = created.splitlines()[-1].strip().encode()
+    users_before, nodes_before = server_view()
+    must('target_live_state', sorted(users_before.values()) == ['target-only'] and not nodes_before)
+
+    out['phase'] = 'product-check'
+    staging = private_dir('work', 'staging')
+    uid = nested.IdMap(r.podman('unshare', 'cat', '/proc/self/uid_map').stdout.decode())
+    gid = nested.IdMap(r.podman('unshare', 'cat', '/proc/self/gid_map').stdout.decode())
+    conversion = tempctr.TempObjects(r, JOB, memory='384m', pids=256, cpus='0.5')
+    opened = habackup.open_backup(ARCHIVE)
+    logs = []
+    work = SimpleNamespace(ha=opened, keys=KEYS, _addons={}, staging=staging,
+                           guard=haimport.SpaceGuard([staging, ROOT], 12 * 1024 ** 3 + 128 * 1024 ** 2),
+                           quadlets=lambda a: quadlets, runner=lambda a: r,
+                           adapter=lambda a: SimpleNamespace(owner_ids=lambda: (uid, gid)),
+                           temp=lambda a: conversion, abort=lambda: None, checkpoint=lambda: None,
+                           phase=lambda p: None, log=lambda t: logs.append(t))
+    for method in ('addon_member', 'addon_info', 'open'):
+        setattr(work, method, MethodType(getattr(haimport.Work, method), work))
+    try:
+        checked = ha_headscale.check(work, app)
+        shutil.rmtree(staging / 'headscale-work')
+        must('product_check_no_blockers', checked['blockers'] == [], count=len(checked['blockers']))
+        section = checked['headscale']
+        facts['product_check'] = {k: section.get(k) for k in ('headscale_version', 'db_version', 'users', 'nodes',
+                                                              'pre_auth_keys', 'api_keys', 'policies', 'server_url',
+                                                              'target_server_url', 'dns_records', 'target_version')}
+        facts['product_check_warnings'] = len(checked['warnings'])
+
+        out['phase'] = 'product-convert'
+        converted_dir = private_dir('work', 'converted')
+        converted = ha_headscale.convert(work, app, False, converted_dir)
+    finally:
+        left = conversion.cleanup()
+        opened.close()
+    must('conversion_temp_objects_removed', not left)
+    must('product_convert_counts', converted['users'] == 3 and converted['nodes'] == 2
+         and converted['api_keys_kept'] == 1, users=converted['users'], nodes=converted['nodes'],
+         api_keys_removed=converted['api_keys_removed'], api_keys_kept=converted['api_keys_kept'],
+         dns_records=converted['dns_records'])
+    data_tar = converted['volumes']['headscale-data']
+    plane_tar = converted['volumes']['headplane-data']
+
+    out['phase'] = 'integrity-before-start'
+    source_dir = private_dir('work', 'source-db')
+    source_files = source_member_files(source_dir)
+    source_db, source_node_keys = db_facts(source_dir)
+    conv_dir = private_dir('work', 'converted-db')
+    conv_noise, conv_records = unpack_db(data_tar, conv_dir)
+    conv_db, _ = db_facts(conv_dir)
+    must('source_db_integrity_ok', source_db['integrity'] == 'ok', counts=source_db['counts'])
+    must('converted_db_integrity_ok', conv_db['integrity'] == 'ok', counts=conv_db['counts'])
+    must('converted_users_equal_source', conv_db['users'] == source_db['users'],
+         users=[name for _id, name in source_db['users']])
+    must('converted_nodes_identity_equal_source', conv_db['nodes'] == source_db['nodes'],
+         nodes=[{k: n[k] for k in ('id', 'ipv4', 'ipv6', 'hostname', 'given_name', 'user_id')} for n in source_db['nodes']])
+    must('converted_preauth_equal_source', conv_db['pre_auth_keys'] == source_db['pre_auth_keys'],
+         count=len(source_db['pre_auth_keys']))
+    noise_src = source_files.get('data/noise_private.key', b'').strip()
+    must('noise_identity_is_ha_key', bool(noise_src) and conv_noise == noise_src)
+    records_src = source_files.get('config/dns_records.json')
+    must('dns_records_are_ha_records', records_src is not None and conv_records == records_src)
+    with tarfile.open(plane_tar) as tar:
+        plane = {m.name.removeprefix('./'): tar.extractfile(m).read() for m in tar if m.isfile()}
+    must('target_headplane_data_kept', plane.get('target-marker.txt') == marker)
+
+    out['phase'] = 'restore'
+    stop_server()
+    safety = private_dir('work', 'safety')
+    for volume in ('headscale-data', 'headplane-data'):
+        export_file(volume, safety / (volume + '.tar'))
+    for volume, path in (('headscale-data', data_tar), ('headplane-data', plane_tar)):
+        podman('volume', 'rm', volume, timeout=60)
+        podman('volume', 'create', '--label', LABEL, volume, timeout=60)
+        import_file(volume, path)
+    start_server(config)
+    users_after, nodes_after = server_view()
+    must('restored_users_are_ha_users', sorted(users_after.values()) == sorted(n for _i, n in source_db['users'])
+         and 'target-only' not in users_after.values(), users=sorted(users_after.values()))
+    expected_nodes = {n['id']: sorted([n['ipv4'], n['ipv6']]) for n in source_db['nodes']}
+    must('restored_nodes_ids_and_ips', {int(k): sorted(v['ips']) for k, v in nodes_after.items()} == expected_nodes,
+         nodes={k: {'ips': v['ips'], 'name': v['name'], 'user': v['user']} for k, v in nodes_after.items()})
+    target_api = api_probe(target_key)
+    must('target_api_key_still_works', target_api.get('status') == 200 and target_api.get('users') ==
+         sorted(n for _i, n in source_db['users']), status=target_api.get('status'))
+    # HA's own API key hashes are replaced by this device's; the plaintext HA key is never read (NEVER_READ).
+    must('ha_headplane_api_key_never_read', 'data/.headplane_api_key' not in source_files
+         and 'data/.headplane_api_key' in habackup.NEVER_READ)
+    target_pre = private_dir('work', 'target-pre-db')
+    unpack_db(safety / 'headscale-data.tar', target_pre)
+    target_db, _ = db_facts(target_pre)
+    must('api_keys_are_target_keys_not_ha_keys', conv_db['api_key_prefixes_sha'] == target_db['api_key_prefixes_sha']
+         and not set(conv_db['api_key_prefixes_sha']) & set(source_db['api_key_prefixes_sha']),
+         target=len(target_db['api_key_prefixes_sha']), ha=len(source_db['api_key_prefixes_sha']))
+
+    out['phase'] = 'vpn-root-cause'
+    for host in (SOURCE_URL_HOST, TARGET_URL_HOST):
+        netns('ip', 'route', 'add', 'local', host + '/32', 'dev', 'lo', 'table', 'local')
+    relay_proc = subprocess.Popen(['nsenter', '--net=/proc/%d/ns/net' % infra_pid(), 'python3', '-I', '-c', RELAY,
+                                   '127.0.0.1', '8080', '0.0.0.0:28080'],
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    must('relay_ready', relay_proc.stdout.readline().strip() == b'relay-ready')
+    facts['netns_without_interface'] = netns_snapshot()
+    addrs = netns('ip', '-o', 'addr', 'show').stdout.decode().split()
+    must('baseline_has_no_usable_address', not [a for a in addrs if '/' in a and not a.startswith(('127.', '::1'))],
+         addresses=sorted(a for a in addrs if '/' in a))
+    reach = netns('python3', '-I', '-c', HEALTH_PROBE, SOURCE_URL_HOST, timeout=30)
+    must('control_endpoint_reachable_in_baseline', reach.stdout.decode().strip() == '200')
+    state_dir = private_dir('work', 'client-state')
+    run_dir = private_dir('work', 'client-run')
+    with tarfile.open(ROOT / 'input/client-state.tar') as tar:
+        for member in tar:
+            p = Path(member.name)
+            assert not p.is_absolute() and '..' not in p.parts and (member.isfile() or member.isdir())
+            dest = state_dir / p
+            if member.isdir():
+                dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+            else:
+                dest.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                with open(dest, 'xb') as handle:
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(tar.extractfile(member).read())
+    expected_key = source_node_keys.get(2)
+    start_client(state_dir, run_dir)
+    paused, paused_seen = wait_running(40)
+    _u, nodes_paused = server_view()
+    check('root_cause_reproduced_no_interface', paused.get('BackendState') != 'Running'
+          and not (nodes_paused.get(2) or {}).get('online'),
+          states=paused_seen, server_online=(nodes_paused.get(2) or {}).get('online'))
+    facts['client_log_before_interface'] = client_log_predicates()
+    netns('ip', 'tuntap', 'add', 'dev', 'eth0', 'mode', 'tun')
+    netns('ip', 'addr', 'add', '10.254.54.2/24', 'dev', 'eth0')
+    netns('ip', 'link', 'set', 'eth0', 'up')
+    facts['netns_with_interface'] = netns_snapshot()
+    check('netns_has_no_default_route', not any(r_.startswith('default') for r_ in facts['netns_with_interface']['ipv4_routes']))
+    t0 = time.monotonic()
+    first, first_seen = wait_running(120)
+    facts['seconds_to_running_after_interface'] = round(time.monotonic() - t0, 1)
+    ips = sorted([n for n in source_db['nodes'] if n['id'] == 2][0][k] for k in ('ipv4', 'ipv6'))
+
+    def continuity(name, state, seen, fatal=True):
+        _u2, nodes = server_view()
+        node = nodes.get(2) or {}
+        return (must if fatal else check)(name, state.get('BackendState') == 'Running' and not state.get('AuthURL')
+                    and state.get('ID') == '2' and sorted(state.get('TailscaleIPs') or []) == ips
+                    and state.get('PublicKey') == expected_key and state.get('HostName') == 'b1-ts-alice'
+                    and node.get('online') is True and len(nodes) == len(source_db['nodes']),
+                    client=public(state), states=seen, server_node=node, server_nodes=len(nodes))
+
+    continuity('client_reconnects_same_identity_after_restore', first, first_seen)
+
+    out['phase'] = 'dns-record'
+    query = podman(*TS, 'dns', 'query', 'b1-nas.ts.local', 'A', check=False, timeout=60)
+    check('ha_dns_record_served_to_client', b'100.64.0.250' in (query.stdout or b''), rc=query.returncode)
+
+    out['phase'] = 'server-restart'
+    podman('restart', '--time', '20', SERVER, timeout=120)
+    for _ in range(60):
+        if podman('exec', SERVER, 'headscale', 'health', check=False, timeout=15).returncode == 0:
+            break
+        time.sleep(1)
+    time.sleep(5)
+    after_server, seen_server = wait_running(120)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline and not (server_view()[1].get(2) or {}).get('online'):
+        time.sleep(3)
+    continuity('client_reconnects_after_server_restart', after_server, seen_server)
+
+    out['phase'] = 'client-restart'
+    podman('restart', '--time', '20', CLIENT, timeout=120)
+    after_client, seen_client = wait_running(120)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline and not (server_view()[1].get(2) or {}).get('online'):
+        time.sleep(3)
+    continuity('client_reconnects_after_client_restart', after_client, seen_client)
+    preds = client_log_predicates()
+    must('no_new_login_needed', not preds['needs_login'] and not preds['auth_url'], predicates=preds)
+
+    out['phase'] = 'integrity-after-restart'
+    podman('stop', '--time', '20', CLIENT, timeout=60)
+    stop_server()
+    live_dir = private_dir('work', 'restored-db')
+    export_file('headscale-data', live_dir / 'volume.tar')
+    live_noise, _rec = unpack_db(live_dir / 'volume.tar', live_dir)
+    live_db, live_keys = db_facts(live_dir)
+    must('restored_db_integrity_ok_after_restarts', live_db['integrity'] == 'ok', counts=live_db['counts'])
+    must('restored_identity_rows_equal_source', live_db['users'] == source_db['users']
+         and live_db['nodes'] == source_db['nodes'] and live_db['pre_auth_keys'] == source_db['pre_auth_keys']
+         and live_db['counts']['nodes'] == source_db['counts']['nodes'])
+    must('restored_noise_is_ha_key', live_noise == noise_src)
+
+    out['phase'] = 'repoint-to-target-url'
+    # After the integrity snapshot: a re-point outcome cannot change the recorded restore verdicts above.
+    start_server(config)
+    podman('start', CLIENT, timeout=120)
+    resumed, seen_resumed = wait_running(120)
+    continuity('client_reconnects_before_repoint', resumed, seen_resumed, fatal=False)
+    attempts = []
+    # tailscale up refuses a new --login-server while Running unless --force-reauth (a new login); the documented
+    # re-point is `tailscale down` first. Both forms are recorded; --force-reauth is never used.
+    for before, extra in ((None, []), ('down', []), (None, ['--reset'])):
+        down_rc = podman(*TS, 'down', check=False, timeout=60).returncode if before == 'down' else None
+        up = podman(*TS, 'up', *extra, '--login-server=http://%s:28080' % TARGET_URL_HOST, '--hostname=b1-ts-alice',
+                    '--accept-dns=false', '--timeout=60s', check=False, timeout=120)
+        low = ((up.stdout or b'') + (up.stderr or b'')).lower()
+        attempts.append({'down_first': before == 'down', 'down_rc': down_rc, 'reset': bool(extra), 'rc': up.returncode,
+                         'flags_error': b'non-default' in low, 'force_reauth_required': b'force-reauth' in low,
+                         'login_url_printed': b'http' in low and b'/register/' in low})
+        if up.returncode == 0 or attempts[-1]['login_url_printed']:
+            break
+        if before is None and not extra and not attempts[-1]['force_reauth_required']:
+            break
+    repointed, seen_repoint = wait_running(90)
+    prefs = podman(*TS, 'debug', 'prefs', check=False, timeout=30)
+    try:
+        control_url = json.loads(prefs.stdout or b'{}').get('ControlURL')
+    except ValueError:
+        control_url = None
+    continuity('client_repointed_to_target_url_keeps_identity', repointed, seen_repoint, fatal=False)
+    check('client_control_url_is_target', control_url == 'http://%s:28080' % TARGET_URL_HOST, attempts=attempts)
+    podman('stop', '--time', '20', CLIENT, timeout=60)
+    stop_server()
+
+
+    out['phase'] = 'rollback'
+    for volume in ('headscale-data', 'headplane-data'):
+        podman('volume', 'rm', volume, timeout=60)
+        podman('volume', 'create', '--label', LABEL, volume, timeout=60)
+        import_file(volume, safety / (volume + '.tar'))
+    start_server(config)
+    users_rb, nodes_rb = server_view()
+    rb_api = api_probe(target_key)
+    must('rollback_restores_pre_import_target', sorted(users_rb.values()) == ['target-only'] and not nodes_rb
+         and rb_api.get('status') == 200, users=sorted(users_rb.values()), nodes=len(nodes_rb))
+    stop_server()
+    out.update(status='passed' if all(checks.values()) else 'partial', phase='done',
+               false_checks=sorted(k for k, v in checks.items() if not v))
+except Exception as error:  # noqa: BLE001
+    out['error_code'] = type(error).__name__
+    if isinstance(error, AssertionError):
+        out['failed_check'] = str(error)[:80]
+    if hasattr(error, 'code'):
+        out['product_error_code'] = error.code
+finally:
+    cleanup = {}
+    if relay_proc is not None:
+        try:
+            os.killpg(relay_proc.pid, signal.SIGTERM)
+            relay_proc.wait(timeout=10)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+        cleanup['relay_exited'] = relay_proc.poll() is not None
+    for name in (CLIENT, SERVER):
+        r.podman('rm', '--force', '--time', '10', name, check=False, timeout=60)
+    r.podman('pod', 'rm', '--force', POD, check=False, timeout=120)
+    for volume in VOLUMES:
+        r.podman('volume', 'rm', '--force', volume, check=False, timeout=60)
+    shutil.rmtree(ROOT / 'work', ignore_errors=True)
+    shutil.rmtree(ROOT / '.config', ignore_errors=True)
+    objects = store_objects(r)
+    cleanup.update(store_after=objects, work_removed=not (ROOT / 'work').exists(),
+                   no_lab_containers=not objects['containers'], no_lab_pods=not objects['pods'],
+                   no_lab_volumes=not objects['volumes'])
+    out['cleanup'] = cleanup
+    if out['status'] == 'passed' and not (cleanup['no_lab_containers'] and cleanup['no_lab_pods']
+                                          and cleanup['no_lab_volumes'] and cleanup.get('relay_exited', True)):
+        out['status'] = 'failed'
+        out['failed_check'] = 'cleanup'
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['podman_commands'] = len(r.commands)
+    out['free_bytes_min'] = min(r.free) if r.free else None
+    report(ROOT / 'headscale-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+    sys.exit(0 if out['status'] == 'passed' else 1)

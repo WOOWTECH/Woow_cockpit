@@ -1,0 +1,9 @@
+# Headscale's durable state: the SQLite database (nodes, users, pre-auth keys, API keys)
+# and noise_private.key, the control plane's identity. Losing it means every node has to
+# re-register. scripts/backup.sh exports this volume.
+[Unit]
+Description=Woow Headscale data volume
+
+[Volume]
+VolumeName=headscale-data
+Label=io.woowtech.app=headscale

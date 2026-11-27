@@ -1,0 +1,44 @@
+{
+ "assessment": "the same 22 not-ok as before the fix (lane-full-units-1ea1801.json), none new: test_ha_emqx expects the pre-guard behaviour and test_ha_omnigent the pre-SECURITY_BLOCKER behaviour on this branch, test_litellm_lab_runner is the guard refusing its fake child",
+ "blocked": 6,
+ "commercial_acceptance": "not-complete",
+ "errors": 6,
+ "failures": 16,
+ "not_ok_by_module": {
+  "test_ha_emqx": [
+   "FAIL CheckTests.test_a_clean_backup",
+   "FAIL CheckTests.test_a_hot_backup_is_tried_and_named",
+   "FAIL CheckTests.test_an_ip_node_name_needs_no_host_line",
+   "FAIL CheckTests.test_blockers",
+   "FAIL ConvertTests.test_a_failed_export_stops_the_conversion_with_the_advice",
+   "FAIL ConvertTests.test_a_partial_import_stops_the_conversion",
+   "FAIL ConvertTests.test_an_import_that_would_open_anonymous_login_is_refused",
+   "FAIL ConvertTests.test_lost_rows_stop_the_conversion",
+   "FAIL ConvertTests.test_the_strict_settings_must_come_back",
+   "ERROR ConvertTests.test_the_whole_conversion"
+  ],
+  "test_ha_omnigent": [
+   "FAIL CheckTests.test_a_clean_backup",
+   "FAIL CheckTests.test_a_same_named_account_is_a_warning",
+   "FAIL CheckTests.test_versions",
+   "FAIL ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+   "FAIL ConvertTests.test_counts_that_differ_stop_the_conversion",
+   "ERROR ConvertTests.test_a_same_named_ha_account_wins",
+   "ERROR ConvertTests.test_the_whole_conversion_in_test_mode"
+  ],
+  "test_litellm_lab_runner": [
+   "FAIL LabRunnerTests.test_abort_is_forwarded",
+   "FAIL LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+   "ERROR LabRunnerTests.test_exact_reader_capture_boundary",
+   "ERROR LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+   "ERROR LabRunnerTests.test_stderr_and_failures_are_not_returned"
+  ]
+ },
+ "not_ok_identical_to_lane_full_units_1ea1801": true,
+ "skipped": 6,
+ "source_commit": "ed3758e (fix/ha-native-arch-20261124 = the lane branch commit ee5a3cc on ddbd6d3)",
+ "stdout_sha256": "1cf2c2b878c0cf570b92de4c6576a38b1ea47c0d7f3d45643f437a3a311e30b8",
+ "tests": 1423,
+ "what": "guarded full tests/backup (team guard: no podman/ssh/sudo/systemctl/runuser processes) of the native-code architecture fix, through heavy.sh and the host heavy-tests lock",
+ "when": "2026-11-24, queued 10:10, ended 11:10 Asia/Taipei (a detached run that survived the 10:2x kill of the lane agent)"
+}

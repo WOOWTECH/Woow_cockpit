@@ -643,6 +643,47 @@ input.switch[type="checkbox"]:disabled { cursor: default; opacity: .6; }
 .ha-database-list > li { display: grid; gap: 6px; min-inline-size: 0; }
 .ha-database-name { overflow-wrap: anywhere; }
 
+/* HA import with one confirmation (HAOS parity): the issue lines, the confirmation box and the chain's per-app results. */
+.ha-summary { font-size: 17px; font-weight: 600; margin-block: 14px 4px; overflow-wrap: anywhere; }
+.ha-issues { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; min-inline-size: 0; }
+.ha-issue { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; font-size: 14px; min-inline-size: 0; padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--line); }
+.ha-issue-stop { border-inline-start-color: var(--ww-coral); }
+.ha-issue-confirm, .ha-issue-general { border-inline-start-color: var(--ww-black); }
+.ha-issue-auto { border-inline-start-color: var(--ww-blue); }
+.ha-issue-label { font-weight: 600; white-space: nowrap; }
+.ha-issue-text, .ha-issue-action { min-inline-size: 0; overflow-wrap: anywhere; flex: 1 1 260px; }
+.ha-issue-action { color: var(--text-secondary); }
+.ha-names { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 8px; flex-basis: 100%; min-inline-size: 0; }
+.ha-names li { background: var(--ww-gray); border-radius: var(--radius-sm); padding: 1px 10px; font-size: 13px; overflow-wrap: anywhere; min-inline-size: 0; }
+.ha-names li.ha-more { background: transparent; color: var(--text-secondary); }
+.ha-subhead { font-size: 14px; font-weight: 600; margin-block: 6px 0; }
+.ha-confirm { border: 1px solid var(--ww-black); border-radius: var(--radius); padding: 16px; margin-block-start: 18px; display: grid; gap: 12px; min-inline-size: 0; }
+.ha-confirm .subheading { margin: 0; }
+.ha-confirm .confirm-choice { margin-block-start: 4px; }
+.ha-choices .choices { margin-block-start: 8px; }
+.ha-group-list { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; min-inline-size: 0; }
+.ha-group-row { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 14px 16px; display: grid; gap: 6px; min-inline-size: 0; }
+.ha-group-row.needs-person { border-color: rgba(244, 93, 109, .6); }
+.ha-group-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 6px 12px; }
+.ha-group-name { min-inline-size: 0; overflow-wrap: anywhere; }
+.ha-group-message { margin: 0; overflow-wrap: anywhere; }
+.ha-group-message.strong { font-weight: 600; }
+.ha-group-row .secondary { margin: 0; overflow-wrap: anywhere; }
+.ha-result { border: 1px solid var(--hairline); border-radius: var(--radius); padding: 6px 16px 14px; display: grid; gap: 6px; min-inline-size: 0; }
+.ha-result .ha-summary { margin-block-start: 8px; }
+.ha-after { margin-block-start: 18px; }
+.ha-kept { margin-block-start: 18px; display: grid; gap: 8px; min-inline-size: 0; }
+.ha-kept .subheading, .ha-kept p { margin: 0; }
+.ha-kept .ha-group-list { margin-block-start: 4px; }
+.ha-kept-item .button-group { margin-block-start: 4px; }
+.ha-group-notes { margin: 0; font-size: 14px; min-inline-size: 0; overflow-wrap: anywhere; }
+.ha-check-starts { margin: 0; overflow-wrap: anywhere; }
+.ha-job-group { margin-block-start: 6px; }
+:root.pf-v6-theme-dark .ha-issue-stop, :root.pf-v6-theme-dark .ha-group-row.needs-person { border-color: #ff8a96; }
+:root.pf-v6-theme-dark :is(.ha-issue-confirm, .ha-issue-general, .ha-confirm) { border-color: var(--text-primary); }
+:root.pf-v6-theme-dark .ha-names li { background: #2a2e36; }
+
 /* ---------------------------------------------------------------- responsive */
 @media (max-width: 1280px) {
   .grid.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

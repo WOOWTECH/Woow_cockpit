@@ -1,0 +1,148 @@
+{
+ "module_sha256": "b32c962721316ce2b877755aa5d3d798b6608ec6ef3c46c8b7320da57c2f5db3",
+ "tests": [
+  "tests.backup.test_ha_pg_stdin",
+  "tests.backup.test_ha_odoo",
+  "tests.backup.test_ha_flows"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 68,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "P01",
+   "protection": "write_file reads the written file back",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "P02",
+   "protection": "a short copy is written again",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "P03",
+   "protection": "at most 2 more writes, then the job stops",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "P04",
+   "protection": "the digest is compared, not only the size",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 17
+  },
+  {
+   "id": "P05",
+   "protection": "a read-back that failed is no proof",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  },
+  {
+   "id": "P06",
+   "protection": "POSIX cksum's length bytes",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 22
+  },
+  {
+   "id": "P07",
+   "protection": "an open file is rewound for every attempt",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 20
+  },
+  {
+   "id": "P08",
+   "protection": "a pause between the attempts",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 17
+  },
+  {
+   "id": "P09",
+   "protection": "script: the input opens and closes its own transaction",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 5
+  },
+  {
+   "id": "P10",
+   "protection": "script/statement: the end mark is required",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 4
+  },
+  {
+   "id": "P11",
+   "protection": "a new end mark for every call",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "P12",
+   "protection": "the end mark must END the output",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 8
+  },
+  {
+   "id": "P13",
+   "protection": "statement stays outside a transaction block (review C-19)",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 12
+  },
+  {
+   "id": "P14",
+   "protection": "the retry note names no content and the attempt",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 17
+  },
+  {
+   "id": "P15",
+   "protection": "the final failure is the zh-TW INCOMPLETE_FILE message",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 16
+  }
+ ],
+ "controls": [
+  {
+   "id": "C01",
+   "change": "a changed comment in ha_odoo.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 68
+  }
+ ],
+ "all_caught": true,
+ "subset": null,
+ "seconds": 26.5
+}

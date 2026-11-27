@@ -1,0 +1,18 @@
+Ign:1 http://repo.example:80 ./ InRelease
+Ign:2 http://repo.example:80 ./ Release
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Ign:3 http://repo.example:80 ./ Packages
+Ign:4 http://repo.example:80 ./ Translation-en
+Err:3 http://repo.example:80 ./ Packages
+  407  Proxy Authentication Required [IP: 192.0.2.2 80]
+Ign:4 http://repo.example:80 ./ Translation-en
+Reading package lists...

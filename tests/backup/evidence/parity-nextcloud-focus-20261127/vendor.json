@@ -1,0 +1,37 @@
+{
+  "repository": "https://github.com/pulsejet/memories",
+  "release": "v11.1.4",
+  "release_commit": "3ec040e55d2cfc8bd0e339c6338946d1513d15ae",
+  "local_vendor_tree": "281e8df3e6d0a3daae7d26ac48c591229a02a8eb",
+  "verified": "2026-11-27",
+  "files": [
+    {
+      "path": "lib/Db/FilecacheTriggers.php",
+      "local_path": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/parity-nextcloud/vendor-memories/FilecacheTriggers.php",
+      "git_blob": "d7925012010dc3b35ec994f659776ed99f7b4e68",
+      "sha256": "8d124f4f37afdbba67f3cb6eef66289ccda4a7c8373fd0f3f5d4082bd64730ee",
+      "release_bytes_match_local": true
+    },
+    {
+      "path": "lib/Settings/SystemConfig.php",
+      "local_path": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/parity-nextcloud/vendor-memories/lib_Settings_SystemConfig.php",
+      "git_blob": "630ea9a4ccfbd0aaaba7dd1a2cee3cc98cbe096c",
+      "sha256": "1c82124e00b3ebf83e456c72ec9984ddc6be9fdecbba49ff206309a1213e629e",
+      "release_bytes_match_local": true
+    }
+  ],
+  "system_config": {
+    "key": "memories.db.triggers.fcu",
+    "default": false,
+    "read": "IConfig::getSystemValue",
+    "write": "IConfig::setSystemValue",
+    "destination": "config.php; no oc_appconfig write"
+  },
+  "fixed_definition_changes": [
+    "public-qualified tables/function",
+    "SECURITY INVOKER explicit",
+    "SET search_path = pg_catalog",
+    "ordinary integer columns required",
+    "exact catalog body/owner/language/trigger validation"
+  ]
+}

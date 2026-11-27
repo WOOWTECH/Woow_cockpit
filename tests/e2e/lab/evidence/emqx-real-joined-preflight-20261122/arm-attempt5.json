@@ -1,0 +1,13 @@
+{
+  "source_commit": "c5300d368f5d15f4cfbe8f6d1ef94dae9f1a04b2",
+  "scope": "real ARM joined preflight with pinned absent HTTPS fresh profile; no restore",
+  "exit": 0,
+  "elapsed_seconds": 115.78408638807014,
+  "stdout_sha256": "9724fa96147a1acf890a848fb1dace9ab949461e90447468142e0d932890b813",
+  "fixed_status": [
+    "PREFLIGHT REGISTRATION LOGIN PASSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "restore_executed": false
+}

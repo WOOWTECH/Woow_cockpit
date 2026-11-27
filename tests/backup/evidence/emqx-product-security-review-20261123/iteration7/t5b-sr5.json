@@ -1,0 +1,63 @@
+{
+ "attempt": "t5b-sr5",
+ "backup_engine_tree": "5142e05cb05337936d5fd010082e1c07f3d88b06",
+ "code": "fix/emqx-sr5-hash-warning-20261124",
+ "command": "-I t5b_plain_explicit.py sr5 disable,suffix,control",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 197.6,
+ "exit_code": 0,
+ "harness_commit": "283865c5fe5ad65c6711a56692003d53a865b10c",
+ "iteration": 7,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "sr5",
+  "device_after": "rows=1:plain=0",
+  "device_before": "rows=1:plain=0",
+  "device_login_before": "own=login:wrong=refused",
+  "elapsed_s": 197.2,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "modes": {
+   "control": {
+    "candidate": "rows=1:plain=0",
+    "candidate_after_restart": "rows=1:plain=0",
+    "candidate_authn_algorithms": [
+     [
+      "sha256",
+      true
+     ]
+    ],
+    "candidate_login": "own=login:wrong=refused",
+    "candidate_login_after_restart": "own=login:wrong=refused",
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_refused": false,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 126.7,
+    "ha_hocon_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c"
+   },
+   "disable": {
+    "conversion": "REFUSED: EMQX 不能搬過來：HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。",
+    "conversion_refused": true,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 29.6,
+    "ha_hocon_sha256": "6b31923ff84b20a1cea985aab906d45bde92633f86c7147bddc310a5b8da407c"
+   },
+   "suffix": {
+    "conversion": "REFUSED: EMQX 不能搬過來：HA 的 EMQX 用「plain」（不加密）的方式保存 MQTT 帳號的密碼，搬過來會把明文密碼留在這台，所以不能匯入。請先在 HA 的 EMQX 管理頁「存取控制 → 認證」把內建資料庫的密碼雜湊方式（password_hash_algorithm）改成 plain 以外的方式（例如 sha256 並加鹽，或 bcrypt），再替每個 MQTT 帳號重新設定一次密碼（EMQX 不會轉換已經存好的密碼，沒有重設的帳號在改完後就無法登入），然後重新製作 HA 備份再匯入。",
+    "conversion_refused": true,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 26.4,
+    "ha_hocon_sha256": "7346f5fe69f9b513cc465b72fa2c763f1f84154c787dd53812602d4369396550"
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T5b SR-5 HA plain authenticator with explicit salt_position vs this device bootstrap users"
+ },
+ "source_commit": "3c857c3099d19333d7f0c7f7780c1aec5d4d8e2c",
+ "started": "2026-11-24T17:46:03+0800",
+ "status_lines": [],
+ "stdout_sha256": "c46442bf0910be7b5d9b3ce9d30dd83f9daa8594be891e30480a0427f63bc5fb",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

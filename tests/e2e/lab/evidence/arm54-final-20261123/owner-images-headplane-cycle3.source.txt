@@ -1,0 +1,114 @@
+"""Item C (lane arm54-2): images pulled straight into the test owner's rootless storage on .54 (runs as root).
+
+usage (through arm54_final_control.py run): arm54_final_owner_images.py <workspace> headplane-standin|omnigent|n8n|emqx
+
+The owner's podman runs here through runuser from this root process, i.e. in .54's own network namespace (only the
+owner's user manager and its units live in the private namespace): a pull adds image files under the owner's home
+and nothing else (no container, no network object); `podman pull --arch arm64` selects the arm64 manifest of the
+pinned multi-arch index, checked against the registry listing.
+
+headplane-standin (stated deviation): the package 0afdfa4 names Image=localhost/woow-headplane:0.7.1-woow2, a local
+build (Containerfile.headplane = upstream ghcr.io/tale/headplane:0.7.1 + WOOWTECH's rebuilt React Router app) that
+has no arm64 build. The product refuses to package an app whose image is missing (adapters/quadlet_postgres.py
+import_manifest: '找不到應用使用的映像', owner-headscale-attempt6), so the upstream 0.7.1 arm64 image -- the base of
+the woow2 build, WITHOUT the rebuilt app -- is tagged with the package's image name. headplane.service is never
+started on .54; the HA import keeps the target's headplane volume (checked by the Headscale run).
+Nothing here prints a secret value."""
+import json
+import os
+import shutil
+import sys
+import time
+
+from arm54_final_runtime import RESERVE, ROOT, report
+import arm54_final_owner_common as oc
+
+KIND = sys.argv[2] if len(sys.argv) > 2 else ''
+# (reference pinned by index digest, arm64 manifest digest from the registry listing, extra tag or None)
+IMAGES = {
+    'headplane-standin': [
+        ('ghcr.io/tale/headplane:0.7.1@sha256:394483fd2336ce6b15df360c3e118ddfd45eb8140fe21df9f2611077f5d79d22',
+         'sha256:b2028fa45537c37ddc04dfe1eed513922b8d5236d6d7a2af53bb6fce065dda65',
+         'localhost/woow-headplane:0.7.1-woow2'),
+    ],
+    # the exact references of the Woow Omnigent package 6e4f0c0 (as arm54_final_omni_build.py)
+    'omnigent': [
+        ('docker.io/library/postgres:16.15-alpine3.24'
+         '@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139', 'sha256:9f5be6795d4e', None),
+        ('ghcr.io/omnigent-ai/omnigent-server:v0.21.0'
+         '@sha256:9bba2964f015ddbb61da0924267effd1801c0db8f44ecec95f401f24d9a3f90c', 'sha256:38ed1996713c', None),
+    ],
+    # the images of the Woow n8n package 2ac1ae2 (named there by tag only), pinned by the index digest of the registry
+    # listing (n8n/postgres/valkey as arm54_final_n8n_build.py; n8nio/runners listed on 2026-11-24)
+    'n8n': [
+        ('docker.io/library/postgres:16.15-alpine'
+         '@sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139', 'sha256:9f5be6795d4e',
+         'docker.io/library/postgres:16.15-alpine'),
+        ('docker.io/valkey/valkey:8.1.11-alpine'
+         '@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a', 'sha256:880f09f3e1ba',
+         'docker.io/valkey/valkey:8.1.11-alpine'),
+        ('docker.io/n8nio/n8n:2.43.6@sha256:dd580fe1ab6e99e85bc66f2acf8bc8c5e9409fbe61b2e2803c5024403ef52833',
+         'sha256:4648e0196554', 'docker.io/n8nio/n8n:2.43.6'),
+        ('docker.io/n8nio/runners:2.43.6@sha256:3168a82b29b3a8ec9acbe876d9e654b3333dfd630b257f6cc2bc81fc5f93b2bf',
+         'sha256:bdc21be78c9e', 'docker.io/n8nio/runners:2.43.6'),
+    ],
+    # the two images of the Woow EMQX package ea5886c (named there by index digest)
+    'emqx': [
+        ('docker.io/emqx/emqx:5.8.9@sha256:35b46f7aa7a0d51f3959e4344221ac5ec7f948b03e43099286b6c40a07bb393b',
+         'sha256:c455c60feced', None),
+        ('docker.io/nginxinc/nginx-unprivileged:1.27-alpine'
+         '@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0', 'sha256:025de0b541bc', None),
+    ],
+}
+assert KIND in IMAGES, 'kind-refused'
+
+checks, facts = {}, {}
+out = {'status': 'failed', 'phase': 'start', 'kind': KIND, 'owner': oc.OWNER, 'commercial_acceptance': 'not-complete',
+       'checks': checks, 'facts': facts}
+started = time.monotonic()
+
+
+def must(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    if not ok:
+        raise AssertionError(name)
+
+
+try:
+    acct = oc.account()
+    must('owner_present', acct is not None)
+    must('caller_in_54_netns', oc.netns_inode(1) == oc.netns_inode(os.getpid()))
+    for ref, arm64, tag in IMAGES[KIND]:
+        short = ref.split('@')[0].rsplit('/', 1)[-1]
+        out['phase'] = 'pull ' + short
+        free = shutil.disk_usage(acct.pw_dir).free
+        must('free_space_before_%s' % short, free >= RESERVE + 2 * 1024 ** 3, free_gib=round(free / 1024 ** 3, 2))
+        oc.podman('pull', '--quiet', '--arch', 'arm64', ref, timeout=1500)
+        info = json.loads(oc.podman('image', 'inspect', ref, timeout=60).stdout)[0]
+        digests = sorted(info.get('RepoDigests') or [])
+        must('arm64_%s' % short, info.get('Architecture') == 'arm64'
+             and any(d.split('@')[1].startswith(arm64) for d in digests), arch=info.get('Architecture'),
+             digests=[d.split('@')[1][:19] for d in digests])
+        labels = info.get('Labels') or {}
+        facts[short] = {'id': info['Id'][:12], 'bytes': info.get('Size'),
+                        'version_label': labels.get('org.opencontainers.image.version')}
+        if tag:
+            out['phase'] = 'tag ' + short
+            oc.podman('tag', info['Id'], tag, timeout=60)
+            tagged = json.loads(oc.podman('image', 'inspect', tag, timeout=60).stdout)[0]
+            must('tag_%s_is_the_pulled_image' % short, tagged['Id'] == info['Id'], tag=tag)
+    listing = oc.podman('images', '--format', '{{.Repository}}:{{.Tag}}', timeout=60).stdout.decode().split()
+    facts['owner_images'] = sorted(listing)
+    out['status'] = 'passed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001 - type + a masked tail only
+    out['error'] = type(error).__name__
+    out['error_detail'] = oc.safe_tail(str(error), 400)
+finally:
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    report(ROOT / ('owner-images-%s-result.json' % KIND), out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

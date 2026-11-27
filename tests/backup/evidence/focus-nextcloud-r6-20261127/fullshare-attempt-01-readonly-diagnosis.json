@@ -1,0 +1,189 @@
+{
+  "source": {
+    "journal_state": "installed",
+    "manifest_sha256": "966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79",
+    "transaction_leaf": "/usr/local/lib/.focus-nextcloud-r6-24d1dc3d14bfc94e",
+    "helper_transaction_leaf": "/usr/local/libexec/.focus-nextcloud-r6-24d1dc3d14bfc94e",
+    "current_library": {
+      "exact": true,
+      "entry_count": 55,
+      "changed_fields": {}
+    },
+    "current_helper": {
+      "exact": true,
+      "entry_count": 1,
+      "changed_fields": {}
+    },
+    "prior_library": {
+      "exact": true,
+      "entry_count": 73,
+      "changed_fields": {}
+    },
+    "prior_helper": {
+      "exact": true,
+      "entry_count": 1,
+      "changed_fields": {}
+    }
+  },
+  "quadlets": [
+    {
+      "name": "nextcloud-app.container",
+      "sha256": "7d489a5a9db7df6277e21dc8df71ab3fe180bb4dfa7b1c7e15421540ae4585f6",
+      "matches_original_bytes": false,
+      "matches_pinned_bytes": true,
+      "metadata_diff": {},
+      "nlink": 1
+    },
+    {
+      "name": "nextcloud-office.container",
+      "sha256": "1ed3c75304ef3ca793edbbb66bc840aeb901008a3d848792519b48abefb7cf74",
+      "matches_original_bytes": false,
+      "matches_pinned_bytes": true,
+      "metadata_diff": {},
+      "nlink": 1
+    },
+    {
+      "name": "nextcloud-db.container",
+      "sha256": "253c28b953b074c3d87278f7cca99fa5a79cd2a634cb317a4b8cad0e3884e329",
+      "matches_original_bytes": false,
+      "matches_pinned_bytes": true,
+      "metadata_diff": {},
+      "nlink": 1
+    },
+    {
+      "name": "nextcloud-redis.container",
+      "sha256": "31cd46ad8dff95261beb6a5b714a4fafd3aa97c7bb57e973f61a124b7d877884",
+      "matches_original_bytes": false,
+      "matches_pinned_bytes": true,
+      "metadata_diff": {},
+      "nlink": 1
+    },
+    {
+      "name": "nextcloud-gateway.container",
+      "sha256": "ad41e5d2296ad13508806f7931424fcf97b6f621523464be39d39bc09060223e",
+      "matches_original_bytes": false,
+      "matches_pinned_bytes": true,
+      "metadata_diff": {},
+      "nlink": 1
+    }
+  ],
+  "units": {
+    "nextcloud-app.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-cron.timer": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "enabled"
+    },
+    "nextcloud-db.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-gateway.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-office.service": {
+      "ActiveState": "failed",
+      "SubState": "failed",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-redis.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud.target": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "enabled"
+    },
+    "woowtech-backup-schedule.timer": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": ""
+    }
+  },
+  "original_inactive_unit_states": {
+    "nextcloud-app.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-cron.timer": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "enabled"
+    },
+    "nextcloud-db.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-gateway.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-office.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud-redis.service": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "generated"
+    },
+    "nextcloud.target": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": "enabled"
+    },
+    "woowtech-backup-schedule.timer": {
+      "ActiveState": "inactive",
+      "SubState": "dead",
+      "UnitFileState": ""
+    }
+  },
+  "all_five_images_exact": true,
+  "catalog_sha_equal": true,
+  "isolation_equal": true,
+  "archive_hashes_equal": true,
+  "archive_hashes": [
+    {
+      "name": "20261123T132013Z-34811d90.json",
+      "size": 655,
+      "sha256": "18d9c681b62cd09b97f125c23d42eaf47bcaf96d1d9e0cebc49c49f30bb6a81d"
+    },
+    {
+      "name": "20261123T132013Z-34811d90.tar",
+      "size": 422031360,
+      "sha256": "3ea0b2dc8c26d669efe5974c375084d6b435345603b701d55e620fc03d1d367f"
+    }
+  ],
+  "captured_before_after_markers_equal": true,
+  "captured_before_after_state_equal_fields": {
+    "config_sha256": true,
+    "users": true,
+    "db": true,
+    "data_top": true,
+    "units": true,
+    "status": true,
+    "office": true
+  },
+  "current_cold_config_sha_matches_original": true,
+  "original_fixture_stat": {
+    "size": 4467947520,
+    "mtime_ns": 1795442736290171673,
+    "inode": 8131209
+  },
+  "free_bytes": 26328625152,
+  "memory_current": 356794368,
+  "memory_max": "3221225472"
+}

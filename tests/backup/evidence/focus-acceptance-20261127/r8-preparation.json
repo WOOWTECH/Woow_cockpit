@@ -1,0 +1,48 @@
+{
+  "scope": "r8-preparation-only",
+  "real_run_executed": false,
+  "device_mutated": false,
+  "listener_started": false,
+  "browser_started": false,
+  "offline_checks": {
+    "tests": 9,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "blocked": 0,
+    "shim_hits": 0,
+    "guard_log": "acceptance-r8-offline-02.log"
+  },
+  "node_syntax_and_offline_default": "pass",
+  "files_sha256": {
+    "focus_acceptance_ui.py": "7aa6384f143055ede4b5bfe5a4291d1f7b48448094cf677639a07a2bdf38f237",
+    "focus_acceptance_ui_page.mjs": "e07232a821c1cbf20350c6e29e28d9346564ac5487c42e4829651ca6b7cb1411",
+    "focus_acceptance_ui_relay.py": "51b1f531162fc421eccf2bb07727726414cf7fa018e30cb78b56381b29e0c4ae",
+    "focus_acceptance_ui_test.py": "da9c34b9aa8b71f1aaa3dee6f09f18f61bfa12f0c7aed84ae4c3dda5cf8f28df"
+  },
+  "transport": {
+    "host_bind": "127.0.0.1",
+    "host_port": "ephemeral",
+    "device": "woowbk-dev-d",
+    "device_destination": "127.0.0.1:9090",
+    "exec_user": "devadmin",
+    "tls_termination": "real-cockpit",
+    "published_ports": 0,
+    "device_network_changes": 0
+  },
+  "original_ha_fixture": {
+    "bytes": 331694080,
+    "sha256": "f82422e327f151ec819d8e626011af965e40bf1ac78da3fa7a7bd0f869b69e1d",
+    "derived_change": "only-emqx-member-minus64bytes"
+  },
+  "expected_page_scope": {
+    "selected_apps": 3,
+    "blocked_apps": 1,
+    "imported_apps": 2,
+    "import_jobs": 4,
+    "confirmation_ticks": 1,
+    "import_clicks": 1
+  },
+  "requires": "review-and-separate-dev-d-lease",
+  "commercial_acceptance": "not-complete"
+}

@@ -1,0 +1,14 @@
+{
+  "source_commit": "1ad9da9a23226b8c0e8d6baaec718baf1e859bc4",
+  "scope": "pinned public NC primitive behavior only",
+  "exit": 0,
+  "elapsed_seconds": 2.686,
+  "stdout_sha256": "c41a55ac175436e57cc997fc6f4f6755b467efec60ae7d38060ba4b179c43311",
+  "fixed_status": [
+    "CLIENT NC PRIMITIVES PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "preflight_reason": "none",
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

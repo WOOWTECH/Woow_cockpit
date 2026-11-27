@@ -1,0 +1,39 @@
+{
+  "office": {
+    "fields": {
+      "TimeoutStopUSec": "1min 30s",
+      "MainPID": "0",
+      "Result": "exit-code",
+      "ExecMainExitTimestamp": "Fri 2026-11-27 00:31:35 UTC",
+      "ExecMainCode": "1",
+      "ExecMainStatus": "137",
+      "ActiveState": "failed",
+      "SubState": "failed",
+      "StateChangeTimestamp": "Fri 2026-11-27 00:31:35 UTC",
+      "ActiveExitTimestamp": "Fri 2026-11-27 00:31:24 UTC",
+      "InactiveEnterTimestamp": "Fri 2026-11-27 00:31:35 UTC"
+    },
+    "systemd_event_categories": []
+  },
+  "jobs": {
+    "active_jobs": 0
+  },
+  "selected_case_event_times": [
+    {
+      "time": "08:28:26",
+      "fixed_label": "fixture-size-ok"
+    },
+    {
+      "time": "08:30:26",
+      "fixed_label": "case-failed"
+    },
+    {
+      "time": "08:30:43",
+      "fixed_label": "baseline-recovery-verified"
+    }
+  ],
+  "case_results": {
+    "passed": 27,
+    "failed": 1
+  }
+}

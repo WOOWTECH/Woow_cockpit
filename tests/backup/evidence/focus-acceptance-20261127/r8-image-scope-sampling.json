@@ -1,0 +1,31 @@
+{
+  "scope": "r8-readonly-selected-versus-all-image-sampling",
+  "duration_bound_seconds": 40,
+  "sample_count": 35,
+  "every_sample_selected_image_configs_equal": true,
+  "every_sample_selected_unit_states_equal": false,
+  "raw_all_image_mismatch_samples": 0,
+  "unrelated_names_seen": [],
+  "sample_differences": [
+    {
+      "selected_images_equal": true,
+      "missing_selected": [],
+      "unrelated_images": {},
+      "selected_unit_differences": {
+        "omnigent-server-health.timer": {
+          "before": [
+            "active",
+            "waiting"
+          ],
+          "after": [
+            "active",
+            "running"
+          ]
+        }
+      }
+    }
+  ],
+  "old_guard_unchanged": true,
+  "initial_failed_sample_reconstructed": false,
+  "commercial_acceptance": "not-complete"
+}

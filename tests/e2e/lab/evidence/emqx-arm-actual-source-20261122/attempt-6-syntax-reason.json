@@ -1,0 +1,15 @@
+{
+  "source_commit": "484a9fe0b64a6bb91b808cf06d87b60fc5286faa",
+  "scope": "actual ARM source original syntax subreason; no target or restore",
+  "exit": 1,
+  "elapsed_seconds": 9.070335436146706,
+  "fixed_phases": [
+    "SOURCE HOCON_SYNTAX_REPUBLISH_PAYLOAD REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "1de71ed6639ed94b0d305b6a5edb3ecefdc0b5aae5d4520b34f70c3c39a96540",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

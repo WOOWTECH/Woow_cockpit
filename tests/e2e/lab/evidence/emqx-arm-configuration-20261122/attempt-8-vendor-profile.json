@@ -1,0 +1,16 @@
+{
+  "source_commit": "b195f91895cca227af7eaf0d7b9297895d8f55f7",
+  "scope": "real ARM native HOCON plus actual pinned vendor ACL profile only; no cold traversal or broker",
+  "exit": 1,
+  "elapsed_seconds": 9.0080067939125,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HOCON_VENDOR_ACL REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "c6cef729b13e3d17daf47304e280f397e3e5b0b0e3e626a52ddf1f1a1313ea6f",
+  "restore_executed": false
+}

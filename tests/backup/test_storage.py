@@ -492,9 +492,142 @@ class UploadTests(StorageTestCase):
         self.assertEqual(results['first'], results['second'])
         self.assertEqual(len(hashed), 1, 'hashed once')
 
+    def test_any_file_name_is_taken_and_shown_clean(self):
+        """X-UP-01: the name is only shown; a file is never opened by it."""
+        cases = {'': '', ' \n ': '', 'a\nb.tar': 'a b.tar', 'x' * 300: 'x' * 255, '\u202eexe.tar': 'exe.tar',
+                 'a\x00b': 'a b', '\ud800.tar': '.tar', '備份 1.tar': '備份 1.tar', '../x.tar': '../x.tar'}
+        for given, shown in cases.items():
+            with self.subTest(filename=given):
+                begun = self.storage.begin_upload(given, 100)
+                info = json.loads((self.paths.uploads / f'{begun["upload_id"]}.json').read_text())
+                self.assertEqual(info['filename'], shown)
+                self.assertEqual(Path(begun['path']).parent, self.paths.uploads)
+                self.storage.abort_upload(begun['upload_id'])
+        for bad in (None, 5, b'x', ['x']):
+            with self.subTest(filename=bad), self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload(bad, 100)
+            self.assertEqual(ctx.exception.code, 'invalid-request')
+        data = fake_archive_bytes(backup_id='20261101T080000Z-0123abce', created='2026-11-01T08:00:00Z')
+        begun = self.storage.begin_upload('\n', len(data))
+        self.simulate_fsreplace(begun['path'], data)
+        self.assertEqual(self.storage.finish_upload(begun['upload_id'])['filename'],
+                         'woowtech-backup-uploaded-20261101-080000.woowbackup')
+
+    def idle(self, begun, seconds, *names):
+        """Make an upload look as if nothing had been written to it for `seconds`."""
+        past = time.time() - seconds
+        for name in names or (f'{begun["upload_id"]}.part', f'{begun["upload_id"]}.json'):
+            os.utime(self.paths.uploads / name, (past, past))
+
+    def pending(self):
+        return {name[:-5] for name in os.listdir(self.paths.uploads) if name.endswith('.json')}
+
+    def test_an_idle_upload_makes_room(self):
+        """X-UP-03: the one that has been idle the longest, an hour at least, and only one at a time."""
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        for item, hours in zip(begun, (2, 5, 3, 1.1)):
+            self.idle(item, hours * 3600)
+        fresh = self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(self.pending(), {begun[i]['upload_id'] for i in (0, 2, 3)} | {fresh['upload_id']})
+        self.assertFalse(Path(begun[1]['path']).exists(), 'its files went')
+        second = self.storage.begin_upload('sixth.tar', 100)
+        self.assertEqual(self.pending(), {begun[i]['upload_id'] for i in (0, 3)} | {fresh['upload_id'], second['upload_id']})
+        with self.assertRaises(BackupError) as ctx:
+            self.storage.finish_upload(begun[1]['upload_id'])
+        self.assertEqual(ctx.exception.code, 'not-found')
+
+    def test_what_is_still_being_uploaded_stays(self):
+        """Written to within the hour (cockpit writes a temp file), or being checked at this moment."""
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        for item in begun:
+            self.idle(item, 7200)
+        temps = [self.paths.uploads / f'.{item["upload_id"]}.part-abc123' for item in begun[:2]]
+        for temp in temps:
+            temp.write_bytes(b'partial')
+        self.idle(begun[2], 3500)
+        import fcntl
+        fd = os.open(self.paths.uploads / f'{begun[3]["upload_id"]}.json', os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)  # what upload-finish holds while it hashes
+            with self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload('fifth.tar', 100)
+            self.assertEqual(ctx.exception.code, 'busy')
+            self.assertEqual(self.pending(), {item['upload_id'] for item in begun})
+        finally:
+            os.close(fd)
+        self.idle(begun[0], 7200, temps[0].name)  # the browser is gone for long
+        fresh = self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(len(self.pending() | {begun[0]['upload_id'], begun[3]['upload_id']}), 5)
+        self.assertIn(fresh['upload_id'], self.pending())
+        self.assertNotEqual({begun[0]['upload_id'], begun[3]['upload_id']} & self.pending(),
+                            {begun[0]['upload_id'], begun[3]['upload_id']})
+        self.assertTrue(temps[1].exists())
+
+    def test_a_write_at_the_last_moment_saves_an_upload(self):
+        """X-UP-03: looked at again under its lock; and the lock of one that is not idle is never touched."""
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        for item, hours in zip(begun, (5, 4, 3, 2)):
+            self.idle(item, hours * 3600)
+        oldest, real, seen = begun[0]['upload_id'], self.storage._last_write, []
+
+        def last_write(upload_id):
+            seen.append(upload_id)
+            return time.time() if upload_id == oldest and seen.count(oldest) > 1 else real(upload_id)
+        with mock.patch.object(self.storage, '_last_write', last_write):
+            fresh = self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(self.pending(), {begun[i]['upload_id'] for i in (0, 2, 3)} | {fresh['upload_id']})
+        for item in (begun[0], begun[2], begun[3]):
+            self.idle(item, 3500)
+        with mock.patch('fcntl.flock', side_effect=AssertionError('a lock was taken')):
+            with self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload('sixth.tar', 100)
+        self.assertEqual(ctx.exception.code, 'busy')
+
+    def test_a_stale_upload_whose_record_is_a_link_is_left_alone(self):
+        """X-UP-03: the record of an upload is opened without following a link (O_NOFOLLOW): one that was put in the uploads
+        folder in its place is neither locked nor removed, and an upload with it makes no room."""
+        outside = self.base / 'outside.json'
+        outside.write_text('{"not": "an upload"}')
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        past = time.time() - 7200
+        for item in begun:
+            record = self.paths.uploads / f'{item["upload_id"]}.json'
+            record.unlink()
+            record.symlink_to(outside)
+            os.utime(record, (past, past), follow_symlinks=False)
+            os.utime(self.paths.uploads / f'{item["upload_id"]}.part', (past, past))
+        with mock.patch('fcntl.flock', side_effect=AssertionError('a lock was taken on what a link names')):
+            with self.assertRaises(BackupError) as ctx:
+                self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(ctx.exception.code, 'busy')
+        self.assertEqual(self.pending(), {item['upload_id'] for item in begun})
+        for item in begun:
+            self.assertTrue(Path(item['path']).exists(), 'its placeholder stays')
+        self.assertEqual(outside.read_text(), '{"not": "an upload"}')
+        # the same uploads with their own records, idle as long: the oldest goes, as before
+        for item in begun:
+            record = self.paths.uploads / f'{item["upload_id"]}.json'
+            record.unlink()
+            record.write_text(json.dumps({'upload_id': item['upload_id'], 'filename': 'x.tar', 'size': 100}))
+            os.utime(record, (past, past))
+        self.storage.begin_upload('fifth.tar', 100)
+        self.assertEqual(len(self.pending()), 4)
+        self.assertEqual(len(self.pending() & {item['upload_id'] for item in begun}), 3)
+
+    def test_more_stale_uploads_than_there_may_be(self):
+        """However many are left over, as many go as must."""
+        begun = [self.storage.begin_upload(f'{i}.tar', 100) for i in range(4)]
+        for name in ('u' + '1' * 16, 'u' + '2' * 16):
+            for ext in ('part', 'json'):
+                (self.paths.uploads / f'{name}.{ext}').write_text('{}')
+        for item in [{'upload_id': 'u' + '1' * 16}, {'upload_id': 'u' + '2' * 16}, *begun[:3]]:
+            self.idle(item, 7200)
+        fresh = self.storage.begin_upload('next.tar', 100)
+        self.assertEqual(len(self.pending()), 4)
+        self.assertLessEqual({begun[3]['upload_id'], fresh['upload_id']}, self.pending())
+
     def test_begin_validation_space_and_limits(self):
-        for filename, size in (('', 100), ('a\nb', 100), ('x' * 300, 100), ('ok', 10), ('ok', True), ('ok', '100'),
-                               (None, 100), ('ok', 10 ** 15)):
+        for filename, size in (('ok', 10), ('ok', True), ('ok', '100'), (None, 100), ('ok', 10 ** 15)):
             with self.subTest(filename=filename, size=size):
                 with self.assertRaises(BackupError) as ctx:
                     self.storage.begin_upload(filename, size)

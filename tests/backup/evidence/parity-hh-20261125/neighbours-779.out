@@ -1,0 +1,2 @@
+iteration 2 (HH-OWNER-2235) at parity/hh-20261125@9da33013, guard.py (nice 15, idle io, one process): 13 modules = test_ha_import cli chain links common registry backup tempctr pg_stdin sqlite hermes headscale issues
+tests=779 failures=0 errors=0 skipped=12 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=405

@@ -1,0 +1,19 @@
+control 'adopt' rc=0 3.9s
+control 'cancel the whole' rc=0 2.8s
+control 'choice' rc=0 3.8s
+control 'database' rc=0 3.4s
+control 'job not found' rc=0 3.5s
+control 'key with a Tab' rc=0 4.3s
+control 'legacy engine' rc=0 3.4s
+control 'main' rc=0 6.4s
+control 'no device key' rc=0 3.2s
+control 'reconfirm' rc=0 5.3s
+control 'reload' rc=0 2.3s
+control 'restore of a converted' rc=0 3.9s
+control 'retry' rc=0 7.0s
+control 'stop after' rc=0 9.9s
+m16 CAUGHT rc=1 5.5s by 'no device key' :: the created key is not announced (D11)
+m18 CAUGHT rc=1 3.9s by 'main' :: the apps left out are not rows of the result
+m25 CAUGHT rc=1 6.1s by 'reconfirm' :: the confirmation-required result has no way on
+m26 CAUGHT rc=1 24.3s by 'cancel the whole' :: cancel of the import is not asked
+done: 4 caught of 4

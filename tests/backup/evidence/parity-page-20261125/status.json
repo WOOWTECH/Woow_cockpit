@@ -1,0 +1,40 @@
+{
+ "lane": "PAGE",
+ "branch": "parity/page-20261125",
+ "commit": "1119389dd78dc5ebc4fe5474bd839de41b00c4ec",
+ "base": "d5c985f",
+ "what_ran": {
+  "backup-ui (Chromium, headless, fixture engine, whole suite)": {
+   "tests": 128,
+   "pass": 128,
+   "fail": 0,
+   "old_tests": 108,
+   "new_tests": 20,
+   "exit": 0,
+   "duration_ms": 988199,
+   "log": "evidence/full1-backup-ui.tap",
+   "worktree": "clean detached worktree at the commit, through team/heavy.sh and the host lock"
+  },
+  "jsdom probe (offline, no layout)": {
+   "scenarios": 22,
+   "pass": 22,
+   "files": "offline-probe/scenarios.cjs (18), scenarios_legacy.cjs (4)"
+  },
+  "jsdom-judged mutation sweep of backup.js": {
+   "mutants": 27,
+   "caught": 27,
+   "controls_ok": 14,
+   "summary": "evidence/jsdom-mutation-summary-*.txt"
+  },
+  "static": {
+   "node --check": "backup.js, backup-ui.mjs",
+   "check_source.py": "passed",
+   "undeclared names (TypeScript checker)": "none new"
+  }
+ },
+ "not_run": [
+  "Playwright-judged mutation sweep (heavy-step economy rule of 19:0x)",
+  "any real device or real Cockpit (R8 of DESIGN G4 belongs to the REAL lane)"
+ ],
+ "truth": "a fixture engine written after CONTRACT sections 7 and 8; nothing was shown against the real engine; commercial_acceptance stays not-complete"
+}

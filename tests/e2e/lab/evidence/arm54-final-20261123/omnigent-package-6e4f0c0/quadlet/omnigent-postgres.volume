@@ -1,0 +1,7 @@
+# Postgres data: accounts, password hashes, policies, sessions. It used to be an implicit
+# volume auto-created by `podman run`; declaring it with the SAME VolumeName= adopts the
+# existing data on hosts that already run omnigent (install.sh then requires the matching
+# omnigent-postgres-password secret; see README "Migrating an existing deployment").
+[Volume]
+VolumeName=omnigent-postgres-data
+Label=io.woowtech.app=omnigent

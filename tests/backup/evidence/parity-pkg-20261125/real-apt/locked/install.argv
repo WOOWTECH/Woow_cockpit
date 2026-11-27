@@ -1,0 +1,2 @@
+/usr/bin/apt-get -q -o Acquire::Retries=1 -o DPkg::Lock::Timeout=300 -y --no-install-recommends --no-remove --reinstall install age zstd python3-nacl python3-cryptography
+(ran with -o DPkg::Lock::Timeout=2 -y --no-install-recommends)

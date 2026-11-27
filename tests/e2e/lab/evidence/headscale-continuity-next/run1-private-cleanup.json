@@ -1,0 +1,10 @@
+{
+  "archive_metadata_before_cleanup": [
+    {
+      "type": "manual",
+      "encrypted": true
+    }
+  ],
+  "removed_exact_run1_installer_private_dir": true,
+  "retained_fixture_mode": "0o700"
+}

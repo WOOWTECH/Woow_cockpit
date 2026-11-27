@@ -1,0 +1,6 @@
+import base64, hashlib, json
+out = {}
+for name in NAMES:
+    data = open('/usr/share/keyrings/%s.gpg' % name, 'rb').read()
+    out[name] = {'b64': base64.b64encode(data).decode(), 'sha256': hashlib.sha256(data).hexdigest()}
+print(json.dumps(out, sort_keys=True))

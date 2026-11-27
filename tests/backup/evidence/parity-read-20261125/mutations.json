@@ -1,0 +1,1613 @@
+{
+ "results": [
+  {
+   "label": "outer members limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer members limit counts skipped ones",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "add-ons limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "extended header limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "long name limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "name length",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon.json limit (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "entries limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "bytes limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "bytes limit of copies",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copies are not counted",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "inflate budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "inflate ratio",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip field limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip member limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names limit in the walk",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link copies limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link passes",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link memory",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "kept names limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "list digest",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "list count in the key",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names for a page are cleaned",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "collector of the caller",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "a cut-off file is job wide",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "gzip feed",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_OUTER_MEMBERS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_BACKUP_JSON",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_ADDONS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_FOLDERS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_PAX",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_LONG_NAME",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_ADDON_JSON",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of DEFAULT_MAX_MEMBERS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of DEFAULT_MAX_BYTES",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of INFLATE_FLOOR",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_GZIP_FIELD",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of INFLATE_RATIO",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "octal",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "negative number",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax padding",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax record",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax key twice",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax sparse",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax number",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax time",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "extended header alone",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "two pax headers",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "two long names",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "two long links",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "magic",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "global header inside",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "global header after pax",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "global header moves",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "prefix of GNU headers",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer sparse",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer truncated",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer names with a path",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer links are members",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "outer folders have data",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "compressed outer",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "regular file",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "backup.json twice",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "cockpit doc",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "recognise any object",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "version",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "type",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon twice",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folder names",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folder twice",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "extra",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "slug charset",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "made-up slug collides",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "reserved names",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "bad slug is listed",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "duplicate member",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "encryption version",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "size mismatch",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "cipher blocks",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "not an archive",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "protected decides",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "problem member opens",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "missing is no problem",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second folder",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "hidden characters",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "text cut",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip crc",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip size",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip crc of later members",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "gzip verify",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip reserved flags",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip header crc",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip rubbish",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "gzip one member only",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "legacy trailer",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "entry types",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "data of non-files",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "root",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "absolute name",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "dotdot",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "empty component",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "control names pass",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "flawed names not admitted",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "flawed names not listed",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "blank names in a walk for nothing",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "duplicates",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "replaces a directory",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "parent cache",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "table growth",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "device nodes pass",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "never read",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "never read below",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "never read depth",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "secret place listed",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon.json kind",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "symlink stays inside",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "symlink climbs after a name",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "absolute symlink",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "symlink samples per area",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "tail of a plain tar",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail alignment",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail checksum",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "member finish",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checked to the end",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "inner truncated",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy a secret",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy addon.json",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy an excluded file",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy addon.json of a folder",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "withheld names",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "withheld links in a chain",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy other kinds",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link to a file not handed out",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "links without asking",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "handed out flag",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "hostile link target",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "links to nothing not listed",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link chains",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link circles",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy before the checks",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "mode of the link",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "copy_later",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "read_or_skip",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "read_or_skip limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "addon slug",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon system",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon version",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "addon image",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "member error scope",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "v2/v3 shorter than announced (describe)",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v2/v3 shorter than announced (open)",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail is content",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "v1 blocks",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v1 blocks (describe)",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v2 padding",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v2 plaintext size",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v2 truncated",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v3 truncated",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v3 authentication",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v3 tags",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "reserved bytes",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "wrong key v1/v2",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "wrong key v3",
+   "file": "hasecuretar.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar problem",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar unknown addon key",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar addons limit",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar folders limit",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar size limit",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar date",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar no date",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "sidecar text",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "problem not stored",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "problem not shown",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "order without a date",
+   "file": "hastore.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale age",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale age under the lock",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale lock",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale order",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale temp files",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale temp files 2",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale once",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "busy",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "file name clean",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "file name type",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "backup.json limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "json size",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "json pieces",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "json pieces without ,",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "json pieces without [",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "json pieces without {",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_JSON_ITEMS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "a plain v7 member",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v7 checksum",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v7 block",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "v7 in a gzip backup",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "finish without drain",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "drain without finish",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "no final checks",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "no final checks of the second pass",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "the second pass ends early",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link names limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link names are counted",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_LINK_CHARS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: inner extended header",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: outer extended header",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: gzip members",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: addon.json (parse)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: file read whole",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: inflate budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: names",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: entries",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: addon.json (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: bytes (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: bytes (copies)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: outer members",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: backup.json (size)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: backup.json (pieces)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: add-ons",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: folders",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "a member limit ends the job",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders from the top",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders: no stop at a known folder",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders: below a file",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders: not implied",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "folders: a file is a folder",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax records limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax records are not counted",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax records of global headers",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "pax records of a header",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "limit text: pax records (inner)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (errors=1)"
+  },
+  {
+   "label": "limit text: pax records (outer)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of MAX_PAX_RECORDS",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "link targets limit",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes call is gone",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes count never moves on",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes count is too long",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the bytes threshold is strict",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the first bytes call is late",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the reader of the walk has none",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries call is gone (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries count is off (walk)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the walk does not hand it to the copies",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the copies do not hand it to the pass",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the reader of the second pass has none",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries call is gone (second pass)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checkpoint: the entries count is off (second pass)",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of CHECK_BYTES",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "value of CHECK_ENTRIES",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: no budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: budget is not handed on",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "second pass: the floor is the budget",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: constant",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: short",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: one for all tables",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "names key: not in the digest",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "stale upload: the record is followed",
+   "file": "storage.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail: every word is looked at",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "tail: a block is skipped",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum is not looked at",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum counts the first part only",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum counts the second part only",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: the signed sum is counted in Python",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: 127 is a high byte",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "checksum: a byte counts 255 less",
+   "file": "habackup.py",
+   "result": "caught",
+   "why": "FAILED (failures=1)"
+  },
+  {
+   "label": "CONTROL (must survive)",
+   "file": "habackup.py",
+   "result": "SURVIVED",
+   "why": "OK"
+  }
+ ],
+ "seconds": 3877
+}

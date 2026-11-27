@@ -1,0 +1,10 @@
+{
+  "memory_current": 1775996928,
+  "memory_max": 4294967296,
+  "varlib_free_bytes": 36977225728,
+  "proof_root_exists": false,
+  "host_ram_available_bytes": 4103966720,
+  "lease_case": "OD23-real-local-offline-bundle",
+  "source_commit": "4176d8415d68e9e79730e1b71a6723ac4c764f2f",
+  "checked_utc": "2026-11-26T22:09:13.315601+00:00"
+}

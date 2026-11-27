@@ -1,0 +1,178 @@
+{
+  "scope": "exact-prior-own-test-safety-retention",
+  "product_source": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "policy": "three newest safety backups per app after successful restore; unchanged",
+  "successful_pruning_job_events": [
+    {
+      "deleted_id": "20261126T225103Z-3036ed2b",
+      "event": "successful-older-safety-prune",
+      "job_id": "j20261126T234651Z-2379a24c",
+      "job_type": "restore",
+      "job_state": "succeeded",
+      "retained_evidence_file": "job-j20261126T234651Z-2379a24c.json",
+      "retained_evidence_sha256": "eca5ddc01107dba0d22ed94a1b77f6fbaddeac6d9c934f0201422def3778aa16",
+      "occurrences": 1
+    },
+    {
+      "deleted_id": "20261126T224900Z-4f1206af",
+      "event": "successful-older-safety-prune",
+      "job_id": "j20261126T234854Z-9b4447d4",
+      "job_type": "restore",
+      "job_state": "succeeded",
+      "retained_evidence_file": "job-j20261126T234854Z-9b4447d4.json",
+      "retained_evidence_sha256": "e5473259936c7ee3220c14674a426247764cd31157c50b2b3298b33f21fa126e",
+      "occurrences": 1
+    }
+  ],
+  "creation_provenance": [
+    {
+      "job_id": "j20261126T225019Z-32fde71d",
+      "job_state": "succeeded",
+      "job_type": "restore",
+      "safety_backup_id": "20261126T225103Z-3036ed2b",
+      "apps": null,
+      "evidence": "job-j20261126T225019Z-32fde71d.json"
+    },
+    {
+      "job_id": "j20261126T224835Z-f3258b86",
+      "job_state": "succeeded",
+      "job_type": "restore",
+      "safety_backup_id": "20261126T224900Z-4f1206af",
+      "apps": null,
+      "evidence": "job-j20261126T224835Z-f3258b86.json"
+    }
+  ],
+  "current_presence": [
+    {
+      "generation": "older",
+      "id": "20261126T224835Z-3c00f119",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "manual",
+      "apps": [
+        "omnigent"
+      ],
+      "bytes": 5959680
+    },
+    {
+      "generation": "older",
+      "id": "20261126T224900Z-4f1206af",
+      "sidecar_present": false,
+      "archive_present": false
+    },
+    {
+      "generation": "older",
+      "id": "20261126T225018Z-d4fe5bf8",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "manual",
+      "apps": [
+        "hermes"
+      ],
+      "bytes": 1136640
+    },
+    {
+      "generation": "older",
+      "id": "20261126T225103Z-3036ed2b",
+      "sidecar_present": false,
+      "archive_present": false
+    },
+    {
+      "generation": "older",
+      "id": "20261126T225357Z-193816e7",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "hermes"
+      ],
+      "bytes": 1157120
+    },
+    {
+      "generation": "older",
+      "id": "20261126T225552Z-2e6d3671",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "omnigent"
+      ],
+      "bytes": 6082560
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234155Z-c75a7da6",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "manual",
+      "apps": [
+        "omnigent"
+      ],
+      "bytes": 5959680
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234230Z-11508663",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "omnigent"
+      ],
+      "bytes": 6574080
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234341Z-df4130f4",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "manual",
+      "apps": [
+        "hermes"
+      ],
+      "bytes": 1136640
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234446Z-20a51c66",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "hermes"
+      ],
+      "bytes": 1116160
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234730Z-b8d0ca69",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "hermes"
+      ],
+      "bytes": 1157120
+    },
+    {
+      "generation": "current",
+      "id": "20261126T234924Z-e3c4387b",
+      "sidecar_present": true,
+      "archive_present": true,
+      "type": "safety",
+      "apps": [
+        "omnigent"
+      ],
+      "bytes": 6072320
+    }
+  ],
+  "older_present": 4,
+  "current_case_present": 6,
+  "total_present": 10,
+  "known_old_own_safety_pruned": 2,
+  "journal_proof": false,
+  "evidence_source": "immutable retained successful restore job captures, including their actual log entries",
+  "old_failed_recovery_preserved": true,
+  "cookie_coverage_of_old_attempt": false,
+  "commercial_acceptance": "not-complete"
+}

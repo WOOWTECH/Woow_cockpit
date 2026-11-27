@@ -1,0 +1,104 @@
+{
+  "scope": "cookie-observer-readonly",
+  "acceptance_passed": false,
+  "proves_old_page4_cookie_absence": false,
+  "old_page4_result_unchanged": true,
+  "administrative_root_verified": true,
+  "source_version": "362",
+  "primary_source_hashes_verified": true,
+  "primary_source_commit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+  "native_cockpit_capability": {
+    "package_version": "362-1~bpo24.04.1",
+    "binary_sha256": "4b09c1484234c0b49d00a3e63d108217b5b9270801958e86a4b80cd560848845"
+  },
+  "cookie_metadata": [
+    {
+      "name": "cockpit",
+      "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+      "length": 7,
+      "expires": null,
+      "maxAge": null,
+      "classification": "proved-public-protocol-tombstone",
+      "initial_jar_member": true,
+      "live_jar_member": false
+    },
+    {
+      "name": "cockpit",
+      "sha256": "97051da49fb8b3c6a5dd24fb34ddf74a09f8c5c2c62df642995354b160939694",
+      "length": 96,
+      "expires": null,
+      "maxAge": null,
+      "classification": "http-session",
+      "initial_jar_member": false,
+      "live_jar_member": true
+    }
+  ],
+  "match_counts": [
+    {
+      "names": [
+        "cockpit"
+      ],
+      "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+      "length": 7,
+      "classification": "proved-public-protocol-tombstone",
+      "device": {
+        "hits": 8,
+        "categories": {
+          "jobs": {
+            "hits": 8,
+            "matched_files": 8
+          }
+        }
+      },
+      "host": {
+        "hits": 0,
+        "categories": {}
+      }
+    },
+    {
+      "names": [
+        "cockpit"
+      ],
+      "sha256": "97051da49fb8b3c6a5dd24fb34ddf74a09f8c5c2c62df642995354b160939694",
+      "length": 96,
+      "classification": "credential-zero-hits-required",
+      "device": {
+        "hits": 0,
+        "categories": {}
+      },
+      "host": {
+        "hits": 0,
+        "categories": {}
+      }
+    }
+  ],
+  "observations_complete": true,
+  "unscanned_late_jar_metadata": [],
+  "public_tombstone_proofs": [
+    {
+      "name": "cockpit",
+      "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+      "initial_https_root_get_200": true,
+      "source_version": "362",
+      "http_only": true,
+      "secure": true,
+      "same_site_strict": true,
+      "root_path": true,
+      "live_jar_member": false,
+      "source_auth_sha256": "d3ad1a818ec7b7d2270f6c36f8364f96ffe34a42018800381a78ee68100b43e7",
+      "source_handler_sha256": "7c6551f0a993da62ff1aecbd5382fc4087f9f6d327fe53055e3d0a931c0e9cca"
+    }
+  ],
+  "authenticated_cookie_observed": true,
+  "live_jar_stable_during_scan": true,
+  "strict_credential_zero_hits": true,
+  "registered_credentials_zero_hits": true,
+  "all_observed_values_zero_hits": false,
+  "scanned": 648,
+  "archive_index_sidecars": 17,
+  "actual_archive_index_sidecars_expected": 17,
+  "regular_json_roots": 2,
+  "host_files": 2,
+  "failure_kind": null,
+  "diagnostic_completed": true
+}

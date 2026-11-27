@@ -1,0 +1,21 @@
+{
+  "scope": "r8-readonly-prerequisites",
+  "source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "driver_commit": "a8003e7d1e7390d3198972a54e858e91d0fad407",
+  "lease": "lease-r8-dev-d.json",
+  "tool_status": "ready",
+  "required_tool_count": 5,
+  "all_required_tools_working": true,
+  "missing_package_count": 0,
+  "apt_invoked": false,
+  "cockpit_client_sha256": "0efe6d2641f292f008c3f0b8fde11162bda82b202f4018b260ee08e060ad677e",
+  "cockpit_schema": {
+    "payload": "stream",
+    "open_uses_spawn_array": true,
+    "control_channel_empty": true,
+    "data_channel_newline_framed": true,
+    "helper_path_matches_frozen_page": true
+  },
+  "real_ui_executed": false,
+  "commercial_acceptance": "not-complete"
+}

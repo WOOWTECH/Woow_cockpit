@@ -1,0 +1,33 @@
+{
+  "scope": "offline-Git-source-bytes-only",
+  "page4_source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "current_source_commit": "59a1b0f95132ea51c899f590eea7e3b02c5dba43",
+  "files": [
+    {
+      "path": "backup/manifest.json",
+      "page4_sha256": "b2a859319cb698fec500c84719c535ed19c7117f620ab267abe9171bae06f377",
+      "current_sha256": "b2a859319cb698fec500c84719c535ed19c7117f620ab267abe9171bae06f377",
+      "equal": true
+    },
+    {
+      "path": "backup/index.html",
+      "page4_sha256": "b6615814811ddbb558d4ece13f9b3d27c32b3135cdd15b2943c27d47f44b814e",
+      "current_sha256": "b6615814811ddbb558d4ece13f9b3d27c32b3135cdd15b2943c27d47f44b814e",
+      "equal": true
+    },
+    {
+      "path": "backup/backup.css",
+      "page4_sha256": "60b90a3d6756e2ab1335d1d15a6267fe53521a16a0a958e9d4ddead28c93c9ee",
+      "current_sha256": "60b90a3d6756e2ab1335d1d15a6267fe53521a16a0a958e9d4ddead28c93c9ee",
+      "equal": true
+    },
+    {
+      "path": "backup/backup.js",
+      "page4_sha256": "2336bc134527ac5959421bcb5bd3dcc1e116f8828a0a77de11a113b5b88e11b4",
+      "current_sha256": "2336bc134527ac5959421bcb5bd3dcc1e116f8828a0a77de11a113b5b88e11b4",
+      "equal": true
+    }
+  ],
+  "runtime_source_verified": false,
+  "old_page4_cookie_absence_proved": false
+}

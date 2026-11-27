@@ -1,0 +1,68 @@
+"""Remove everything this lane created on .54: private-store containers/pods/volumes/images, leftover helper
+processes and the whole 0700 workspace (inputs with the real HA archive and the client state copy included).
+The default store and the original containers are never addressed."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+from arm54_final_runtime import ROOT, RootfulRunner, store_objects
+
+r = RootfulRunner()
+out = {'status': 'failed', 'workspace': str(ROOT), 'commercial_acceptance': 'not-complete'}
+started = time.monotonic()
+
+
+def pids_naming_root():
+    found = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) == os.getpid():
+            continue
+        try:
+            cmd = (entry / 'cmdline').read_bytes()
+        except OSError:
+            continue
+        if str(ROOT).encode() in cmd:
+            found.append(int(entry.name))
+    return sorted(found)
+
+
+try:
+    before = store_objects(r)
+    out['store_before'] = {k: len(v) for k, v in before.items()}
+    for name in before['containers']:
+        r.podman('rm', '--force', '--time', '10', name, check=False, timeout=120)
+    for name in before['pods']:
+        r.podman('pod', 'rm', '--force', name, check=False, timeout=120)
+    for name in store_objects(r)['volumes']:
+        r.podman('volume', 'rm', '--force', name, check=False, timeout=120)
+    for name in before['secrets']:
+        r.podman('secret', 'rm', name, check=False, timeout=60)
+    r.podman('rmi', '--all', '--force', check=False, timeout=600)
+    after = store_objects(r)
+    out['store_after'] = {k: len(v) for k, v in after.items()}
+    leftover = pids_naming_root()
+    for pid in leftover:
+        try:
+            os.kill(pid, 15)
+        except ProcessLookupError:
+            pass
+    time.sleep(2)
+    out['helper_processes_found'] = len(leftover)
+    out['helper_processes_left'] = len(pids_naming_root())
+    mounts = Path('/proc/self/mountinfo').read_text().splitlines()
+    out['mounts_naming_workspace'] = sum(str(ROOT) in m for m in mounts)
+    if not any(after.values()) and not out['helper_processes_left'] and not out['mounts_naming_workspace']:
+        shutil.rmtree(ROOT)
+    out['workspace_removed'] = not ROOT.exists()
+    out['status'] = 'passed' if out['workspace_removed'] else 'failed'
+except Exception as error:  # noqa: BLE001
+    out['error_code'] = type(error).__name__
+finally:
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['free_bytes'] = shutil.disk_usage('/var/tmp').free
+    print(json.dumps(out, sort_keys=True))
+    sys.exit(0 if out['status'] == 'passed' else 1)

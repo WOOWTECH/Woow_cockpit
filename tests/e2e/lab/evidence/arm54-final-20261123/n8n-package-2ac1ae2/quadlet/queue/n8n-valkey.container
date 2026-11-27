@@ -1,0 +1,31 @@
+[Unit]
+Description=n8n queue Valkey
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+PartOf=n8n.target
+
+[Container]
+ContainerName=n8n-valkey
+Image=docker.io/valkey/valkey:8.1.11-alpine
+Network=n8n.network
+Volume=n8n-valkey-data.volume:/data
+Volume=%h/.config/n8n/start-valkey.sh:/usr/local/bin/start-valkey.sh:ro
+Secret=n8n-valkey-password,type=mount,target=n8n-valkey-password
+Exec=/bin/sh /usr/local/bin/start-valkey.sh start
+Label=io.woowtech.app=n8n
+LogDriver=journald
+HealthCmd=/bin/sh /usr/local/bin/start-valkey.sh health
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+HealthStartPeriod=60s
+PodmanArgs=--stop-timeout=60
+
+[Service]
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

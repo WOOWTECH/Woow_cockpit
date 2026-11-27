@@ -1,0 +1,48 @@
+{
+  "status": "passed",
+  "executed_by": "parent",
+  "source_commit": "9bfb6b8b710f2f44fc7a85e803cf39141115c666",
+  "retained_receipt_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-upload-only/20261127T092046/fixed-result.json",
+  "retained_receipt_sha256": "9bbb2491a7726f2585c8ee74a4c64b2c6e33450184142ae1163aff69e78965d7",
+  "receipt_exact_copy": "upload-only-passed-fixed-result.json",
+  "metrics": {
+    "writer": {
+      "status": "passed",
+      "rpc_returncode": null,
+      "metrics": {
+        "minimum_free_bytes": 21682466816,
+        "peak_memory_current_bytes": 1117286400
+      },
+      "diagnostic_sha256": "cded040c901fe5ccde09870c22b7dbd317dc6a6772a13ffd683c492508a65a80"
+    },
+    "upload-finish": {
+      "status": "reaped",
+      "rpc_returncode": 0,
+      "metrics": {
+        "minimum_free_bytes": 21682323456,
+        "peak_memory_current_bytes": 1268273152
+      },
+      "diagnostic_sha256": "58d2fd2709d3f09c105eee85660da250694159d0fa82904072c3c02f1847e861"
+    },
+    "verify-retained": {
+      "status": "passed",
+      "rpc_returncode": null,
+      "metrics": {
+        "minimum_free_bytes": 21681766400,
+        "peak_memory_current_bytes": 1284681728
+      },
+      "diagnostic_sha256": "c6e3d6cc8cea5df7976a6470555610c2be79ca9182cc52086fcc139050053f37"
+    }
+  },
+  "app_starts": 0,
+  "pulls": 0,
+  "initial_fullshare_upload_cause": "unknown-not-recorded",
+  "regression": {
+    "name": "tests.backup.test_focus_nextcloud_r6_source.GuardTests.test_actual_orchestrator_claims_stops_and_returns_units_and_source",
+    "failed_before_fix": true,
+    "passed_after_fix": true,
+    "tests": 1,
+    "broad_tests_repeated": false
+  },
+  "fullshare_runtime": "not-leased"
+}

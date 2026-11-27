@@ -1,0 +1,90 @@
+{
+  "supervision_id": "eight-watch-20261120T090608Z-72fa69ff",
+  "code_commit": "d47faa82856ad9e56417cd9603444d40c1156048",
+  "engine_sha256": {
+    "ha_emqx.py": "9da4e59d6f8ae1cec7fc60d78be5234532da3f1dc378226e778bf8abe34cd9f7",
+    "ha_emqx_settings.py": "97fa19a37b2e63249cd34e7c8261014ae3c55ef1fc1c3046281a626761a73ceb"
+  },
+  "harness_sha256": "ef906e4b7a3061558e2f7ee5b6a60b5ce5d1361c5db4b37e3b054f0833ec2e60",
+  "emqx_image": "3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "emqx_version": "5.8.9",
+  "emqx_source": "a8319fe2390169e1f2483e3ec80dd01a6cdb233d",
+  "mqtt_client_image": "93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3",
+  "scope": "synthetic HA backup, real isolated EMQX/Podman/Mosquitto; no production restore",
+  "public_guard_enabled": true,
+  "lab_network": "none",
+  "published_ports": {},
+  "restricted_setting_scope": {
+    "real_roots_observed": 44,
+    "all_variants_supported": false,
+    "refused": [
+      "active discovery/TLS distribution",
+      "active target connectors/plugins/exhook/PSK/rules",
+      "active persistent sessions/custom durable storage",
+      "external monitor database/push gateway",
+      "unreviewed roots/files",
+      "unsafe operational root removal",
+      "bootstrap identity/hash conflicts"
+    ]
+  },
+  "fixture_tests": {
+    "operational_and_TLS": 16,
+    "bootstrap_flow": 10,
+    "snapshot": 4,
+    "candidate_flow": 11,
+    "public_guard": 2
+  },
+  "fixture_failures": 0,
+  "fixture_skips": 0,
+  "commercial_acceptance_complete": false,
+  "remaining": [
+    "real HA deployment backups and full output-volume install/rollback acceptance",
+    "additional active settings/reference variants and independent security review",
+    "complete dynamic credential-source coverage in the real runner flow",
+    "Omnigent trusted-schema importer and accepted dev-d test identity (prior refresh400/login401)",
+    "Headscale local DERP and real client validation",
+    "Hermes independent review previously rejected by auto-review: remains unverified; no retry/bypass",
+    "final-version evidence for all in-scope deployed services; Pi excluded"
+  ],
+  "final_real_run": {
+    "attempt": 9,
+    "exit_code": 0,
+    "passed_stages": 9,
+    "failed_stages": 0,
+    "blocked_stages": 0,
+    "skipped_stages": 0,
+    "retained_message_rows": {
+      "source": 1,
+      "candidate": 1
+    },
+    "ha_only_payload_readback": true,
+    "restart_readback_and_denied_subscription": true,
+    "published_mqtt_allow_and_deny_verified_before_restart": true,
+    "full_output_volume_packaging_and_production_install": false
+  },
+  "cleanup": {
+    "containers": 0,
+    "volumes": 0,
+    "secrets": 0,
+    "temporary_code_removed": true
+  },
+  "final_dev_d": {
+    "running": true,
+    "network": "none",
+    "ports": {}
+  },
+  "late_candidate_inspect": {
+    "verified": false,
+    "reason": "candidate already removed by successful cleanup; separate observer assertion failed on zero matching containers"
+  },
+  "fixture_scope_note": "Counts are affected suites run during the implementation increments, not a whole-project CI pass or commercial acceptance.",
+  "command": "bash tests/e2e/lab/owner.sh d python3 - /tmp/woowbk-emqx-engine-090608/backup-engine --preflight-only < tests/e2e/lab/emqx_synthetic_preservation.py",
+  "command_note": "Legacy --preflight-only flag now runs the full internal candidate chain; temporary package copy was removed after verification.",
+  "resolved_real_findings": [
+    "disabled durable_storage raw config omits lazy defaults",
+    "exact image TLS references need bounded fingerprint verification",
+    "implicit snapshot parent directories owned by root prevented candidate startup",
+    "imported auth bootstrap needs matched target metadata restoration",
+    "synthetic cold-backup fixture must use deployed disc retainer rather than schema default ram"
+  ]
+}

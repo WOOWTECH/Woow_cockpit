@@ -1,0 +1,147 @@
+{
+ "lane": "F2-chain",
+ "head": "6de94f6fa2ad5823e3a75be99368ef89a718aafc",
+ "baseline": {
+  "returncode": 0,
+  "tests": 308
+ },
+ "sources": {
+  "woowbackup/hachain.py": "4e5c520bc5785fc3066b3cd59c7918cb250301b255713bfc8d5b8a52742fdb8f",
+  "woowbackup/jobs.py": "f46168dbc6927c6d5e142132f3b618ffbd8d20c39fc9e01688c620d0a8a4a4b5",
+  "woowbackup/cli.py": "45058afea99fd52467f2f9269023e191e47835ed402ef2ad78e9325873dda10e"
+ },
+ "tests": [
+  "tests.backup.test_ha_chain",
+  "tests.backup.test_jobs",
+  "tests.backup.test_ha_cli",
+  "tests.backup.test_cli"
+ ],
+ "caught": 12,
+ "total": 13,
+ "missed": [
+  "C11"
+ ],
+ "controls_noticed": [],
+ "rows": [
+  {
+   "id": "C11",
+   "what": "a changed HA file is damaged",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 308,
+   "seconds": 78.5
+  },
+  {
+   "id": "C21",
+   "what": "the Odoo database goes to Odoo only",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 47,
+   "seconds": 32.9
+  },
+  {
+   "id": "C26",
+   "what": "the apps of a record belong to its group",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 44,
+   "seconds": 24.0
+  },
+  {
+   "id": "J21",
+   "what": "a job of an import is a chain job only with its group and chain",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 73,
+   "seconds": 34.7
+  },
+  {
+   "id": "J23",
+   "what": "a recovery pass keeps the key file of a restore chain that is still running",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 29,
+   "seconds": 11.1
+  },
+  {
+   "id": "J24",
+   "what": "an import that cannot get the engine says which apps it did not reach",
+   "module": "woowbackup/jobs.py",
+   "caught": true,
+   "tests_run": 75,
+   "seconds": 35.4
+  },
+  {
+   "id": "C34",
+   "what": "an unconfirmed line of a restore keeps the app out, not failed",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 19,
+   "seconds": 6.7
+  },
+  {
+   "id": "C35",
+   "what": "a job that was written for a restore keeps its converted backup's id in the result of an interrupted import",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 2,
+   "seconds": 1.2
+  },
+  {
+   "id": "C36",
+   "what": "a converted backup that is bad is not offered for another try",
+   "module": "woowbackup/hachain.py",
+   "caught": true,
+   "tests_run": 33,
+   "seconds": 14.3
+  },
+  {
+   "id": "L01",
+   "what": "only a converted backup with several apps is split",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 243,
+   "seconds": 69.9
+  },
+  {
+   "id": "L02",
+   "what": "a converted backup of one app restores as a single job",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 246,
+   "seconds": 70.7
+  },
+  {
+   "id": "L11",
+   "what": "a request of more apps than a chain can name is not cut to its first",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 246,
+   "seconds": 80.7
+  },
+  {
+   "id": "L10",
+   "what": "an unreadable registry never splits",
+   "module": "woowbackup/cli.py",
+   "caught": true,
+   "tests_run": 243,
+   "seconds": 75.5
+  },
+  {
+   "id": "K01",
+   "what": "a comment of hachain.py",
+   "module": "woowbackup/hachain.py",
+   "caught": false,
+   "tests_run": 308,
+   "seconds": 101.8
+  },
+  {
+   "id": "K02",
+   "what": "a comment of jobs.py",
+   "module": "woowbackup/jobs.py",
+   "caught": false,
+   "tests_run": 308,
+   "seconds": 103.1
+  }
+ ]
+}

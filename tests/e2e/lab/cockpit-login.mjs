@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Lab check: log in to a device's Cockpit over HTTPS as devadmin, turn on administrative access
 // and prove it by running `id -u` with superuser: "require" (must print 0).
-//   node tests/e2e/lab/cockpit-login.mjs <a|b|c>
+//   node tests/e2e/lab/cockpit-login.mjs <a|b|c|d>
 // The password is read from ~/.woowbk-lab/secrets/devadmin.pass and never printed or captured:
 // screenshots are taken only before a password is typed or after the fields are gone.
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
@@ -9,10 +9,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
 
-const ports = { a: 19091, b: 19092, c: 19093 };
+const ports = { a: 19091, b: 19092, c: 19093, d: 19094 };
 const dev = (process.argv[2] || '').replace(/^(woowbk-)?dev-/, '');
 if (!ports[dev]) {
-  console.error('usage: cockpit-login.mjs <a|b|c>');
+  console.error('usage: cockpit-login.mjs <a|b|c|d>');
   process.exit(2);
 }
 const lab = process.env.WOOWBK_LAB_HOME || join(homedir(), '.woowbk-lab');

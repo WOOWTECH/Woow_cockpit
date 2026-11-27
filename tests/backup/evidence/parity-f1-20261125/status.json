@@ -1,0 +1,56 @@
+{
+ "lane": "F1-foundation",
+ "date": "2026-11-25",
+ "base": "e7d687b",
+ "source_commit": "0f6e4d4208e3f47f0264d1665e69395f7581b0cd",
+ "rows": {
+  "HA-03": "done",
+  "HA-04": "done",
+  "HA-05": "done",
+  "HA-06": "done",
+  "HA-12": "done",
+  "HA-13": "done",
+  "HA-14": "part",
+  "X-CLI-03": "done",
+  "KEY-16": "done",
+  "CM-01": "part",
+  "CM-02": "part",
+  "CM-06": "part",
+  "FL-07": "done",
+  "X-PF-03": "done"
+ },
+ "unit_tests": {
+  "tests_backup_b1": "tests=2053 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=270",
+  "only_the_5_known_not_ok": true,
+  "real_backup_tests": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=10",
+  "backup_ui": "# tests 108 # pass 108 # fail 0 ",
+  "backup_ui_commit": "77b33c0651ef128977304af267f2c62f7539a607"
+ },
+ "mutation_check": {
+  "commit": "77b33c0651ef128977304af267f2c62f7539a607",
+  "caught": 205,
+  "total": 205,
+  "missed": [],
+  "controls_noticed": []
+ },
+ "pg_stdin_mutation_check": "mutation check: PASS (15/15 caught)",
+ "real_files_offline": {
+  "commit": "77b33c0651ef128977304af267f2c62f7539a607",
+  "selection": "see real-selection.txt",
+  "isolation": "pass"
+ },
+ "real_devices": "none (code-only lane)",
+ "commercial_acceptance": "not-complete",
+ "lab_discover_suite": {
+  "line": "tests=1294 failures=2 errors=71 skipped=0 expected_failures=0 unexpected_successes=0 blocked=133 shim_hits=0 run_native=denied elapsed=293",
+  "not_ok": 48,
+  "integration_lane_baseline_not_ok": 48,
+  "new_not_ok": [],
+  "no_longer_not_ok": [],
+  "baseline": "integration lane run m23 of the lab discover suite at fdc922f (73 not-ok: tests that need run_native, refused by the guard, and 2 stale persisted values)"
+ },
+ "probes_on_the_f1_read_pkg_merge": {
+  "isolation": "pass",
+  "selection": true
+ }
+}

@@ -1,0 +1,15 @@
+{
+  "status": "diagnosed",
+  "reason": "oci-config-ref-pin-mismatch",
+  "source_annotation_expected": true,
+  "source_config_id": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "oci_export_config_id": "sha256:7a50f22eb109878acd1ec8e00764853737d8903faf444b5d67d9d0fa36268831",
+  "oci_config_bytes_sha256_matches_descriptor": true,
+  "manifest_images": 1,
+  "manifest_layers": 11,
+  "export_members_regular": true,
+  "loads": 0,
+  "pulls": 0,
+  "pin_check_preserved": true,
+  "failed_root_preserved": true
+}

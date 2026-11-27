@@ -1,0 +1,13 @@
+iteration 2: the final AliasTests run against the iteration-1 product code (git archive of 4099859 + the final test file): 11 of 13 fail or error, 2 pass (regression guards)
+ERROR: test_a_chain_of_links_is_judged_by_what_its_first_link_became
+ERROR: test_a_chain_that_ends_in_a_special_name_is_left_out_like_a_link_there
+ERROR: test_a_link_to_a_damaged_secondary_database_stays_out_with_it
+ERROR: test_a_link_to_a_database_whose_group_has_a_member_that_is_no_file_stays_out
+ERROR: test_a_link_to_a_file_below_a_folder_where_a_file_must_be_stays_out
+ERROR: test_a_link_to_a_name_outside_the_tree_is_left_out_and_listed
+ERROR: test_any_shape_of_links_never_carries_what_stays_out
+ERROR: test_settling_twice_lists_a_link_once
+FAIL: test_a_chain_of_links_to_a_file_that_stays_out_stays_out
+FAIL: test_a_link_to_a_database_moves_with_the_database
+FAIL: test_a_link_to_an_env_too_large_to_filter_stays_out_with_it
+tests=13 failures=3 errors=8 (as printed by units.sh)

@@ -1,0 +1,51 @@
+{
+ "lane": "litellm-product",
+ "date": "2026-11-24",
+ "updated": "2026-11-24T09:18+08:00",
+ "scope": "unit and offline tests of the final LiteLLM product tree (fixtures and fakes; NOT acceptance: the real runs are tests/e2e/lab/evidence/litellm-product-20261123/)",
+ "results": {
+  "full tests/backup (team/heavy.sh + host-heavy lock, integration-3 guard.py --exe-only, clean detached worktree)": {
+   "source_commit": "6b55ec5",
+   "tests": 1507,
+   "failures": 5,
+   "errors": 2,
+   "skipped": 6,
+   "host_process_calls_refused": 0,
+   "shim_hits": 0,
+   "seconds": 301,
+   "not_ok": [
+    "tests.backup.test_ha_omnigent.CheckTests.test_a_clean_backup",
+    "tests.backup.test_ha_omnigent.CheckTests.test_a_same_named_account_is_a_warning",
+    "tests.backup.test_ha_omnigent.CheckTests.test_versions",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+    "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode"
+   ],
+   "note": "only the pre-existing test_ha_omnigent failures of this branch's base (the Omnigent public-import guard, identical on clean d812699; gone in the integration branch since lane omnigent-product was merged as 97c22c9)",
+   "earlier_run": "a0475c5 (2026-11-24 03:59-04:03, no guard runner): 1507 tests, the same 7, 6 skipped"
+  },
+  "python3 -I tests/backup/litellm_product_mutations.py (team/heavy.sh + host-heavy lock)": {
+   "source_commit": "6b55ec5",
+   "mutations": 67,
+   "caught": 67,
+   "baseline_tests": 109,
+   "seconds": 868.3,
+   "modules": {
+    "woowbackup/ha_litellm.py": "3a6e928e075af3c3f96c9560c89502bbb3576e6b13d4fac5277aee419e53cfac",
+    "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+    "woowbackup/haimport.py": "2722cc979c55b8ec86eb320fe4bfe564d93d63c85de73b08346812eef6b6a3c1",
+    "woowbackup/suggest.py": "f8262578fa04345e1618fcc889c59809b0804a0574c88eb233d5b179747d0508"
+   },
+   "file": "mutation-check-6b55ec5.json",
+   "earlier_run": "98427dc (2026-11-24 02:59-03:24): 67/67 caught"
+  },
+  "tests/e2e/lab/test_litellm_full_flow.py + test_litellm_real_ha.py + test_litellm_negative_flow.py": {
+   "source_commit": "b3e587d",
+   "tests": 32,
+   "result": "OK"
+  },
+  "node tests/backup-ui.mjs": "the page (backup/backup.js, tests/backup-ui.mjs) is unchanged since e0c9e56: 101/101 (unit-tests.json); the integrated page is run by integration-3"
+ },
+ "commercial_acceptance": "not-complete"
+}

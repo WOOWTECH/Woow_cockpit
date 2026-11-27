@@ -1,0 +1,51 @@
+{
+  "scope": "main integrated implementation tests and actual synthetic product adapter flow; not real HA commercial acceptance",
+  "implementation_commits": [
+    "863a974",
+    "e345a86",
+    "1a6a052"
+  ],
+  "main_targeted_tests": {
+    "native_inventory": {
+      "run": 3,
+      "pass": 3,
+      "skip": 0
+    },
+    "source_phase_and_transfer": {
+      "run": 11,
+      "pass": 11,
+      "skip": 0
+    },
+    "private_owner_driver": {
+      "run": 7,
+      "pass": 7,
+      "skip": 0
+    }
+  },
+  "actual_synthetic_product_run": {
+    "source_commit": "52f5ada1a7a6fe869b3fd6a61f4402a362c79e18",
+    "evidence": "emqx-ha-adapter-joined/run-20261122T124529Z-1043310.jsonl",
+    "exit": 0,
+    "stages_passed": [
+      "source_absent_from_target",
+      "ha_build_and_package",
+      "temporary_objects_cleanup",
+      "candidate_installed",
+      "automatic_rollback_verified",
+      "adapter_automatic_rollback",
+      "wrapper_cleanup"
+    ],
+    "postflight": "dev-d isolation: true none {}",
+    "scope_excludes": [
+      "real HA backup restore",
+      "ARM Podman target",
+      "full private source coverage",
+      "independent security approval"
+    ]
+  },
+  "first_diagnostic_controller_invocation": {
+    "result": "not-executed",
+    "reason": "missing backup-engine import path in controller; corrected before lab execution"
+  },
+  "commercial_acceptance": "not-complete"
+}

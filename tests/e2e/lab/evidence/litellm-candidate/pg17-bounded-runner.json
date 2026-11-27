@@ -1,0 +1,31 @@
+{
+  "scope": "isolated dev-d synthetic PostgreSQL 17 query contract; not migration acceptance",
+  "source_commit": "7e63c6c198f831e9dc9aab26608fa8e628522541",
+  "source_sha256": {
+    "tests/e2e/lab/litellm_version_candidate.py": "a9c8995ceb8a6894f69bba5d28bb76a35074cc173cef4e8d0b2260dc9f2d948a",
+    "tests/e2e/lab/litellm_salt_sql_candidate.py": "ae80275475fd158eeb1cfe157000c5ce33c2354ccdbe0837b8436d9952b8aba0",
+    "backup-engine/woowbackup/ha_litellm_candidate.py": "0faa5630c5bcf9293c01e830aaa3f3658818a321412da247f800925d64261449",
+    "backup-engine/woowbackup/podman.py": "ee7568ba0fcd49644641afa24a2aac7309faaa008f21effbf79c4d4854038d9f"
+  },
+  "postgres_image_id": "sha256:094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+  "memory_limit_mib": 128,
+  "cgroup_current_before_bytes": 2017640448,
+  "cgroup_max_bytes": 4294967296,
+  "cgroup_headroom_before_bytes": 2277326848,
+  "runner": "DevDRunner using woowbackup.podman.default_runner",
+  "cases": {
+    "matching_rows": true,
+    "salt_mismatch": true,
+    "fingerprint_mismatch": true,
+    "missing_fingerprint": true,
+    "duplicate_salt_rows": true,
+    "oversized_salt": true,
+    "view_refused": true,
+    "rls_refused": true,
+    "superuser_refused": true
+  },
+  "cleanup_notes": 0,
+  "independent_remaining_test_containers": 0,
+  "independent_remaining_test_volumes": 0,
+  "conversion": "disabled"
+}

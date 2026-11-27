@@ -1,0 +1,13 @@
+{
+  "source_commit": "cbb66c1",
+  "run": 4,
+  "passed": 3,
+  "errors": 1,
+  "failed": 0,
+  "skipped": 0,
+  "error_test": "test_spool_native_replay_lifetime_and_late_finish",
+  "actual": "PrivateFailure(private-source-refused) after context closed",
+  "expected_before_lifecycle_change": "ValueError from closed underlying file",
+  "classification": "test expectation outdated after explicit fixed replay-lifecycle guard; private spool had already been removed",
+  "scope": "synthetic native HOCON and lifecycle only; not real restore"
+}

@@ -1,0 +1,33 @@
+{
+  "scope": "isolated dev-d synthetic data-only fixture, no HA backup; not migration acceptance",
+  "source_commit": "70ea4521fe523f9df986bc24b38cf13db5584570",
+  "source_sha256": {
+    "tests/e2e/lab/litellm_salt_sql_candidate.py": "e3fce7090627dc32038989c25c9306a5e4867cac91edabc53ef81eb41da741a2",
+    "tests/e2e/lab/litellm_pg18_pg17_candidate.py": "3d52e76cc64f385f6b59660664e07795fa2f90548f077988476c8db830ddcea8",
+    "tests/e2e/lab/litellm_version_candidate.py": "a9c8995ceb8a6894f69bba5d28bb76a35074cc173cef4e8d0b2260dc9f2d948a",
+    "backup-engine/woowbackup/ha_litellm_candidate.py": "0faa5630c5bcf9293c01e830aaa3f3658818a321412da247f800925d64261449"
+  },
+  "pg18_image_id": "sha256:4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+  "pg18_registry_index_digest_reported_by_coordinator": "sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff",
+  "pg18_version_reported_by_coordinator": "18.7",
+  "ha_source_pg_version_from_local_package": "18.6",
+  "pg17_image_id": "sha256:094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+  "pg18_image_environment": {"PG_MAJOR": "18", "PGDATA": "/var/lib/postgresql/18/docker"},
+  "salt_test": {
+    "postgres_major": 18,
+    "memory_limit_mib": 128,
+    "headroom_before_bytes": 2263875584,
+    "cases": {"matching_rows": true, "salt_mismatch": true, "fingerprint_mismatch": true, "missing_fingerprint": true,
+      "duplicate_salt_rows": true, "oversized_salt": true, "view_refused": true, "rls_refused": true, "superuser_refused": true},
+    "remaining_test_containers": 0, "remaining_test_volumes": 0
+  },
+  "data_only_test": {
+    "source_major": 18, "target_major": 17, "memory_per_container_mib": 128,
+    "headroom_before_bytes": 2236211200,
+    "cases": {"synthetic_data_only_dump": true, "synthetic_rows_equal": true, "trusted_schema_unchanged": true, "loader_non_superuser": true},
+    "remaining_test_containers": 0, "remaining_test_volumes": 0,
+    "format": "plain SQL INSERT data-only dump, not a custom archive",
+    "scope": "single fixed synthetic table and independently created destination schema"
+  },
+  "conversion": "disabled"
+}

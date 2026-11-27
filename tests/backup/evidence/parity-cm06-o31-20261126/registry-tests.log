@@ -1,0 +1,20 @@
+test_a_lane_that_has_not_delivered_is_refused_at_the_end (tests.backup.test_ha_parity_rows.ParityRowsTests.test_a_lane_that_has_not_delivered_is_refused_at_the_end) ... ok
+test_a_lost_moved_or_doubled_row_is_noticed (tests.backup.test_ha_parity_rows.ParityRowsTests.test_a_lost_moved_or_doubled_row_is_noticed) ... ok
+test_a_row_is_done_only_with_its_tests_and_issues (tests.backup.test_ha_parity_rows.ParityRowsTests.test_a_row_is_done_only_with_its_tests_and_issues) ... ok
+test_a_snippet_changes_only_its_own_rows (tests.backup.test_ha_parity_rows.ParityRowsTests.test_a_snippet_changes_only_its_own_rows) ... ok
+test_every_row_is_registered_and_shown_by_its_tests (tests.backup.test_ha_parity_rows.ParityRowsTests.test_every_row_is_registered_and_shown_by_its_tests) ... ok
+test_tests_are_looked_up_in_the_source (tests.backup.test_ha_parity_rows.ParityRowsTests.test_tests_are_looked_up_in_the_source) ... ok
+test_the_file_is_written_the_merge_way (tests.backup.test_ha_parity_rows.ParityRowsTests.test_the_file_is_written_the_merge_way) ... ok
+test_the_owner_sees_every_row (tests.backup.test_ha_parity_rows.ParityRowsTests.test_the_owner_sees_every_row) ... ok
+test_the_report_counts_every_lane (tests.backup.test_ha_parity_rows.ParityRowsTests.test_the_report_counts_every_lane) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 4.403s
+
+OK
+
+BLOCKED: []
+SHIM_HITS: []
+RUN_NATIVE: absent
+SPAWNED: []
+ELAPSED: 4

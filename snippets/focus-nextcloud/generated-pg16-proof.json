@@ -1,0 +1,47 @@
+{
+  "acceptance": "generated database proof; original Nextcloud full flow pending",
+  "checks": {
+    "all-other-shape-guards": true,
+    "all-probe-rows-preserved": true,
+    "bounded-isolation": true,
+    "catalog-and-unit-files-unchanged": true,
+    "completed": true,
+    "durable-volume-inventory-unchanged": true,
+    "exact-body-owner-invoker-searchpath-trigger": true,
+    "existing-image": true,
+    "extra-program-counted": true,
+    "final-trusted-pair-and-types": true,
+    "loader-privileges": true,
+    "nc09-available-inventory": true,
+    "nc09-extension-baseline-equivalent": true,
+    "nc09-role-baseline-equivalent": true,
+    "new-container-name": true,
+    "new-volume-name": true,
+    "no-archive-programs": true,
+    "ordinary-integer-tables": true,
+    "outer-isolation-preserved": true,
+    "overloaded-function-has-exact-identity": true,
+    "own-probe-gone": true,
+    "reject-body-change": true,
+    "reject-disabled-trigger": true,
+    "reject-noninteger-column": true,
+    "reject-searchpath-change": true,
+    "reject-security-definer": true,
+    "trigger-updates-only-matching-parent": true
+  },
+  "command_class": null,
+  "failure_step": null,
+  "failure_type": null,
+  "image": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "observations": {
+    "container_churn_is_observed_separately": "existing Headscale may restart independently; no app action issued",
+    "container_inventory_equal": true,
+    "container_records_changed": 0
+  },
+  "source_commit": "2d9555e4c0c180c24ce470e37c6825a135119225",
+  "source_hashes": {
+    "backup-engine/woowbackup/ha_nextcloud.py": "b888cbff8a47e01791b277916394e90b13b3ddc673c2d893368ddf3c06cbcf56",
+    "backup-engine/woowbackup/ha_nextcloud_memories.py": "8138b640890bb97d48bd13fb2315ec65ff6da2ebcfb7541993c4bb357ea1ebb2"
+  },
+  "sqlstate": null
+}

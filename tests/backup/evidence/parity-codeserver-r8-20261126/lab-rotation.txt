@@ -1,0 +1,6 @@
+lab: == phase rotate:code-server
+lab: rotate:code-server: stopped code-server-health.timer
+lab: rotate:code-server: stopped code-server-health.service
+lab: rotate:code-server: stopped code-server.service
+lab: removed ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8 (7999790230ec) from woowbk-dev-e
+lab: rotate:code-server: units stopped and inactive, no container left, images dropped; host 27386 MiB free

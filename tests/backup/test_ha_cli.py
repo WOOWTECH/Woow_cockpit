@@ -7,14 +7,21 @@ import os
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from woowbackup import cli, flows, haimport, hastore, jobs
+import copy
+
+from woowbackup import catalog as catalogmod
+from woowbackup import cli, flows, ha_n8n, ha_odoo, haapps, hachain, haimport, haissues, hastore, jobs
+from woowbackup.errors import BackupError
+from woowbackup.haissues import Issue
 from woowbackup.storage import Storage
 
 from . import hafixtures as hx
 from .test_archive import fake_archive_bytes
+from .test_catalog import demo_entry, lookup as user_lookup
 from .test_cli import CliCase
-from .test_flows import FakeKeys
+from .test_flows import FakeAdapter, FakeKeys, FakeReporter
 
 HA_META_KEYS = set(hastore.SIDECAR_KEYS) | {'importable_apps', 'other_addons'}
 GIB = 1024 ** 3
@@ -54,13 +61,25 @@ class UploadFinishTests(HaCliCase):
         self.assertEqual(again, reply, 'a retry after a page timeout returns the same record')
         self.assertEqual(self.call(['list'])['backups'], [])
 
+    def test_a_file_name_is_only_shown(self):
+        """X-UP-01: blank, long or with control characters, the upload begins and the record's name is clean."""
+        data = hx.simple_backup()
+        for filename, shown in (('', None), ('\n', None), ('a\nb\u202e.tar', 'a b .tar'), ('x' * 300, None)):
+            with self.subTest(filename=filename[:10]):
+                _begin, reply = self.upload(data + bytes(len(filename)), filename)
+                name = reply['ha_backup']['filename']
+                self.assertEqual(name, shown or name)
+                self.assertTrue(name.isprintable() and 1 <= len(name) <= 255)
+        for bad in (5, None, ['x'], 'a/b.tar', 'a\\b.tar'):
+            self.assertEqual(self.call(['upload-begin'], {'filename': bad, 'size': 1000})['error']['code'], 'invalid-request')
+
     def test_a_cockpit_file_still_answers_backup(self):
         _begin, reply = self.upload(fake_archive_bytes(backup_id='20261101T080000Z-0123abcd'), 'x.woowbackup')
         self.assertEqual(set(reply), {'ok', 'backup'})
         self.assertEqual(reply['backup']['id'], '20261101T080000Z-0123abcd')
 
     def test_a_broken_ha_file(self):
-        begin, reply = self.upload(hx.simple_backup(protected='yes'))
+        begin, reply = self.upload(hx.simple_backup(version=99))
         self.assertEqual(reply['error']['code'], 'corrupt-archive')
         self.assertEqual(reply['error']['message'], 'HA 備份檔已損毀或遭到修改，無法使用。')
         self.assertEqual(self.call(['upload-abort'], {'upload_id': begin['upload_id']}), {'ok': True})
@@ -141,21 +160,54 @@ class HaJobStartTests(HaCliCase):
         return jobs.JobStore(self.paths).get(job_id)
 
     def test_specs_and_validation(self):
-        self.assertEqual(set(cli.SPECS['ha-check-start']), {'ha_backup_id', 'apps', 'request_id', 'key'})
+        self.assertEqual(set(cli.SPECS['ha-check-start']), {'ha_backup_id', 'apps', 'request_id', 'key', 'choices'})
         self.assertEqual(set(cli.SPECS['ha-convert-start']), {'ha_backup_id', 'apps', 'test_mode', 'request_id',
-                                                              'confirm', 'odoo_database', 'key'})
+                                                              'confirm', 'odoo_database', 'key', 'acknowledged',
+                                                              'choices'})
         valid = 'ha-' + '0' * 20
         base = {'ha_backup_id': valid, 'apps': ['odoo'], 'request_id': 'req-ha-check-1'}
-        for request in ({**base, 'apps': ['nextcloud']}, {**base, 'apps': ['odoo', 'odoo']}, {**base, 'apps': []},
+        for request in ({**base, 'apps': ['wordpress']}, {**base, 'apps': ['odoo', 'odoo']}, {**base, 'apps': []},
                         {**base, 'extra': 1}, {'ha_backup_id': valid, 'apps': ['odoo']}, {**base, 'key': ''}):
             with self.subTest(request=request):
                 self.assertEqual(self.error_code(['ha-check-start'], request), 'invalid-request')
         self.assertEqual(self.error_code(['ha-check-start'], base), 'not-found')
         convert = {**base, 'test_mode': False, 'confirm': True}
         for request in ({**convert, 'confirm': False}, {k: v for k, v in convert.items() if k != 'test_mode'},
-                        {**convert, 'odoo_database': '../x'}, {**convert, 'test_mode': 'no'}):
+                        {**convert, 'odoo_database': 'a\nb'}, {**convert, 'odoo_database': 'x' * 64},
+                        {**convert, 'test_mode': 'no'}, {**convert, 'acknowledged': []}, {**convert, 'choices': []}):
             with self.subTest(request=request):
                 self.assertEqual(self.error_code(['ha-convert-start'], request), 'invalid-request')
+
+    def test_choices_and_acknowledged_are_checked_strictly(self):
+        self.catalog['emqx'] = types.SimpleNamespace(id='emqx', name='EMQX')
+        base = {'ha_backup_id': 'ha-' + '0' * 20, 'apps': ['odoo', 'emqx', 'n8n'], 'request_id': 'req-ha-choice-1',
+                'test_mode': False, 'confirm': True}
+        key = 'emqx.no-authentication:1f0c52ab9d3e4f60'
+        good = ({'odoo': {'database': '客戶 a$b'}}, {'emqx': {'node': 'emqx@ha.local'}}, {'n8n': {'addon': 'a1_woow-n8n'}},
+                {'odoo': {'database': 'x', 'addon': 'local_odoo18ce'}}, {'odoo': {}}, {})
+        for choices in good:
+            with self.subTest(choices=choices):
+                self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'choices': choices}), 'not-found')
+                self.assertEqual(self.error_code(['ha-check-start'], {'ha_backup_id': base['ha_backup_id'], 'apps': [
+                    'odoo'], 'request_id': 'req-ha-choice-2', 'choices': choices}), 'not-found')
+        for choices in ({'wordpress': {}}, {'odoo': 'x'}, {'odoo': {'node': 'a@b'}}, {'n8n': {'database': 'x'}},
+                        {'emqx': {'node': 'emqx'}}, {'emqx': {'node': 'emqx@ha local'}}, {'emqx': {'node': '-x@y\n'}},
+                        {'odoo': {'database': ''}}, {'odoo': {'database': 5}}, {'n8n': {'addon': '../x'}},
+                        {'n8n': {'addon': None}}, {'odoo': {'volume': 'x'}}, 'x'):
+            with self.subTest(choices=choices):
+                self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'choices': choices}), 'invalid-request')
+        for acknowledged in ({'emqx': [key]}, {'_shared': [key], 'odoo': []}, {}):
+            with self.subTest(acknowledged=acknowledged):
+                self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'acknowledged': acknowledged}),
+                                 'not-found')
+        many = [f'emqx.no-authentication:{i:016x}' for i in range(haissues.MAX_ACKNOWLEDGED + 1)]
+        self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'acknowledged': {'emqx': many[:-1]}}),
+                         'not-found')
+        for acknowledged in ({'emqx': many}, {'emqx': [key, key]}, {'emqx': key}, {'emqx': ['x']}, {'EMQX': [key]},
+                             {'emqx': [key + '0']}, {'emqx': [5]}, 'x', None):
+            with self.subTest(acknowledged=str(acknowledged)[:60]):
+                self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'acknowledged': acknowledged}),
+                                 'invalid-request')
 
     def test_check_start_params_and_the_selected_addons(self):
         _begin, reply = self.upload(hx.simple_backup())
@@ -169,7 +221,25 @@ class HaJobStartTests(HaCliCase):
         self.assertFalse(jobs.JobStore(self.paths).key_path(response['job_id']).exists(), 'nothing to decrypt')
         self.assertEqual(self.launched, [response['job_id']])
         reply = self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': ['n8n'], 'request_id': 'req-ha-check-3'})
-        self.assertEqual(reply['error']['code'], 'invalid-request')
+        self.assertEqual(reply['error']['code'], 'invalid-request', 'the backup holds nothing of the selection')
+
+    def test_an_app_the_backup_does_not_hold_is_only_left_out(self):
+        """X-CLI-03, HA-03: it stays in the check (its result says so) while another selected app is there."""
+        _begin, reply = self.upload(hx.simple_backup())
+        ha_id = reply['ha_backup']['id']
+        response = self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': ['n8n', 'odoo', 'hermes'],
+                                                  'request_id': 'req-ha-check-5',
+                                                  'choices': {'odoo': {'addon': hx.ODOO}}})
+        params = self.record(response['job_id'])['params']
+        self.assertEqual((params['apps'], params['choices']), (['n8n', 'odoo', 'hermes'], {'odoo': {'addon': hx.ODOO}}))
+        for apps in (['n8n'], ['n8n', 'hermes']):
+            reply = self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': apps, 'request_id': 'req-ha-check-6'})
+            self.assertEqual((reply['error']['code'], reply['error']['details']['app']), ('invalid-request', 'n8n'))
+        base = {'ha_backup_id': ha_id, 'test_mode': False, 'confirm': True, 'request_id': 'req-ha-conv-3',
+                'odoo_database': 'woowtest'}
+        self.catalog['hermes'] = types.SimpleNamespace(id='hermes', name='Hermes')
+        self.assertEqual(self.error_code(['ha-convert-start'], {**base, 'apps': ['odoo', 'hermes']}), 'invalid-request',
+                         'one job of several apps (the labs) stays as strict as it was')
 
     @hx.needs_crypto
     def test_keys_are_checked_before_a_job_starts(self):
@@ -190,10 +260,9 @@ class HaJobStartTests(HaCliCase):
     def test_convert_start(self):
         ha_id = self.two_addons()
         base = {'ha_backup_id': ha_id, 'request_id': 'req-ha-conv-1', 'test_mode': True, 'confirm': True}
-        reply = self.call(['ha-convert-start'], {**base, 'apps': ['odoo']})
-        self.assertEqual((reply['error']['code'], reply['error']['details']['field']),
-                         ('invalid-request', 'odoo_database'))
         response = self.call(['ha-convert-start'], {**base, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest'})
+        self.assertEqual(set(response), {'ok', 'job_id', 'deduplicated', 'key_created'})
+        self.assertFalse(response['key_created'])
         record = self.record(response['job_id'])
         self.assertEqual((record['type'], record['params']), ('backup', {
             'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest',
@@ -202,6 +271,28 @@ class HaJobStartTests(HaCliCase):
         again = self.call(['ha-convert-start'], {**base, 'apps': ['odoo', 'n8n'], 'odoo_database': 'woowtest'})
         self.assertEqual((again['job_id'], again['deduplicated']), (response['job_id'], True))
 
+    def test_convert_start_without_a_database_lets_the_job_choose(self):
+        """HA-14: the only one that can move; the job says so when there are several."""
+        ha_id = self.two_addons()
+        base = {'ha_backup_id': ha_id, 'test_mode': True, 'confirm': True, 'apps': ['odoo']}
+        response = self.call(['ha-convert-start'], {**base, 'request_id': 'req-ha-conv-4'})
+        self.assertIsNone(self.record(response['job_id'])['params']['odoo_database'])
+        self.finish(response['job_id'])
+        key = 'n8n.credentials:1f0c52ab9d3e4f60'
+        response = self.call(['ha-convert-start'], {
+            **base, 'apps': ['odoo', 'n8n'], 'request_id': 'req-ha-conv-5',
+            'choices': {'odoo': {'database': '客戶 a'}, 'emqx': {'node': 'a@b'}},
+            'acknowledged': {'n8n': [key], 'odoo': [], 'hermes': [key], '_shared': [key]}})
+        params = self.record(response['job_id'])['params']
+        self.assertEqual((params['odoo_database'], params['choices'], params['acknowledged']),
+                         ('客戶 a', {'odoo': {'database': '客戶 a'}}, {'n8n': [key], '_shared': [key]}))
+
+    def finish(self, job_id):
+        store = jobs.JobStore(self.paths)
+        record = store.get(job_id)
+        record['state'] = 'failed'
+        store.save(record)
+
     def test_convert_start_refusals(self):
         ha_id = self.two_addons()
         request = {'ha_backup_id': ha_id, 'apps': ['n8n'], 'request_id': 'req-ha-conv-2', 'test_mode': False,
@@ -209,13 +300,633 @@ class HaJobStartTests(HaCliCase):
         del self.catalog['n8n']
         reply = self.call(['ha-convert-start'], request)
         self.assertEqual((reply['error']['code'], reply['error']['message']),
-                         ('app-not-in-catalog', '請先到「應用軟體」安裝同版本的 n8n 工作流程，再匯入。'))
+                         ('app-not-in-catalog', haimport.INSTALL_HINT.format(name='n8n 工作流程')))
+        self.assertNotIn('應用軟體', reply['error']['message'], 'that page installs nothing (DESIGN H-b 16)')
         self.catalog['n8n'] = types.SimpleNamespace(id='n8n', name='n8n 工作流程')
-        self.keys.device = None
-        self.assertEqual(self.error_code(['ha-convert-start'], request), 'no-device-key')
-        self.keys.device = FakeKeys(self.root).device
         response = self.call(['ha-convert-start'], request)
         self.assertIsNone(self.record(response['job_id'])['params']['odoo_database'])
+
+    def test_convert_start_creates_the_device_key(self):
+        """HA-13 (D11)."""
+        ha_id = self.two_addons()
+        request = {'ha_backup_id': ha_id, 'apps': ['n8n'], 'request_id': 'req-ha-conv-6', 'test_mode': False,
+                   'confirm': True}
+        self.keys.device = None
+        with mock.patch.object(FakeKeys, 'ensure_device_key', side_effect=BackupError('internal-error', 'x')):
+            reply = self.call(['ha-convert-start'], request)
+        self.assertEqual(reply['error']['code'], 'no-device-key', 'only when it really cannot be created')
+        self.assertEqual(self.launched, [])
+        response = self.call(['ha-convert-start'], request)
+        self.assertTrue(response['key_created'])
+        self.assertEqual([line for line in self.audit if line.startswith('device-key-created ')],
+                         [f'device-key-created key_id={self.keys.device.key_id} reason=ha-convert '
+                          f'loginuid={cli._login_uid()}'])
+        self.assertFalse(cli.key_view(self.keys.device_key())['kit_confirmed'], 'the page keeps asking to download it')
+
+
+class ShareKeyTests(HaCliCase):
+    """KEY-16: one key for the whole backup; an add-on that is not encrypted does not lose the key its share needs."""
+
+    def setUp(self):
+        super().setUp()
+        for app_id in ('odoo', 'n8n', 'nextcloud', 'woow-code-server'):
+            self.catalog[app_id] = types.SimpleNamespace(id=app_id, name=app_id)
+
+    def share_backup(self, share=True, encrypted=True):
+        n8n = hx.addon_member('woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64')
+        members = [(f'{hx.ODOO}.tar.gz', hx.addon_member()), (f'{hx.N8N}.tar.gz', n8n)]
+        if share:
+            data = hx.tar_bytes([{'name': '.', 'type': 'dir'}, {'name': 'odoo_addons', 'type': 'dir'}], compress=True)
+            members.append(('share.tar.gz', hx.v3_encrypt(data) if encrypted else data))
+        _begin, reply = self.upload(hx.outer_bytes(members, hx.ha_doc(addons=(hx.ODOO, hx.N8N),
+                                                                     folders=('share',) if share else ())))
+        return reply['ha_backup']['id']
+
+    def start(self, ha_id, apps, request_id, **fields):
+        return self.call(['ha-check-start'], {'ha_backup_id': ha_id, 'apps': apps, 'request_id': request_id, **fields})
+
+    def finish(self, job_id):
+        store = jobs.JobStore(self.paths)
+        record = store.get(job_id)
+        record['state'] = 'failed'
+        store.save(record)
+        return record
+
+    @hx.needs_crypto
+    def test_an_encrypted_share_folder_asks_for_the_key_once(self):
+        ha_id = self.share_backup()
+        reply = self.start(ha_id, ['odoo', 'n8n'], 'req-share-0001')
+        self.assertEqual(reply['error']['code'], 'key-required')
+        reply = self.start(ha_id, ['odoo'], 'req-share-0002', key=hx.WRONG_PASSWORD)
+        self.assertEqual(reply['error']['code'], 'wrong-key')
+        self.assertEqual(self.launched, [])
+        reply = self.start(ha_id, ['odoo'], 'req-share-0003', key=hx.PASSWORD)
+        store = jobs.JobStore(self.paths)
+        self.assertEqual(store.key_path(reply['job_id']).read_bytes(), hx.PASSWORD.encode(), 'the key is kept')
+        self.assertTrue(self.finish(reply['job_id'])['params']['key_provided'])
+
+    @hx.needs_crypto
+    def test_apps_that_do_not_read_it_need_no_key(self):
+        reply = self.start(self.share_backup(), ['n8n'], 'req-share-0004', key='NOT-NEEDED')
+        self.assertFalse(jobs.JobStore(self.paths).key_path(reply['job_id']).exists())
+        self.assertFalse(self.finish(reply['job_id'])['params']['key_provided'])
+
+    def test_a_share_folder_that_is_not_encrypted_needs_none(self):
+        for share, encrypted in ((True, False), (False, False)):
+            reply = self.start(self.share_backup(share, encrypted), ['odoo'], f'req-share-1{share}', key='NOT-NEEDED')
+            self.assertFalse(jobs.JobStore(self.paths).key_path(reply['job_id']).exists())
+            self.assertFalse(self.finish(reply['job_id'])['params']['key_provided'])
+
+    @hx.needs_crypto
+    def test_the_job_opens_the_share_folder_with_the_key(self):
+        """The whole way (stubbed app step): the check reads the encrypted share folder with the key that was kept."""
+        ha_id = self.share_backup()
+        seen = []
+
+        def check(work, app):
+            with work.open(work.share_member()) as stream:
+                seen.append(len(stream.read(512)))
+            return {'target_version': '18', 'odoo': {'databases': [{'name': 'prod', 'ok': True}]}}
+
+        ctx = flows.FlowContext(self.paths, 'j20261118T120000Z-0123abcd', self.deps, FakeReporter())
+        ctx.ha_key = hx.PASSWORD
+        self.deps.adapter_factory = lambda app, **_kw: types.SimpleNamespace(
+            probe=lambda: {'deployed': True, 'problems': []}, runner=types.SimpleNamespace(home='/nonexistent'), job_id=None)
+        with mock.patch.object(ha_odoo, 'check', check), mock.patch.object(ha_odoo, 'check_blockers', lambda f: []), \
+                mock.patch.object(flows, 'running_reserve', lambda ctx: 0), \
+                mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4):
+            check_result = flows.run_verify(ctx, {'source': 'ha', 'ha_backup_id': ha_id, 'apps': ['odoo'],
+                                                  'key_provided': True})['ha_check']
+        self.assertEqual((seen, check_result['apps'][0]['importable']), ([512], True))
+
+
+class ImportStartTests(HaCliCase):
+    """ha-import-start (B4): the request, what is refused before anything starts, the plan and the first job. (The chain
+    of the other apps is hachain's.)"""
+
+    KEY = 'n8n.credentials:1f0c52ab9d3e4f60'
+
+    def setUp(self):
+        super().setUp()
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = types.SimpleNamespace(id=importer.app_id, name=importer.name)
+        n8n = hx.addon_member('woow-n8n', image='ghcr.io/woowtech/woow-ha-n8n-amd64')
+        _begin, reply = self.upload(hx.outer_bytes([(f'{hx.ODOO}.tar.gz', hx.addon_member()),
+                                                    (f'{hx.N8N}.tar.gz', n8n)], hx.ha_doc(addons=(hx.ODOO, hx.N8N))))
+        self.ha_id = reply['ha_backup']['id']
+        self.base = {'ha_backup_id': self.ha_id, 'apps': ['odoo', 'n8n'], 'request_id': 'req-import-0001',
+                     'confirm': True, 'test_mode': False, 'then_restore': True, 'overwrite': True}
+
+    def params(self, response):
+        return jobs.JobStore(self.paths).get(response['job_id'])['params']
+
+    def test_the_request_is_strict(self):
+        self.assertEqual(set(cli.SPECS['ha-import-start']), {
+            'ha_backup_id', 'apps', 'request_id', 'confirm', 'test_mode', 'then_restore', 'overwrite', 'acknowledged',
+            'choices', 'check_job_id', 'key'})
+        for field in ('ha_backup_id', 'apps', 'request_id', 'confirm', 'test_mode', 'then_restore'):
+            request = {key: value for key, value in self.base.items() if key != field}
+            with self.subTest(missing=field):
+                self.assertEqual(self.error_code(['ha-import-start'], request), 'invalid-request')
+        for change in ({'confirm': False}, {'extra': 1}, {'apps': ['wordpress']}, {'apps': []}, {'check_job_id': 'x'},
+                       {'acknowledged': {'hermes': [self.KEY]}}, {'choices': {'emqx': {'node': 'a@b'}}},
+                       {'acknowledged': {'n8n': ['x']}}, {'then_restore': 'yes'}, {'key': ''}, {'odoo_database': 'x'}):
+            with self.subTest(change=change):
+                self.assertEqual(self.error_code(['ha-import-start'], {**self.base, **change}), 'invalid-request')
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'ha_backup_id': 'ha-' + '0' * 20}),
+                         'not-found')
+        self.assertEqual(self.launched, [])
+
+    def test_replacing_the_data_needs_an_explicit_yes(self):
+        for overwrite in (None, False):
+            request = {**self.base, 'overwrite': overwrite}
+            if overwrite is None:
+                del request['overwrite']
+            reply = self.call(['ha-import-start'], request)
+            self.assertEqual((reply['error']['code'], reply['error']['details']['field']), ('invalid-request', 'overwrite'))
+        response = self.call(['ha-import-start'], {**self.base, 'then_restore': False, 'overwrite': False})
+        self.assertFalse(self.params(response)['chain']['then_restore'], 'only converting replaces nothing')
+
+    def test_the_first_job_and_the_plan(self):
+        response = self.call(['ha-import-start'], {
+            **self.base, 'test_mode': True, 'acknowledged': {'n8n': [self.KEY], '_shared': [], 'odoo': []},
+            'choices': {'odoo': {'database': '客戶 a'}}})
+        self.assertEqual(set(response), {'ok', 'job_id', 'deduplicated', 'group', 'key_created'})
+        self.assertEqual((response['deduplicated'], response['key_created']), (False, False))
+        self.assertRegex(response['group'], r'\Ag[0-9a-f]{16}\Z')
+        params = self.params(response)
+        self.assertEqual({key: params[key] for key in ('source', 'ha_backup_id', 'apps', 'odoo_database', 'test_mode',
+                                                       'encrypt', 'key_provided')},
+                         {'source': 'ha', 'ha_backup_id': self.ha_id, 'apps': ['odoo'], 'odoo_database': '客戶 a',
+                          'test_mode': True, 'encrypt': True, 'key_provided': False})
+        self.assertEqual(params['choices'], {'odoo': {'database': '客戶 a'}})
+        self.assertNotIn('acknowledged', params, 'nothing was confirmed for the first app')
+        self.assertEqual(params['group'], {'id': response['group'], 'index': 0, 'count': 2, 'kind': 'ha-import',
+                                           'step': 'convert', 'app_id': 'odoo'})
+        self.assertEqual(params['chain'], {
+            'apps': ['odoo', 'n8n'], 'test_mode': True, 'then_restore': True, 'encrypt': True, 'key_provided': False,
+            'ha_backup_id': self.ha_id, 'acknowledged': {'n8n': [self.KEY]}, 'choices': {'odoo': {'database': '客戶 a'}},
+            'results': []})
+        record = jobs.JobStore(self.paths).get(response['job_id'])
+        self.assertEqual((record['type'], [p['id'] for p in record['phases']]),
+                         ('backup', ['prepare', 'decrypt', 'convert', 'package', 'verify']))
+        self.assertEqual(self.launched, [response['job_id']])
+
+    def test_the_confirmed_keys_of_the_first_app_are_handed_over(self):
+        response = self.call(['ha-import-start'], {**self.base, 'apps': ['n8n', 'odoo'],
+                                                   'acknowledged': {'n8n': [self.KEY], '_shared': [self.KEY]}})
+        params = self.params(response)
+        self.assertEqual((params['apps'], params['acknowledged'], params['odoo_database']),
+                         (['n8n'], {'n8n': [self.KEY], '_shared': [self.KEY]}, None))
+
+    def test_a_retry_returns_the_same_import(self):
+        first = self.call(['ha-import-start'], self.base)
+        again = self.call(['ha-import-start'], self.base)
+        self.assertEqual((again['job_id'], again['group'], again['deduplicated']), (first['job_id'], first['group'], True))
+        self.assertEqual(sum(1 for line in self.audit if line.startswith('ha-import-confirm')), 0)
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'request_id': 'req-import-0002'}), 'busy')
+        store = jobs.JobStore(self.paths)
+        record = store.get(first['job_id'])
+        record['state'] = 'failed'
+        store.save(record)
+        other = self.call(['ha-convert-start'], {'ha_backup_id': self.ha_id, 'apps': ['n8n'], 'test_mode': False,
+                                                 'confirm': True, 'request_id': 'req-import-0003'})
+        self.assertFalse(other['deduplicated'])
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'request_id': 'req-import-0003'}),
+                         'invalid-request', 'the id of another kind of job')
+
+    def test_apps_that_cannot_start_are_left_out_with_their_reason(self):
+        del self.catalog['odoo']
+        response = self.call(['ha-import-start'], {**self.base, 'apps': ['hermes', 'odoo', 'n8n']})
+        params = self.params(response)
+        self.assertEqual((params['apps'], params['group']['count'], params['chain']['apps']), (['n8n'], 1, ['n8n']))
+        rows = {row['app_id']: row for row in params['chain']['results']}
+        self.assertEqual(set(rows), {'hermes', 'odoo'})
+        for row in rows.values():
+            self.assertEqual(set(row), set(haimport.RESULT_KEYS))
+            self.assertEqual(row['status'], 'skipped')
+        self.assertEqual((rows['hermes']['code'], rows['odoo']['code']), ('not-found', 'app-not-in-catalog'))
+        self.assertIn('請在 HA 建立備份時勾選', rows['hermes']['message'])
+        self.assertIn('應用設定', rows['odoo']['message'])
+        self.assertEqual(haimport._clean_results(params['chain']['results']), params['chain']['results'])
+
+    def test_nothing_left_to_import_is_refused(self):
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'apps': ['hermes', 'emqx']}),
+                         'invalid-request')
+        del self.catalog['n8n']
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'apps': ['n8n']}), 'app-not-in-catalog')
+        self.assertEqual(self.error_code(['ha-import-start'], {**self.base, 'apps': ['hermes', 'n8n']}),
+                         'app-not-in-catalog')
+        self.assertEqual(self.launched, [])
+
+    @hx.needs_crypto
+    def test_keys_are_checked_before_the_import_starts(self):
+        _begin, reply = self.upload(hx.fixture('v3_gzip.tar').read_bytes())
+        request = {**self.base, 'ha_backup_id': reply['ha_backup']['id']}
+        self.keys.device = None
+        self.assertEqual(self.error_code(['ha-import-start'], request), 'key-required')
+        self.assertEqual(self.error_code(['ha-import-start'], {**request, 'key': hx.WRONG_PASSWORD}), 'wrong-key')
+        self.assertIsNone(self.keys.device, 'nothing was created for a refused import')
+        response = self.call(['ha-import-start'], {**request, 'key': hx.PASSWORD})
+        self.assertTrue(response['key_created'])
+        self.assertTrue(self.params(response)['key_provided'])
+        record = json.dumps(jobs.JobStore(self.paths).get(response['job_id']))
+        self.assertNotIn(hx.PASSWORD, record)
+
+    def test_the_device_key_is_created_only_when_something_is_encrypted(self):
+        self.keys.device = None
+        self.deps.encrypt_by_default = lambda: False
+        response = self.call(['ha-import-start'], self.base)
+        self.assertEqual((response['key_created'], self.keys.device, self.params(response)['encrypt']),
+                         (False, None, False))
+
+    def test_what_was_confirmed_is_journaled_without_names(self):
+        store = jobs.JobStore(self.paths)
+        check = store.create('verify', {'source': 'ha', 'ha_backup_id': self.ha_id, 'apps': ['n8n']})
+        issue = Issue('n8n.credentials', 'confirm', '憑證要重新輸入', [f'cred{i}' for i in range(25)])
+        shared = Issue('shared.pauses', 'confirm', '會暫停', ['filebrowser'])
+        check.update(state='succeeded', result={'ha_check': {'schema': 2, 'ha_backup_id': self.ha_id, 'shared': [
+            shared.view('_shared')], 'apps': [{'app_id': 'n8n', 'issues': [issue.view('n8n')]}]}})
+        store.save(check)
+        keys = {'n8n': [issue.key('n8n'), self.KEY], '_shared': [shared.key('_shared')]}
+        response = self.call(['ha-import-start'], {**self.base, 'acknowledged': keys, 'check_job_id': check['id']})
+        lines = [line for line in self.audit if line.startswith('ha-import-confirm ')]
+        head = f'ha-import-confirm ha_backup={self.ha_id} group={response["group"]} '
+        uid = cli._login_uid()
+        self.assertEqual(lines, [f'{head}app=n8n issue=n8n.credentials items=25 loginuid={uid}',
+                                 f'{head}app=n8n issue=n8n.credentials items=- loginuid={uid}',
+                                 f'{head}app=_shared issue=shared.pauses items=1 loginuid={uid}'])
+        self.assertFalse(any('cred1' in line or 'filebrowser' in line for line in self.audit))
+        self.assertNotIn('check_job_id', self.params(response), 'the audit only')
+
+    def run_first_job(self, response, convert):
+        """The first job alone in this process (`chain=False`: what follows it is hachain's, tested in test_ha_chain), as its
+        unit runs it (stubbed app step and adapter)."""
+        from .test_ha_import import HaWorld, app
+        world = HaWorld()
+        self.deps.adapter_factory = world.factory
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = app(importer.app_id, importer.name)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'convert', convert))
+            stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
+            stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            return jobs.run_job(self.paths, response['job_id'], deps=self.deps, chain=False)
+
+    def test_the_first_job_runs_and_reports_itself(self):
+        key = Issue('odoo.modules', 'confirm', 'x', ['m'], database='客戶 a').key('odoo')
+        request = {**self.base, 'choices': {'odoo': {'database': '客戶 a'}}, 'acknowledged': {'odoo': [key]}}
+        response = self.call(['ha-import-start'], request)
+
+        def convert(work, app, database, test_mode, out_dir):
+            sink = work.sink(app)
+            sink.confirm('odoo.modules', '缺少的模組', ['m'], database=database)
+            sink.confirm('odoo.modules', '缺少的模組', ['other'], database='test')
+            (out_dir / 'volumes').mkdir(parents=True)
+            path = out_dir / 'volumes' / 'odoo18-web-data.tar'
+            path.write_bytes(b'volume')
+            return {'volumes': {'odoo18-web-data': path}, 'database': database, 'custom_modules': [],
+                    'left_databases': ['test']}
+
+        record = self.run_first_job(response, convert)
+        self.assertEqual((record['state'], record['error']), ('succeeded', None))
+        result = record['result']
+        self.assertEqual([(row['app_id'], row['status'], [i['id'] for i in row['issues']]) for row in result['results']],
+                         [('odoo', 'converted', ['odoo.modules'])])
+        self.assertEqual((result['ha_import']['group'], result['ha_import']['odoo_database'],
+                          result['ha_import']['left_databases']), (response['group'], '客戶 a', ['test']))
+        row = haimport.load_registry(self.paths)[result['backup_id']]
+        self.assertEqual(row['confirmed'], [{'app_id': 'odoo', 'id': 'odoo.modules', 'items': ['m']}])
+        self.assertEqual(record['params']['chain']['apps'], ['odoo', 'n8n'], 'what the rest of the import needs stays')
+
+    def test_the_first_job_that_fails_reports_itself_in_the_record(self):
+        for error, status, code in ((BackupError('corrupt-archive', '讀不出來。'), 'failed', 'corrupt-archive'),
+                                    (RuntimeError('x'), 'failed', 'internal-error'),
+                                    (BackupError('confirmation-required', 'x'), 'skipped', 'confirmation-required')):
+            response = self.call(['ha-import-start'], {**self.base, 'request_id': f'req-import-{code}',
+                                                       'choices': {'odoo': {'database': 'prod'}}})
+            record = self.run_first_job(response, mock.Mock(side_effect=error))
+            self.assertEqual((record['state'], record['error']['code']), ('failed', code))
+            row = record['result']['results'][0]
+            self.assertEqual((row['app_id'], row['status'], row['code']), ('odoo', status, code))
+            self.assertEqual((self.storage.list_backups(), haimport.load_registry(self.paths)), ([], {}))
+            self.assertEqual(os.listdir(self.paths.staging), [])
+
+    def test_the_command_is_listed(self):
+        self.assertIn('ha-import-start', cli.COMMANDS)
+
+    def run_whole_chain(self, response, **stubs):
+        """The unit of the first job runs the whole import in this process (both app steps stubbed)."""
+        from .test_ha_import import HaWorld, app
+        self.deps.adapter_factory = HaWorld().factory
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = app(importer.app_id, importer.name)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'convert', stubs['odoo']))
+            stack.enter_context(mock.patch.object(ha_n8n, 'convert', stubs['n8n']))
+            stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
+            stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            return jobs.run_job(self.paths, response['job_id'], deps=self.deps)
+
+    def test_the_run_job_command_runs_the_whole_import(self):
+        """The unit's own command line: `run-job <first job>` answers with the first job's state and has run the chain."""
+        from .test_ha_import import HaWorld, app
+        response = self.call(['ha-import-start'], {**self.base, 'then_restore': False, 'overwrite': False,
+                                                  'choices': {'odoo': {'database': 'prod'}}})
+        self.deps.adapter_factory = HaWorld().factory
+        for importer in haapps.IMPORTERS:
+            self.catalog[importer.app_id] = app(importer.app_id, importer.name)
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ha_odoo, 'convert', ConvertStubs.odoo))
+            stack.enter_context(mock.patch.object(ha_n8n, 'convert', ConvertStubs.n8n))
+            stack.enter_context(mock.patch.object(flows, 'running_reserve', lambda ctx: 0))
+            stack.enter_context(mock.patch.object(haimport.SpaceGuard, 'free', lambda guard: 1024 ** 4))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            reply = self.call(['run-job', response['job_id']])
+        self.assertEqual(reply, {'ok': True, 'state': 'succeeded'})
+        self.assertEqual([(r['params']['group']['app_id'], r['state']) for r in self.group_records(response)],
+                         [('odoo', 'succeeded'), ('n8n', 'succeeded')])
+        self.assertEqual(len(self.storage.list_backups()), 2)
+
+    def group_records(self, response):
+        rows = [r for r in jobs.JobStore(self.paths).list(limit=None) if (r['params'].get('group') or {}).get('id') == response['group']]
+        return sorted(rows, key=lambda r: (r['created'], r['id']))
+
+    @hx.needs_crypto
+    def test_the_whole_import_converts_app_after_app_in_one_process_and_carries_the_key_in_memory(self):
+        """ha-import-start, then its unit: the real conversions (app steps stubbed) of two apps of an encrypted HA backup, one
+        job each; the key is typed once, lives in memory from the first job on, and is nowhere in the records or logs."""
+        _begin, reply = self.upload(hx.fixture('v3_gzip.tar').read_bytes())
+        response = self.call(['ha-import-start'], {**self.base, 'ha_backup_id': reply['ha_backup']['id'], 'then_restore': False,
+                                                  'overwrite': False, 'key': hx.PASSWORD,
+                                                  'choices': {'odoo': {'database': 'prod'}}})
+        key_file = jobs.JobStore(self.paths).key_path(response['job_id'])
+        self.assertTrue(key_file.exists())
+        self.addCleanup(jobs.unmask_secret, hx.PASSWORD)
+        seen = []
+
+        def odoo(work, app_, database, test_mode, out_dir):
+            seen.append(('odoo', key_file.exists(), work.ctx.ha_key))
+            return ConvertStubs.odoo(work, app_, database, test_mode, out_dir)
+
+        def n8n(work, app_, test_mode, out_dir):
+            seen.append(('n8n', key_file.exists(), work.ctx.ha_key, work.ctx.key_file))
+            return ConvertStubs.n8n(work, app_, test_mode, out_dir)
+
+        first = self.run_whole_chain(response, odoo=odoo, n8n=n8n)
+        self.assertEqual(seen, [('odoo', True, hx.PASSWORD), ('n8n', False, hx.PASSWORD, None)])
+        records = self.group_records(response)
+        self.assertEqual([(r['params']['group']['app_id'], r['params']['group']['step'], r['state']) for r in records],
+                         [('odoo', 'convert', 'succeeded'), ('n8n', 'convert', 'succeeded')])
+        self.assertEqual((first['id'], first['result']['group']['next_job_id']), (response['job_id'], records[1]['id']))
+        self.assertEqual(records[0]['unit'], records[1]['unit'])
+        self.assertEqual(records[1]['params']['key_provided'], True)
+        for index, record in enumerate(records):
+            self.assertEqual([item['id'] for item in self.storage.get(record['result']['backup_id'])['apps']],
+                             [record['params']['group']['app_id']], 'one converted backup per app')
+            self.assertNotIn(hx.PASSWORD, json.dumps(record))
+            self.assertNotIn(hx.PASSWORD, '\n'.join(jobs.JobStore(self.paths).read_log(record['id'], 500)))
+        view = records[1]['result']['group']
+        self.assertEqual([(row['app_id'], row['status'], row['convert_job_id']) for row in view['results']],
+                         [('odoo', 'converted', records[0]['id']), ('n8n', 'converted', records[1]['id'])])
+        rows = haimport.load_registry(self.paths)
+        for record in records:
+            row = rows[record['result']['backup_id']]
+            self.assertEqual((row['group'], [item['app_id'] for item in row['results']]), (response['group'], ['odoo', 'n8n']),
+                             'every converted backup\'s origin says what became of the whole import')
+        self.assertFalse(key_file.exists())
+        self.assertEqual(list(Path(self.paths.run).glob('key-*')), [])
+
+    def test_a_conversion_that_fails_anywhere_leaves_the_apps_before_it_whole_and_nothing_of_its_own(self):
+        """DESIGN C5: the second app's conversion fails in convert(), in import_manifest(), in the packaging (after its row was
+        registered) or its process dies: the first app's backup and row stay, the second leaves no backup, no row, no staging."""
+        from .test_ha_import import FakeHaAdapter
+        original_manifest = FakeHaAdapter.import_manifest
+        original_package = flows._package
+
+        def manifest(adapter, staging_dir, **items):
+            if adapter.app.id == 'n8n':
+                raise BackupError('job-failed', '無法整理 n8n 的備份內容。')
+            return original_manifest(adapter, staging_dir, **items)
+
+        def package(ctx, apps, *args, **kwargs):
+            if [app.id for app in apps] == ['n8n']:
+                raise BackupError('job-failed', '無法封裝 n8n 的備份。')
+            return original_package(ctx, apps, *args, **kwargs)
+
+        class Killed(BaseException):
+            pass
+
+        def killed(work, app_, test_mode, out_dir):
+            raise Killed()
+
+        cases = (('in convert()', {'n8n': mock.Mock(side_effect=BackupError('corrupt-archive', 'n8n 的資料讀不出來。'))}, None, 'failed'),
+                 ('in import_manifest()', {}, (FakeHaAdapter, 'import_manifest', manifest), 'failed'),
+                 ('in the packaging, after the row was registered', {}, (flows, '_package', package), 'failed'),
+                 ('by a process that dies', {'n8n': killed}, None, 'running'))
+        for index, (label, stub, patch, state) in enumerate(cases):
+            with self.subTest(label):
+                self.tearDown()
+                self.setUp()
+                self.addCleanup(jobs.unmask_secret, hx.PASSWORD)
+                response = self.call(['ha-import-start'], {**self.base, 'then_restore': False, 'overwrite': False,
+                                                           'choices': {'odoo': {'database': 'prod'}}})
+                stubs = {'odoo': ConvertStubs.odoo, 'n8n': stub.get('n8n', ConvertStubs.n8n)}
+                with contextlib.ExitStack() as stack:
+                    if patch is not None:
+                        stack.enter_context(mock.patch.object(*patch))
+                    if state == 'running':
+                        with self.assertRaises(Killed):
+                            self.run_whole_chain(response, **stubs)
+                    else:
+                        self.run_whole_chain(response, **stubs)
+                records = self.group_records(response)
+                self.assertEqual([(r['params']['group']['app_id'], r['state']) for r in records],
+                                 [('odoo', 'succeeded'), ('n8n', state)], label)
+                kept = self.storage.list_backups()
+                self.assertEqual([[item['id'] for item in meta['apps']] for meta in kept], [['odoo']], label)
+                rows = haimport.load_registry(self.paths)
+                self.assertEqual([(bid, row['apps'], row['group']) for bid, row in rows.items()],
+                                 [(kept[0]['id'], ['odoo'], response['group'])], label)
+                if state == 'running':
+                    self.assertEqual(jobs.recover_interrupted(self.paths, unit_active=lambda unit: False), [records[1]['id']])
+                    result = jobs.JobStore(self.paths).get(records[1]['id'])['result']['group']['results']
+                    self.assertEqual([(row['app_id'], row['status']) for row in result], [('odoo', 'converted'), ('n8n', 'failed')])
+                else:
+                    last = records[1]['result']['group']['results']
+                    self.assertEqual([(row['app_id'], row['status']) for row in last], [('odoo', 'converted'), ('n8n', 'failed')])
+                    self.assertEqual(records[1]['result']['results'][0]['status'], 'failed')
+                self.assertEqual(os.listdir(self.paths.staging), [], label)
+
+    def test_the_ha_file_cannot_be_deleted_while_any_job_of_the_import_is_waiting_or_running(self):
+        """The restore jobs of the chain name the HA file too: between two jobs and during a restore it stays."""
+        response = self.call(['ha-import-start'], self.base)
+        asked = []
+        original = jobs.JobReporter.begin
+
+        def begin(reporter):
+            if reporter.record.get('type') == 'restore':
+                asked.append(self.error_code(['ha-delete'], {'ha_backup_id': self.ha_id, 'confirm': True}))
+            return original(reporter)
+
+        with mock.patch.object(jobs.JobReporter, 'begin', begin):
+            self.run_whole_chain(response, odoo=ConvertStubs.odoo, n8n=ConvertStubs.n8n)
+        self.assertEqual(asked, ['busy'] * len(asked))
+        self.assertTrue(asked)
+        records = self.group_records(response)
+        self.assertTrue(all(r['state'] in jobs.TERMINAL for r in records))
+        self.assertEqual(self.call(['ha-delete'], {'ha_backup_id': self.ha_id, 'confirm': True}), {'ok': True},
+                         'when the import is over the file may go')
+
+
+class ConvertStubs:
+    """The app steps of a conversion, replaced (the container work is test_ha_odoo / test_ha_n8n / the labs)."""
+
+    @staticmethod
+    def odoo(work, app_, database, test_mode, out_dir):
+        work.phase('convert')
+        (out_dir / 'volumes').mkdir(parents=True)
+        path = out_dir / 'volumes' / 'odoo18-web-data.tar'
+        path.write_bytes(b'volume')
+        return {'volumes': {'odoo18-web-data': path}, 'dirs': {}, 'database': database, 'custom_modules': []}
+
+    @staticmethod
+    def n8n(work, app_, test_mode, out_dir):
+        work.phase('convert')
+        return {'volumes': {}, 'postgres': {}, 'owner_email': 'ha-probe@probe.invalid', 'packages': [],
+                'workflows_to_fix': [], 'counts': {}}
+
+
+class RestoreKeyTests(HaCliCase):
+    """FL-07, X-PF-03 (D11): an in-place restore without a device key creates it instead of refusing."""
+
+    def setUp(self):
+        super().setUp()
+        self.backup_id = self.make_backup()
+        self.request = {'backup_id': self.backup_id, 'apps': ['woowbk-demo'], 'request_id': 'req-restore-0001',
+                        'confirm': True}
+
+    def test_the_restore_check_no_longer_refuses(self):
+        data = (self.keys.device, self.keys.imported)
+        self.keys.imported, self.keys.device = [self.keys.device], None  # the backup's key is here, not as device key
+        app = self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps'][0]
+        check = next(c for c in app['checks'] if c['id'] == 'woowbk-demo/device-key')
+        self.assertEqual((app['restorable'], check['status']), (True, 'warn'))
+        self.assertIn('自動建立', check['message'])
+        self.assertEqual([(i['id'], i['level']) for i in app['issues']], [('restore.device-key', 'auto')])
+        self.assertIsNone(self.keys.device, 'the check itself creates nothing')
+        self.keys.device, self.keys.imported = data
+        app = self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps'][0]
+        self.assertNotIn('issues', app)
+        self.assertFalse(any(c['id'].endswith('/device-key') for c in app['checks']))
+
+    def test_the_restore_creates_the_key(self):
+        self.keys.imported, self.keys.device = [self.keys.device], None
+        response = self.call(['restore-start'], self.request)
+        self.assertTrue(response['key_created'])
+        self.assertIsNotNone(self.keys.device)
+        self.assertEqual(self.audit[-1], f'device-key-created key_id={self.keys.device.key_id} reason=restore '
+                                         f'loginuid={cli._login_uid()}')
+
+    def test_no_key_where_none_is_needed(self):
+        self.keys.imported, self.keys.device = [self.keys.device], None
+        self.world.mode['woowbk-demo'] = 'fresh'
+        self.assertFalse(self.call(['restore-start'], self.request)['key_created'], 'a new deployment has no copy')
+        self.assertIsNone(self.keys.device)
+        self.assertEqual(self.error_code(['restore-start'], {**self.request, 'request_id': 'req-restore-0002'}), 'busy')
+
+    def test_unencrypted_safety_backups_need_none(self):
+        self.keys.imported, self.keys.device = [self.keys.device], None
+        self.deps.encrypt_by_default = lambda: False
+        self.assertFalse(self.call(['restore-start'], self.request)['key_created'])
+        self.assertIsNone(self.keys.device)
+
+    def test_an_app_that_cannot_be_asked_counts_as_there(self):
+        self.keys.imported, self.keys.device = [self.keys.device], None
+        with mock.patch.object(FakeAdapter, 'detect_mode', side_effect=RuntimeError('x')), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(self.call(['restore-start'], self.request)['key_created'])
+
+    def test_a_key_that_cannot_be_created_refuses_before_anything_starts(self):
+        self.keys.imported, self.keys.device = [self.keys.device], None
+        with mock.patch.object(FakeKeys, 'ensure_device_key', side_effect=OSError('x')):
+            self.assertEqual(self.error_code(['restore-start'], self.request), 'no-device-key')
+        self.assertEqual(self.launched, [])
+
+
+class RestoreConfirmTests(HaCliCase):
+    """B6: lines a restore check wants confirmed (an adapter's `restore_issues`); the request's `acknowledged`."""
+
+    class Adapter(FakeAdapter):
+        restore_issues = ()
+        found = ()
+
+        def preflight(self, *args, **kwargs):
+            checks = super().preflight(*args, **kwargs)
+            self.restore_issues = list(self.found)
+            return checks
+
+    def setUp(self):
+        super().setUp()
+        self.backup_id = self.make_backup(('woowbk-demo', 'woowbk-two'))
+        self.issue = Issue('restore.device-key', 'confirm', '還原時會先停止。', ['filebrowser'])
+        self.Adapter.found = [self.issue, Issue('restore.device-key', 'auto', '自動')]
+        self.deps.adapter_factory = lambda app, *, log, phase=None, checkpoint=None, writers_hook=None, \
+            imported_hook=None: self.Adapter(app, self.world, log, phase, checkpoint, writers_hook, imported_hook)
+        self.request = {'backup_id': self.backup_id, 'apps': ['woowbk-demo'], 'request_id': 'req-restore-0011',
+                        'confirm': True}
+
+    def test_inspect_lists_them(self):
+        for app in self.call(['inspect'], {'backup_id': self.backup_id})['preflight']['apps']:
+            self.assertEqual([i['level'] for i in app['issues']], ['confirm', 'auto'])
+            self.assertTrue(app['restorable'], 'a line to confirm does not stop the restore')
+
+    def test_an_unconfirmed_line_refuses_before_anything_starts(self):
+        for acknowledged in (None, {}, {'woowbk-two': [self.issue.key('woowbk-demo')]},
+                             {'woowbk-demo': [self.issue.key('woowbk-two')]}):
+            request = dict(self.request, **({} if acknowledged is None else {'acknowledged': acknowledged}))
+            reply = self.call(['restore-start'], request)
+            self.assertEqual(reply['error']['code'], 'confirmation-required')
+            self.assertEqual(reply['error']['details'], {'apps': {'woowbk-demo': [self.issue.view('woowbk-demo')]}})
+        self.assertEqual(self.launched, [])
+
+    def test_a_confirmed_line_starts_and_is_recorded(self):
+        keys = {'woowbk-demo': [self.issue.key('woowbk-demo')], 'woowbk-two': []}
+        response = self.call(['restore-start'], {**self.request, 'acknowledged': keys})
+        params = jobs.JobStore(self.paths).get(response['job_id'])['params']
+        self.assertEqual(params['acknowledged'], {'woowbk-demo': keys['woowbk-demo']})
+
+    def test_only_the_lines_of_the_restored_apps_stay_in_the_job_record(self):
+        keys = {'woowbk-demo': [self.issue.key('woowbk-demo')], 'woowbk-two': [self.issue.key('woowbk-two')]}
+        response = self.call(['restore-start'], {**self.request, 'acknowledged': keys})
+        params = jobs.JobStore(self.paths).get(response['job_id'])['params']
+        self.assertEqual(params['acknowledged'], {'woowbk-demo': keys['woowbk-demo']},
+                         'the keys of an app that is not restored are not kept')
+
+    def test_one_more_name_must_be_confirmed_again(self):
+        keys = {'woowbk-demo': [self.issue.key('woowbk-demo')]}
+        self.Adapter.found = [Issue('restore.device-key', 'confirm', '還原時會先停止。', ['filebrowser', 'code-server'])]
+        self.assertEqual(self.error_code(['restore-start'], {**self.request, 'acknowledged': keys}),
+                         'confirmation-required')
+
+    def test_adapters_without_such_lines_are_not_asked(self):
+        self.deps.adapter_factory = self.world.factory
+        with mock.patch.object(self.archive, 'read_manifest', side_effect=AssertionError('not read')):
+            self.assertTrue(self.call(['restore-start'], self.request)['ok'])
+
+    def test_an_adapter_that_cannot_be_made_is_the_jobs_to_report(self):
+        def factory(app, **_kwargs):
+            raise BackupError('owner-missing', '找不到應用擁有者帳號。')
+
+        self.deps.adapter_factory = factory
+        self.assertTrue(self.call(['restore-start'], self.request)['ok'])
+
+    def test_the_lines_are_validated(self):
+        for acknowledged in ({'woowbk-demo': ['x']}, {'woowbk-demo': 'x'}, [], {'Bad App': []}):
+            self.assertEqual(self.error_code(['restore-start'], {**self.request, 'acknowledged': acknowledged}),
+                             'invalid-request')
 
 
 class FromHaTests(HaCliCase):
@@ -289,3 +1000,183 @@ class FromHaTests(HaCliCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def registry_row(apps=('odoo', 'n8n')):
+    """A row of ha-imports.json (what a conversion registered), for a backup of these apps."""
+    return {'ha_backup_id': 'ha-' + '0' * 20, 'name': 'WOOW', 'date': '2026-11-18T00:00:00Z', 'apps': list(apps),
+            'odoo_database': None, 'test_mode': False, 'workflows_to_fix': [], 'reminders': [], 'addons': [],
+            'job_id': 'j20261125T100000Z-00000001', 'created': '2026-11-25T10:00:00Z'}
+
+
+class RestoreSplitTests(HaCliCase):
+    """`restore-start` of a converted HA backup with several apps is a chain of single-app restores (HAOS parity; DESIGN B6):
+    one app's problem never takes back or stops the others. Any other backup keeps its all-or-nothing restore (owner H6)."""
+
+    def setUp(self):
+        super().setUp()
+        self.catalog = catalogmod.Catalog()
+        for app_id, name in (('odoo', 'Odoo 18'), ('n8n', 'n8n 工作流程'), ('emqx', 'EMQX')):
+            entry = copy.deepcopy(demo_entry(self.paths))
+            entry.update(id=app_id, name=name, config_files=[{'path': f'.config/{app_id}/app.env', 'mode': '0600'}])
+            self.catalog[app_id] = catalogmod.validate_entry(entry, paths=self.paths, user_lookup=user_lookup)
+            self.world.data[app_id] = f'{app_id}-v1'.encode()
+            self.world.mode[app_id] = 'inplace'
+            self.world.deployed[app_id] = True
+        self.backup = self.make_backup(['odoo', 'n8n', 'emqx'])
+        haimport.register(self.paths, self.backup, registry_row(('odoo', 'n8n', 'emqx')))
+        self.request = {'backup_id': self.backup, 'apps': ['odoo', 'n8n', 'emqx'], 'request_id': 'req-split-0001', 'confirm': True}
+
+    def first_params(self, response):
+        return jobs.JobStore(self.paths).get(response['job_id'])['params']
+
+    def test_a_converted_backup_with_several_apps_starts_a_chain(self):
+        response = self.call(['restore-start'], self.request)
+        self.assertEqual(set(response), {'ok', 'job_id', 'deduplicated', 'key_created', 'group'})
+        self.assertRegex(response['group'], r'\Ag[0-9a-f]{16}\Z')
+        params = self.first_params(response)
+        self.assertEqual(params['apps'], ['odoo'], 'the first job restores the first app only')
+        self.assertEqual(params['group'], {'id': response['group'], 'index': 0, 'count': 3, 'kind': 'ha-restore',
+                                           'step': 'restore', 'app_id': 'odoo'})
+        self.assertEqual(params['chain']['apps'], ['odoo', 'n8n', 'emqx'])
+        self.assertEqual((params['backup_id'], params['key_provided']), (self.backup, False))
+        self.assertEqual(self.launched, [response['job_id']])
+
+    def test_a_retry_returns_the_same_chain(self):
+        first = self.call(['restore-start'], self.request)
+        again = self.call(['restore-start'], self.request)
+        self.assertEqual((again['job_id'], again['group'], again['deduplicated']), (first['job_id'], first['group'], True))
+
+    def test_the_requests_options_go_to_every_job_of_the_chain(self):
+        response = self.call(['restore-start'], {**self.request, 'allow_no_safety': True, 'accept_unauthenticated': True})
+        params = self.first_params(response)
+        self.assertEqual((params['allow_no_safety'], params['accept_unauthenticated']), (True, True))
+        self.assertEqual((params['chain']['allow_no_safety'], params['chain']['accept_unauthenticated']), (True, True))
+
+    def test_only_a_converted_backup_with_several_apps_is_split(self):
+        """A converted backup of one app, and every other backup, restore as they always did: one job, no group."""
+        one = self.call(['restore-start'], {**self.request, 'apps': ['odoo'], 'request_id': 'req-split-0002'})
+        self.assertEqual(set(one), {'ok', 'job_id', 'deduplicated', 'key_created'})
+        self.assertNotIn('group', self.first_params(one))
+        self.assertEqual(self.first_params(one)['apps'], ['odoo'])
+        jobs.cancel_job(self.paths, one['job_id'], wait_seconds=0)
+        record = jobs.JobStore(self.paths).get(one['job_id'])
+        record['state'] = 'failed'
+        jobs.JobStore(self.paths).save(record)
+        plain = self.make_backup(['odoo', 'n8n'])  # not converted from an HA backup
+        many = self.call(['restore-start'], {**self.request, 'backup_id': plain, 'apps': ['odoo', 'n8n'], 'request_id': 'req-split-0003'})
+        self.assertEqual(set(many), {'ok', 'job_id', 'deduplicated', 'key_created'})
+        self.assertEqual(self.first_params(many)['apps'], ['odoo', 'n8n'])
+        self.assertNotIn('group', self.first_params(many))
+        self.assertNotIn('chain', self.first_params(many))
+
+    def test_more_apps_than_a_chain_can_name_are_never_cut_to_the_first(self):
+        """A chain names at most hachain.MAX_APPS apps; a request with more would run as its first app alone: it stays one job."""
+        with mock.patch.object(hachain, 'MAX_APPS', 2):
+            response = self.call(['restore-start'], self.request)
+        self.assertNotIn('group', response)
+        self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
+
+    def test_an_unreadable_registry_never_splits_and_never_breaks_a_restore(self):
+        haimport.registry_path(self.paths).write_text('{')
+        with contextlib.redirect_stderr(io.StringIO()):
+            response = self.call(['restore-start'], self.request)
+        self.assertNotIn('group', response)
+        self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
+
+    def test_a_registry_that_raises_never_splits_and_never_breaks_a_restore(self):
+        with mock.patch.object(haimport, 'load_registry', side_effect=OSError('x')), contextlib.redirect_stderr(io.StringIO()):
+            response = self.call(['restore-start'], self.request)
+        self.assertNotIn('group', response)
+        self.assertEqual(self.first_params(response)['apps'], ['odoo', 'n8n', 'emqx'])
+
+    def test_the_confirmed_lines_of_each_app_go_to_its_own_job(self):
+        keys = {'odoo': ['odoo.modules:1f0c52ab9d3e4f60'], 'n8n': ['n8n.credentials:1f0c52ab9d3e4f60'], 'hermes': ['x.yy:1f0c52ab9d3e4f60']}
+        response = self.call(['restore-start'], {**self.request, 'acknowledged': keys})
+        params = self.first_params(response)
+        self.assertEqual(params['acknowledged'], {'odoo': ['odoo.modules:1f0c52ab9d3e4f60']})
+        self.assertEqual(params['chain']['acknowledged'], {'odoo': ['odoo.modules:1f0c52ab9d3e4f60'],
+                                                           'n8n': ['n8n.credentials:1f0c52ab9d3e4f60']})
+        self.assertNotIn('hermes', json.dumps(params), 'the lines of an app that is not restored are not kept')
+
+    def run_chain(self, response):
+        with contextlib.redirect_stderr(io.StringIO()):
+            return jobs.run_job(self.paths, response['job_id'], deps=self.deps)
+
+    def records(self, response):
+        rows = [r for r in jobs.JobStore(self.paths).list(limit=None) if (r['params'].get('group') or {}).get('id') == response['group']]
+        return sorted(rows, key=lambda r: (r['created'], r['id']))
+
+    def test_the_chain_restores_the_apps_one_after_the_other_each_with_its_own_pre_restore_backup(self):
+        response = self.call(['restore-start'], self.request)
+        self.world.data.update({app: b'changed-on-device' for app in ('odoo', 'n8n', 'emqx')})
+        first = self.run_chain(response)
+        records = self.records(response)
+        self.assertEqual([(r['params']['group']['app_id'], r['type'], r['state']) for r in records],
+                         [('odoo', 'restore', 'succeeded'), ('n8n', 'restore', 'succeeded'), ('emqx', 'restore', 'succeeded')])
+        self.assertEqual(first['id'], response['job_id'])
+        self.assertEqual({app: self.world.data[app] for app in ('odoo', 'n8n', 'emqx')},
+                         {'odoo': b'odoo-v1', 'n8n': b'n8n-v1', 'emqx': b'emqx-v1'})
+        view = records[-1]['result']['group']
+        self.assertEqual([(row['app_id'], row['status']) for row in view['results']],
+                         [('odoo', 'imported'), ('n8n', 'imported'), ('emqx', 'imported')])
+        safeties = [r['result']['safety_backup_id'] for r in records]
+        self.assertEqual(len(set(safeties)), 3)
+        self.assertTrue(all(self.storage.get(safety)['type'] == 'safety' for safety in safeties))
+        self.assertEqual([item['id'] for item in self.storage.get(safeties[1])['apps']], ['n8n'])
+        self.assertEqual({r['unit'] for r in records}, {jobs.unit_name(response['job_id'])})
+
+    def test_one_app_that_fails_is_rolled_back_alone(self):
+        """The old all-or-nothing restore took every app back when one failed; a chain takes back only that one."""
+        self.world.fail_restore_after['n8n'] = 1
+        response = self.call(['restore-start'], self.request)
+        self.world.data.update({app: b'changed-on-device' for app in ('odoo', 'n8n', 'emqx')})
+        self.run_chain(response)
+        records = self.records(response)
+        self.assertEqual([r['state'] for r in records], ['succeeded', 'rolled-back', 'succeeded'])
+        self.assertEqual(self.world.data['odoo'], b'odoo-v1')
+        self.assertEqual(self.world.data['n8n'], b'changed-on-device', 'rolled back to what the device had')
+        self.assertEqual(self.world.data['emqx'], b'emqx-v1')
+
+    def test_the_old_all_or_nothing_restore_still_rolls_every_app_back(self):
+        plain = self.make_backup(['odoo', 'n8n', 'emqx'])
+        self.world.fail_restore_after['n8n'] = 1
+        response = self.call(['restore-start'], {**self.request, 'backup_id': plain, 'request_id': 'req-split-0009'})
+        self.world.data.update({app: b'changed-on-device' for app in ('odoo', 'n8n', 'emqx')})
+        record = self.run_chain(response)
+        self.assertEqual(record['state'], 'rolled-back')
+        self.assertEqual({app: self.world.data[app] for app in ('odoo', 'n8n', 'emqx')},
+                         {app: b'changed-on-device' for app in ('odoo', 'n8n', 'emqx')})
+
+
+class JobCancelTests(HaCliCase):
+    """`job-cancel` of a job of an import (CONTRACT section 7): the whole import, or `after_this` the app being worked on."""
+
+    def test_the_request_is_strict(self):
+        self.assertEqual(set(cli.SPECS['job-cancel']), {'job_id', 'after_this'})
+        job_id = jobs.JobStore(self.paths).create('backup', {'apps': ['woowbk-demo']})['id']
+        for request in ({'job_id': job_id, 'after_this': 'yes'}, {'job_id': job_id, 'after_this': 1}, {'job_id': job_id, 'x': 1},
+                        {'after_this': True}):
+            with self.subTest(request=request):
+                self.assertEqual(self.error_code(['job-cancel'], request), 'invalid-request')
+
+    def test_a_job_of_no_import_refuses_to_stop_after_this_app(self):
+        job_id = jobs.JobStore(self.paths).create('backup', {'apps': ['woowbk-demo']})['id']
+        reply = self.call(['job-cancel'], {'job_id': job_id, 'after_this': True})
+        self.assertEqual((reply['ok'], reply['error']['code'], reply['error']['details']['field']), (False, 'invalid-request', 'after_this'))
+        self.assertEqual(self.call(['job-cancel'], {'job_id': job_id, 'after_this': False}), {'ok': True, 'state': 'queued'})
+
+    def test_stop_after_this_app_and_cancel_of_an_import(self):
+        store = jobs.JobStore(self.paths)
+        group = hachain.new_group_id()
+        params = hachain.convert_params('ha-' + '0' * 20, ['odoo'], database=None, test_mode=False, encrypt=True, key_provided=False,
+                                        acknowledged={}, choices={})
+        params['group'] = hachain.group_params(group, 'ha-import', 'convert', 'odoo', 0, 2)
+        params['chain'] = hachain.new_chain(['odoo', 'n8n'], ha_backup_id='ha-' + '0' * 20)
+        record = store.create('backup', params)
+        self.assertEqual(self.call(['job-cancel'], {'job_id': record['id'], 'after_this': True}),
+                         {'ok': True, 'state': 'queued', 'after_this': True})
+        self.assertTrue(store.stop_requested(group))
+        self.assertFalse(store.cancel_requested(record['id']))
+        self.assertEqual(self.call(['job-cancel'], {'job_id': record['id']})['state'], 'queued')
+        self.assertTrue(store.cancel_requested(record['id']))

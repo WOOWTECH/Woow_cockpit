@@ -322,7 +322,12 @@ class DirRestoreTests(DirRestoreCase):
         self.assertLess(unpack_at, min(i for i, a in enumerate(argvs) if a[:3] in ([PODMAN, 'secret', 'create'],
                                                                                    [PODMAN, 'volume', 'rm'])))
         import_at = argvs.index([PODMAN, 'volume', 'import', 'woowbk-demo-files', '-'])
-        self.assertEqual(argvs[import_at + 1:import_at + 6], [
+        mount = '/home/appowner/.local/share/containers/storage/volumes/woowbk-demo-files/_data'
+        self.assertEqual(argvs[import_at + 1:import_at + 9], [
+            # the replaced volume's top directory, put back (adapter _apply_volume_root; Podman 6.1.1)
+            [PODMAN, 'volume', 'inspect', '--format', '{{.Mountpoint}}', 'woowbk-demo-files'],
+            [PODMAN, 'unshare', 'chown', '--no-dereference', '0:0', '--', mount],
+            [PODMAN, 'unshare', 'chmod', '0755', '--', mount],
             [PODMAN, 'volume', 'rm', '-f', 'woowbk-demo-pgdata'],
             [PODMAN, 'ps', '--format', '{{.ID}}'],  # no container may still use a directory (review M5)
             dir_call('swap', HTML, JOB, 'inplace'), dir_call('swap', DATA, JOB, 'inplace'),
@@ -883,3 +888,260 @@ class DirColdDatabaseTests(DirRestoreCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+HOME = '/home/appowner'
+BROWSER = {'id': 'a' * 12, 'name': 'woowbk-files', 'unit': 'woowbk-files.service', 'source': HOME, 'rw': True}
+
+
+class PauseOtherServicesTests(DirRestoreCase):
+    """D10 (X-AD-14, X-AD-50; HAOS parity 2026-11-25): the restore of a converted HA backup pauses the other services that use
+    what it replaces (a folder, the whole home, a volume), says which in its confirmation, and starts them again; what no
+    service started cannot be started again and stops this app, as an ordinary restore does."""
+
+    def setUp(self):
+        super().setUp()
+        self.owner = self.new_owner()
+        self.owner.units['woowbk-files.service'] = 'active'
+        self.owner.bind_mounts = [dict(BROWSER)]
+
+    def converted(self, owner=None, planned=('woowbk-files.service',)):
+        """An adapter of the restore of a converted HA backup; `planned` is the list the confirmation held (flows hands the job's
+        list to every adapter it makes; the adapter of the check sets its own)."""
+        adapter = self.make_adapter(owner or self.owner)
+        adapter.ha_import = True
+        adapter.planned_pauses = frozenset(planned)
+        return adapter
+
+    def stops(self, owner=None):
+        return [a[4:] for a in (owner or self.owner).argvs() if a[:3] == [SYSTEMCTL, '--user', 'stop']]
+
+    def test_an_ordinary_restore_still_refuses_to_go_on_with_another_service_using_the_data(self):
+        checks = self.make_adapter(self.owner).preflight(self.manifest, mode='inplace')
+        self.assertEqual([c['status'] for c in checks if c['id'].startswith('woowbk-demo/dir-in-use')], ['fail'])
+        adapter = self.make_adapter(self.owner)
+        self.assertEqual(adapter.restore_issues, [])
+        with self.assertRaises(BackupError) as caught:
+            adapter.backup(self.staging / 'ordinary', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertEqual(self.stops(), [], 'nothing was paused')
+
+    def test_the_check_lists_the_services_in_one_line_to_confirm_and_names_them(self):
+        adapter = self.converted()
+        checks = adapter.preflight(self.manifest, mode='inplace')
+        mine = [c for c in checks if c['id'].startswith('woowbk-demo/dir-in-use')]
+        self.assertEqual([c['status'] for c in mine], ['warn'])
+        self.assertIn('woowbk-files', mine[0]['message'])
+        self.assertIn('自動啟動', mine[0]['message'])
+        self.assertEqual([c['status'] for c in checks if c['status'] == 'fail'], [])
+        (issue,) = adapter.restore_issues
+        self.assertEqual((issue.id, issue.level, issue.names), ('restore.pauses', 'confirm', ('woowbk-files',)))
+        self.assertRegex(issue.key('woowbk-demo'), r'^restore\.pauses:[0-9a-f]{16}$')
+
+    def test_one_more_service_is_another_confirmation_key(self):
+        first = self.converted()
+        first.preflight(self.manifest, mode='inplace')
+        self.owner.units['woowbk-sync.service'] = 'active'
+        self.owner.bind_mounts.append({'id': 'b' * 12, 'name': 'woowbk-sync', 'unit': 'woowbk-sync.service',
+                                       'source': f'{HOME}/{DATA}', 'rw': False})
+        second = self.converted()
+        second.preflight(self.manifest, mode='inplace')
+        self.assertEqual(second.restore_issues[0].names, ('woowbk-files', 'woowbk-sync'))
+        self.assertNotEqual(first.restore_issues[0].key('woowbk-demo'), second.restore_issues[0].key('woowbk-demo'))
+
+    def test_nobody_using_the_data_means_no_line_to_confirm(self):
+        self.owner.bind_mounts = []
+        adapter = self.converted()
+        checks = adapter.preflight(self.manifest, mode='inplace')
+        self.assertEqual(adapter.restore_issues, [])
+        self.assertEqual([c for c in checks if c['id'].startswith('woowbk-demo/dir-in-use')], [])
+
+    def test_a_volume_another_service_writes_to_is_in_the_same_line(self):
+        self.owner.bind_mounts = [{'id': 'c' * 12, 'name': 'woowbk-sync', 'unit': 'woowbk-sync.service',
+                                   'volume': 'woowbk-demo-files', 'rw': True},
+                                  {'id': 'd' * 12, 'name': 'reader', 'unit': 'reader.service',
+                                   'volume': 'woowbk-demo-files', 'rw': False}]
+        self.owner.units.update({'woowbk-sync.service': 'active', 'reader.service': 'active'})
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')
+        self.assertEqual(adapter.restore_issues[0].names, ('woowbk-sync',), 'a read-only mount of a volume is no writer')
+
+    def test_a_container_no_service_started_cannot_be_paused_and_stops_this_app(self):
+        self.owner.bind_mounts = [{'id': 'e' * 12, 'name': 'viewer', 'unit': None, 'source': f'{HOME}/{DATA}', 'rw': False}]
+        adapter = self.converted()
+        checks = adapter.preflight(self.manifest, mode='inplace')
+        failing = [c for c in checks if c['status'] == 'fail']
+        self.assertEqual([c['id'] for c in failing], ['woowbk-demo/dir-in-use'])
+        self.assertIn('容器 viewer 不是由服務啟動的，無法自動暫停', failing[0]['message'])
+        self.assertEqual(adapter.restore_issues, [])
+        with self.assertRaises(BackupError) as caught:
+            self.converted().backup(self.staging / 'blocked', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertIn('容器 viewer 不是由服務啟動的', caught.exception.message)
+        self.assertEqual(self.stops(), [], 'nothing was stopped')
+
+    def test_the_pre_restore_copy_pauses_them_first_and_hands_them_on(self):
+        adapter = self.converted()
+        adapter.backup(self.staging / 'copy', include_images=False, keep_stopped=True)
+        stops = self.stops()
+        self.assertEqual(stops[0], ['woowbk-files.service'], 'the other service is paused first, in a call of its own')
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'inactive')
+        self.assertEqual(adapter.paused, ['woowbk-files.service'])
+        self.assertIn('woowbk-files.service', adapter.kept_stopped)
+        recorded = [call for call in self.hook_calls if 'paused:woowbk-files.service' in call]
+        self.assertTrue(recorded and 'woowbk-demo-app.service' in recorded[0],
+                        'it was listed for the recovery before it stopped, together with the writers (marked as paused)')
+        self.assertIn('paused:woowbk-files.service', self.hook_calls[-1], 'and stays listed while it is paused')
+
+    def test_a_failing_pre_restore_copy_starts_them_again(self):
+        self.owner.fail.append(('pg_dump', 1))
+        adapter = self.converted()
+        with self.assertRaises(BackupError):
+            adapter.backup(self.staging / 'failing', include_images=False, keep_stopped=True)
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+        self.assertEqual(self.hook_calls[-1], [], 'nothing is left in the record')
+
+    def test_the_restore_takes_over_what_the_copy_paused_and_starts_it_again(self):
+        copy = self.converted()
+        copy.backup(self.staging / 'copy', include_images=False, keep_stopped=True)
+        restore = self.converted()
+        restore.take_over(copy.kept_stopped, 12.0)
+        self.assertEqual(restore.paused, ['woowbk-files.service'])
+        self.assertEqual(restore._taken_over, ['woowbk-demo-app.service'])
+        restore.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'inactive', 'paused until the app is checked')
+        started, failed = restore.resume_paused()
+        self.assertEqual((started, failed), (['woowbk-files.service'], []))
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(restore.paused, [])
+        self.assertEqual(self.hook_calls[-1], [])
+
+    def test_without_a_pre_restore_copy_the_restore_pauses_them_before_the_swap(self):
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')
+        adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(adapter.paused, ['woowbk-files.service'])
+        argvs = self.owner.argvs()
+        pause = argvs.index([SYSTEMCTL, '--user', 'stop', '--', 'woowbk-files.service'])
+        self.assertLess(pause, argvs.index(dir_call('swap', HTML, JOB, 'inplace')), 'paused before the first swap')
+        self.assertFalse(any('匯入期間有新的服務' in note for note in adapter.warnings),
+                         'it was in the confirmation: nothing unexpected to say')
+
+    def test_a_service_that_started_after_the_confirmation_stops_this_app_and_asks_again(self):
+        """D10 (X-AD-14): a service the customer never saw is not paused behind their back. The restore stops here, before
+        anything has changed, with the new list as the line to confirm."""
+        self.owner.bind_mounts = []
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')  # nobody uses the data yet: the confirmation holds no service ...
+        self.assertEqual(adapter.planned_pauses, frozenset())
+        self.owner.bind_mounts = [dict(BROWSER)]  # ... and now a service does
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        (issue,) = caught.exception.issues
+        self.assertEqual((issue.id, issue.level, issue.names), ('restore.pauses', 'confirm', ('woowbk-files',)))
+        self.assertEqual(caught.exception.details['apps']['woowbk-demo'][0]['items'], ['woowbk-files'])
+        self.assertFalse(adapter.destructive_started)
+        self.assertEqual(self.stops(), [], 'nothing was stopped, the service runs on')
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+
+    def test_the_new_line_is_the_one_the_next_check_will_list(self):
+        """So that confirming it once is enough: the key of the refusal's line is the key of the next check's line."""
+        self.owner.bind_mounts = []
+        adapter = self.converted()
+        adapter.preflight(self.manifest, mode='inplace')
+        self.owner.bind_mounts = [dict(BROWSER)]
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        again = self.converted()
+        again.preflight(self.manifest, mode='inplace')
+        self.assertEqual(caught.exception.issues[0].key('woowbk-demo'), again.restore_issues[0].key('woowbk-demo'))
+
+    def test_the_pre_restore_copy_does_not_pause_a_service_that_is_not_in_the_confirmation(self):
+        adapter = self.converted(planned=())
+        with self.assertRaises(BackupError) as caught:
+            adapter.backup(self.staging / 'unconfirmed', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(caught.exception.issues[0].names, ('woowbk-files',))
+        self.assertEqual(self.stops(), [], 'nothing was stopped, not even the app')
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active')
+
+    def test_a_service_of_the_confirmation_that_stopped_meanwhile_is_no_reason_to_ask_again(self):
+        self.owner.bind_mounts = [dict(BROWSER)]
+        adapter = self.converted(planned=('woowbk-files.service', 'woowbk-sync.service'))  # woowbk-sync is not running any more
+        adapter.backup(self.staging / 'subset', include_images=False, keep_stopped=True)
+        self.assertEqual(adapter.paused, ['woowbk-files.service'])
+
+    def test_one_more_service_than_the_confirmation_lists_the_whole_new_list(self):
+        self.owner.units['woowbk-sync.service'] = 'active'
+        self.owner.bind_mounts.append({'id': 'b' * 12, 'name': 'woowbk-sync', 'unit': 'woowbk-sync.service',
+                                       'source': f'{HOME}/{DATA}', 'rw': True})
+        adapter = self.converted()  # the confirmation holds woowbk-files only
+        with self.assertRaises(BackupError) as caught:
+            adapter.backup(self.staging / 'more', include_images=False, keep_stopped=True)
+        self.assertEqual(caught.exception.issues[0].names, ('woowbk-files', 'woowbk-sync'))
+        self.assertEqual(self.stops(), [])
+
+    def test_a_service_that_starts_in_the_middle_of_the_restore_is_refused_not_paused(self):
+        """After the first destructive step the restore cannot ask the customer: the service is not paused behind their back, the
+        restore of this app fails and rolls back (as an ordinary restore does for a container that uses a replaced folder)."""
+        self.owner.bind_mounts = []
+        adapter = self.converted(planned=())
+        adapter.preflight(self.manifest, mode='inplace')
+
+        def appears(op, _args):
+            if op == 'unpack':
+                self.owner.bind_mounts = [dict(BROWSER)]
+        self.owner.dir_hook = appears
+        with self.assertRaises(BackupError) as caught:
+            adapter.restore(self.manifest, self.extract, mode='inplace')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertTrue(adapter.destructive_started, 'the restore had begun: the job rolls this app back')
+        self.assertTrue(self.stops(), 'the app itself was stopped')
+        self.assertNotIn('woowbk-files.service', [unit for call in self.stops() for unit in call])
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual(adapter.paused, [])
+
+    def test_a_rollback_pauses_what_uses_the_data_without_asking(self):
+        """A rollback has to finish: it pauses what it finds, the job starts it again afterwards (`strict` False)."""
+        strict = self.converted(planned=())
+        with self.assertRaises(BackupError) as caught:
+            strict.pause_foreign(when='還原')
+        self.assertEqual(caught.exception.code, 'confirmation-required')
+        self.assertEqual(self.stops(), [])
+        rollback = self.converted(planned=())
+        self.assertEqual(rollback.pause_foreign(when='還原', strict=False), ['woowbk-files.service'])
+        self.assertEqual(rollback.paused, ['woowbk-files.service'])
+
+    def test_a_service_that_cannot_be_paused_stops_this_app_and_runs_on(self):
+        self.owner.fail.append(('stop -- woowbk-files.service', 1))
+        adapter = self.converted()
+        with self.assertRaises(BackupError):
+            adapter.backup(self.staging / 'nostop', include_images=False, keep_stopped=True)
+        self.assertEqual(self.owner.units['woowbk-demo-app.service'], 'active', 'the app was not stopped')
+
+    def test_what_is_still_stopped_stays_listed_when_it_does_not_start(self):
+        adapter = self.converted()
+        adapter.backup(self.staging / 'copy', include_images=False, keep_stopped=True)
+        self.owner.fail_units.add('woowbk-files.service')
+        started, failed = adapter.resume_paused()
+        self.assertEqual((started, failed), ([], ['woowbk-files.service']))
+        self.assertEqual(adapter.paused, ['woowbk-files.service'])
+        self.assertIn('paused:woowbk-files.service', self.hook_calls[-1])
+
+    def test_only_service_names_are_ever_started_again(self):
+        adapter = self.converted()
+        failed = adapter.start_paused(['woowbk-files.service', '../x.service', 'a b.service', 'timers.target', ''])
+        self.assertEqual(failed, ['../x.service', 'a b.service', 'timers.target', ''])
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')
+        self.assertEqual([a[4:] for a in self.owner.argvs() if a[:3] == [SYSTEMCTL, '--user', 'start']],
+                         [['woowbk-files.service']])
+
+    def test_a_unit_list_may_name_the_apps_own_units_and_the_paused_ones(self):
+        adapter = self.converted()
+        self.owner.units['woowbk-files.service'] = 'inactive'
+        failed = adapter.start_units(['woowbk-demo-app.service', 'woowbk-files.service'])
+        self.assertEqual(failed, [])
+        self.assertEqual(self.owner.units['woowbk-files.service'], 'active')

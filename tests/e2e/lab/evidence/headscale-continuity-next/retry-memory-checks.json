@@ -1,0 +1,38 @@
+[
+  {
+    "attempt": 1,
+    "epoch": 1795276058.2730458,
+    "cgroup_current": 2182463488,
+    "cgroup_max": 4294967296,
+    "cgroup_headroom": 2112503808,
+    "host_MemAvailable": 4774002688,
+    "memory_gate_pass": false
+  },
+  {
+    "attempt": 2,
+    "epoch": 1795276073.5125816,
+    "cgroup_current": 2191110144,
+    "cgroup_max": 4294967296,
+    "cgroup_headroom": 2103857152,
+    "host_MemAvailable": 4775030784,
+    "memory_gate_pass": false
+  },
+  {
+    "attempt": 3,
+    "epoch": 1795276088.6431305,
+    "cgroup_current": 2185555968,
+    "cgroup_max": 4294967296,
+    "cgroup_headroom": 2109411328,
+    "host_MemAvailable": 4739784704,
+    "memory_gate_pass": false
+  },
+  {
+    "attempt": 4,
+    "epoch": 1795276103.8386598,
+    "cgroup_current": 2205847552,
+    "cgroup_max": 4294967296,
+    "cgroup_headroom": 2089119744,
+    "host_MemAvailable": 4720955392,
+    "memory_gate_pass": false
+  }
+]

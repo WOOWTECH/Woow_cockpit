@@ -1,0 +1,1 @@
+{"commercial_acceptance": "not-complete", "elapsed_seconds": 12.5, "exit": 0, "script_args": ["--after-reboot"], "source_commit": "dd4c6d674ab33756882cc041c106203f49681f29", "stdout_sha256": "883baf986cb3cd1ccfa55a4bb9592df7210d610af19fc547f5e78951df7b06e1", "tree_dirty": false}

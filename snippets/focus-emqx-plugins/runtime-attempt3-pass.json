@@ -1,0 +1,144 @@
+{
+  "baseline_scope": "existing-apps-never-selected",
+  "checks": [
+    {
+      "name": "appowner_only",
+      "ok": true
+    },
+    {
+      "name": "nested_rootless_store",
+      "ok": true
+    },
+    {
+      "name": "exact_loaded_image",
+      "ok": true
+    },
+    {
+      "name": "device_headroom_1900MiB",
+      "ok": true
+    },
+    {
+      "name": "disk_reserve_13GiB_plus_256MiB",
+      "ok": true
+    },
+    {
+      "name": "fixture_compiled_in_exact_image",
+      "ok": true
+    },
+    {
+      "name": "stable_persisted_plugin_states",
+      "ok": true
+    },
+    {
+      "name": "genuine_available_plugin_responds_on_device",
+      "ok": true
+    },
+    {
+      "name": "available_plugin_has_material_running_and_configuration",
+      "ok": true
+    },
+    {
+      "name": "missing_enabled_plugin_has_no_material_or_running_app",
+      "ok": true
+    },
+    {
+      "name": "nonempty_administrator_table",
+      "ok": true
+    },
+    {
+      "name": "real_vendor_export",
+      "ok": true
+    },
+    {
+      "name": "vendor_row_counts_match",
+      "ok": true
+    },
+    {
+      "name": "exact_enabled_missing_confirmation",
+      "ok": true
+    },
+    {
+      "name": "available_plugin_retained_in_first_candidate",
+      "ok": true
+    },
+    {
+      "name": "unacknowledged_conversion_refused",
+      "ok": true
+    },
+    {
+      "name": "device_states_unchanged_after_refusal",
+      "ok": true
+    },
+    {
+      "name": "owned_first_candidate_removed_emqx-new",
+      "ok": true
+    },
+    {
+      "name": "owned_first_candidate_removed_emqx-new-log",
+      "ok": true
+    },
+    {
+      "name": "owned_first_candidate_removed_emqx-in",
+      "ok": true
+    },
+    {
+      "name": "vendor_row_counts_match",
+      "ok": true
+    },
+    {
+      "name": "acknowledged_candidate_cleaned_exact_record",
+      "ok": true
+    },
+    {
+      "name": "available_configuration_and_order_retained",
+      "ok": true
+    },
+    {
+      "name": "available_plugin_responds_before_restart",
+      "ok": true
+    },
+    {
+      "name": "administrator_receipts_recorded",
+      "ok": true
+    },
+    {
+      "name": "cleaned_states_persist_after_restart",
+      "ok": true
+    },
+    {
+      "name": "genuine_plugin_responds_after_restart",
+      "ok": true
+    },
+    {
+      "name": "all_configuration_roots_and_admin_tables_match_after_restart",
+      "ok": true
+    },
+    {
+      "name": "postconversion_vendor_check_not_skipped",
+      "ok": true
+    },
+    {
+      "name": "administrator_mismatch_still_refused",
+      "ok": true
+    },
+    {
+      "name": "disposable_source_device_never_changed",
+      "ok": true
+    },
+    {
+      "name": "no_owned_resources_remain",
+      "ok": true
+    },
+    {
+      "name": "other_volumes_images_and_installed_source_unchanged",
+      "ok": true
+    }
+  ],
+  "image": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+  "ok": true,
+  "prior_original_emqx_full_flow": "preserved-existing-evidence",
+  "run_id": "j20261126T215925Z-ba807121",
+  "source_commit": "a82a086f382ea08be46e857e41004165527da680",
+  "source_scope": "private-payload-only",
+  "unrelated_container_churn_observed": false
+}

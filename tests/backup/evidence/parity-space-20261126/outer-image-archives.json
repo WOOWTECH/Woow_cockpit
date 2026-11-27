@@ -1,0 +1,51 @@
+{
+  "scope": "unused isolated lab outer images only",
+  "before_free": 25817796608,
+  "archived": [
+    {
+      "image_id": "42aa95fc13ded13dfe60355a3b6ffb83b8d99e360b96b18dd56506d5f12d3467",
+      "tags": [],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/outer-image-cache/42aa95fc13ded13dfe60355a3b6ffb83b8d99e360b96b18dd56506d5f12d3467.docker.tar.gz",
+      "archive_sha256": "e874fa115798292896f47daf68b55494ce5f32a6c1f92b64d3cb9c3570003c1e",
+      "archive_bytes": 564319722,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
+    },
+    {
+      "image_id": "4f0bd4f65b34b634ed3b47bd2bcdbb80686a772c3dc7b6a0e07019b11c8ecd85",
+      "tags": [
+        "quay.io/podman/stable:v4.9"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/outer-image-cache/4f0bd4f65b34b634ed3b47bd2bcdbb80686a772c3dc7b6a0e07019b11c8ecd85.docker.tar.gz",
+      "archive_sha256": "9fa58b4c6f8f317fb5fb29f6dbedc0c32d79f52ff1a1af9bbc1cfa137ed3b9a9",
+      "archive_bytes": 194403169,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
+    },
+    {
+      "image_id": "4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b",
+      "tags": [],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/outer-image-cache/4ea77c7055dec6a632156aa2cd9f1abaaedeba5f812f104f4e9e1ac37363469b.docker.tar.gz",
+      "archive_sha256": "c331332e2609b3c92b5f1f5e2b920047088ff33fe66387cda7cdedd79aa8767d",
+      "archive_bytes": 126906332,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
+    },
+    {
+      "image_id": "094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+      "tags": [
+        "docker.io/library/postgres:17.11-alpine3.23"
+      ],
+      "archive": "/home/woowtechopenclaw/.woowbk-lab/evidence/parity-space-20261126/outer-image-cache/094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7.docker.tar.gz",
+      "archive_sha256": "b2d4c11e9e47d365497c8892d56157c9aa45a60698f02e38c7f247d0501f90bc",
+      "archive_bytes": 123198909,
+      "format": "docker-archive",
+      "original_config_and_all_layers_verified": true,
+      "removed": true
+    }
+  ],
+  "after_free": 21414617088
+}

@@ -1,0 +1,72 @@
+# n8n.container: the n8n main process (editor, REST API, webhooks, task broker).
+#
+# Rendered by scripts/install.sh (decision D2). The publish address comes from HOST_BIND
+# and HOST_PORT in ~/.config/n8n/n8n.env. The same file is passed to the container with
+# --env-file, so any n8n setting can be added there without editing this unit. The public
+# URL keys (N8N_HOST, N8N_PROTOCOL, N8N_EDITOR_BASE_URL, N8N_WEBHOOK_URL, N8N_PROXY_HOPS)
+# are set by install.sh --public-url. WEBHOOK_URL is deprecated since n8n 2.35.
+#
+# Secrets (install.sh creates both): n8n-db-password and n8n-runners-auth-token. The token
+# must exist even in internal runner mode, because every Secret= has to resolve.
+[Unit]
+Description=n8n
+Documentation=https://github.com/WOOWTECH/Woow_podman_n8n
+PartOf=n8n.target
+Requires=n8n-postgres.service
+After=n8n-postgres.service
+# The task-runner sidecar (quadlet/optional/n8n-runners.container) is optional:
+# N8N_RUNNERS_MODE=internal installs without it, so Wants= and not Requires=.
+Wants=n8n-runners.service
+
+[Container]
+ContainerName=n8n
+# n8nio/n8n and n8nio/runners MUST carry the same version (tests/dryrun.local.sh checks it).
+Image=docker.io/n8nio/n8n:2.43.6
+Network=n8n.network
+Volume=n8n-data.volume:/home/node/.n8n
+PublishPort=@@HOST_BIND@@:@@HOST_PORT@@:5678
+EnvironmentFile=%h/.config/n8n/n8n.env
+# --env beats --env-file, so the DB identity and the broker wiring cannot drift.
+Environment=DB_TYPE=postgresdb
+Environment=DB_POSTGRESDB_HOST=n8n-postgres
+Environment=DB_POSTGRESDB_PORT=5432
+Environment=DB_POSTGRESDB_DATABASE=n8n
+Environment=DB_POSTGRESDB_USER=n8n
+Environment=NODE_ENV=production
+Environment=GENERIC_TIMEZONE=@@GENERIC_TIMEZONE@@
+Environment=TZ=@@TZ@@
+Environment=DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/n8n-db-password
+Environment=N8N_RUNNERS_AUTH_TOKEN_FILE=/run/secrets/n8n-runners-auth-token
+Environment=N8N_NATIVE_PYTHON_RUNNER=true
+Environment=N8N_MIGRATE_FS_STORAGE_PATH=true
+Environment=N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+# The task broker (port 5679) listens inside the container only; it is never published.
+# n8n-runners reaches it over n8n-network.
+Environment=N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
+Secret=n8n-db-password,type=mount,target=n8n-db-password
+Secret=n8n-runners-auth-token,type=mount,target=n8n-runners-auth-token
+Label=io.woowtech.app=n8n
+LogDriver=journald
+# /healthz/readiness returns 200 only once the DB is connected and migrated. The image is
+# a minimal node base without curl or wget, so node itself does the request.
+HealthCmd=node -e "fetch('http://127.0.0.1:5678/healthz/readiness').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+# The first start after a version upgrade runs DB migrations.
+HealthStartPeriod=900s
+PodmanArgs=--stop-timeout=60
+
+[Service]
+# Readiness gate: podman 4.9.3 ignores Notify=healthy, so wait for the DB healthcheck.
+ExecStartPre=/usr/bin/timeout 300 /bin/sh -c 'until /usr/bin/podman healthcheck run n8n-postgres >/dev/null 2>&1; do sleep 2; done'
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+{
+  "source_commit": "6287f49a217ab6e60c8f21d834acf7af8a99f5be",
+  "scope": "real x86 HA backup Mnesia ACL with real rule-to-action delivery real restore",
+  "exit": 0,
+  "elapsed_seconds": 753.486,
+  "stdout_sha256": "6a289ca5d193e91cd258081090243fe73fc64011082c0b1f8ac0302863a62de4",
+  "fixed_status": [
+    "REAL OWNER RESTORE ROLLBACK PASSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

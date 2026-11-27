@@ -1,0 +1,1046 @@
+{
+ "schema_version": 1,
+ "attempt": "ARM full Odoo/n8n HA import acceptance on dev-c with the INTEGRATED engine (real RPi5 HA backups 20261119-arm, add-on 0.4.13)",
+ "kind": "driver",
+ "device": "woowbk-dev-c (lab; network none, no published ports)",
+ "started_utc": "2026-11-23T03:43:01Z",
+ "source_commit": "ba618ba",
+ "engine_files_sha256": "2fcd4a60fd33b8cc452054001877bea3ac653317351325cea3a7b4fac32c6c1b",
+ "command": "python3 -B -I tests/e2e/lab/ha_import_e2e.py --fixtures ~/.woowbk-lab/ha-fixtures/20261119-arm --prefix woow-arm --odoo-addon-version 0.4.13 --arch aarch64 --baseline 20261118T095247Z-388c9bd7,20261118T095520Z-33eb7474 --source-capture ~/.woowbk-lab/evidence/odoo-n8n-final-20261123/capture-arm-997c63e7 --evidence integration-arm-20261123 baseline upload keys check convert restore armcompare verify n8ndiag restart db2 testmode armdownload armnative armcrash cleanup leaks baseline",
+ "exit_code": 0,
+ "elapsed_seconds": 2833,
+ "stdout_sha256": "794a66130e389f2073cf759fbf22f1247b111cb09546cfbdccf2518aff0e63b1",
+ "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/integration-arm-20261123/20261123T114301",
+ "passed": 133,
+ "failed": 0,
+ "status_lines": [
+  "PASS baseline: odoo restored from 20261118T095247Z-388c9bd7",
+  "PASS baseline: n8n restored from 20261118T095520Z-33eb7474",
+  "PASS baseline: no imported data left (no custom module, no test partner, no workflow)",
+  "PASS baseline: the lab data is back (prodlike_baseline.py markers in Odoo and n8n)",
+  "PASS baseline: health 200 everywhere",
+  "PASS upload enc: upload-finish answers ha_backup",
+  "PASS upload enc: Odoo and n8n importable and installed",
+  "PASS upload plain: upload-finish answers ha_backup",
+  "PASS upload plain: Odoo and n8n importable and installed",
+  "PASS upload unc: upload-finish answers ha_backup",
+  "PASS upload unc: Odoo and n8n importable and installed",
+  "PASS list shows the three HA backups",
+  "PASS check without a key: key-required",
+  "PASS check with a wrong key: wrong-key",
+  "PASS convert with a wrong key: wrong-key",
+  "PASS check enc: job succeeded",
+  "PASS check enc: Odoo ok, woowtest and woowtest2 can move",
+  "PASS check enc: woowtest counts and custom module woow_import_probe (copied from the backup)",
+  "PASS check enc: n8n ok with owner, 3 workflows, 1 active, 1 credential, executions",
+  "PASS check enc: the workflow that needs fixing is listed",
+  "PASS check enc: versions shown",
+  "PASS check enc: the source processor is aarch64",
+  "PASS check enc: no throwaway container or volume left",
+  "PASS check plain: job succeeded",
+  "PASS check plain: Odoo ok, woowtest and woowtest2 can move",
+  "PASS check plain: woowtest counts and custom module woow_import_probe (copied from the backup)",
+  "PASS check plain: n8n ok with owner, 3 workflows, 1 active, 1 credential, executions",
+  "PASS check plain: the workflow that needs fixing is listed",
+  "PASS check plain: versions shown",
+  "PASS check plain: the source processor is aarch64",
+  "PASS check plain: no throwaway container or volume left",
+  "PASS check unc: job succeeded",
+  "PASS check unc: Odoo ok, woowtest and woowtest2 can move",
+  "PASS check unc: woowtest counts and custom module woow_import_probe (copied from the backup)",
+  "PASS check unc: n8n ok with owner, 3 workflows, 1 active, 1 credential, executions",
+  "PASS check unc: the workflow that needs fixing is listed",
+  "PASS check unc: versions shown",
+  "PASS check unc: the source processor is aarch64",
+  "PASS check unc: no throwaway container or volume left",
+  "PASS convert enc (woowtest, odoo+n8n): job succeeded with a backup id",
+  "PASS convert: ha_import shape",
+  "PASS list: the converted backup is a manual backup with from_ha and the HA note",
+  "PASS inspect: preflight passes for both apps (settings same)",
+  "PASS restore of the converted backup succeeded",
+  "PASS restore: every health check ok",
+  "PASS ARM source and x86 copy: exact table inventory",
+  "PASS ARM source and x86 copy: all table row counts identical (apart from rows explained one by one in arm-compare.json)",
+  "PASS ARM source and x86 copy: all equal-count table contents identical (apart from rows explained one by one in arm-compare.json)",
+  "PASS ARM row evidence: the source capture is this HA archive and equals the HA-side fingerprint of all 205 tables",
+  "PASS ARM row evidence: every differing row matches a vendor-cited rule (no schema change, no other table)",
+  "PASS import: Odoo has the 5 test partners",
+  "PASS import: module woow_import_probe installed with its record",
+  "PASS import: the custom module is in the custom modules folder",
+  "PASS import: web.base.url unchanged and the upgrade marker is the device's",
+  "PASS import: odoo.service active (upgrade gate passed)",
+  "PASS import: health 200 everywhere",
+  "PASS import: Odoo admin and ha-probe can log in",
+  "PASS import: attachment ha-probe.txt readable",
+  "PASS import: n8n owner can log in",
+  "PASS import: the JavaScript community node moved and loads here",
+  "PASS import: credential \"HA probe header\" decrypts to the expected value",
+  "PASS import: 3 workflows with \"WOOW 匯入測試 - 排程\" active",
+  "PASS import: at least one execution moved",
+  "PASS n8n diagnosis: the owner logs in",
+  "PASS n8n diagnosis: with the community package installed, GET /rest/community-packages waits on `npm outdated` (npm registry; this lab has no network)",
+  "PASS n8n diagnosis: the same restored node loads without the registry (database row, package files, runtime node type)",
+  "PASS restart: Odoo (database, web, gateway) and n8n.target restarted with new containers",
+  "PASS restart: health 200 everywhere",
+  "PASS restart: odoo.service active again (upgrade gate passed on start)",
+  "PASS restart: Odoo still has the 5 test partners and the probe record",
+  "PASS restart: Odoo admin and ha-probe log in, attachment readable",
+  "PASS restart: n8n owner logs in and the credential is listed",
+  "PASS restart: the JavaScript community node still loads",
+  "PASS restart: credential \"HA probe header\" still decrypts to the expected value",
+  "PASS restart: 3 workflows with \"WOOW 匯入測試 - 排程\" active and the executions kept",
+  "PASS convert plain (woowtest2, odoo only): job succeeded",
+  "PASS restore of woowtest2 succeeded",
+  "PASS woowtest2: partner count as the check reported",
+  "PASS woowtest2: Odoo health 200",
+  "PASS convert enc-uncompressed in test mode: job succeeded",
+  "PASS restore of the test-mode backup succeeded",
+  "PASS test mode: Odoo neutralised (no real mail server active) with a new database.uuid",
+  "PASS test mode: Odoo has the 5 test partners",
+  "PASS test mode: module woow_import_probe installed with its record",
+  "PASS test mode: the custom module is in the custom modules folder",
+  "PASS test mode: web.base.url unchanged and the upgrade marker is the device's",
+  "PASS test mode: odoo.service active (upgrade gate passed)",
+  "PASS test mode: health 200 everywhere",
+  "PASS test mode: Odoo admin and ha-probe can log in",
+  "PASS test mode: attachment ha-probe.txt readable",
+  "PASS test mode: n8n owner can log in",
+  "PASS test mode: the JavaScript community node moved and loads here",
+  "PASS test mode: credential \"HA probe header\" decrypts to the expected value",
+  "PASS test mode: 3 workflows, all unpublished",
+  "PASS test mode: at least one execution moved",
+  "PASS downloaded copy: the check passes without a key",
+  "PASS downloaded copy: conversion succeeded",
+  "PASS downloaded copy: import succeeded",
+  "PASS downloaded copy: Odoo has the 5 test partners",
+  "PASS downloaded copy: module woow_import_probe installed with its record",
+  "PASS downloaded copy: the custom module is in the custom modules folder",
+  "PASS downloaded copy: web.base.url unchanged and the upgrade marker is the device's",
+  "PASS downloaded copy: odoo.service active (upgrade gate passed)",
+  "PASS downloaded copy: health 200 everywhere",
+  "PASS downloaded copy: Odoo admin and ha-probe can log in",
+  "PASS downloaded copy: attachment ha-probe.txt readable",
+  "PASS downloaded copy: n8n owner can log in",
+  "PASS downloaded copy: the JavaScript community node moved and loads here",
+  "PASS downloaded copy: credential \"HA probe header\" decrypts to the expected value",
+  "PASS downloaded copy: 3 workflows with \"WOOW 匯入測試 - 排程\" active",
+  "PASS downloaded copy: at least one execution moved",
+  "PASS ARM-only code: the check job ran",
+  "PASS ARM-only code: the database using the module is refused, naming it",
+  "PASS ARM-only code: the other database can still move",
+  "PASS ARM-only code: n8n moves with a warning naming the community node",
+  "PASS ARM-only code: the conversion does not go through",
+  "PASS ARM-only community node: conversion succeeded",
+  "PASS ARM-only community node: import succeeded",
+  "PASS ARM-only community node: n8n starts and answers",
+  "PASS ARM-only community node: the owner logs in and the JavaScript node still loads",
+  "PASS unclean stop: conversion succeeded",
+  "PASS unclean stop: import succeeded",
+  "PASS unclean stop: the last committed row survived (ARM WAL replayed here)",
+  "PASS unclean stop: the data is complete",
+  "PASS unclean stop: Odoo health 200",
+  "PASS no throwaway container, volume or network left",
+  "PASS no staging folder and no key file left",
+  "PASS no test secret in the engine's records, logs, index, registry or the device journal",
+  "PASS baseline: odoo restored from 20261118T095247Z-388c9bd7",
+  "PASS baseline: n8n restored from 20261118T095520Z-33eb7474",
+  "PASS baseline: no imported data left (no custom module, no test partner, no workflow)",
+  "PASS baseline: the lab data is back (prodlike_baseline.py markers in Odoo and n8n)",
+  "PASS baseline: health 200 everywhere"
+ ],
+ "armcompare": {
+  "schema_version": 2,
+  "status": "explained_row_differences",
+  "source_tables": 205,
+  "target_tables": 205,
+  "identical": 201,
+  "rows_differ": {
+   "public.bus_bus": [
+    "6",
+    "0"
+   ],
+   "public.ir_cron_progress": [
+    "15",
+    "28"
+   ]
+  },
+  "content_differs": [
+   "public.ir_config_parameter",
+   "public.ir_cron"
+  ],
+  "missing": [],
+  "added": [],
+  "unverified_tables": [],
+  "requires_row_evidence": [
+   "public.bus_bus",
+   "public.ir_config_parameter",
+   "public.ir_cron",
+   "public.ir_cron_progress"
+  ],
+  "row_evidence": {
+   "source_capture_run": "997c63e766654d81bfe4aaf10d015b38",
+   "archive_sha256": "a5fb626820a0947482a394094cd004715eb348fc92cec760c0dc7d9546f420e5",
+   "binding_ok": true,
+   "binding": {
+    "tables": 205,
+    "differ_from_ha_fingerprint": []
+   },
+   "restore_started_utc": "2026-11-23T03:53:51.060971",
+   "captured_at": "2026-11-23T03:57:40.604962+00:00",
+   "cron_log": {
+    "started": [
+     1,
+     2,
+     3,
+     5,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ],
+    "completed": [
+     1,
+     2,
+     3,
+     5,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15
+    ],
+    "lines": 52
+   },
+   "tables_with_row_events": [
+    "public.bus_bus",
+    "public.ir_config_parameter",
+    "public.ir_cron",
+    "public.ir_cron_progress"
+   ],
+   "tables_outside_row_evidence": [],
+   "explained_tables": [
+    "public.bus_bus",
+    "public.ir_config_parameter",
+    "public.ir_cron",
+    "public.ir_cron_progress"
+   ],
+   "all_explained": true,
+   "summary": {
+    "events": 35,
+    "unexplained": 0,
+    "tables": {
+     "public.bus_bus": {
+      "events": 6,
+      "explained": 6,
+      "by_rule": {
+       "bus-gc": 6
+      },
+      "by_kind": {
+       "removed": 6
+      }
+     },
+     "public.ir_config_parameter": {
+      "events": 3,
+      "explained": 3,
+      "by_rule": {
+       "import-settings": 3
+      },
+      "by_kind": {
+       "changed": 1,
+       "removed": 1,
+       "added": 1
+      }
+     },
+     "public.ir_cron": {
+      "events": 13,
+      "explained": 13,
+      "by_rule": {
+       "cron-schedule": 13
+      },
+      "by_kind": {
+       "changed": 13
+      }
+     },
+     "public.ir_cron_progress": {
+      "events": 13,
+      "explained": 13,
+      "by_rule": {
+       "cron-progress": 13
+      },
+      "by_kind": {
+       "added": 13
+      }
+     }
+    }
+   },
+   "events": [
+    {
+     "table": "public.bus_bus",
+     "id": 1,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.bus_bus",
+     "id": 2,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.bus_bus",
+     "id": 3,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.bus_bus",
+     "id": 4,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.bus_bus",
+     "id": 5,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.bus_bus",
+     "id": 6,
+     "kind": "removed",
+     "columns": [],
+     "rule": "bus-gc",
+     "explained": true,
+     "why": "older than 24 h, autovacuum ran",
+     "before": {
+      "create_date": "2026-11-19T00:59:16.042443"
+     },
+     "after": null
+    },
+    {
+     "table": "public.ir_config_parameter",
+     "id": 4,
+     "kind": "changed",
+     "columns": [
+      "value",
+      "write_date"
+     ],
+     "rule": "import-settings",
+     "explained": true,
+     "why": "web.base.url",
+     "before": {
+      "key": "web.base.url",
+      "value": "http://192.168.2.34:8069",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "after": {
+      "key": "web.base.url",
+      "value": "http://localhost:8069",
+      "write_date": "2026-11-23T03:51:15.940139"
+     }
+    },
+    {
+     "table": "public.ir_config_parameter",
+     "id": 11,
+     "kind": "removed",
+     "columns": [],
+     "rule": "import-settings",
+     "explained": true,
+     "why": "web.base.url.freeze",
+     "before": {
+      "key": "web.base.url.freeze",
+      "value": "True",
+      "write_date": "2026-11-19T00:56:30.59518"
+     },
+     "after": null
+    },
+    {
+     "table": "public.ir_config_parameter",
+     "id": 50,
+     "kind": "added",
+     "columns": [],
+     "rule": "import-settings",
+     "explained": true,
+     "why": "woow_paas_platform.upgrade_done",
+     "before": null,
+     "after": {
+      "key": "woow_paas_platform.upgrade_done",
+      "value": "{\"digest\":\"sha256:dd0982f37ae8628bbe146004058c6e7fcb5ed54c5cefe0a0901bab79a703c0fe\",\"core_date\":\"18.0.20260926\"}",
+      "write_date": "2026-11-23T03:51:15.940139"
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 1,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "base.autovacuum_job",
+      "cron_name": "Base: Auto-vacuum internal data",
+      "nextcall": "2026-11-20T00:56:21",
+      "lastcall": "2026-11-19T01:09:39",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "base.autovacuum_job",
+      "cron_name": "Base: Auto-vacuum internal data",
+      "nextcall": "2026-11-24T00:56:21",
+      "lastcall": "2026-11-23T03:56:29",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 2,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "base.ir_cron_res_users_deletion",
+      "cron_name": "Base: Portal Users Deletion",
+      "nextcall": "2026-11-20T00:56:21",
+      "lastcall": "2026-11-19T00:57:32",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "base.ir_cron_res_users_deletion",
+      "cron_name": "Base: Portal Users Deletion",
+      "nextcall": "2026-11-24T00:56:21",
+      "lastcall": "2026-11-23T03:56:31",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 3,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_mail_scheduler_action",
+      "cron_name": "Mail: Email Queue Manager",
+      "nextcall": "2026-11-19T01:59:22",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_mail_scheduler_action",
+      "cron_name": "Mail: Email Queue Manager",
+      "nextcall": "2026-11-23T03:59:22",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 5,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_delete_notification",
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "nextcall": "2026-11-20T00:59:22",
+      "lastcall": "2026-11-19T01:00:50",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_delete_notification",
+      "cron_name": "Notification: Delete Notifications older than 6 Month",
+      "nextcall": "2026-11-24T00:59:22",
+      "lastcall": "2026-11-23T03:56:29",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 7,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_post_scheduled_message",
+      "cron_name": "Mail: Post scheduled messages",
+      "nextcall": "2026-11-20T00:59:22",
+      "lastcall": "2026-11-19T01:00:50",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_post_scheduled_message",
+      "cron_name": "Mail: Post scheduled messages",
+      "nextcall": "2026-11-24T00:59:22",
+      "lastcall": "2026-11-23T03:56:29",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 8,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_send_scheduled_message",
+      "cron_name": "Notification: Notify scheduled messages",
+      "nextcall": "2026-11-19T01:59:22",
+      "lastcall": "2026-11-19T01:00:50",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_send_scheduled_message",
+      "cron_name": "Notification: Notify scheduled messages",
+      "nextcall": "2026-11-23T03:59:22",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 9,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_web_push_notification",
+      "cron_name": "Mail: send web push notification",
+      "nextcall": "2026-11-20T00:59:22",
+      "lastcall": "2026-11-19T01:00:50",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_web_push_notification",
+      "cron_name": "Mail: send web push notification",
+      "nextcall": "2026-11-24T00:59:22",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 10,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute",
+      "cron_name": "Discuss: channel member unmute",
+      "nextcall": "2026-11-20T00:59:22",
+      "lastcall": "2026-11-19T01:00:50",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_discuss_channel_member_unmute",
+      "cron_name": "Discuss: channel member unmute",
+      "nextcall": "2026-11-24T00:59:22",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 11,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute",
+      "cron_name": "Discuss: users settings unmute",
+      "nextcall": "2026-11-20T00:59:22",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "mail.ir_cron_discuss_users_settings_unmute",
+      "cron_name": "Discuss: users settings unmute",
+      "nextcall": "2026-11-24T00:59:22",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 12,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder",
+      "cron_name": "Users: Notify About Unregistered Users",
+      "nextcall": "2026-11-20T00:59:23",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "auth_signup.ir_cron_auth_signup_send_pending_user_reminder",
+      "cron_name": "Users: Notify About Unregistered Users",
+      "nextcall": "2026-11-24T00:59:23",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 13,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete",
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "nextcall": "2026-11-19T01:59:26",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "partner_autocomplete.ir_cron_partner_autocomplete",
+      "cron_name": "Partner Autocomplete: Sync with remote DB",
+      "nextcall": "2026-11-23T03:59:26",
+      "lastcall": "2026-11-23T03:56:31",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 14,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "sms.ir_cron_sms_scheduler_action",
+      "cron_name": "SMS: SMS Queue Manager",
+      "nextcall": "2026-11-19T01:59:28",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "sms.ir_cron_sms_scheduler_action",
+      "cron_name": "SMS: SMS Queue Manager",
+      "nextcall": "2026-11-23T03:59:28",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron",
+     "id": 15,
+     "kind": "changed",
+     "columns": [
+      "lastcall",
+      "nextcall"
+     ],
+     "rule": "cron-schedule",
+     "explained": true,
+     "why": "job ran after the restore",
+     "before": {
+      "xmlid": "snailmail.snailmail_print",
+      "cron_name": "Snailmail: process letters queue",
+      "nextcall": "2026-11-19T01:59:29",
+      "lastcall": "2026-11-19T01:00:51",
+      "failure_count": 0,
+      "first_failure_date": null
+     },
+     "after": {
+      "xmlid": "snailmail.snailmail_print",
+      "cron_name": "Snailmail: process letters queue",
+      "nextcall": "2026-11-23T03:59:29",
+      "lastcall": "2026-11-23T03:56:30",
+      "failure_count": 0,
+      "first_failure_date": null
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 16,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 1,
+      "create_date": "2026-11-23T03:56:28.294585",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 17,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 5,
+      "create_date": "2026-11-23T03:56:29.608239",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 18,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 7,
+      "create_date": "2026-11-23T03:56:29.76608",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 19,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 9,
+      "create_date": "2026-11-23T03:56:29.824063",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 20,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 8,
+      "create_date": "2026-11-23T03:56:29.853301",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 21,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 10,
+      "create_date": "2026-11-23T03:56:30.326087",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 22,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 11,
+      "create_date": "2026-11-23T03:56:30.343723",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 23,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 14,
+      "create_date": "2026-11-23T03:56:30.468302",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 24,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 15,
+      "create_date": "2026-11-23T03:56:30.47414",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 25,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 3,
+      "create_date": "2026-11-23T03:56:30.542072",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 26,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 12,
+      "create_date": "2026-11-23T03:56:30.551137",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 27,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 13,
+      "create_date": "2026-11-23T03:56:31.06953",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    },
+    {
+     "table": "public.ir_cron_progress",
+     "id": 28,
+     "kind": "added",
+     "columns": [],
+     "rule": "cron-progress",
+     "explained": true,
+     "why": "progress of a job that ran after the restore",
+     "before": null,
+     "after": {
+      "cron_id": 2,
+      "create_date": "2026-11-23T03:56:31.339719",
+      "done": 0,
+      "remaining": 0,
+      "timed_out_counter": 0
+     }
+    }
+   ]
+  }
+ },
+ "n8n_diagnosis": {
+  "login": true,
+  "listing": {
+   "status": 200,
+   "packages": [
+    [
+     "n8n-nodes-globals",
+     "1.1.0",
+     false
+    ]
+   ],
+   "seconds": 87.3
+  },
+  "process_samples": 25,
+  "npm_outdated_seen": [
+   4.6,
+   86.4,
+   24
+  ],
+  "n8n_packages": [
+   [
+    "n8n-nodes-globals",
+    "1.1.0",
+    false
+   ]
+  ],
+  "n8n_community_nodes_checked": 1,
+  "local_probe_seconds": 0.8,
+  "n8n_community_probe": "local-db-manifest-authenticated-node-types"
+ },
+ "leak_scan": {
+  "files_scanned": 683,
+  "journal_bytes": 82705253,
+  "hits": 0
+ },
+ "notes": [
+  "Engine: integration/ha-import-batch1-20261123 ba618ba backup-engine = feat/ha-import-batch1 b2f63ce + 10fe446 (hasqlite/ha_n8n network fail-closed); deployed with deploy-src.sh c --src <integration worktree> --no-demo-catalog; 39/39 installed .py files equal the tree (changed vs b2f63ce: ha_hermes.py, ha_n8n.py, hasqlite.py); helper sha256 539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678 unchanged. engine_files_sha256 = sha256 of the output of: cd /usr/local/lib/woowtech-cockpit-backup && find woowbackup -name '*.py' | LC_ALL=C sort | xargs sha256sum.",
+  "n8n SQLite sandbox child in the real flow: tests/e2e/lab/sandbox_netns_sampler.py ran inside dev-c (read-only /proc) during this run: 9 n8n children (program sha256 1f7ce7aa... = ha_n8n.SQLITE_CHILD of this tree); 8 observed after dropping root (euid 65534): all in their own network namespace (differs from dev-c PID 1) and chrooted; 1 finished between two scans (not observable after the drop; its check job succeeded, which with 10fe446 requires the namespace switch). dev-c runs Python 3.12.3, so the os.unshare path ran; the libc fallback for Python < 3.12 is not exercised here (arm54 lane, .54 Debian 12). Details: sandbox-netns-arm.json.",
+  "Real: HA backups made on the RPi5 HA (192.168.2.34) on 2026-11-19 (provenance accepted by the owner), converted and restored by the engine helper jobs into the production-like Podman Odoo 18 / n8n 2.43.6 stacks; clients: Odoo JSON-RPC logins and attachment read, n8n REST login, credential decrypted by n8n itself, node-types lookup; restart of all Odoo and n8n units; baseline restore at the end. armcompare reuses the 11-23 same-archive source capture capture-arm-997c63e7 (binding checked: same archive sha256 and equal to the HA-side fingerprint).",
+  "Not covered here: pull (needs Docker Hub; dev-c has no network by design), a physical ARM target (arm54 lane), HA UI upload (earlier UI runs)."
+ ],
+ "commercial_acceptance": "not-complete"
+}

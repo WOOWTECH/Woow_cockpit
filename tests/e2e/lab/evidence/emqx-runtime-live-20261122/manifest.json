@@ -1,0 +1,18 @@
+{
+  "authoritative_source_commit": "688d4b2c320ea2cb9153699621fd07f658b4bcc0",
+  "base_commit": "f5099c4e6facdacd16536f79e449b620dc7cf25c",
+  "earlier_attempt_sources": "uncommitted-not-retained",
+  "files": {
+    "RESULTS.txt": "87bddaedb99ab738d7dbd6e5c94bb983cf7ec1a0fad6c01afcba6497f2089432",
+    "attempt-1.jsonl": "b48e4e995022af86957fb37b9269c9eac6abbaff49ca62527f4414665c562ac6",
+    "attempt-2.jsonl": "4875bc1e5be68b86447f5f5f7044afe04dba2ac7e05bdd0ca56e437d8b7c8f4e",
+    "attempt-3.jsonl": "fa97da3069a770830be4548342b1d60cc5fb30bacef1b4dc2107285f6af51407",
+    "attempt-4.jsonl": "d1c44ce1f114839fa13f0ec9e6164c3a00d9676ade15e2e685d04c60197004df",
+    "attempt-5.jsonl": "82846f856b3ede149ecf045275c74bc1b2a591cde118005ff658e643af80b914",
+    "early-volume-cleanup-refusal.json": "f75464f3ef20dcf9a7535646843bd7d8179a4b9c63f59c013b3f8ad30717cf28",
+    "early-volume-cleanup.json": "804c7329030cfd5aaf4c347107497d15d61c086707514d570f85f22837f77098",
+    "final.jsonl": "64bc97080337921464dc822f04a57efd784713d821d5eb4dc66c38e88bb95125",
+    "postflight.json": "ae1371652487af273f8c53b2be0a7cab2c973fbd6b68f4b50123a9d05a7be24f"
+  },
+  "schema": 1
+}

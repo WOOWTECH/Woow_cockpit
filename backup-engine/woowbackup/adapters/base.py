@@ -6,6 +6,12 @@ flows use to report job phases and honour cancellation.
 """
 
 
+# In the job record's list of stopped units (`stopped_writers`) a service of another app that a restore of a converted HA
+# backup paused (D10) is written with this prefix: the recovery of a dead job starts exactly those, and any other name that
+# is not one of the app's own units stays "not started" (nothing unrelated is ever started from a record).
+PAUSED_PREFIX = 'paused:'
+
+
 class Adapter:
     name = 'base'
     version = 1
@@ -28,6 +34,12 @@ class Adapter:
         self.warnings = []
         # The job this adapter works for (set by flows); names the restore's host-directory siblings.
         self.job_id = None
+        # The restore (or its check) is of a backup converted from a Home Assistant backup (set by flows and the restore
+        # check): what differs on this device is then handled and listed instead of refused (RESTORE lane, HAOS parity).
+        self.ha_import = False
+        # The keys of the lines to confirm the request carried for this app (flows sets it from params.acknowledged); the
+        # adapter asks for one only at a point where nothing has changed yet.
+        self.acknowledged = frozenset()
 
     def probe(self):
         """{'deployed': bool, 'state': str, 'units': [{'name','active'}], 'problems': [str]}"""

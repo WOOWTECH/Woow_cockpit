@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""Parent-approved one-attempt recovery using unchanged d7 primitives. No retry."""
+import base64,datetime,fcntl,hashlib,inspect,json,os,pathlib,stat,subprocess,sys,time
+ROOT=pathlib.Path('/tmp/parity-focus-nextcloud-r6-20261127')
+sys.path.insert(0,str(ROOT/'tests/e2e/lab'))
+import focus_nextcloud_r6_source as source
+import focus_nextcloud_r6_wake as wake
+import focus_nextcloud_r6_case as case
+from focus_nextcloud_r6_inventory import collect,ORIGINALS,FIXTURE
+from focus_nextcloud_r6_plan import RESERVE,DEVICE_CAP
+LAB=pathlib.Path.home()/'.woowbk-lab'
+CONTROL=LAB/'evidence/focus-nextcloud-r6-control/20261127T082621'
+CASE=LAB/'evidence/focus-nextcloud-r6/20261127T082700'
+COMMIT='d7db60cc284138658e93604dd41dafb7fc7d036f'
+NONCE='24d1dc3d14bfc94e'
+PRODUCT='966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79'
+PRIOR='cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1'
+
+NATIVE=r'''
+import json,subprocess
+names=['nextcloud.target','nextcloud-app.service','nextcloud-db.service','nextcloud-redis.service',
+'nextcloud-office.service','nextcloud-gateway.service','nextcloud-cron.timer','woowtech-backup-schedule.timer',
+'nextcloud-cron.service','woowtech-backup-schedule.service']
+out={}
+for n in names:
+ p=subprocess.run(['systemctl','--user','show',n,'--property=ActiveState,SubState,UnitFileState,MainPID,Result,ExecMainStatus,ExecMainExitTimestamp'],capture_output=True,timeout=30)
+ assert p.returncode==0
+ out[n]=dict(x.split('=',1) for x in p.stdout.decode().splitlines() if '=' in x)
+print(json.dumps(out))
+'''
+UNITS=r'''
+import hashlib,json,os,pathlib,stat,sys
+q=json.load(sys.stdin);root=pathlib.Path.home()/'.config/containers/systemd';out=[]
+for r in q['rows']:
+ p=root/r['name'];s=p.lstat();assert stat.S_ISREG(s.st_mode) and s.st_nlink==1 and not os.listxattr(p)
+ assert (s.st_uid,s.st_gid,stat.S_IMODE(s.st_mode),s.st_mtime_ns)==(r['uid'],r['gid'],r['mode'],r['mtime_ns'])
+ out.append({'name':r['name'],'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+print(json.dumps(out))
+'''
+SOURCE=r'''
+q=json.load(sys.stdin);n=q['nonce'];assert n=='24d1dc3d14bfc94e'
+a=Path('/usr/local/lib')/('.focus-nextcloud-r6-'+n);b=Path('/usr/local/libexec')/('.focus-nextcloud-r6-'+n)
+with (a/'transaction.json').open() as f:j=json.load(f)
+out={'state':j['state'],'manifest_sha256':j['manifest_sha256'],'prior_sha256':manifest_hash(j['prior'])}
+e=j['new'] if q['stage']=='before' else j['prior']
+out['current_library_exact']=tree_snapshot(Path('/usr/local/lib/woowtech-cockpit-backup'))==e['library']
+out['current_helper_exact']=tree_snapshot(Path('/usr/local/libexec/woowtech-cockpit-backup'))==e['helper']
+if q['stage']=='before':
+ out['prior_library_exact']=tree_snapshot(a/'prior-library')==j['prior']['library']
+ out['prior_helper_exact']=tree_snapshot(b/'prior-helper')==j['prior']['helper']
+print(json.dumps(out))
+'''
+RESET=r'''
+import json,subprocess,sys
+q=json.load(sys.stdin);n='nextcloud-office.service'
+p=subprocess.run(['systemctl','--user','show',n,'--property=ActiveState,SubState,MainPID,Result,ExecMainStatus,ExecMainExitTimestamp'],capture_output=True,timeout=30)
+s=dict(x.split('=',1) for x in p.stdout.decode().splitlines() if '=' in x)
+assert s==q['expected'] and s['MainPID']=='0' and s['ActiveState']=='failed'
+p=subprocess.run(['systemctl','--user','reset-failed',n],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=30)
+assert p.returncode==0
+print(json.dumps({'status':'only-known-office-failed-flag-cleared'}))
+'''
+
+def source_program():
+ return ('import hashlib,json,os,stat,sys\nfrom pathlib import Path\nMAX_FILE='+str(source.MAX_FILE)+
+  '\nMAX_TOTAL='+str(source.MAX_TOTAL)+'\n'+inspect.getsource(source.digest)+'\n'+inspect.getsource(source.manifest_hash)+'\n'+inspect.getsource(source.tree_snapshot)+'\n'+SOURCE)
+
+def assert_source(proof,stage):
+ assert proof['state']==('installed' if stage=='before' else 'restored')
+ assert proof['manifest_sha256']==PRODUCT and proof['prior_sha256']==PRIOR
+ assert proof['current_library_exact'] and proof['current_helper_exact']
+ if stage=='before':assert proof['prior_library_exact'] and proof['prior_helper_exact']
+
+def main():
+ with open('/tmp/woowbk-dev-e-mutation.lock','a') as lock:
+  fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+  lease=json.loads(pathlib.Path('/tmp/parity-focus-20261127/lease-nextcloud-r6-fullshare.json').read_text())
+  expires=datetime.datetime.fromisoformat(lease['expires_utc'].replace('Z','+00:00')).timestamp()+1800
+  assert time.time()<expires and lease['source_commit']==COMMIT and lease['product_manifest_sha256']==PRODUCT
+  assert lease['reserve_bytes']==RESERVE and lease['memory_cap_bytes']==DEVICE_CAP
+  assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()==COMMIT
+  bindings={}
+  for name in ('source','wake','case','inventory','plan'):
+   rel='tests/e2e/lab/focus_nextcloud_r6_'+name+'.py';data=(ROOT/rel).read_bytes()
+   trusted=subprocess.check_output(['git','show',COMMIT+':'+rel],cwd=ROOT)
+   assert data==trusted;bindings[rel]=hashlib.sha256(data).hexdigest()
+  for body in (source_program(),NATIVE,UNITS,RESET):compile(body,'<recovery>','exec')
+  out=LAB/'evidence/focus-nextcloud-r6-recovery-authorized'/time.strftime('%Y%m%dT%H%M%S')
+  out.mkdir(parents=True,mode=0o700,exist_ok=False);os.chmod(out.parent,0o700)
+  def save(name,value):
+   fd=os.open(out/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+   with os.fdopen(fd,'w') as f:json.dump(value,f,indent=2)
+  raw=pathlib.Path(__file__).read_bytes();fd=os.open(out/'wrapper.py',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+  with os.fdopen(fd,'wb') as f:f.write(raw)
+  save('command-source-bindings-before-write.json',{'source_commit':COMMIT,'wrapper_sha256':hashlib.sha256(raw).hexdigest(),
+   'command':[sys.executable,'-B','-I',str(pathlib.Path(__file__))],'primitive_sha256':bindings,
+   'source_transaction_nonce':NONCE,'product_manifest_sha256':PRODUCT,'prior_sha256':PRIOR,
+   'lease_file':'/tmp/parity-focus-20261127/lease-nextcloud-r6-fullshare.json','expires_including_grace_epoch':expires})
+  stage='fresh-readonly-predicates';passed=False;failure=None;reset=False;reverted=False;restored=False
+  failed_sha=source.digest(CONTROL/'fixed-result.json');receipt_sha=source.digest(LAB/'run/focus_nextcloud_r6.json')
+  fixture_stat=FIXTURE.stat();fixture_identity=(fixture_stat.st_size,fixture_stat.st_mtime_ns,fixture_stat.st_ino)
+  try:
+   before=json.loads((CONTROL/'prior-inventory.private.json').read_text());units=json.loads((CONTROL/'prior-units.private.json').read_text())
+   manifest=json.loads((CONTROL/'product-manifest.json').read_text());baseline=json.loads((CONTROL/'baseline-hashes.json').read_text())
+   failed=json.loads((CONTROL/'fixed-result.json').read_text());receipt=json.loads((LAB/'run/focus_nextcloud_r6.json').read_text())
+   b=json.loads((CASE/'before.json').read_text());a=json.loads((CASE/'after.json').read_text())
+   assert failed['status']=='failed' and failed['source_commit']==COMMIT and failed['data_baseline_safe'] is True
+   assert receipt['pending'] is False and not receipt.get('jobs') and not receipt.get('created_backups') and not receipt.get('ha_backup_id')
+   assert b['markers']==a['markers'] and all(b['state'].get(k)==a['state'].get(k) for k in ('config_sha256','users','db','data_top','units','status','office'))
+   assert source.manifest_hash(manifest)==PRODUCT
+   native=wake.device(NATIVE);current=collect();proof=wake.device(source_program(),{'nonce':NONCE,'stage':'before'},root=True)
+   assert_source(proof,'before')
+   assert wake.device(case.QUIESCENT,root=True)['active_jobs']==0
+   assert current['isolation']==before['isolation'] and current['root']['memory_max']==str(DEVICE_CAP)
+   assert min(current['host_free_bytes'],current['root']['varlib_free_bytes'])>=RESERVE+512*1024**2
+   assert current['root']['catalog_sha256']==before['root']['catalog_sha256']
+   assert len(current['owner']['images'])==5 and all(r['present'] and r['identity']['id'].removeprefix('sha256:')==ORIGINALS[r['ref']]
+    and r['identity']['architecture']=='amd64' and r['identity']['os']=='linux' for r in current['owner']['images'])
+   for name,row in native.items():
+    assert int(row.get('MainPID') or '0')==0
+    if name=='nextcloud-office.service':
+     assert row['ActiveState']=='failed' and row['SubState']=='failed' and row['Result']=='exit-code' and row['ExecMainStatus']=='137'
+     assert row['ExecMainExitTimestamp']=='Fri 2026-11-27 00:31:35 UTC'
+    else:assert row['ActiveState']=='inactive'
+   for name,row in before['owner']['units'].items():
+    assert native[name].get('UnitFileState')==row.get('UnitFileState')
+   rows=wake.device(UNITS,units)
+   assert {r['name']:r['sha256'] for r in rows}=={r['name']:r['pinned_sha256'] for r in units['rows']}
+   assert wake.device(wake.BASELINE_HASH,root=True,timeout=180)==baseline
+   config=wake.device("import json,pathlib,hashlib; p=pathlib.Path('/home/appowner/.local/share/nextcloud-office/html/config/config.php');print(json.dumps({'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}))",root=True)
+   assert config['sha256']==b['state']['config_sha256']
+   assert fixture_identity==(4467947520,1795442736290171673,8131209)
+   save('fresh-predicates-before-write.json',{'native':native,'source':proof,'unit_hashes':rows,'archive_hashes_match':True,
+    'active_jobs':0,'native_pids_zero':True,'data_evidence_and_cold_config_match':True,'fixture_stat':fixture_identity})
+   assert time.time()<expires
+   stage='only-known-office-reset-failed'
+   expected={k:native['nextcloud-office.service'][k] for k in ('ActiveState','SubState','MainPID','Result','ExecMainStatus','ExecMainExitTimestamp')}
+   save('office-reset-command-before-write.json',{'unit':'nextcloud-office.service','expected':expected})
+   wake.device(RESET,{'expected':expected});reset=True
+   current=collect();assert current['owner']['units']==before['owner']['units']
+   assert all(int(r.get('MainPID') or '0')==0 and r['ActiveState']=='inactive' for r in wake.device(NATIVE).values())
+   stage='exact-five-quadlet-revert'
+   assert wake.device(case.QUIESCENT,root=True)['active_jobs']==0 and time.time()<expires
+   wake.device(wake.unit_program(),{'action':'revert','snapshot':units});case.reload_units()
+   assert wake.device(wake.unit_program(),{'action':'snapshot'})==units;reverted=True
+   save('unit-return-proof.json',{'exact_snapshot':True,'five_files':5})
+   stage='exact-prior-library-helper-version-return'
+   assert wake.device(case.QUIESCENT,root=True)['active_jobs']==0 and time.time()<expires
+   result=source.transact('restore',NONCE,{},manifest,expires);save('source-return.json',result);restored=True
+   proof=wake.device(source_program(),{'nonce':NONCE,'stage':'after'},root=True);assert_source(proof,'after')
+   after=collect();archive=wake.device(wake.BASELINE_HASH,root=True,timeout=180)
+   assert after['owner']['units']==before['owner']['units'] and after['owner']['quadlets']==before['owner']['quadlets']
+   assert after['owner']['images']==before['owner']['images'] and after['root']['installed_hashes']==before['root']['installed_hashes']
+   assert after['root']['catalog_sha256']==before['root']['catalog_sha256'] and archive==baseline
+   assert after['isolation']==before['isolation'] and after['root']['memory_max']==str(DEVICE_CAP)
+   assert wake.device(wake.unit_program(),{'action':'snapshot'})==units and wake.device(case.QUIESCENT,root=True)['active_jobs']==0
+   assert all(int(r.get('MainPID') or '0')==0 and r['ActiveState']=='inactive' for r in wake.device(NATIVE).values())
+   assert source.digest(CONTROL/'fixed-result.json')==failed_sha and source.digest(LAB/'run/focus_nextcloud_r6.json')==receipt_sha
+   st=FIXTURE.stat();assert (st.st_size,st.st_mtime_ns,st.st_ino)==fixture_identity
+   save('after-inventory.private.json',after);save('after-source-proof.json',proof);save('baseline-hashes-after.json',archive)
+   passed=True
+  except Exception:
+   failure='fixed-r6-authorized-recovery-'+stage+'-refused'
+  record={'status':'passed' if passed else 'failed','phase':'authorized-recovery-only','failed_source_commit':COMMIT,
+   'source_transaction_nonce':NONCE,'product_manifest_sha256':PRODUCT,'prior_sha256':PRIOR,
+   'only_known_office_flag_reset':reset,'five_quadlets_exact':reverted,'prior_library_helper_version_exact':restored and passed,
+   'all_original_states_hashes_images_cap_isolation_exact':passed,'old_failed_receipt_preserved':True,
+   'fullshare_acceptance_passed':False,'initial_upload_stop_cause':'unknown-not-recorded',
+   'app_starts':0,'uploads':0,'data_restores':0,'pulls':0,'fixed_failure':failure,
+   'wrapper_sha256':hashlib.sha256(raw).hexdigest(),'private_receipt_dir':str(out)}
+  save('fixed-result.json',record);print(json.dumps(record));return 0 if passed else 1
+
+if __name__=='__main__':sys.exit(main())

@@ -1,0 +1,13 @@
+not an archive           issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+unsupported encryption   issues=['failure.unsupported-format'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+size mismatch            issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+empty                    issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+cut gzip                 issues=[] importer_check=called importable=True other_app_importable=True -> NOT stopped at check time
+crc                      issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+cut tar                  issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+hostile name in front    issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+bad addon.json           issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+duplicate                issues=['failure.corrupt-archive'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+missing                  issues=['failure.not-found'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+not listed               issues=['ha.addon-missing'] importer_check=not called importable=False other_app_importable=True -> stops only this app
+RESULT 11 of 12 damaged members stop only their own app at check time (fakes, not real); not stopped at check time: ['cut gzip']

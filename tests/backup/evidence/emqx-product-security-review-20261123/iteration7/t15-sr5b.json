@@ -1,0 +1,212 @@
+{
+ "attempt": "t15-sr5b",
+ "backup_engine_tree": "5142e05cb05337936d5fd010082e1c07f3d88b06",
+ "code": "fix/emqx-sr5-hash-warning-20261124",
+ "command": "-I t15_sr5_review.py sr5 gw-plain,listener-plain,past-plain",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 643.3,
+ "exit_code": 0,
+ "harness_commit": "966553352624f0e13be5cc38309460ae1cace778",
+ "iteration": 7,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "sr5",
+  "device_users_added": "13",
+  "device_users_expected": 14,
+  "elapsed_s": 643.0,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "lab_left": {
+   "containers": 0,
+   "volumes": 0
+  },
+  "modes": {
+   "gw-plain": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global','stomp:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "sha256",
+      "salt": "suffix"
+     },
+     "plain_refused": false,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_notes_naming": 0,
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 228.2,
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "source_broker": "added=2:rows=2:clear=2:groups=['stomp:global']",
+    "source_mnesia_files": 21,
+    "staged_sha256": "b0aa0abceb96d7e047cf2309d510424c2d1cf742a2f626e8cd54de9024d107cd",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "listener-plain": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global','tcp:default']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "sha256",
+      "salt": "suffix"
+     },
+     "plain_refused": false,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_notes_naming": 0,
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 211.5,
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "source_broker": "added=2:rows=2:clear=2:groups=['tcp:default']",
+    "source_mnesia_files": 21,
+    "staged_sha256": "d534cb37448ba4d59aa1804e53bcf97a79b69a9e0f9ea91f3aeb8780d6db699a",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   },
+   "past-plain": {
+    "candidate_clear": "rows=3:clear=2:groups=['mqtt:global']",
+    "candidate_leak": "rows=3:hash=0:salt=0:pwd=false",
+    "check": {
+     "accounts_stop": 0,
+     "blockers": [],
+     "device": {
+      "count": 14,
+      "hashing": {
+       "dk_length": null,
+       "enable": true,
+       "iterations": null,
+       "mac_fun": null,
+       "name": "sha256",
+       "salt": "suffix"
+      }
+     },
+     "device_ids_exact": true,
+     "hashing": {
+      "dk_length": null,
+      "enable": true,
+      "iterations": null,
+      "mac_fun": null,
+      "name": "sha256",
+      "salt": "suffix"
+     },
+     "plain_refused": false,
+     "warnings": [
+      "HA 的 EMQX 允許未符合規則的主題；這台會拒絕，搬過來後請確認 ACL 規則涵蓋裝置使用的主題。"
+     ]
+    },
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_notes_naming": 0,
+    "device_leak": "rows=14:hash=0:salt=0:pwd=false",
+    "device_read_only_check": {
+     "equal": true
+    },
+    "device_read_only_conversion": {
+     "equal": true
+    },
+    "elapsed_s": 183.6,
+    "export_called": true,
+    "plaintext_rows_in_candidate": 2,
+    "preflight": {
+     "blocker": null,
+     "profile": [
+      "file"
+     ]
+    },
+    "source_broker": "added=2:rows=2:clear=2:groups=['mqtt:global']",
+    "source_mnesia_files": 21,
+    "staged_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c",
+    "text_scan": {
+     "bcrypt_prefix": 0,
+     "control_chars": 0,
+     "hex_runs_24": 0,
+     "texts": 6
+    }
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T15 SR-5 option C re-review (warning leak, names, read-only device reads, plain before export, plain rows from gateway/listener/past authenticators)"
+ },
+ "source_commit": "3c857c3099d19333d7f0c7f7780c1aec5d4d8e2c",
+ "started": "2026-11-24T17:50:10+0800",
+ "status_lines": [],
+ "stdout_sha256": "de69ea79f33f81f8f14ca6f1db92410daf3b843285b668942bbb7efe9ca5a460",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

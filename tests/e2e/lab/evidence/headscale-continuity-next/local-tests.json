@@ -1,0 +1,13 @@
+{
+  "source_sha": "91758a2d53b5924e9bb8bf010be4c74418b6f866",
+  "command": "PYTHONPATH=\"$PWD/backup-engine\" python3 -m unittest discover -s tests/e2e/lab -p \"test_headscale_*.py\" -v",
+  "tests": 48,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "elapsed_seconds": 12.36,
+  "bash_syntax": "pass",
+  "py_compile": "pass",
+  "git_diff_check": "pass",
+  "regression_red_before_fix": true
+}

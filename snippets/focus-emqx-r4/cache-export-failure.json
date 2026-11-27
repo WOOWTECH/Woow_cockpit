@@ -1,0 +1,74 @@
+{
+  "current_cache": {
+    "all_three_exact_reference_metadata_guards": "pass",
+    "catalog_equal_before_after_diagnostic": true,
+    "catalog_lines": 18,
+    "catalog_sha256": "58200fd84e2ed58b85b5ad1b96dff343365728e937514798c612cd30e76123c4",
+    "derived_af291_present": true,
+    "graph_root": "/home/appowner/.local/share/containers/storage",
+    "owner_uid": 1019,
+    "rootless": true
+  },
+  "device_exports_saves_loads_tags_builds_deletions_containers_or_source_changes": false,
+  "device_mutex_released": true,
+  "diagnostic_captures": [
+    {
+      "name": "emqx-r4-cached-images-diag02.private.json",
+      "sha256": "75ea50410a375a425167dc6ea39bcd255f674ce5575674bd7c8f469a31c1339b"
+    },
+    {
+      "name": "emqx-r4-cached-images-diag03.private.json",
+      "sha256": "03d6bae8341164a5dd0ccc14c375262488a73647e2fc0e1cd01e01eb24ddc4f6"
+    },
+    {
+      "name": "emqx-r4-cached-images-diag04.private.json",
+      "sha256": "2ff32326a576736100a6a7666133cf90af38bb84c20c7fab657a97e6a86476b1"
+    }
+  ],
+  "first_diagnostic_packet": "diag01 SyntaxError before read operations; retained separately; corrected packet parses locally before D call",
+  "future_private_diagnostic_offline_gate": {
+    "blocked": 0,
+    "errors": 0,
+    "failures": 0,
+    "log": "/tmp/parity-focus-20261127/emqx-r4-cache-private-phase.guardlog",
+    "log_sha256": "7d3a88f235fbb03889cde78623240a5295095f8c8f3d4758c030a45cd8862659",
+    "run_native": "absent",
+    "shim_hits": 0,
+    "skipped": 0,
+    "source_sha256": {
+      "tests/e2e/lab/focus_emqx_r4_cached_images.py": "a7830f4e62f7ad33e85508849374de0a27d96b4e09dcc9fabe90a954717135d2",
+      "tests/e2e/lab/focus_emqx_r4_prepare_tests.py": "3e6ddd727309665785d86ba6e76b9c68ba70b86b7b83ba41b09bb0683132f132"
+    },
+    "tests": 2
+  },
+  "historical_pre_export_full_catalog_equality": "not measured: original before inventory was memory-only and not retained",
+  "kind": "image-only-export-failure-readonly-diagnosis",
+  "original_inner_message_and_stage": "not retained; original result records ValueError only",
+  "original_result_sha256": "8be003308e19384b04be75d447fc772cc138ba0dc65e633eb9e171117b1990e0",
+  "owned_payload": {
+    "context_source_and_profile_match": true,
+    "immutable_package_files_matched": 11,
+    "mode": "0o700",
+    "retained": true,
+    "source_files_matched_to_17e": 51,
+    "uid": 1019
+  },
+  "retained_broker_archive": {
+    "bytes": 115731968,
+    "config_digest": "sha256:1b8bcb217955926f6a50af4d1dc3f2aa8ea2370fa864579942eecc68a607b80f",
+    "expected_config_digest": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+    "manifest_digest": "sha256:81b7683b765c484161b0d7efbb08857b86a544a28bf9dfb30ce7cb3669db21fa",
+    "platform": {
+      "architecture": "amd64",
+      "os": "linux"
+    },
+    "sha256": "c56871cae03b42356408db6d4ab31c85f808590d385f2ab5914f15e703fe9a63",
+    "unchanged_17e_validator_reproduction": {
+      "guard_message": "pinned_config_mismatch",
+      "validation": "ValueError"
+    },
+    "unchanged_during_read": true
+  },
+  "source_commit": "17e76e61d6637c863f4d6b2031e5daf79d5ec4cd",
+  "summary_written_at": "2026-11-27T01:43:28.303529+00:00"
+}

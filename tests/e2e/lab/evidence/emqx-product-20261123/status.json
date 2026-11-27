@@ -1,0 +1,588 @@
+{
+ "lane": "emqx-product",
+ "date": "2026-11-23",
+ "updated": "2026-11-24T15:23+08:00",
+ "scope": "EMQX HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」, decision C 「EMQX 權限」): the public PRESERVATION_BLOCKER is removed in the same change that makes the product enforce every protection the lab proved; real batch-1 HA backups (ARM RPi5 and x86, cold, encrypted) through the product flow on dev-d",
+ "branch": "R-COCKPIT feat/ha-import-emqx-product-20261124 (local only, never pushed)",
+ "product_tip": "e08f8a1",
+ "backup_engine_tree": "865c930f392006e0080de506eb7c425fd81becd7",
+ "merged_into_integration": [
+  "9bf8f5e (c6435b4)",
+  "66c1142 (health fix 4ec3174)",
+  "7165235 (d8c6d1b, README/status)",
+  "431201e (575f2fd, corrected health fix)",
+  "2b5fee1 (3891601, attempt-32)"
+ ],
+ "security_review": "emqx-secreview: DONE, verdict OK for backup-engine tree 865c930f (sec/emqx-secreview2-20261124@28c6d97)",
+ "unit_tests": {
+  "final_tip_fc0e3bc": "EMQX + harness + lab candidate 226 OK, shared 439 OK, lab ACL component 6 OK, 0 blocked",
+  "full_tests_backup_e08f8a1": "1543 run; not ok only the 12 known ones; RealBackupTests 1/1; backup-ui 100/100",
+  "on_integration_bca3d65_plus_health_fix": "4ec3174: 228 + 488 + 6 OK, 0 blocked",
+  "mutation": "81 protections: 79 killed on e08f8a1, the 2 survivors (test gaps) killed by 7e530cf = 81/81; health fix 7/7"
+ },
+ "supported": "EMQX add-on 5.9.1 (EMQX 5.8.9), ARM and x86 HA backups made while the add-on was stopped; target EMQX 5.8.9 with sources [file, built_in_database] (or [file] when the backup has no ACL rows); everything else refuses with a specific message",
+ "simulated": "S1 browser page, S2 the customer's Dashboard step (through REST), S3 start failure, S4 readback failure, S5 HA's HTTP action target, S6 MQTT clients are the harness probe inside dev-d, S7 lab-made input (README)",
+ "open": [
+  "commercial_acceptance not-complete until the owner accepts",
+  "human security review item: boot-time behaviour of HA's throwaway broker (README)",
+  "not covered: production, device reboot, EMQX clusters, other authorization sources, other EMQX versions"
+ ],
+ "commercial_acceptance": "not-complete",
+ "extra_chain": {
+  "branch": "R-COCKPIT fix/emqx-health-suggest-20261124 (local only, never pushed); worktree /tmp/emqx-health-20261124",
+  "attempts_30_34_engine": "80215432 (attempt-30) and 45db404c (32-34) = the integrated engine + the health fix",
+  "attempts_35_36_engine": "f6dfa9c45975a31cb114611a6498d19f58440344 = integration 2b5fee1 + the export check dd3ae49 (merges bc414dd, d6f2c2f)",
+  "summary": "attempt-30 FAIL 32/33 (real product finding, fixed), 32 PASS 109/109, 33 PASS 153/153, 34 PASS 99/99, 35 PASS 95/95, 36 PASS 106/106; 31 never used (no JSON)"
+ },
+ "unit_tests_integrated": {
+  "it5d_575f2fd_engine_45db404c": "EMQX + harness + lab candidate 242 OK, shared (with test_suggest) 503 OK, lab ACL component 6 OK, 0 blocked",
+  "mutation_integrated_4539aec": "88/88 killed (81 EMQX protections + 7 of the first health fix)",
+  "mutation_corrected_health_fix": "13/13 killed (HB1-HB13), test_suggest 50 OK",
+  "it6_d6f2c2f_engine_f6dfa9c4": "EMQX + harness + lab candidate 259 OK, shared (with test_suggest) 503 OK, lab ACL component 6 OK, 0 blocked"
+ },
+ "security_review_later": "SR-10 fixed on integration (65d8a51, 97c994f); SR-5 closed (not reachable, 3 real conversions); export check dd3ae49 READY (emqx-secreview iteration 6), real product-flow proof = attempts 35/36",
+ "known_effect": "HA hashing MQTT passwords differently: conversion succeeds, this device's own MQTT account can no longer log in (named by the conversion, not by the check page)",
+ "real_runs": {
+  "attempt-01": {
+   "scope": "setup-before-arm-file",
+   "source_commit": "16abc8a",
+   "backup_engine_tree": "7376ab3f",
+   "exit": -15,
+   "elapsed_seconds": 1253.3,
+   "lock_held": "never",
+   "checks": "",
+   "steps": [],
+   "failed_checks": [],
+   "what": "Stopped by the lane while it waited for the dev-d lock (never held it, no dev-d change): the security review's SR-6/SR-7 fixes had to be merged first.",
+   "simulated": "-"
+  },
+  "attempt-02": {
+   "scope": "setup-before-arm-file",
+   "source_commit": "9036688",
+   "backup_engine_tree": "2411407a",
+   "exit": 0,
+   "elapsed_seconds": 1706.0,
+   "lock_held": "706 s",
+   "checks": "33/33",
+   "steps": [
+    "setup: PASS seconds=87",
+    "before: PASS seconds=238",
+    "import:arm-cold:file: PASS seconds=373"
+   ],
+   "failed_checks": [],
+   "what": "Decision C on the real ARM backup and dev-d's own [file] target: the check refuses with exactly the owner's text, the conversion (started anyway) is refused with the same text, no backup and no throwaway object left, state digest equal; also deploy of the tree and baseline B0.",
+   "simulated": "S1 S6"
+  },
+  "attempt-03": {
+   "scope": "x86-file-hot",
+   "source_commit": "448ec58",
+   "backup_engine_tree": "2411407a",
+   "exit": 0,
+   "elapsed_seconds": 723.2,
+   "lock_held": "512 s",
+   "checks": "30/30",
+   "steps": [
+    "setup: PASS seconds=19",
+    "import:x86-cold:file: PASS seconds=266",
+    "check-hot: PASS seconds=225"
+   ],
+   "failed_checks": [],
+   "what": "The same decision-C refusal for the real x86 backup; both hot backups are named (the hot-backup hint stays).",
+   "simulated": "S1 S6"
+  },
+  "attempt-04": {
+   "scope": "arm-builtin",
+   "source_commit": "037ed13",
+   "backup_engine_tree": "2411407a",
+   "exit": 1,
+   "elapsed_seconds": 866.7,
+   "lock_held": "133 s",
+   "checks": "13/15",
+   "steps": [
+    "setup: PASS seconds=17",
+    "import:arm-cold:builtin: FAIL seconds=113"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): the built-in database source was added through the API (file + built-in)",
+    "import:arm-cold:builtin: step ran to the end"
+   ],
+   "what": "FAILED in the harness's own preparation: EMQX 5.8.9 prepends a source created through REST (emqx_authz_api_sources.erl:258-259), so the order was [built_in_database, file]. No product job ran. Fixed in the harness (move after:file, as a customer does) and in the docs. dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-05": {
+   "scope": "arm-builtin",
+   "source_commit": "006e495",
+   "backup_engine_tree": "2411407a",
+   "exit": 1,
+   "elapsed_seconds": 1867.5,
+   "lock_held": "741 s",
+   "checks": "21/23",
+   "steps": [
+    "setup: PASS seconds=21",
+    "import:arm-cold:builtin: FAIL seconds=717"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id",
+    "import arm-cold/emqx (builtin target) after the baseline restore: this device's admin logs in_ HA's admin password does not"
+   ],
+   "what": "FAILED in the PRODUCT: 「EMQX 候選啟動後設定與目標不一致」: a source added at runtime lacks the schema default max_rules that every boot fills (emqx_config.erl:341,345). Fixed 28e9492. A second FAIL is the harness's timing only (the first login right after the baseline restore got 404; fixed e62b0a5). dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-06": {
+   "scope": "arm-builtin",
+   "source_commit": "e62b0a5",
+   "backup_engine_tree": "bb052f3d",
+   "exit": 1,
+   "elapsed_seconds": 2157.0,
+   "lock_held": "571 s",
+   "checks": "22/23",
+   "steps": [
+    "setup: PASS seconds=35",
+    "import:arm-cold:builtin: FAIL seconds=533"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id"
+   ],
+   "what": "FAILED in the PRODUCT at the same check: the package's EnvironmentFile= (EMQX_LOG__CONSOLE__LEVEL) was not given to the candidate. Fixed 3761d18 (since abff1a0 podman reads the file itself). dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-07": {
+   "scope": "arm-builtin",
+   "source_commit": "3761d18",
+   "backup_engine_tree": "25c1fa0e",
+   "exit": 1,
+   "elapsed_seconds": 2732.8,
+   "lock_held": "333 s",
+   "checks": "22/23",
+   "steps": [
+    "setup: PASS seconds=10",
+    "import:arm-cold:builtin: FAIL seconds=323"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id"
+   ],
+   "what": "FAILED at the same check with no root named; fdb7cfe makes the refusal name the differing setting roots (schema names only, never values). dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-08": {
+   "scope": "arm-builtin",
+   "source_commit": "fdb7cfe",
+   "backup_engine_tree": "41e74632",
+   "exit": 1,
+   "elapsed_seconds": 393.7,
+   "lock_held": "393 s",
+   "checks": "22/23",
+   "steps": [
+    "setup: PASS seconds=16",
+    "import:arm-cold:builtin: FAIL seconds=376"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id"
+   ],
+   "what": "FAILED, now naming `dashboard`: num_acceptors defaults to the online schedulers (emqx_dashboard_schema.erl:125-131) and the candidate runs under --cpus. Fixed 92f2461. dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-09": {
+   "scope": "arm-builtin",
+   "source_commit": "92f2461",
+   "backup_engine_tree": "0764d670",
+   "exit": -15,
+   "elapsed_seconds": 228.4,
+   "lock_held": "never",
+   "checks": "",
+   "steps": [],
+   "failed_checks": [],
+   "what": "Stopped by the lane while it only waited for the dev-d lock (never held it, no dev-d change), to land be5bc6f first.",
+   "simulated": "-"
+  },
+  "attempt-10": {
+   "scope": "arm-builtin",
+   "source_commit": "56a6433",
+   "backup_engine_tree": "0e342456",
+   "exit": 1,
+   "elapsed_seconds": 890.8,
+   "lock_held": "625 s",
+   "checks": "24/25",
+   "steps": [
+    "setup: PASS seconds=15",
+    "import:arm-cold:builtin: FAIL seconds=608"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id"
+   ],
+   "what": "FAILED in the PRODUCT: 「暫用的 EMQX 在 300 秒內沒有就緒」: ERL_FLAGS lands after bin/emqx's trailing -emqx_data_dir (bin/emqx:570,1321-1324). Fixed be2c92d (ERL_AFLAGS). be5bc6f (no anonymous volume) proven here. dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-11": {
+   "scope": "arm-builtin",
+   "source_commit": "be2c92d",
+   "backup_engine_tree": "6b1181d7",
+   "exit": 1,
+   "elapsed_seconds": 400.0,
+   "lock_held": "398 s",
+   "checks": "24/25",
+   "steps": [
+    "setup: PASS seconds=19",
+    "import:arm-cold:builtin: FAIL seconds=378"
+   ],
+   "failed_checks": [
+    "import arm-cold/emqx (builtin target): conversion succeeded with a backup id"
+   ],
+   "what": "FAILED in the PRODUCT after HA's data imported: 「EMQX 匯入後未能保留目標有效設定」: `emqx ctl conf load` fills schema defaults before storing (emqx_conf_cli.erl:541-546). Fixed 0d260db. dev-d's own baseline was restored by the harness itself (state digest equal to the one before).",
+   "simulated": "S1 S2 S6"
+  },
+  "attempt-12": {
+   "scope": "arm-builtin",
+   "source_commit": "0d260db",
+   "backup_engine_tree": "5292c15d",
+   "exit": 0,
+   "elapsed_seconds": 401.6,
+   "lock_held": "401 s",
+   "checks": "66/66",
+   "steps": [
+    "setup: PASS seconds=10",
+    "import:arm-cold:builtin: PASS seconds=391"
+   ],
+   "failed_checks": [],
+   "what": "ARM built-in, engine 5292c15d (before abff1a0/8613ffa): check ok, real conversion (real space check), inspect in place/same, restore with a safety backup and the product's own readback (「EMQX 還原後核對一致」); after the restore AND after a service restart: HA's 3 MQTT users log in with HA's passwords, wrong password / anonymous / banned client id refused, this device's bootstrap user still logs in, HA's ACL rows active (allowed, and SUBACK 0x80 denied), this device's ACL file byte-equal and still working, 2 retained messages with equal payloads, HA's republish rule delivers exactly one rendered message, HA's HTTP action rule matched and ran, HA's Dashboard users and API key work, state after the restart equal, no anonymous volume left.",
+   "simulated": "S1 S2 S5 S6"
+  },
+  "attempt-13": {
+   "scope": "arm-rollback",
+   "source_commit": "6d7c1e2",
+   "backup_engine_tree": "5292c15d",
+   "exit": 0,
+   "elapsed_seconds": 407.7,
+   "lock_held": "407 s",
+   "checks": "84/84",
+   "steps": [
+    "setup: PASS seconds=5",
+    "rollback:arm-cold: PASS seconds=402"
+   ],
+   "failed_checks": [],
+   "what": "ARM rollback rounds, engine 5292c15d: imported state proven again first, then AUTOMATIC rollback (start failure → job rolled-back), READBACK rollback (a changed setting → named 設定（log） → rolled back by itself), each with the full client probe after it; then MANUAL rollback = restore of baseline B0: this device's admin back, no HA data, [file] only, markers back, state digest equal to before any import.",
+   "simulated": "S1 S3 S4 S5 S6"
+  },
+  "attempt-14": {
+   "scope": "x86-builtin",
+   "source_commit": "cde92e4",
+   "backup_engine_tree": "5292c15d",
+   "exit": 0,
+   "elapsed_seconds": 2341.7,
+   "lock_held": "1038 s",
+   "checks": "66/66",
+   "steps": [
+    "setup: PASS seconds=45",
+    "import:x86-cold:builtin: PASS seconds=988"
+   ],
+   "failed_checks": [],
+   "what": "x86 built-in, engine 5292c15d: the same full import set as attempt-12.",
+   "simulated": "S1 S2 S5 S6"
+  },
+  "attempt-15": {
+   "scope": "x86-rollback",
+   "source_commit": "f211688",
+   "backup_engine_tree": "5292c15d",
+   "exit": 0,
+   "elapsed_seconds": 2244.2,
+   "lock_held": "761 s",
+   "checks": "85/85",
+   "steps": [
+    "setup: PASS seconds=36",
+    "rollback:x86-cold: PASS seconds=723"
+   ],
+   "failed_checks": [],
+   "what": "x86 rollback rounds, engine 5292c15d: the same rounds as attempt-13.",
+   "simulated": "S1 S3 S4 S5 S6"
+  },
+  "attempt-16": {
+   "scope": "file-refusal-hot",
+   "source_commit": "4bd7fbb",
+   "backup_engine_tree": "5292c15d",
+   "exit": 0,
+   "elapsed_seconds": 818.1,
+   "lock_held": "817 s",
+   "checks": "48/48",
+   "steps": [
+    "setup: PASS seconds=14",
+    "import:arm-cold:file: PASS seconds=441",
+    "import:x86-cold:file: PASS seconds=235",
+    "check-hot: PASS seconds=121"
+   ],
+   "failed_checks": [],
+   "what": "Decision C for both real cold backups on dev-d's [file] target (check and conversion refused with the owner's text, nothing left, state digest equal) and both hot backups named, engine 5292c15d.",
+   "simulated": "S1 S6"
+  },
+  "attempt-17": {
+   "scope": "cleanup-leaks",
+   "source_commit": "96d5239",
+   "backup_engine_tree": "5292c15d",
+   "exit": 1,
+   "elapsed_seconds": 13.8,
+   "lock_held": "13 s",
+   "checks": "15/16",
+   "steps": [
+    "setup: PASS seconds=4",
+    "cleanup: PASS seconds=8",
+    "cleanup-baseline: PASS seconds=1",
+    "leaks: SKIP headroom=1"
+   ],
+   "failed_checks": [
+    "leaks: headroom before the step"
+   ],
+   "what": "FAILED only because the leaks step was skipped: dev-d's memory headroom (which counts page cache) was 1 576 128 512 B, below the harness limit of 1.5 GiB. cleanup (no job object, converted/safety backups deleted, no drop-in left, EMQX running) and cleanup-baseline (B0 deleted) passed.",
+   "simulated": "-"
+  },
+  "attempt-18": {
+   "scope": "arm-builtin",
+   "source_commit": "e08f8a1",
+   "backup_engine_tree": "865c930f",
+   "exit": 0,
+   "elapsed_seconds": 779.6,
+   "lock_held": "778 s",
+   "checks": "74/74",
+   "steps": [
+    "setup: PASS seconds=26",
+    "before: PASS seconds=138",
+    "import:arm-cold:builtin: PASS seconds=614"
+   ],
+   "failed_checks": [],
+   "what": "ARM built-in on the FINAL merged engine (865c930f): `setup` (deploy; every installed module and the helper equal to this tree), `before` (state digest equal to the first one recorded before any import; new baseline B0), then check ok, real conversion (real space check), inspect in place/same, restore with a safety backup and the product's own readback (「EMQX 還原後核對一致」); after the restore AND after a service restart: HA's 3 MQTT users log in with HA's passwords, wrong password / anonymous / banned client id refused, this device's bootstrap user still logs in, HA's ACL rows active (allowed, and SUBACK 0x80 denied), this device's ACL file byte-equal and still working, 2 retained messages with equal payloads, HA's republish rule delivers exactly one rendered message, HA's HTTP action rule matched and ran, HA's Dashboard users and API key work, state after the restart equal, no anonymous volume left.",
+   "simulated": "S1 S2 S5 S6"
+  },
+  "attempt-19": {
+   "scope": "arm-rollback",
+   "source_commit": "f1ec063",
+   "backup_engine_tree": "865c930f",
+   "exit": 0,
+   "elapsed_seconds": 399.6,
+   "lock_held": "398 s",
+   "checks": "84/84",
+   "steps": [
+    "setup: PASS seconds=8",
+    "rollback:arm-cold: PASS seconds=390"
+   ],
+   "failed_checks": [],
+   "what": "ARM rollback rounds on the FINAL engine: imported state proven again first, then AUTOMATIC rollback (start failure → job rolled-back), READBACK rollback (a changed setting → named 設定（log） → rolled back by itself), each with the full client probe after it; then MANUAL rollback = restore of baseline B0: this device's admin back, no HA data, [file] only, markers back, state digest equal to before any import.",
+   "simulated": "S1 S3 S4 S5 S6"
+  },
+  "attempt-20": {
+   "scope": "x86-builtin",
+   "source_commit": "219d567",
+   "backup_engine_tree": "865c930f",
+   "exit": 0,
+   "elapsed_seconds": 856.9,
+   "lock_held": "855 s",
+   "checks": "66/66",
+   "steps": [
+    "setup: PASS seconds=37",
+    "import:x86-cold:builtin: PASS seconds=817"
+   ],
+   "failed_checks": [],
+   "what": "x86 built-in on the FINAL engine: the same full import set as attempt-18 (check, conversion, restore + readback, client probes after the restore and after the restart, state equal, no anonymous volume left).",
+   "simulated": "S1 S2 S5 S6"
+  },
+  "attempt-21": {
+   "scope": "x86-rollback",
+   "source_commit": "ef73c0e",
+   "backup_engine_tree": "865c930f",
+   "exit": 1,
+   "elapsed_seconds": 24.5,
+   "lock_held": "23 s",
+   "checks": "6/7",
+   "steps": [
+    "setup: FAIL seconds=23"
+   ],
+   "failed_checks": [
+    "setup: no anonymous volume left on dev-d (every image VOLUME path of a throwaway mounted)"
+   ],
+   "what": "FAILED by a false alarm of the HARNESS in its setup step; no product step ran: 2 \"new dangling volumes\" were dev-d's NAMED headscale-data and headscale-run, dangling whenever the pre-existing headscale.service restart loop has no container (97 anonymous volumes before and after). Fixed f0a34e2 (only podman's generated names and woowbk-* count). dev-d's EMQX kept attempt-20's recorded imported state for attempt-22.",
+   "simulated": "-"
+  },
+  "attempt-22": {
+   "scope": "x86-rollback",
+   "source_commit": "fc0e3bc",
+   "backup_engine_tree": "865c930f",
+   "exit": 1,
+   "elapsed_seconds": 524.7,
+   "lock_held": "524 s",
+   "checks": "90/91",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=8",
+    "rollback:x86-cold: PASS seconds=505",
+    "reclaim: PASS seconds=5",
+    "leaks: FAIL seconds=4"
+   ],
+   "failed_checks": [
+    "leaks: step ran to the end"
+   ],
+   "what": "x86 rollback rounds on the FINAL engine: the step PASSED completely (imported state proven again first, then AUTOMATIC rollback (start failure → job rolled-back), READBACK rollback (a changed setting → named 設定（log） → rolled back by itself), each with the full client probe after it; then MANUAL rollback = restore of baseline B0: this device's admin back, no HA data, [file] only, markers back, state digest equal to before any import). Exit 1 only because the leaks step could not start (harness): the b1 driver's scan requires an index.json this engine does not have; fixed c6435b4, the scan ran in the later attempts.",
+   "simulated": "S1 S3 S4 S5 S6"
+  },
+  "attempt-23": {
+   "scope": "file-refusal-hot",
+   "source_commit": "c6435b4",
+   "backup_engine_tree": "865c930f",
+   "exit": 0,
+   "elapsed_seconds": 1064.9,
+   "lock_held": "1063 s",
+   "checks": "55/55",
+   "steps": [
+    "reclaim: PASS seconds=10",
+    "setup: PASS seconds=27",
+    "import:arm-cold:file: PASS seconds=387",
+    "import:x86-cold:file: PASS seconds=398",
+    "check-hot: PASS seconds=231",
+    "reclaim: PASS seconds=4",
+    "leaks: PASS seconds=4"
+   ],
+   "failed_checks": [],
+   "what": "Decision C on the FINAL engine, dev-d's own [file] target: the real ARM and the real x86 cold backup are each refused at check time with exactly the owner's text as the only blocker, the conversion (started anyway) is refused with the same text, no backup and no throwaway object left, dev-d's EMQX state digest equal; both hot backups are named (the hot-backup hint stays); LEAK SCAN (the first one of this lane that ran): 650 engine files, the whole journal and the run's private evidence against 18 secret names (HA key, b1 test passwords, dev-d's EMQX secrets, the kit, the 4 Dashboard tokens issued to this run's probes) = 0 hits.",
+   "simulated": "S1 S6"
+  },
+  "attempt-24": {
+   "scope": "cleanup-leaks",
+   "source_commit": "5eb53fd",
+   "backup_engine_tree": "865c930f",
+   "exit": 0,
+   "elapsed_seconds": 33.6,
+   "lock_held": "33 s",
+   "checks": "20/20",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=10",
+    "cleanup: PASS seconds=14",
+    "cleanup-baseline: PASS seconds=2",
+    "leaks: PASS seconds=4"
+   ],
+   "failed_checks": [],
+   "what": "Cleanup on the FINAL engine: no throwaway container, volume or network of a job, no staging folder or key file, no drop-in, script or marker; the test's converted and safety backups and the baseline B0 deleted, dev-d's own backups stay, woow-emqx and its entrance run, no new anonymous volume; leak scan again = 0 hits; isolation true none {}.",
+   "simulated": "-"
+  },
+  "attempt-30": {
+   "scope": "suggest-health",
+   "source_commit": "4ec3174",
+   "backup_engine_tree": "80215432",
+   "exit": 1,
+   "elapsed_seconds": 824.8,
+   "lock_held": "823 s",
+   "checks": "32/33",
+   "steps": [
+    "reclaim: PASS seconds=8",
+    "setup: PASS seconds=22",
+    "before: PASS seconds=89",
+    "suggest-health: FAIL seconds=698",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=3"
+   ],
+   "failed_checks": [
+    "suggest-health: a restore with the proposed health check succeeds and is not rolled back (health passed)"
+   ],
+   "what": "FAILED = a REAL PRODUCT FINDING (the page's own draft): the merged health fix a3a0479 proposed the Dashboard page /; the engine's check sends Accept: application/json and EMQX answers that page 406 (cowboy_static, emqx_dashboard.erl:338), so the backup with the draft warned 「健康檢查未通過（HTTP 406）」 and the restore failed its check and rolled back (the rollback's own check failed the same way). dev-d's EMQX state digest equal to the one before, dev-d's own catalog entry back (same SHA-256), new baseline B0, leak scan 0 hits. The earlier \"/ 200\" had been measured with Accept: */*. Fixed a5c6a3c (the draft asks /api/v5/error_codes, the broker's public REST API).",
+   "simulated": "S1 S6"
+  },
+  "attempt-32": {
+   "scope": "suggest-health+fileonly-import",
+   "source_commit": "575f2fd",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 1703.6,
+   "lock_held": "1703 s",
+   "checks": "109/109",
+   "steps": [
+    "reclaim: PASS seconds=1",
+    "setup: PASS seconds=12",
+    "before: PASS seconds=23",
+    "suggest-health: PASS seconds=241",
+    "import:x86-fileonly:file: PASS seconds=1413",
+    "reclaim: PASS seconds=3",
+    "leaks: PASS seconds=7"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine + the corrected health fix (45db404c). (1) suggest-health: dev-d's installed EMQX entry read, a FRESH draft from the page's own catalog-suggest proposes /api/v5/error_codes through the entrance (200) instead of the container-only /readyz and says why (/readyz answers 403 from the device); installed UNEDITED: a backup with its health check passed (no warning) and a restore with it that is not rolled back; dev-d's own entry back (same SHA-256), state digest equal. (2) Decision C's other half on dev-d's own [file] target with the lab-made x86 backup whose ACL rows EMQX itself cleared (`x86-fileonly`): the FIRST import attempt from dev-d's OWN state fails twice on purpose, a one-shot start failure (the job rolls back; when the start failed the data volume held HA's rule = HA's data really was there) and a one-shot readback tamper (named ONLY 設定（log）, rolled back by itself); after each: dev-d's own state is back (state digest equal to its own state right before that restore, baseline markers, its own admin logs in and HA's admin password does not, its own bootstrap MQTT user logs in and HA's three MQTT users are refused, authorization is its own as right before that restore (no_match deny), no HA user, rule, retained message or API key); then the real import: check ok, real conversion, restore + the product's readback, client probes after the restore and after a restart (HA's users and passwords, HA's retained messages, rule delivery, denied topics, this device's file rule still applies). Leak scan with the 11 Dashboard tokens this run issued = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-33": {
+   "scope": "fileonly-rollback+noacl-import",
+   "source_commit": "3891601",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 970.4,
+   "lock_held": "969 s",
+   "checks": "153/153",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=9",
+    "rollback:x86-fileonly: PASS seconds=430",
+    "import:x86-noacl:file: PASS seconds=521",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=5"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine (45db404c), dev-d's own [file] target. (1) `x86-fileonly` rollback rounds from the imported state: the imported state proven again (22 probes), AUTOMATIC rollback (start failure; the data volume held HA's data when it failed), READBACK rollback (named ONLY 設定（log）), each followed by the full client probes and a state equal to the one before that restore; manual rollback to the baseline B0 (digest equal, markers, no HA data). (2) the second lab-made input `x86-noacl` (HA authorizes with its built-in database, all ACL rows cleared): uploaded through the page's upload-begin/-finish, check ok (file-only target named, no ACL warning, no hot-backup warning), real conversion, inspect in place, restore + readback, client probes after the restore and after a restart, same state after the restart. Leak scan with 13 issued tokens = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-34": {
+   "scope": "noacl-rollback+draft",
+   "source_commit": "560936b",
+   "backup_engine_tree": "45db404c",
+   "exit": 0,
+   "elapsed_seconds": 485.8,
+   "lock_held": "485 s",
+   "checks": "99/99",
+   "steps": [
+    "reclaim: PASS seconds=2",
+    "setup: PASS seconds=8",
+    "rollback:x86-noacl: PASS seconds=443",
+    "catalog-draft: PASS seconds=21",
+    "reclaim: PASS seconds=3",
+    "leaks: PASS seconds=7"
+   ],
+   "failed_checks": [],
+   "what": "INTEGRATED engine (45db404c). (1) `x86-noacl` rollback rounds (the same rounds as attempt-33 on the second lab-made input): automatic rollback, readback rollback (only 設定（log） named), manual rollback to B0 (digest equal, no HA data). (2) catalog-draft: a fresh draft from the page's own catalog-suggest (asks /api/v5/error_codes, says why /readyz is not used) is installed UNEDITED as dev-d's EMQX entry and the device status is clean with it: attempts 35 and 36 run with it, as on a customer's device. Leak scan 656 files / 21 names = 0 hits.",
+   "simulated": "S1 S3 S4 S5 S6 S7"
+  },
+  "attempt-35": {
+   "scope": "x86-draft-import",
+   "source_commit": "d6f2c2f",
+   "backup_engine_tree": "f6dfa9c4",
+   "exit": 0,
+   "elapsed_seconds": 1139.3,
+   "lock_held": "1138 s",
+   "checks": "95/95",
+   "steps": [
+    "reclaim: PASS seconds=7",
+    "setup: PASS seconds=17",
+    "import:x86-cold:builtin: PASS seconds=1096",
+    "reclaim: PASS seconds=6",
+    "leaks: PASS seconds=10"
+   ],
+   "failed_checks": [],
+   "what": "FINAL integrated engine f6dfa9c4 (integration 2b5fee1 + the export check dd3ae49; the guarded unit set 259 + 503 + 6 OK on it first, in the same heavy slot) with the page's own UNEDITED draft as dev-d's EMQX entry (read back unchanged, health check included). Real x86 cold backup on the built-in target (the built-in database source added through the API after the file source): check ok (file + built-in read, no ACL or hot-backup warning), real conversion (the export check runs in target_broker right before `emqx ctl data import`, so HA's real export passed it), inspect in place, check and conversion changed nothing (digest equal). The FIRST import attempt from dev-d's OWN state fails twice on purpose: a one-shot start failure (the job rolls back; when the start failed the data volume held HA's rule) and a one-shot readback tamper (only 設定（log） named, rolled back by itself); after each dev-d's own state is back (state digest equal to its own state right before that restore, baseline markers, its own admin logs in and HA's admin password does not, its own bootstrap MQTT user logs in and HA's three MQTT users are refused, authorization is its own as right before that restore (no_match deny), no HA user, rule, retained message or API key). Then the real restore with a safety backup, not rolled back: the product's readback and the DRAFT's own health check passed (job log); client probes after the restore (21) and after a restart (22): HA's users and passwords, the retained messages, rule delivery, allowed and denied topics. Leak scan 657 files / 24 names with the 10 issued tokens = 0 hits.",
+   "simulated": "S1 S2 S3 S4 S5 S6"
+  },
+  "attempt-36": {
+   "scope": "x86-draft-rollback+cleanup",
+   "source_commit": "7631adb",
+   "backup_engine_tree": "f6dfa9c4",
+   "exit": 0,
+   "elapsed_seconds": 484.8,
+   "lock_held": "484 s",
+   "checks": "106/106",
+   "steps": [
+    "reclaim: PASS seconds=4",
+    "setup: PASS seconds=10",
+    "rollback:x86-cold: PASS seconds=421",
+    "catalog-own: PASS seconds=8",
+    "cleanup: PASS seconds=23",
+    "cleanup-baseline: PASS seconds=2",
+    "reclaim: PASS seconds=2",
+    "leaks: PASS seconds=6"
+   ],
+   "failed_checks": [],
+   "what": "FINAL integrated engine f6dfa9c4, the page's own unedited draft still installed (read back). x86 built-in rollback rounds from the imported state: the imported state proven again (23 checks), AUTOMATIC rollback (start failure; the data volume held HA's data when it failed), READBACK rollback (only 設定（log） named; every other setting and table were the converted ones), each followed by the full client probes (22) and a state equal to the one before that restore; manual rollback to the baseline B0 (digest equal to the one before any import, markers, own admin logs in and HA's does not, own file ACL only, no HA data). Then catalog-own: dev-d's own EMQX entry installed again (same SHA-256); cleanup: no job container, volume, network, staging folder or key file, the lab-made uploads deleted from the HA store (the real ones stay), the test's converted and safety backups deleted, no drop-in left, woow-emqx and its entrance run; B0 deleted; leak scan 646 files / 21 names = 0 hits; no new anonymous volume; isolation true none {} before and after.",
+   "simulated": "S1 S2 S3 S4 S5 S6"
+  }
+ }
+}

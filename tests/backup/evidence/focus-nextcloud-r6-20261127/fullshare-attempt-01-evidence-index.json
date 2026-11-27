@@ -1,0 +1,51 @@
+{
+  "failed_source_commit": "d7db60cc284138658e93604dd41dafb7fc7d036f",
+  "files": {
+    "fullshare-attempt-01-baseline-open.json": {
+      "bytes": 207,
+      "sha256": "90700975ac1edc5fa5794f1ffa22b61ca25f4f36dd143b5a6edcf8a1e2b7497b"
+    },
+    "fullshare-attempt-01-office-timeline.json": {
+      "bytes": 904,
+      "sha256": "c990e7b2fc4fb4261b62ae3d7ad5de18ac46438c7e263eed77922350e5dff8e1"
+    },
+    "fullshare-attempt-01-readonly-diagnosis.json": {
+      "bytes": 5183,
+      "sha256": "18d93d6beb52750963ec3ad8030cb0a264210b969a15038bbce003c709a6cc06"
+    },
+    "fullshare-attempt-01-result.json": {
+      "bytes": 853,
+      "sha256": "25186f53e07e2b63fe8755b665d3c93da66ece496f32017ede8488080a6b4e68"
+    },
+    "fullshare-attempt-01-summary.json": {
+      "bytes": 1334,
+      "sha256": "f3634ebf1bbb1190270f642fdb10bc006338a7511ee23193fe2469acdd6d3dea"
+    },
+    "fullshare-recovery-baseline-hashes.json": {
+      "bytes": 313,
+      "sha256": "848a76196a3cddc94803398c792cd2ad9e53d37a090f538d5fa9d388699e5d08"
+    },
+    "fullshare-recovery-command-bindings.json": {
+      "bytes": 1266,
+      "sha256": "321c19bca4d223c63cd849af7a7e9f0ccba73a155b11001cbce2d10349f7a571"
+    },
+    "fullshare-recovery-prior-source-proof.json": {
+      "bytes": 265,
+      "sha256": "1cd017b79cbc18effdc7026df94fa2149a029754b56f249d56f03c95881f42fb"
+    },
+    "fullshare-recovery-result.json": {
+      "bytes": 994,
+      "sha256": "5bd74bc41661ada93459baf66f9c363a1a91970e80baa34792d41513371f3e45"
+    },
+    "fullshare-recovery-source-return.json": {
+      "bytes": 421,
+      "sha256": "6d1293666e2c0606ce7191eb595b8682345c804dafe1436c4a4a1e86987708d5"
+    },
+    "fullshare-recovery-wrapper.txt": {
+      "bytes": 12827,
+      "sha256": "d290824e9c15254c886ba5a39185e8e7cafeddc132f93a112b94d5a518c44fd3"
+    }
+  },
+  "status": "failed-attempt-and-successful-recovery-retained",
+  "wrapper_sha256": "d290824e9c15254c886ba5a39185e8e7cafeddc132f93a112b94d5a518c44fd3"
+}

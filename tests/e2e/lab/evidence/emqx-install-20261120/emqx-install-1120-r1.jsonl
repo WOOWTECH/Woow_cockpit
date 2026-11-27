@@ -1,0 +1,37 @@
+{"stage": "isolated_startup", "result": "pass"}
+{"stage": "effective_root_inventory", "roots": ["actions", "alarm", "api_key", "authentication", "authorization", "auto_subscribe", "banned", "bridges", "broker", "cluster", "conn_congestion", "connectors", "crl_cache", "dashboard", "delayed", "durable_sessions", "durable_storage", "exhook", "flapping_detect", "force_gc", "force_shutdown", "gateway", "limiter", "listeners", "log", "mqtt", "node", "overload_protection", "plugins", "prometheus", "psk_authentication", "retainer", "rewrite", "rpc", "rule_engine", "slow_subs", "sources", "stats", "sys_topics", "sysmon", "telemetry", "topic_metrics", "trace", "zones"]}
+{"stage": "effective_config_and_bootstrap_mount", "result": "pass"}
+{"stage": "product_structured_config_reader", "result": "pass"}
+{"stage": "operational_root", "root": "api_key", "result": "pass"}
+{"stage": "operational_root", "root": "banned", "result": "pass"}
+{"stage": "operational_root", "root": "cluster", "result": "pass"}
+{"stage": "operational_root", "root": "log", "result": "pass"}
+{"stage": "operational_root", "root": "node", "result": "pass"}
+{"stage": "operational_root", "root": "rpc", "result": "pass"}
+{"stage": "restricted_root", "root": "actions", "result": "pass"}
+{"stage": "restricted_root", "root": "auto_subscribe", "result": "pass"}
+{"stage": "restricted_root", "root": "bridges", "result": "pass"}
+{"stage": "restricted_root", "root": "connectors", "result": "pass"}
+{"stage": "restricted_root", "root": "exhook", "result": "pass"}
+{"stage": "restricted_root", "root": "gateway", "result": "pass"}
+{"stage": "restricted_root", "root": "plugins", "result": "pass"}
+{"stage": "restricted_root", "root": "psk_authentication", "result": "pass"}
+{"stage": "restricted_root", "root": "rewrite", "result": "pass"}
+{"stage": "restricted_root", "root": "rule_engine", "result": "pass"}
+{"stage": "restricted_root", "root": "sources", "result": "pass"}
+{"stage": "restricted_root", "root": "topic_metrics", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_sessions", "result": "pass"}
+{"stage": "restricted_root", "root": "durable_storage", "result": "pass"}
+{"stage": "restricted_root", "root": "limiter", "result": "pass"}
+{"stage": "restricted_root", "root": "prometheus", "result": "pass"}
+{"stage": "restricted_root", "root": "sysmon", "result": "pass"}
+{"stage": "product_complete_reference_validation", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "synthetic_ha_backup_product_parser_and_staging", "result": "pass"}
+{"stage": "product_phase_convert", "result": "pass"}
+{"stage": "candidate_container_state", "role": "emqx-new", "exit_code": 0, "running": true}
+{"stage": "snapshot_file_metadata", "role": "emqx-new", "uid": 1000, "gid": 1000, "mode": "0o644"}
+{"stage": "product_candidate_entry", "result": "blocked", "code": "job-failed", "reason": "EMQX \u532f\u5165\u5f8c\u7684\u8cc7\u6599\u7b46\u6578\u548c HA \u4e0d\u540c\uff0c\u5df2\u505c\u6b62\uff1aemqx_retainer_message\uff08HA 1\uff0c\u532f\u5165\u5f8c 4\uff09\u3002"}
+{"stage": "product_cleanup", "remaining": 0}
+{"image": "3f60addfad2b", "client_image": "93a0bdfcbd9b", "results": [{"stage": "isolated_startup", "result": "pass"}, {"stage": "effective_config_and_bootstrap_mount", "result": "pass"}, {"stage": "product_structured_config_reader", "result": "pass"}, {"stage": "product_complete_reference_validation", "result": "pass"}, {"stage": "synthetic_ha_backup_product_parser_and_staging", "result": "pass"}, {"stage": "product_phase_convert", "result": "pass"}, {"stage": "product_candidate_entry", "result": "blocked", "code": "job-failed", "reason": "EMQX \u532f\u5165\u5f8c\u7684\u8cc7\u6599\u7b46\u6578\u548c HA \u4e0d\u540c\uff0c\u5df2\u505c\u6b62\uff1aemqx_retainer_message\uff08HA 1\uff0c\u532f\u5165\u5f8c 4\uff09\u3002"}]}

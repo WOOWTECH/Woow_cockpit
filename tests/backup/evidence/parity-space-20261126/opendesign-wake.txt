@@ -1,0 +1,23 @@
+lab: == phase wake:opendesign
+lab: image localhost/woow-open-design:4.2.1 already loaded (5bf5f9b959b3)
+lab: image docker.io/library/nginx:1.30.4-alpine already loaded (1ae82dcc4a34)
+lab: host disk after the images: 20 GiB free
+lab: wake:opendesign: every installed unit's Image= is loaded
+inotify headroom: 10+ (cap 10, stop below 5)
+lab: wake:opendesign: started open-design.service (257s, lowest host free 15080 MiB)
+lab: wake:opendesign: started open-design-nginx.service (258s, lowest host free 15080 MiB)
+lab: wake:opendesign: started open-design-mcp.service (259s, lowest host free 15080 MiB)
+lab: wake:opendesign: started open-design-terminal.service (261s, lowest host free 15079 MiB)
+app open-design: deployed=True state=running owner=appowner units=4 inactive=[] problems=[]
+health http://127.0.0.1:7456/api/health -> 200 (expects 200)
+unit open-design.service: active
+unit open-design-mcp.service: active
+unit open-design-nginx.service: active
+unit open-design-terminal.service: active
+healthcheck open-design: healthy
+healthcheck open-design-nginx: healthy
+healthcheck open-design-mcp: healthy
+healthcheck open-design-terminal: healthy
+failed user units: none
+lab: dev-e ready: opendesign running and healthy
+lab: wake:opendesign: ready 307s after its first unit started; host 15071 MiB free

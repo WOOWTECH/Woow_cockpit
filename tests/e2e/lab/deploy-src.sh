@@ -1,12 +1,12 @@
 #!/bin/bash
 # Copy the CURRENT working tree (uncommitted changes included) into a lab device and install it
 # there as root, the way a customer device would be installed from a checkout.
-#   tests/e2e/lab/deploy-src.sh <a|b|c> [--src CHECKOUT] [--demo-catalog|--no-demo-catalog] [--fallback]
+#   tests/e2e/lab/deploy-src.sh <a|b|c|d> [--src CHECKOUT] [--demo-catalog|--no-demo-catalog] [--fallback]
 #
 #   --src CHECKOUT      copy that Woow_cockpit checkout instead of the one holding this script (e.g. the
 #                       integration worktree of a feature, while the lab scripts come from another branch)
 #   --no-demo-catalog   install without the woowbk-demo fixture: only the catalog entries put there on
-#                       purpose stay (default on dev-c, which mirrors the production host's apps)
+#                       purpose stay (default on dev-c and dev-d, which mirror production apps)
 #
 # 1. Tree minus .git node_modules .local design (and __pycache__) -> /opt/woow-cockpit-src,
 #    root-owned and not group/world-writable (a low-privilege checkout is never the trust root).
@@ -39,7 +39,7 @@ shift || true
 fallback=no
 tree=$REPO_ROOT
 demo_catalog=yes
-[ "$DEV" != c ] || demo_catalog=no
+case "$DEV" in c | d | e) demo_catalog=no ;; esac
 while [ $# -gt 0 ]; do
     case "$1" in
         --fallback) fallback=yes ;;

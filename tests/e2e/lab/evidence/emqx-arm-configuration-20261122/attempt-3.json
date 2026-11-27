@@ -1,0 +1,16 @@
+{
+  "source_commit": "f951eab21d4f6bbe9abb667a8bcac2af7dff07eb",
+  "scope": "real ARM addon metadata and native HOCON fixed diagnosis only; no broker",
+  "exit": 1,
+  "elapsed_seconds": 9.632527915993705,
+  "fixed_phases": [
+    "ARM TRANSFER PASSED",
+    "ARM SELECT PASSED",
+    "ARM HOCON_SYNTAX REFUSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "0eb380341c4cc998b0cce7a77c575fefd259e60d5e5bd1f2b3feb965461b2704",
+  "restore_executed": false
+}

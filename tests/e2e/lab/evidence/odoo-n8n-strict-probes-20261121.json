@@ -1,0 +1,69 @@
+{
+  "base_commit": "ffdf5cb",
+  "branch": "fix/odoo-n8n-strict-probes",
+  "scope": "Local probe integration and regression only; no deployment or restore this turn",
+  "candidate_sources": [
+    "/tmp/arm-compare-review/candidate.patch",
+    "/tmp/n8n-community-revalidation/local_probe.py"
+  ],
+  "diagnosis": {
+    "n8n": "Captured installed listInstalledPackages awaits npm outdated --json without explicit subprocess timeout. Replace ARM registry-dependent list with local DB/manifest/files plus authenticated exact runtime node-type lookup.",
+    "odoo": "Old check ignored differences outside four core tables and ignored added tables; strict fixed-fixture parsing and all-table checks now fail closed."
+  },
+  "new_local_validation": {
+    "command": "python3 -B -I -m unittest discover -s tests/e2e/lab -p 'test_ha_*.py' -v",
+    "tests": 40,
+    "result": "OK",
+    "log": "/tmp/odoo-n8n-strict-green.log",
+    "before_fix": "17 Odoo tests: failures=21, errors=3 (subtests included); non-core corruption incorrectly passed",
+    "before_log": "/tmp/odoo-n8n-strict-red.log",
+    "npm_reproduction": "node /tmp/n8n-community-revalidation/regression-npm-gate.cjs: 3 assertions PASS using captured installed source; no live service access"
+  },
+  "isolation": {
+    "read_only_inspection": "true none {}",
+    "guard_f37716b": "unchanged AST, retained ancestor"
+  },
+  "historical_evidence": {
+    "original": "arm-restore-revalidation-20261121/20261121T083157: 31 passed, 1 failed; three recorded hashes verified unchanged",
+    "candidate_runs": [
+      "arm-community-local-revalidation-20261121/20261121T093907: 23/23",
+      "arm-community-matrix-revalidation-20261121/20261121T095148: 61/61"
+    ],
+    "qualification": "Existing results.json files checked this turn, not new runs, not strict Odoo acceptance. Old 117/117 is not used."
+  },
+  "acceptance": false,
+  "unresolved": {
+    "odoo": {
+      "identical_tables": 201,
+      "total_tables": 205,
+      "row_counts": {
+        "public.bus_bus": [
+          "6",
+          "0"
+        ],
+        "public.ir_cron_progress": [
+          "15",
+          "28"
+        ]
+      },
+      "equal_count_content_differences": [
+        "public.ir_config_parameter",
+        "public.ir_cron"
+      ],
+      "needed": "Same immutable archive A source, B target-before-convert, C converted-before-start, D bounded post-start snapshots; schema/full cell and producer/cron/GC evidence. Current baseline cannot reconstruct missing historical C/D."
+    },
+    "n8n": "Integrated commit has not been run live; historical candidate success is supporting evidence only.",
+    "resource": "No dev-c heavyweight slot. dev-d shares resources with LiteLLM; no new heavy run attempted."
+  },
+  "next_now": "python3 -B -I -m unittest discover -s tests/e2e/lab -p 'test_ha_*.py' -v",
+  "next_after_explicit_slot_and_capture_plan": "python3 -B -I tests/e2e/lab/ha_import_e2e.py --fixtures /home/woowtechopenclaw/.woowbk-lab/ha-fixtures/20261119-arm --prefix woow-arm --odoo-addon-version 0.4.13 --arch aarch64 --baseline 20261118T095247Z-388c9bd7,20261118T095520Z-33eb7474 --evidence arm-strict-probes-revalidation upload check convert restore armcompare verify cleanup leaks baseline",
+  "next_command_limits": "PROPOSED ONLY, not executed. Confirm installed engine/fixture provenance and baseline IDs with slot owner; arrange A/B/C/D capture before running. Strict armcompare intentionally remains red on unexplained runtime differences; command alone does not prove cell-level equivalence.",
+  "capture_reference": "/tmp/arm-compare-review/CAPTURE-CONTRACT.txt (capture SQL not runtime validated)",
+  "untouched": [
+    "main worktree",
+    "production Podman",
+    "production secrets",
+    "Hermes rejected review",
+    "conversation runner/model/workspace"
+  ]
+}

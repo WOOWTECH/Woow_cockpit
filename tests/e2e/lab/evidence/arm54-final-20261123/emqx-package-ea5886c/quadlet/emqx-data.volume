@@ -1,0 +1,8 @@
+# VolumeName= keeps the compose-era name. Without it Quadlet would create systemd-emqx-data, and an
+# existing host would silently start on an empty volume.
+[Unit]
+Description=Woow EMQX data volume (config overrides, mnesia, built-in-db users)
+
+[Volume]
+VolumeName=woow_emqx_data
+Label=io.woowtech.stack=emqx

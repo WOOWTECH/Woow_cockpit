@@ -1,0 +1,14 @@
+{
+  "source_commit": "8dec71895dcab879034c4d8c9d1d912583e1b5fc",
+  "scope": "real ARM framed actual source-only Capture; no target acknowledgement or broker",
+  "exit": 1,
+  "elapsed_seconds": 6.057112152921036,
+  "fixed_phases": [
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "454e6b69da271338f2cb3c9c7eeca9b40376c66677218f315b2f64e45a8865d7",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

@@ -1,0 +1,45 @@
+{
+  "status": "failed-safe-returned",
+  "controller_commit": "75d7749b4c0308ff9531e57ed1512812c93e7606",
+  "executed_product_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "source_nonce": "808e2d22042d4158",
+  "fixed_result_sha256": "76b0f0deda04092c50231dc290bbdea143112ce34d8b85059b2943ff2f015640",
+  "baseline_safe": true,
+  "prior_quadlets_exact": true,
+  "prior_engine_helper_version_exact": true,
+  "all_originals_preserved": true,
+  "source_return_status": "restored",
+  "prior_source_sha256": "cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1",
+  "office_only_owned_failed_flag_cleared": false,
+  "exclusive_new_receipt_pending": false,
+  "original_failed_receipt_sha256": "d35b376a162dddcdc556b2f5f6e867203a52afbd1eeaae08aa5c95798b144007",
+  "native_check": {
+    "job_id": "j20261127T012921Z-29865c92",
+    "state": "succeeded",
+    "app_importable": false,
+    "issues": [
+      {
+        "id": "failure.incompatible",
+        "level": "stop"
+      }
+    ]
+  },
+  "conversion_jobs": 0,
+  "restore_jobs": 0,
+  "cause": "redis-role-required-literal-redis-in-sha-only-image-reference",
+  "owned_uploaded_ha_deleted_during_cleanup": true,
+  "final_device_backing_free_bytes": 26026536960,
+  "final_host_free_bytes": 26026545152,
+  "old_initial_fullshare_upload_cause": "unknown-not-recorded",
+  "product_fix_commit": "6daaa15c046a4c083cdfb1aac44b5433e8f99f6f",
+  "product_files_changed_vs_frozen_d09": [
+    "woowbackup/ha_nextcloud.py"
+  ],
+  "focused_nc_tests": 138,
+  "focused_nc_failures": 0,
+  "focused_nc_errors": 0,
+  "focused_nc_skips": 0,
+  "extra_shared_role_negative_test_passed": true,
+  "offline_actual_quadlets_accepted": true,
+  "new_runtime_performed": false
+}

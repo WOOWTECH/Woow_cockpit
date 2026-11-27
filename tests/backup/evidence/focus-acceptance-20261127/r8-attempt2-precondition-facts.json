@@ -1,0 +1,21 @@
+{
+  "scope": "r8-attempt2-precondition-diagnosis",
+  "browser_started": false,
+  "upload_started": false,
+  "import_started": false,
+  "old_guard_unchanged": true,
+  "active_jobs": 0,
+  "snapshot_equal": {
+    "original_catalog": true,
+    "original_units": true,
+    "original_images": true,
+    "original_timer": true
+  },
+  "changes": {
+    "original_catalog": {},
+    "original_units": {},
+    "original_images": {},
+    "original_timer": {}
+  },
+  "commercial_acceptance": "not-complete"
+}

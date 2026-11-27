@@ -1,0 +1,15 @@
+{
+  "catalog_access": false,
+  "containers": 0,
+  "device_mutex_free_at_check": true,
+  "frozen_source_clean": true,
+  "installed_source_access": false,
+  "job_id": "j20261127T003730Z-8fc40e71",
+  "networks": 0,
+  "r4_payload_directories": 0,
+  "result_sha256": "d916ab4505472a78e2ede80c07a386fba28da6506db3289e8c56551ecac2f3cb",
+  "scope": "Independent exact-owned-prefix scan; durable volume/image equality in result; no separate original catalog-content hash measurement",
+  "source_commit": "27cb52c4eafbaaa2dbc2ba2916b9604a8941a280",
+  "summary_written_at": "2026-11-27T00:44:15.175871+00:00",
+  "volumes": 0
+}

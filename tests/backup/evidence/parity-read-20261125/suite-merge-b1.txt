@@ -1,0 +1,6 @@
+tests=2164 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=424
+FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded
+FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded
+ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned

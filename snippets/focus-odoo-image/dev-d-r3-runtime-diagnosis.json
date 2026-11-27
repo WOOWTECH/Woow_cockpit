@@ -1,0 +1,10 @@
+{
+  "status": "diagnosed",
+  "reason": "owner-runroot-too-long",
+  "reason_is_exact_fixed_constant": true,
+  "config_and_all_ordered_layers_verified": true,
+  "read_only_store_probe_returncode": 125,
+  "source_store_mutations": 0,
+  "pulls": 0,
+  "r3_artifacts_preserved": true
+}

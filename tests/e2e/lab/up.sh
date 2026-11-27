@@ -1,8 +1,11 @@
 #!/bin/bash
 # Start (or create) a lab device and wait until it is usable.
-#   tests/e2e/lab/up.sh <a|b|c>
+#   tests/e2e/lab/up.sh <a|b|c|d|e>
 # dev-a: 127.0.0.1:19091 -> Cockpit, appowner uid 1001; dev-b: 127.0.0.1:19092, appowner uid 1007;
-# dev-c: 127.0.0.1:19093, appowner uid 1013 (production-like Odoo + n8n, see deploy-prodlike.sh).
+# dev-c: 127.0.0.1:19093, appowner uid 1013 (production-like Odoo + n8n, see deploy-prodlike.sh);
+# dev-d: 127.0.0.1:19094, appowner uid 1019 (production-like Omnigent, Hermes, EMQX, Headscale, see
+# deploy-batch1.sh); dev-e: network none and no published port, appowner uid 1025 (production-like Nextcloud,
+# code-server, OpenDesign, see deploy-batch2.sh).
 # Ready means: systemd finished booting, cockpit.socket listens on 9090, appowner's user manager
 # (user@<uid>.service) is active with its D-Bus socket and has the memory controller (nested containers
 # with --memory fail with "crun: opening file memory.max" without it; restarting the manager fixes that).
@@ -24,12 +27,15 @@ case "$state" in
         for volume in "${VOLUMES[@]}"; do
             "$LP" volume exists "$volume" || "$LP" volume create --label woowbk.lab=device "$volume" >/dev/null
         done
-        log "creating $NAME (memory $DEVICE_MEMORY, cpus $DEVICE_CPUS, https://127.0.0.1:$PORT)"
+        # A network-none device (dev-e) has only its own loopback and publishes nothing.
+        net_args=(-p "127.0.0.1:$PORT:9090") where="https://127.0.0.1:$PORT"
+        [ "$DEVICE_NETWORK" != none ] || { net_args=(--network none); where="network none, no published port"; }
+        log "creating $NAME (memory $DEVICE_MEMORY, cpus $DEVICE_CPUS, $where)"
         "$LP" run -d --name "$NAME" --hostname "$NAME" \
             --label woowbk.lab=device \
             --systemd=always --privileged --device /dev/fuse \
             --memory "$DEVICE_MEMORY" --cpus "$DEVICE_CPUS" "${DEVICE_RUN_ARGS[@]}" \
-            -p "127.0.0.1:$PORT:9090" \
+            "${net_args[@]}" \
             -v "$NAME-home:/home" \
             -v "$NAME-varlib:/var/lib/woowtech-backup" \
             -v "$NAME-containers:/var/lib/containers" \
@@ -78,4 +84,6 @@ if ! "$LP" exec "$NAME" grep -qw memory "$controllers"; then
 fi
 
 machine_id=$("$LP" exec "$NAME" cat /etc/machine-id)
-log "$NAME ready: systemd=$system_state cockpit=https://127.0.0.1:$PORT appowner=$OWNER_UID machine-id=${machine_id:0:8}…"
+cockpit_where="https://127.0.0.1:$PORT"
+[ "$DEVICE_NETWORK" != none ] || cockpit_where="inside the device only (network none)"
+log "$NAME ready: systemd=$system_state cockpit=$cockpit_where appowner=$OWNER_UID machine-id=${machine_id:0:8}…"

@@ -1,0 +1,27 @@
+{
+  "scope": "synthetic real PostgreSQL control-character TOC names; no HA backup",
+  "source_product_commit": "d0cfef06",
+  "events": [
+    {
+      "image_id": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+      "outer_network": "none",
+      "published_ports": 0,
+      "stage": "preflight"
+    },
+    {
+      "carriage_return": true,
+      "forged_id_not_selected": true,
+      "newline": true,
+      "real_pg_archive": true,
+      "restored_only_trusted_data": true,
+      "stage": "toc_control_names",
+      "tab": true,
+      "trusted_entry_selected_once": true
+    },
+    {
+      "stage": "cleanup",
+      "synthetic_container_removed": true
+    }
+  ],
+  "commercial_acceptance": "not-complete"
+}

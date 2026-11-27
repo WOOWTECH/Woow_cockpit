@@ -1,0 +1,97 @@
+{
+ "what": "v4b after the SR-3 fix: refused before any data load",
+ "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+ "source_commit": "aa5f48e (SR-1, SR-3, SR-4)",
+ "exit_code": 0,
+ "elapsed_s": 233.8,
+ "stdout_sha256": "19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061",
+ "lab": "isolated labpodman store (~/.woowbk-lab), throwaway containers by tempctr.TempObjects (--network none); never production, never dev-d",
+ "commercial_acceptance": "not-complete",
+ "result": {
+  "harness": "tests/e2e/lab/omnigent_secreview_attacks.py",
+  "image": "docker.io/library/postgres:16-alpine",
+  "fixture_sha256": "3871a468e2f3a11488df7c6a00a4a8ed7c5b89c3ba2dbc2903ec3bd677013516",
+  "started": "2026-11-23T20:44:32+0800",
+  "variants": [
+   {
+    "variant": "v4b-sequence-what-if",
+    "simulated": [
+     "the live target has a sequence public.atk_seq (as a future Omnigent schema with a sequence would)"
+    ],
+    "backup_bytes": 8908800,
+    "real": {
+     "check": {
+      "ok": true,
+      "blockers": 0,
+      "blocker_heads": [],
+      "warnings": 0,
+      "warning_heads": [],
+      "section": {
+       "users": 2,
+       "scheduled_tasks_active": 0,
+       "public_sessions": 0,
+       "account_conflicts": [],
+       "files": 1,
+       "agents": 17
+      },
+      "seconds": 50.2
+     },
+     "convert": {
+      "ok": false,
+      "code": "incompatible",
+      "message_head": "HA 的資料庫匯出清單裡的序號（SEQUENCE SET）項目含有序號值以外的內容，無法安全地搬過來。",
+      "seconds": 117.0
+     },
+     "simulated": [
+      "observation hook reads the new cluster before the restore role is dropped"
+     ],
+     "_stderr": "",
+     "log_lines": 6,
+     "left_after_cleanup": [],
+     "leaks": {
+      "live_admin_hash_canary": false
+     },
+     "hook": {}
+    },
+    "backup_sha256": "e5f079b7d663981e002bd45a2184af002fdcded33809143b02420605e9aee09e",
+    "seconds": 206.6
+   }
+  ],
+  "real_schema": {
+   "alembic": [
+    "d0a1f879a01d"
+   ],
+   "tables": [
+    "account_tokens",
+    "agents",
+    "alembic_version",
+    "comments",
+    "connections",
+    "conversation_items",
+    "conversation_labels",
+    "conversations",
+    "device_grants",
+    "files",
+    "hosts",
+    "omnigent_conversation_metadata",
+    "policies",
+    "preferences",
+    "projects",
+    "scheduled_task_runs",
+    "scheduled_tasks",
+    "session_permissions",
+    "user_daily_cost",
+    "users"
+   ],
+   "sequences": [],
+   "pg_version": "16",
+   "artifact_files": 19,
+   "cookie": true,
+   "schema_sql_sha256": "de9a06d1183a000a20dff97616ef6154c0d5ee05fcdd67cece613d6a4e00655f",
+   "counts_total": 38
+  },
+  "live_extra_sql": "CREATE SEQUENCE public.atk_seq;\n",
+  "elapsed_s": 233.8,
+  "lab_left_after_cleanup": []
+ }
+}

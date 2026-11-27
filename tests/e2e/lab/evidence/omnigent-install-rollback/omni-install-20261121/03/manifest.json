@@ -1,0 +1,23 @@
+{
+  "tested_sha": "ea48f32b1c67195a992c400eeaf0da11817605f3",
+  "command": [
+    "python3",
+    "tests/e2e/lab/omnigent_install_rollback.py",
+    "--run",
+    "--outer-isolation-confirmed"
+  ],
+  "started": 1795239762.9193206,
+  "slot": "omni-install-20261121",
+  "source_hashes": {
+    "tests/e2e/lab/omnigent_install_rollback.py": "3640451de2763d87bbc800e9ba4b19881f13676002d44082434c64319a570efc",
+    "tests/e2e/lab/omnigent_real_app_chain.py": "b0ef5e8d17740301d37fddd3f6e3816c10e577c884678d64bf8c3faf930ca1d5",
+    "backup-engine/woowbackup/flows.py": "0549b1918760048a8981dcff2755fd9ee74742cb28e3df2a43a88dad74885210",
+    "backup-engine/woowbackup/adapters/quadlet_postgres.py": "8ef2154f073eeba89cdabad38827edda5e34b4abf9e7d2c89f5ca79d7f0a225c",
+    "backup-engine/woowbackup/archive.py": "85b58635a23a552cbe446ceab6dee9fc914d245c708bc86d2211fc69c39e9d49",
+    "backup-engine/woowbackup/ha_omnigent.py": "cd16ee496fdb71139a5f8f96be15309370e4b1b5951d9319ff9487e8b20bc278",
+    "tests/e2e/lab/omnigent_lab_runner.py": "96d9d2ff087aa15621d37257f28d732dd659008fad0ed7be5f32bc0bf55a2946",
+    "tests/e2e/lab/b1_event_transport.py": "f1fee27e31c7c559ad173f88151a15bf8bf076c107c8a229778653e241ea3955"
+  },
+  "run_sha256": "6e8fdc7f2a37915d2768eac1c494d5bf3d995421e58d4eb7d5610616ee09d168",
+  "stderr_bytes": 0
+}

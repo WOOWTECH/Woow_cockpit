@@ -1,0 +1,20 @@
+{
+ "source_commit": "f2f587042b33f6598911b4167a4d7e9f177c97cd",
+ "scope": "r3-d10-independent-baseline-before",
+ "exit": 0,
+ "elapsed_seconds": 8.0,
+ "stdout_sha256": "f6f1dff3db652d57d5ea6ee9273724473e40696c63c09e94f9793caff9bd94b5",
+ "fixed_status": [
+  "dev-e: running, network none, no published port: PASS",
+  "code-server: the baseline's own after-restore marker read exists: PASS",
+  "code-server: only the baseline markers (no leftover test marker): PASS",
+  "code-server: marker read equals the baseline's after-restore read (names and sha256, 20261123T201220-baseline): PASS",
+  "code-server: real login (session cookie, workbench page, wrong password refused): PASS",
+  "code-server: engine status running, no problems: PASS",
+  "code-server: catalog health URLs answer as expected: PASS",
+  "code-server: baseline backup 20261123T121327Z-74c471c6 still listed, encrypted with the device key, this app only: PASS",
+  "batch2 verify code-server: 8/8 PASS"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

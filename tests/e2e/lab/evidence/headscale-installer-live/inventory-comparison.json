@@ -1,0 +1,6 @@
+{
+  "containers": true,
+  "volumes": true,
+  "networks": true,
+  "secrets": true
+}

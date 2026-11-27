@@ -1,0 +1,19 @@
+{
+  "commit": "ea5886c58ef2c6ab1f4e6a4d01908cc9dc4525de",
+  "files": {
+    "config/acl.conf": "5690c6143ea84510c977e8736915c44532f99fca5efffe7444d31020a1f8f70f",
+    "config/base.hocon": "f65f2a2c00037ad1a60c6fe4bdf77017c7d99cff430e8ff82cbbb56c38835a32",
+    "config/entrance.conf": "700855339d9afa8dffa9487bf394ea4dc232853d815e94173c4be2eac9501289",
+    "quadlet/emqx-data.volume": "ead9e52d7a5cc0d4d614b3169aa7bdaaa7b7b735c2ac2c8864a98599845c9e65",
+    "quadlet/emqx-entrance.container": "820cdfbca0d23c1d25c7bffb34825f70b76b63e9f65ed6a556a462d94cb007b9",
+    "quadlet/emqx-log.volume": "6f11c4a3514101c6dacfd242a27a1a1b0b00070efd5a6849ee4a6fea3cd035e9",
+    "quadlet/emqx.container": "c1a1c64c84e07bf5eb05d6f0abaf50c0747150aec5fcc548e2edc0704d894c3f",
+    "quadlet/emqx.network": "11dad0f61f35c1d2740b146416058f95c4088a14bcfd863af5974474f0d6d6f4",
+    "scripts/common.sh": "71dbfd2359ac992d3ce10a3e75b9f87f7f9cbce65f229b959f902747290458af",
+    "scripts/lib/quadlet-lib.sh": "1d50ecbbf77ed9da40fad5644d1731901003379a8eca6b0e3e87f0ab0b847018",
+    "tests/smoke.sh": "a14d0f562875027db0c2659f6bf9ba09412fe49aab6e1bf9b0ca50588c7a8e2b"
+  },
+  "installer_or_upgrader_included": false,
+  "source": "local-public-package-git-blobs",
+  "working_tree_used": false
+}

@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "source_commit": "e365ac88bc5e536ea632dda39c24f01a1d1b6e20",
+  "phase": "wake-baseline",
+  "baseline_verified": true,
+  "prior_quadlet_bytes_restored": true,
+  "units_quadlets_catalog_baseline_archive_and_isolation_preserved": true,
+  "baseline_id": "20261123T132013Z-34811d90",
+  "baseline_hashes": [
+    {
+      "name": "20261123T132013Z-34811d90.json",
+      "size": 655,
+      "sha256": "18d9c681b62cd09b97f125c23d42eaf47bcaf96d1d9e0cebc49c49f30bb6a81d"
+    },
+    {
+      "name": "20261123T132013Z-34811d90.tar",
+      "size": 422031360,
+      "sha256": "3ea0b2dc8c26d669efe5974c375084d6b435345603b701d55e620fc03d1d367f"
+    }
+  ],
+  "memory_cap_bytes": 3221225472,
+  "reserve_bytes": 13958643712,
+  "final_free_bytes": 28903641088,
+  "fixed_failure": null,
+  "private_prior_copy_retained": true,
+  "rotation_policy": "return-original-inactive-units-and-exact-quadlets-retain-five-loaded-images",
+  "installer": false,
+  "source_deployment": false,
+  "pulls": 0,
+  "private_receipt": "~/.woowbk-lab/evidence/focus-nextcloud-r6-wake/20261127T074932",
+  "strict_old_reference_and_canonical_same_config_verified_before_writes": true,
+  "guard_correction": false,
+  "images_retained": true,
+  "restore_executed": false,
+  "fixtures_copied": false,
+  "wake_metrics": {
+    "status": "started",
+    "minimum_free_bytes": 28905500672,
+    "peak_memory_bytes": 809451520
+  },
+  "prior_unit_bindings": [
+    {
+      "name": "nextcloud-app.container",
+      "sha256": "8d2328d9f2b0a76e06e33e1059d674fdfd631d6ce404d204e3d107fb0fc868df",
+      "pinned_sha256": "7d489a5a9db7df6277e21dc8df71ab3fe180bb4dfa7b1c7e15421540ae4585f6",
+      "config_id": "e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+      "uid": 1025,
+      "gid": 1025,
+      "mode": 420,
+      "mtime_ns": 1795424766327553717
+    },
+    {
+      "name": "nextcloud-office.container",
+      "sha256": "ec7ae4e682d8ec4bff0bb3f1addf0906f4058ad2c19d47411d1f1c692db192e3",
+      "pinned_sha256": "1ed3c75304ef3ca793edbbb66bc840aeb901008a3d848792519b48abefb7cf74",
+      "config_id": "a35ff1de149aeae0b1c9ecc83ab9406bd14a788cd61284e95b88b602df4a6ba3",
+      "uid": 1025,
+      "gid": 1025,
+      "mode": 420,
+      "mtime_ns": 1795424767966465694
+    },
+    {
+      "name": "nextcloud-db.container",
+      "sha256": "e473318d713e5fa6696beef867130fe5756c7ddd69df41347326b0f11b4e86e3",
+      "pinned_sha256": "253c28b953b074c3d87278f7cca99fa5a79cd2a634cb317a4b8cad0e3884e329",
+      "config_id": "9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7",
+      "uid": 1025,
+      "gid": 1025,
+      "mode": 420,
+      "mtime_ns": 1795424767585399591
+    },
+    {
+      "name": "nextcloud-redis.container",
+      "sha256": "972d317efe40ed129a3c4ccc4653705ff8a8dded3c721a058463c8c4b3c8656a",
+      "pinned_sha256": "31cd46ad8dff95261beb6a5b714a4fafd3aa97c7bb57e973f61a124b7d877884",
+      "config_id": "d1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad",
+      "uid": 1025,
+      "gid": 1025,
+      "mode": 420,
+      "mtime_ns": 1795424768016921465
+    },
+    {
+      "name": "nextcloud-gateway.container",
+      "sha256": "e4e773e6b5cb21a0ecd90a8b0b156cbd7cd306305d46b4121f8cbd0e244bf56b",
+      "pinned_sha256": "ad41e5d2296ad13508806f7931424fcf97b6f621523464be39d39bc09060223e",
+      "config_id": "696695300a3c18a324c07ecb41f220e8c470302148b0378770cf5c70e6458ea0",
+      "uid": 1025,
+      "gid": 1025,
+      "mode": 420,
+      "mtime_ns": 1795424767667596104
+    }
+  ],
+  "independent_exact_prior_unit_bytes_and_metadata_verified": true,
+  "independent_cold_state_and_original_engine_hashes_verified": true
+}

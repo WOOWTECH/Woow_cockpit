@@ -1,0 +1,66 @@
+{
+ "attempt": "t5b-fix-2",
+ "backup_engine_tree": "345d18273d27a9c3fc7b1dda3c4a13397b092074",
+ "code": "fix/emqx-export-members-20261124",
+ "command": "-I t5b_plain_explicit.py fix suffix,control",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 373.5,
+ "exit_code": 0,
+ "harness_commit": "50eaf177e249b39d57170e6c8fa5ba0f5ea777f9",
+ "iteration": 5,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "codebase": "fix",
+  "device_after": "rows=1:plain=0",
+  "device_before": "rows=1:plain=0",
+  "device_login_before": "own=login:wrong=refused",
+  "elapsed_s": 372.4,
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "modes": {
+   "control": {
+    "candidate": "rows=1:plain=0",
+    "candidate_after_restart": "rows=1:plain=0",
+    "candidate_authn_algorithms": [
+     [
+      "sha256",
+      true
+     ]
+    ],
+    "candidate_login": "own=login:wrong=refused",
+    "candidate_login_after_restart": "own=login:wrong=refused",
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_refused": false,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 167.2,
+    "ha_hocon_sha256": "f727e4f6ec35687f6232a760452a1f68f04ef9770ca1d08ae5707c0d0c909a2c"
+   },
+   "suffix": {
+    "candidate": "rows=1:plain=0",
+    "candidate_after_restart": "rows=1:plain=0",
+    "candidate_authn_algorithms": [
+     [
+      "plain",
+      true
+     ]
+    ],
+    "candidate_login": "own=refused:wrong=refused",
+    "candidate_login_after_restart": "own=refused:wrong=refused",
+    "conversion": "PASSED (candidate built, all product checks green)",
+    "conversion_refused": false,
+    "device_bootstrap_password_stored_plaintext": false,
+    "elapsed_s": 179.2,
+    "ha_hocon_sha256": "7346f5fe69f9b513cc465b72fa2c763f1f84154c787dd53812602d4369396550"
+   }
+  },
+  "network": "none",
+  "store": "labpodman (separate --root)",
+  "test": "T5b SR-5 HA plain authenticator with explicit salt_position vs this device bootstrap users"
+ },
+ "source_commit": "3ad74cacae3cc77ddb281eb166488ff5af0d15fb",
+ "started": "2026-11-24T14:00:43+0800",
+ "status_lines": [],
+ "stdout_sha256": "a00aaa7e8cc8bc3313d14eb066495335886b6409e3e1c3789120cec135677890",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

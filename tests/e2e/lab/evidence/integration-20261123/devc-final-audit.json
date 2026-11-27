@@ -1,0 +1,86 @@
+{
+ "schema_version": 1,
+ "kind": "device-audit",
+ "device": "woowbk-dev-c (lab)",
+ "when": "after the last integration run (x86 capcompare ended 13:35 local); read-only (labpodman inspect/exec, woowbk-owner podman ps/exec psql, curl inside the device)",
+ "script": "scratchpad devc_audit.py of the integration lane (read-only; reads no secret)",
+ "audit": {
+  "audited_local": "2026-11-23 13:35:46",
+  "isolation": "true none {}",
+  "nested_containers": {
+   "total": 10,
+   "healthy": 10,
+   "names": [
+    "n8n",
+    "n8n-postgres",
+    "n8n-runners",
+    "n8n-valkey",
+    "n8n-webhook",
+    "n8n-worker",
+    "n8n-worker-runners",
+    "odoo18-db",
+    "odoo18-gateway",
+    "odoo18-web"
+   ]
+  },
+  "health": {
+   "http://127.0.0.1:18069/web/health": "200",
+   "http://127.0.0.1:18080/web/health": "200",
+   "http://127.0.0.1:15678/healthz/readiness": "200",
+   "http://127.0.0.1:15679/healthz": "200"
+  },
+  "baseline_markers": {
+   "odoo": "before-backup-20261118T175223",
+   "n8n": "before-backup-20261118T175342"
+  },
+  "imported_data": {
+   "custom_module_woow_import_probe_present": false,
+   "test_partners": "0",
+   "n8n_workflows": "0"
+  },
+  "pg_auto_conf_settings": {
+   "odoo18-db": "0",
+   "n8n-postgres": "0"
+  },
+  "job_labelled_objects": {
+   "containers": 0,
+   "volumes": 0,
+   "networks": 0
+  },
+  "staging_entries": 0,
+  "n8n_creds_export_file_present": false,
+  "device_tmp_woowbk_entries": 0,
+  "sandbox_sampler_processes": 0,
+  "installed_engine": {
+   "files_sha256": "2fcd4a60fd33b8cc452054001877bea3ac653317351325cea3a7b4fac32c6c1b",
+   "py_files": "39",
+   "helper_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+   "version": "2026.11.19.2"
+  },
+  "schedule_timer": [
+   "enabled",
+   "active"
+  ],
+  "schedule_config_present": false,
+  "memory": "956.4MB / 3.221GB"
+ },
+ "expected": {
+  "isolation": "true none {}",
+  "nested_containers": "10/10 healthy",
+  "health": "200 x4",
+  "baseline_markers": "before-backup-* in Odoo and n8n (prodlike_baseline.py)",
+  "imported_data": "none",
+  "pg_auto_conf_settings": "0 (C-19 settings reset)",
+  "job_labelled_objects": "0/0/0",
+  "staging_entries": 0,
+  "n8n_creds_export_file_present": false,
+  "sandbox_sampler_processes": 0
+ },
+ "ok": true,
+ "kept_on_purpose": [
+  "The integrated engine (ba618ba backup-engine, 39 files, aggregate 2fcd4a60...) stays installed in dev-c (before: the b2f63ce engine, which differs only in ha_hermes.py, ha_n8n.py, hasqlite.py). deploy backup of the replaced files: dev-c /var/backups/woowtech-cockpit-source/20261123T034203256171Z.",
+  "Engine catalog: 16 archives (32 files, about 100 MiB) from these runs (converted test archives and pre-restore safety packages) stay in dev-c /var/lib/woowtech-backup/archives (98 files, 424 MiB in all), like the earlier lanes; the apps hold no imported data. Uploaded HA backups are content-addressed (ha-backups unchanged at 892 MiB, 24 entries).",
+  "Schedule timer enabled+active with no schedule.json (schedule off), as left by the 11-23 odoo-n8n deploy."
+ ],
+ "commercial_acceptance": "not-complete"
+}

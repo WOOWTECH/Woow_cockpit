@@ -1,0 +1,61 @@
+#!/bin/bash
+# parity-odoo (OD-OWNER-1735): heavy groups on a throw-away detached worktree W.   run.sh TAG group...
+#   groups: b1 (full tests/backup through integration-3's guard.py --b1), ha118 (RealBackupTests), real (the lane's two real-HA-backup test classes), mut (this lane's mutation sweep)
+# Every group goes through team/heavy.sh and the host heavy-tests lock. Records: scratchpad/parity-odoo/runs/TAG.* (0600).
+set -u
+umask 077
+BASE=/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad
+S=$BASE/parity-odoo
+G=$BASE/integration-3/guard.py
+HEAVY=$BASE/team/heavy.sh
+W=${W:-/tmp/parity-odoo-verify-20261125}
+LOCK=/tmp/woowbk-host-heavy-tests.lock
+R=$S/runs
+TAG=$1; shift
+SUM=$R/$TAG.summary
+cd "$W" || exit 2
+head=$(git rev-parse --short HEAD)
+dirty=$(git status --porcelain --untracked-files=no | wc -l)
+echo "tag $TAG head $head dirty $dirty start $(date +%T)" > "$SUM"
+heavy() { HEAVY_WAIT=${HEAVY_WAIT:-43200} HEAVY_FREE=$LOCK "$HEAVY" flock -w 3600 "$LOCK" "$@"; }
+for name in "$@"; do
+  t0=$SECONDS
+  case $name in
+    b1)
+      heavy env PYTHONPATH=backup-engine:tests/e2e/lab PYTHONDONTWRITEBYTECODE=1 timeout 7200 \
+        python3 "$G" --b1 --log "$R/$TAG-b1.guardlog" --discover tests/backup --top . > "$R/$TAG-b1.out" 2> "$R/$TAG-b1.err"
+      rc=$?; line=$(head -1 "$R/$TAG-b1.out" | cut -c1-300) ;;
+    ha118)
+      heavy env PYTHONPATH=backup-engine:tests/e2e/lab PYTHONDONTWRITEBYTECODE=1 timeout 3600 \
+        python3 "$G" --b1 --ha118 --log "$R/$TAG-ha118.guardlog" tests.backup.test_ha_backup.RealBackupTests \
+        > "$R/$TAG-ha118.out" 2> "$R/$TAG-ha118.err"
+      rc=$?; line=$(head -1 "$R/$TAG-ha118.out" | cut -c1-300) ;;
+    real)
+      heavy env PYTHONPATH=backup-engine:tests/e2e/lab PYTHONDONTWRITEBYTECODE=1 timeout 3600 \
+        python3 "$G" --b1 --ha118 --log "$R/$TAG-real.guardlog" tests.backup.test_ha_odoo.RealOdooBackupTests \
+        tests.backup.test_ha_flows.RealOdooFlowTests > "$R/$TAG-real.out" 2> "$R/$TAG-real.err"
+      rc=$?; line=$(head -1 "$R/$TAG-real.out" | cut -c1-300) ;;
+    mut)
+      # iteration 4: the sweep in chunks (default 46 mutants, about 15 minutes each): every chunk is its own heavy step, so that the other
+      # lanes can take the host lock between two chunks instead of waiting for the whole sweep. MUT_CHUNK=0: one step as before.
+      rc=0; n=0; caught=0; total=0
+      if [ "${MUT_CHUNK:-46}" = 0 ]; then
+        heavy env PYTHONDONTWRITEBYTECODE=1 timeout 43200 python3 -I "$S/mutations.py" --repo "$W" --jobs "${JOBS:-1}" \
+          --json "$R/$TAG-mut.json" > "$R/$TAG-mut.out" 2> "$R/$TAG-mut.err"
+        rc=$?; line=$(tail -1 "$R/$TAG-mut.out" | cut -c1-300)
+      else
+        while IFS= read -r ids; do
+          n=$((n+1))
+          heavy env PYTHONDONTWRITEBYTECODE=1 timeout 14400 python3 -I "$S/mutations.py" --repo "$W" --jobs "${JOBS:-1}" --only "$ids" \
+            --json "$R/$TAG-mut$n.json" > "$R/$TAG-mut$n.out" 2> "$R/$TAG-mut$n.err"
+          crc=$?; [ "$crc" -eq 0 ] || rc=$crc
+          echo "  chunk $n rc=$crc $(tail -1 "$R/$TAG-mut$n.out" | cut -c1-200)" >> "$SUM"
+        done < <(python3 -I "$S/chunks.py" "${MUT_CHUNK:-46}")
+        line="$n chunks, rc=$rc (the lines of every chunk are above)"
+      fi ;;
+    *) rc=2; line="unknown group" ;;
+  esac
+  echo "step $name rc=$rc seconds=$((SECONDS-t0)) $line" >> "$SUM"
+done
+echo "end $(date +%T) head-after $(git rev-parse --short HEAD) dirty $(git status --porcelain --untracked-files=no | wc -l)" >> "$SUM"
+echo done > "$R/$TAG.exit"

@@ -1,0 +1,172 @@
+{
+  "scope": "fixed-read-only-deep-diff",
+  "driver_commit": "cf28f50b87129e9574c592bda9fe6846412f0a07",
+  "tree_differences": {
+    "installed_vs_original": {
+      "directories": {
+        "added": 0,
+        "missing": 0,
+        "changed": 0
+      },
+      "files": {
+        "added": 0,
+        "missing": 0,
+        "changed": 0
+      }
+    },
+    "installed_vs_candidate": {
+      "directories": {
+        "added": 2,
+        "missing": 0,
+        "changed": 3
+      },
+      "files": {
+        "added": 26,
+        "missing": 5,
+        "changed": 47
+      }
+    },
+    "private_vs_saved_private": {
+      "directories": {
+        "added": 0,
+        "missing": 0,
+        "changed": 0
+      },
+      "files": {
+        "added": 0,
+        "missing": 0,
+        "changed": 0
+      }
+    },
+    "new": {
+      "exists": true,
+      "vs_original": {
+        "directories": {
+          "added": 0,
+          "missing": 2,
+          "changed": 3
+        },
+        "files": {
+          "added": 5,
+          "missing": 26,
+          "changed": 47
+        }
+      },
+      "vs_candidate": {
+        "directories": {
+          "added": 0,
+          "missing": 0,
+          "changed": 0
+        },
+        "files": {
+          "added": 0,
+          "missing": 0,
+          "changed": 0
+        }
+      }
+    },
+    "recover": {
+      "exists": false
+    }
+  },
+  "helper": {
+    "installed_vs_original": true,
+    "installed_vs_candidate": false,
+    "private_original_bytes": true,
+    "new_exists": true,
+    "new_vs_candidate": true,
+    "new_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678"
+  },
+  "journal_flags": {
+    "copy_complete": true,
+    "stage_intent": true,
+    "publish_intent": true,
+    "recovery_publish_intent": null,
+    "restored": true,
+    "complete": false
+  },
+  "journal_error_fields": {},
+  "journal_keys": [
+    "candidate",
+    "candidate_helper",
+    "complete",
+    "copy_complete",
+    "helper",
+    "original",
+    "private_tree",
+    "publish_intent",
+    "restored",
+    "stage_intent"
+  ],
+  "before_after_durable_checks": {
+    "catalog": true,
+    "files": true,
+    "protected": true,
+    "units": true,
+    "timer": true,
+    "volumes": true,
+    "running": true,
+    "active_jobs": true,
+    "retention_sha256": true,
+    "images": true
+  },
+  "image_baseline_durable_checks": {
+    "catalog": true,
+    "files": true,
+    "protected": true,
+    "units": true,
+    "timer": true,
+    "volumes": true,
+    "running": true,
+    "retention_sha256": true,
+    "images": true,
+    "active_jobs": true
+  },
+  "protected_baselines": {
+    "20261118T095520Z-33eb7474": {
+      "archive": {
+        "filename": "20261118T095520Z-33eb7474.tar",
+        "sha256": "38fac3cbd7d15c1eea11d98248c89040c0b22b97d50df7b38d50f71dfe7b3512",
+        "bytes": 133120,
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1794995721361484419
+      },
+      "sidecar": {
+        "sha256": "ffd0961ee7303fbcf03ec6b11bd36c44b84eeb94beb81cbc5c616168acf68f76",
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1795669850141861151,
+        "filename": "20261118T095520Z-33eb7474.json",
+        "bytes": 644
+      }
+    },
+    "20261118T095247Z-388c9bd7": {
+      "archive": {
+        "filename": "20261118T095247Z-388c9bd7.tar",
+        "sha256": "e7bd639497235c4a3db58e8ee1197bc0d955941e9e35563a590fa44e49a784eb",
+        "bytes": 12564480,
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1794995568877423103
+      },
+      "sidecar": {
+        "sha256": "03eab5e8a5954838f250627364874393730a80e7c0107ec63e46d0dc3dc26819",
+        "mode": 384,
+        "uid": 0,
+        "gid": 0,
+        "mtime_ns": 1795677711382308186,
+        "filename": "20261118T095247Z-388c9bd7.json",
+        "bytes": 641
+      }
+    }
+  },
+  "state_sha256": "1efb3230fe3666dee1fb0cfc0789ef3bd1a44b829c2641e775bb6f2c27c9d9a5",
+  "private_snapshot_sha256": "5877db18dee0adbde34a6c5d2e20ee31c7c2510a72b9c70d01f066dc5c259a5d",
+  "source_or_recovery_reexecuted": false,
+  "heavy_slot_used": false,
+  "mutex_released": true
+}

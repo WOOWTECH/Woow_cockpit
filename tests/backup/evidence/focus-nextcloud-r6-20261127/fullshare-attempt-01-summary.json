@@ -1,0 +1,34 @@
+{
+  "app_restore_jobs": 0,
+  "captured_before_after_markers_and_seven_state_fields_equal": true,
+  "cgroup_oom_counters_observed_zero": true,
+  "checks_failed": 1,
+  "checks_passed": 27,
+  "cold_return_blocked_before_unit_or_source_revert": "nextcloud-office.service-failed-state-after-stop",
+  "conversion_jobs": 0,
+  "dev_e_mutex_released": true,
+  "device_recovery_only_passed": true,
+  "diagnostic_limit": "Exception message/writer stderr/watch-error cause were not retained; no cause asserted.",
+  "failed_labels": [
+    "case stopped; recovery required"
+  ],
+  "fullshare_acceptance_passed": false,
+  "global_heavy_wrapper_exited": 0,
+  "ha_check_jobs": 0,
+  "initial_case_and_private_prior_receipts_preserved": true,
+  "initial_upload_stop_cause": "unknown-not-recorded",
+  "native_job_unit_count_active_at_recovery": 0,
+  "no_share_repeated": false,
+  "original_baseline_manifest_opened": true,
+  "original_fixture_current_full_sha_rehashed": false,
+  "original_fixture_stat_preserved": true,
+  "recorded_exception_type": "Failed",
+  "sampled_resources": {
+    "minimum_free_bytes": 24801828864,
+    "peak_memory_current_bytes": 1481388032
+  },
+  "server_encryption_runtime": false,
+  "skipped_fixture_runtime": false,
+  "source_commit": "d7db60cc284138658e93604dd41dafb7fc7d036f",
+  "status": "failed-before-upload-finish"
+}

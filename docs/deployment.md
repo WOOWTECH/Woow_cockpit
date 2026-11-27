@@ -4,7 +4,7 @@
 
 - Ubuntu 24.04、Python 3、Git、可使用 sudo 的 Linux 帳號。
 - APT 已配置 Ubuntu backports。`bootstrap-ubuntu.sh --plan` 不變更設備，只列出各套件是否已安裝；`--apply` 更新套件索引、安裝 Cockpit 與管理擴充、安裝備份工具、啟用 `cockpit.socket`。
-- 套件包括 cockpit、cockpit-podman、cockpit-storaged、cockpit-networkmanager、cockpit-packagekit（來自 backports），以及「備份與還原」需要的 `age`（加密）、`zstd`（壓縮），和讀取上傳的 Home Assistant 備份需要的 `python3-nacl`（解開 2026 年 3 月以後的 HA 加密備份）與 `python3-cryptography`（解開較舊的 HA 加密備份）。這些都來自一般套件庫，`age` 位於 universe。套件庫找不到它們時，`--apply` 會在安裝任何套件前停止並提示啟用 universe。依賴由 APT 處理。實驗室驗證使用 age 1.1.1、zstd 1.5.5、python3-nacl 1.5.0、python3-cryptography 41.0.7。
+- 套件包括 cockpit、cockpit-podman、cockpit-storaged、cockpit-networkmanager、cockpit-packagekit（來自 backports），以及「備份與還原」需要的 `age`（加密）、`zstd`（壓縮），和讀取上傳的 Home Assistant 備份需要的 `python3-nacl`（解開 2026 年 3 月以後的 HA 加密備份）與 `python3-cryptography`（解開較舊的 HA 加密備份）。這些都來自一般套件庫，`age` 位於 universe。套件庫找不到它們時，`--apply` 會在安裝任何套件前停止並提示啟用 universe。重複執行沒有副作用：備份用的四個套件都在時，連不到套件庫也不會擋；真的缺套件又裝不上才停止並列出名稱。這只指備份用的四個套件；Cockpit 的五個套件照舊，需要下載時仍要連得到套件庫。依賴由 APT 處理。實驗室驗證使用 age 1.1.1、zstd 1.5.5、python3-nacl 1.5.0、python3-cryptography 41.0.7。
 - 不自動切換既有網路管理方式、安裝 firewalld、啟用 PCP、重啟應用服務或更新容器。
 
 依 README 執行後，用 `systemctl status cockpit.socket` 確認入口。允許的管理網段需能連到 TCP 9090；防火牆規則應限制到實際管理網段。瀏覽器第一次可能遇到自簽憑證提示，可依 [Cockpit TLS 文件](https://cockpit-project.org/guide/latest/https.html) 安裝設備的可信憑證。
@@ -70,6 +70,7 @@ systemctl --user status podman.socket
 - 應用擁有者帳號需能執行 rootless Podman（subuid／subgid），並啟用 linger（`sudo loginctl enable-linger <應用擁有者>`），讓使用者服務管理器在沒有登入時也執行；否則頁面會提示「使用者服務管理器未啟動」。
 - 安裝後第一次使用，請到「加密金鑰」建立金鑰並保存緊急金鑰，見 [backup.md](backup.md)。
 - 「排程備份」預設關閉。安裝器一律安裝並啟用排程檢查的計時器（管理者用 `systemctl mask` 遮蔽它時除外，見下方）；排程關閉時它每 5 分鐘只做檢查，不會建立備份。開啟排程的方式見 [backup.md](backup.md)，維護見 [operations.md](operations.md)。
+- `install` 會先檢查備份元件需要的工具是否真的能用（age、age-keygen、zstd、python3-nacl、python3-cryptography），缺的會用 apt 自動補裝（只裝這四個套件和它們的相依套件、不移除任何套件、不主動重新啟動服務），才開始更新檔案。補不了（例如這台連不到套件庫）時**更新照常進行**，安裝訊息（`notices`，也會印在畫面上）說明沒補到的套件、原因、補到之前不能用的功能，以及怎麼辦；排除後重新執行即可。`plan` 會先列出要補裝的套件（`packages`）；`sudo python3 scripts/manage.py status` 隨時可以查看（不會更動任何東西，缺套件時結束碼 1；用 `--no-backup` 留下的備份元件也會檢查）。`--no-backup` 與 `--root` 的安裝不檢查也不補裝套件，`--root` 會提示在該系統安裝。回退不會移除補裝的套件。
 
 ### 排程備份的系統單元
 

@@ -1,0 +1,8 @@
+omnigent-postgres
+hermes-postgresql
+woow-emqx
+hermes-redis
+woow-emqx-entrance
+hermes-agent
+omnigent-server
+omnigent-runner

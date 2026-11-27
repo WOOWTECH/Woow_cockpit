@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/WOOWTECH/Woow_podman_vpn_headscale_package",
+  "commit": "0afdfa464a5ae55c85145c242f5b38ac88eea969",
+  "files": {
+    "Containerfile": "02f850bfe625cec627d8da94c3b61bd802990b75b0fd55d6ef164c8c2b7f403d",
+    "scripts/common.sh": "3f852391202bd927276e123fe102ac696d2cf586b1478eabcee7a4efb3861614"
+  },
+  "local_checkout_is_older_0_29_3": true,
+  "shipped_image_registry": "none; package local build per Containerfile"
+}

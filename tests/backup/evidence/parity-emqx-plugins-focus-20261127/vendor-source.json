@@ -1,0 +1,35 @@
+{
+  "tag": "v5.8.9",
+  "ref": {
+    "sha": "a8319fe2390169e1f2483e3ec80dd01a6cdb233d",
+    "type": "commit",
+    "url": "https://api.github.com/repos/emqx/emqx/git/commits/a8319fe2390169e1f2483e3ec80dd01a6cdb233d"
+  },
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/emqx/emqx/v5.8.9/apps/emqx_plugins/src/emqx_plugins.erl",
+      "sha256": "b9f7aada71879886bdde1196c7ffbde8953db01f34208d62068a782a20255f7f",
+      "bytes": 55251
+    },
+    {
+      "url": "https://raw.githubusercontent.com/emqx/emqx/v5.8.9/apps/emqx_plugins/src/emqx_plugins_app.erl",
+      "sha256": "e68780de34adcc3cdacddb1f015023c692a4de2164bd9f2a51944aec4f853cb4",
+      "bytes": 1340
+    },
+    {
+      "url": "https://raw.githubusercontent.com/emqx/emqx/v5.8.9/apps/emqx_plugins/src/emqx_plugins_schema.erl",
+      "sha256": "6f55b0079c609ac766082d8d84b6e111bd342b3242a25e8d59f60534b02fedfa",
+      "bytes": 2616
+    },
+    {
+      "url": "https://raw.githubusercontent.com/emqx/emqx/v5.8.9/apps/emqx_management/src/emqx_mgmt_data_backup.erl",
+      "sha256": "9b15f060a5c553415493a3c61e88e5b33140e64e3b81183d31e65627e94b63b7",
+      "bytes": 40488
+    },
+    {
+      "url": "https://raw.githubusercontent.com/emqx/emqx/v5.8.9/apps/emqx/src/emqx_config.erl",
+      "sha256": "b992be51d9928f4bbda95e43f5955e206558158d73908a0b80881fd2d27a4a53",
+      "bytes": 34847
+    }
+  ]
+}

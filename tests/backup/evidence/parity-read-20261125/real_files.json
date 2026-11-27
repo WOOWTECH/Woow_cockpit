@@ -1,0 +1,191 @@
+{
+ "rows": [
+  {
+   "check": "plain: the file as HA made it",
+   "ok": true,
+   "detail": "2 members"
+  },
+  {
+   "check": "plain: repacked with tar --format=gnu",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with tar --format=oldgnu",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with tar --format=posix",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with tar --format=ustar",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with tar --format=v7",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with busybox tar",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: repacked with tar -b",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: rubbish behind the archive",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: a bit of one add-on changed (gzip or cipher header)",
+   "ok": true,
+   "detail": "598298c3eff6da22199c2eb60853c3feb893f76356af202fdbc3a77568928c84"
+  },
+  {
+   "check": "plain: a bit of one add-on changed (first)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "plain: a bit of one add-on changed (middle)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "plain: a bit of one add-on changed (last)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "plain: one add-on cut off",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "plain: one add-on twice",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: one add-on gone",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: one add-on followed by another gzip",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "plain: one add-on followed by rubbish",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: the file as HA made it",
+   "ok": true,
+   "detail": "3 members"
+  },
+  {
+   "check": "encrypted v3: repacked with tar --format=gnu",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with tar --format=oldgnu",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with tar --format=posix",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with tar --format=ustar",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with tar --format=v7",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with busybox tar",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: repacked with tar -b",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: rubbish behind the archive",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: a bit of one add-on changed (gzip or cipher header)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: a bit of one add-on changed (first)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: a bit of one add-on changed (middle)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: a bit of one add-on changed (last)",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: one add-on cut off",
+   "ok": true,
+   "detail": "error corrupt-archive member"
+  },
+  {
+   "check": "encrypted v3: one add-on twice",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: one add-on gone",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: one add-on followed by another gzip",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "check": "encrypted v3: one add-on followed by rubbish",
+   "ok": true,
+   "detail": "kept"
+  },
+  {
+   "check": "plain: every add-on recompressed in two gzip parts and padded",
+   "ok": true,
+   "detail": ""
+  }
+ ],
+ "ok": 37,
+ "of": 37
+}

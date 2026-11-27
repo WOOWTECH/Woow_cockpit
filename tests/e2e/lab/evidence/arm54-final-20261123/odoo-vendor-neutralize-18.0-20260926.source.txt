@@ -1,0 +1,14 @@
+
+import json, subprocess
+ROOT = '/var/tmp/woow-arm54-final-20261123-gtb7v1s8'
+base = ['podman', '--root', ROOT + '/store', '--runroot', ROOT + '/run', '--storage-driver', 'overlay',
+        '--storage-opt', 'overlay.skip_mount_home=true', '--events-backend', 'file', '--tmpdir', ROOT + '/tmp',
+        '--cgroup-manager', 'cgroupfs']
+script = ("cd /usr/lib/python3/dist-packages/odoo/addons && for f in $(ls */data/neutralize.sql | sort); do "
+          "echo \"=== $f $(sha256sum $f | cut -c1-64)\"; cat -n $f; done")
+p = subprocess.run(base + ['run', '--rm', '--network', 'none', '--pull=never', '--label',
+                           'io.woowtech.test=arm54-final-20261123', '--entrypoint', 'sh',
+                           'docker.io/library/odoo:18.0-20260926', '-c', script],
+                   capture_output=True, timeout=300, env={'PATH': '/usr/local/bin:/usr/bin:/bin', 'HOME': ROOT})
+print(json.dumps({'exit': p.returncode, 'image': 'docker.io/library/odoo:18.0-20260926', 'read_only': True,
+                  'text': p.stdout.decode('utf-8', 'replace')}))

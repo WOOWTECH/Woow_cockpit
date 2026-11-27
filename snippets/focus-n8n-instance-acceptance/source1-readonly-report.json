@@ -1,0 +1,60 @@
+{
+  "scope": "read-only source failure diagnosis",
+  "attempt_result": "FAIL preserved",
+  "driver_commit": "cf28f50b87129e9574c592bda9fe6846412f0a07",
+  "elapsed_seconds": 19.5,
+  "d09_installed": false,
+  "prior_installed_library_exact": true,
+  "prior_helper_exact": true,
+  "prior_library_file_count": 73,
+  "private_prior_copy_exact": true,
+  "candidate_library_staging_exact": true,
+  "candidate_library_files": 52,
+  "journal": {
+    "copy_complete": true,
+    "stage_intent": true,
+    "publish_intent": true,
+    "recovery_publish_intent": null,
+    "restored": true,
+    "complete": false
+  },
+  "exchange_syscall_reached": "not proven; intent recorded immediately before exchange, no per-step completion/error record",
+  "historical_inner_error_class": "not retained; invoke discarded fixed class string when outer catch persisted only RuntimeError",
+  "historical_errno": "not retained; do not infer",
+  "filesystem_observation": {
+    "filesystem": "overlay",
+    "redirect_dir_on": false,
+    "causation": "not established"
+  },
+  "durable_comparison": "all10 fixed after-state comparisons true against image baseline, including exact four protected archive+sidecar files and all retained images",
+  "active_jobs": 0,
+  "running_containers": 0,
+  "mutex_released": true,
+  "heavy_released": true,
+  "new_source_overwrite": false,
+  "new_reinstall_or_retry": false,
+  "new_source_recover_after_failure_report": false,
+  "evidence_files": {
+    "n8n-source-attempt1.json": {
+      "sha256": "bf9dbbc11dc774768574ae6bb9052f86202cf5ab660ff6a506d0325e08e5c4ee",
+      "bytes": 460
+    },
+    "n8n-source-attempt1.private.log": {
+      "sha256": "0d4e9d42fd15f11303836da22617c8f000f03ef8350192c6477243096f4ca96f",
+      "bytes": 137
+    },
+    "n8n-source-attempt1-diagnostic.private.json": {
+      "sha256": "89cebe061b42ef570e76519c95b502032f5d26fbccf121753329b79303834b1e",
+      "bytes": 4948
+    },
+    "n8n-source-attempt1-exact-prior.private.json": {
+      "sha256": "1681cc835591077bb6e46319ffcdd767a3d70be5383162c053aa51cdedaa0a35",
+      "bytes": 7837
+    },
+    "n8n-source-attempt1-diagnostic-summary.json": {
+      "sha256": "a00ba24f21d55104de34c520a78378580489b8e27e20b07d3177286c5e05a04b",
+      "bytes": 914
+    }
+  },
+  "next_action": "hold all source mutations; original source is already exact. Preserve private copies/staging and failed bytes. No safety execution."
+}

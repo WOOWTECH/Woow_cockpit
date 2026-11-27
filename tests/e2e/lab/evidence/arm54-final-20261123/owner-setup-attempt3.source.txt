@@ -1,0 +1,293 @@
+"""Item C setup on .54 (root): uidmap, ONE linger test owner whose user manager runs in a private network namespace,
+the app images in the owner's own rootless storage, and the unmodified Woow package quadlets/config installed for him
+and started under his user systemd -- the deployment the production engine (OwnerRunner) then restores into.
+
+usage (through arm54_final_control.py run): arm54_final_owner_setup.py <workspace> headscale
+
+Test deviations of the Headscale target (stated in the report): published ports stay on 127.0.0.1 of the private
+namespace; DERP = embedded region instead of the public DERP URL (no network; Headscale refuses to start without a
+DERP map); the package's ngrok-sync ExecStartPre is dropped (no ngrok, no network); headplane.container is installed
+(the importer needs its volume mount) but not started and without [Install] (no arm64 woow-headplane image).
+Account-file backups (/etc/passwd- ...) are copied into the 0700 workspace so the cleanup can put them back exactly;
+they are never printed (only equal/not-equal booleans are reported)."""
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import time
+
+from arm54_final_runtime import BASE, ENV, ROOT, private_dir, report
+import arm54_final_owner_common as oc
+
+from woowbackup import podman as product_podman  # noqa: E402
+
+APP = sys.argv[2] if len(sys.argv) > 2 else 'headscale'
+assert APP in ('headscale',), 'app-refused'
+PACKAGE = ROOT / 'source/tests/e2e/lab/evidence/arm54-final-20261123/package-0afdfa4'
+IMAGE = 'localhost/woow-headscale:0.29.4-r1'
+PORTS = {'@@HEADSCALE_PUBLISH@@': '127.0.0.1:28080', '@@HEADSCALE_METRICS_PUBLISH@@': '127.0.0.1:29090'}
+RENDER = {
+    '@@HEADSCALE_SERVER_URL@@': 'http://192.168.2.54:28080',
+    '@@HEADSCALE_IPV4_PREFIX@@': '"100.64.0.0/10"', '@@HEADSCALE_IPV6_PREFIX@@': '"fd7a:115c:a1e0::/48"',
+    '@@HEADSCALE_NODE_EXPIRY@@': '0', '@@HEADSCALE_MAGIC_DNS@@': 'true', '@@HEADSCALE_BASE_DOMAIN@@': 'ts.local',
+    '@@HEADSCALE_DNS_NAMESERVERS_YAML@@': '"1.1.1.1", "1.0.0.1"', '@@HEADSCALE_POLICY_MODE@@': 'database',
+    '@@HEADSCALE_LOG_LEVEL@@': 'info', **PORTS,
+}
+DERP_PACKAGE = '''derp:
+  server:
+    enabled: false
+  urls:
+    - https://controlplane.tailscale.com/derpmap/default
+  auto_update_enabled: true
+  update_frequency: 24h
+'''
+DERP_ISOLATED = '''derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: arm54
+    region_name: ARM54 isolated
+    stun_listen_addr: 127.0.0.1:3478
+    private_key_path: /var/lib/headscale/derp_server_private.key
+    automatically_add_embedded_derp_region: true
+  urls: []
+  paths: []
+  auto_update_enabled: false
+'''
+NGROK_PRE = 'ExecStartPre=/usr/bin/python3 %h/.config/headscale/ngrok-sync.py --apply\n'
+TARGET_MARKER = b'arm54-owner-target-headplane-marker-20261123\n'
+
+checks, facts = {}, {}
+out = {'status': 'failed', 'phase': 'start', 'app': APP, 'owner': oc.OWNER, 'commercial_acceptance': 'not-complete',
+       'checks': checks, 'facts': facts}
+started = time.monotonic()
+state = private_dir('owner-state')
+
+
+def check(name, ok, **detail):
+    checks[name] = bool(ok)
+    if detail:
+        facts[name] = detail
+    return bool(ok)
+
+
+def must(name, ok, **detail):
+    if not check(name, ok, **detail):
+        raise AssertionError(name)
+
+
+def sha(path):
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def root_run(argv, timeout=120, env=None):
+    p = subprocess.run(argv, capture_output=True, timeout=timeout,
+                       env=env or {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'})
+    if p.returncode:
+        raise RuntimeError('root-command-failed %s rc=%d %s' % (argv[0], p.returncode, oc.safe_tail(p.stderr)))
+    return p
+
+
+def render(text):
+    for key, value in RENDER.items():
+        text = text.replace(key, value)
+    assert '@@' not in text, 'unrendered-placeholder'
+    return text
+
+
+def volume_tar(members):
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode='w') as tar:
+        for name, data, mode in members:
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime = len(data), mode, int(time.time())
+            tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+try:
+    out['phase'] = 'preconditions'
+    must('owner_absent_before', oc.account() is None)
+    must('uidmap_absent_before', not os.path.exists('/usr/bin/newuidmap') and not os.path.exists('/usr/bin/newgidmap'))
+    must('no_dropin_before', not any(p.name.startswith('user@') and (p / oc.DROPIN_NAME).exists()
+                                     for p in Path('/etc/systemd/system').iterdir()))
+    deb = ROOT / 'input/uidmap.deb'
+    must('uidmap_deb_is_the_pinned_debian_package', sha(deb) == oc.UIDMAP_SHA256)
+    must('podman_bin_present_no_usr_bin_podman', os.path.exists(oc.PODMAN_BIN) and not os.path.exists('/usr/bin/podman'))
+    before = {p: sha(p) for p in oc.ACCOUNT_FILES + oc.BACKUP_FILES}
+    before_stat = {p: [os.stat(p).st_mode, os.stat(p).st_uid, os.stat(p).st_gid] for p in oc.ACCOUNT_FILES + oc.BACKUP_FILES
+                   if os.path.exists(p)}
+    (state / 'account-stat-before.json').write_text(json.dumps(before_stat))
+    (state / 'account-before.json').write_text(json.dumps(before))
+    saved = private_dir('owner-state', 'account-backups')
+    for path in oc.BACKUP_FILES:
+        if os.path.exists(path):
+            shutil.copy2(path, saved / Path(path).name)
+    facts['account_backup_files_saved'] = sorted(p.name for p in saved.iterdir())
+    journal_dirs = [p for p in Path('/var/log/journal').iterdir() if p.is_dir()] if Path('/var/log/journal').is_dir() else []
+    (state / 'journal-before.json').write_text(json.dumps(sorted(str(f) for d in journal_dirs for f in d.iterdir())))
+    (state / 'var-tmp-before.json').write_text(json.dumps(sorted(os.listdir('/var/tmp'))))
+    (state / 'tmp-before.json').write_text(json.dumps(sorted(os.listdir('/tmp'))))
+
+    out['phase'] = 'uidmap'
+    root_run(['dpkg', '-i', str(deb)], timeout=300,
+             env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'DEBIAN_FRONTEND': 'noninteractive'})
+    must('newuidmap_newgidmap_installed', os.path.exists('/usr/bin/newuidmap') and os.path.exists('/usr/bin/newgidmap'))
+
+    out['phase'] = 'account'
+    root_run(['useradd', '-l', '-m', '-U', '-s', '/usr/sbin/nologin', '-c', oc.COMMENT, oc.OWNER])
+    acct = oc.account()
+    uid = acct.pw_uid
+    subuid = [l for l in Path('/etc/subuid').read_text().splitlines() if l.startswith(oc.OWNER + ':')]
+    subgid = [l for l in Path('/etc/subgid').read_text().splitlines() if l.startswith(oc.OWNER + ':')]
+    (state / 'owner.json').write_text(json.dumps({'uid': uid, 'home': acct.pw_dir,
+                                                  'subuid': subuid[0].split(':')[1:3] if subuid else None}))
+    must('owner_created_with_subordinate_ids', uid >= 1000 and len(subuid) == 1 and len(subgid) == 1,
+         uid=uid, home=acct.pw_dir, subuid=subuid, subgid=subgid, mail_spool=os.path.exists('/var/mail/' + oc.OWNER))
+
+    out['phase'] = 'private-network-manager'
+    dropdir = oc.dropin_dir(uid)
+    must('dropin_dir_absent', not dropdir.exists())
+    dropdir.mkdir(mode=0o755)
+    (dropdir / oc.DROPIN_NAME).write_text(oc.DROPIN_TEXT)
+    os.chmod(dropdir / oc.DROPIN_NAME, 0o644)
+    root_run(['systemctl', 'daemon-reload'], timeout=120)
+    root_run(['loginctl', 'enable-linger', oc.OWNER], timeout=60)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        active = subprocess.run(['systemctl', 'is-active', 'user@%d.service' % uid], capture_output=True,
+                                text=True, timeout=30).stdout.strip()
+        bus = Path('/run/user/%d/bus' % uid)
+        if active == 'active' and bus.exists() and stat.S_ISSOCK(bus.stat().st_mode):
+            break
+        time.sleep(2)
+    must('user_manager_active_with_bus', active == 'active' and bus.exists())
+    pid = oc.manager_pid(uid)
+    (state / 'owner-netns.json').write_text(json.dumps({'inode': oc.netns_inode(pid), 'manager_pid': pid}))
+    links = oc.nsenter(pid, 'ip', '-br', 'link').stdout.decode().split('\n')
+    names = {l.split()[0].split('@')[0]: l.split()[1] for l in links if l.strip()}
+    addrs = oc.nsenter(pid, 'ip', '-br', 'addr').stdout.decode().split('\n')
+    # A new namespace also gets the kernel's DOWN fallback tunnel devices (sit0, ip6tnl0) of loaded modules.
+    must('user_manager_in_private_netns_lo_only', pid > 0 and oc.netns_inode(pid) != oc.netns_inode(1)
+         and 'lo' in names and set(names) - {'lo'} <= oc.FALLBACK_TUNNELS
+         and all(state == 'DOWN' for name, state in names.items() if name != 'lo')
+         and all(l.split()[0] == 'lo' or len(l.split()) <= 2 for l in addrs if l.strip()),
+         links=sorted(' '.join(l.split()[:2]) for l in links if l.strip()),
+         addresses=sorted(' '.join(l.split()) for l in addrs if l.strip()))
+    # .54's /etc/containers/{containers,storage}.conf are root's (cgroupfs; graphroot /var/lib/containers/storage, which
+    # Podman 6.1.1 also applies to rootless users: owner-setup-attempt2 failed with "mkdir /var/lib/containers/storage/
+    # libpod: permission denied"). The test owner gets the usual rootless settings in his own home.
+    oc.write_owner_files({
+        '.config/containers/containers.conf':
+            ('0644', '# test owner (lane arm54-2): rootless with the systemd cgroup manager of his user session\n'
+                     '[engine]\ncgroup_manager = "systemd"\n'),
+        '.config/containers/storage.conf':
+            ('0644', '# test owner (lane arm54-2): rootless storage in his own home and runtime directory\n'
+                     '[storage]\ndriver = "overlay"\nrunroot = "/run/user/%d/containers"\n'
+                     'graphroot = "%s/.local/share/containers/storage"\n' % (uid, acct.pw_dir))})
+    info = oc.podman('info', '--format', '{{.Host.Security.Rootless}} {{.Host.CgroupManager}} {{.Store.GraphDriverName}} '
+                     '{{.Host.CgroupsVersion}} {{.Version.Version}}', timeout=180).stdout.decode().split()
+    must('owner_podman_rootless_systemd_overlay', info[:3] == ['true', 'systemd', 'overlay'], info=info)
+    roots = oc.podman('info', '--format', '{{.Store.GraphRoot}} {{.Store.RunRoot}}', timeout=60).stdout.decode().split()
+    must('owner_storage_in_his_home_and_runtime_dir', roots == ['%s/.local/share/containers/storage' % acct.pw_dir,
+                                                                 '/run/user/%d/containers' % uid], roots=roots)
+    # The product's owner commands: before the fix every one used /usr/bin/podman, which .54 does not have.
+    product_runner = product_podman.OwnerRunner(oc.OWNER)
+    legacy = subprocess.run(product_runner.prefix() + ['/usr/bin/podman', '--version'], capture_output=True, timeout=60,
+                            cwd=acct.pw_dir, env=dict(product_podman.ROOT_ENV))
+    must('unfixed_product_path_fails_on_54', legacy.returncode == 127, rc=legacy.returncode)
+    version = product_runner.podman('--version', timeout=60).stdout.decode().strip()
+    must('fixed_product_owner_runner_runs_podman', product_podman.PODMAN == oc.PODMAN_BIN
+         and version.startswith('podman version'), version=version, podman=product_podman.PODMAN)
+    idmap = oc.podman('unshare', 'cat', '/proc/self/uid_map', timeout=60).stdout.decode().split()
+    must('owner_user_namespace_maps_subordinate_range', len(idmap) == 6 and idmap[:3] == ['0', str(uid), '1'] and idmap[4:6] == subuid[0].split(':')[1:3],
+         uid_map=idmap)
+
+    out['phase'] = 'images'
+    root_ids = subprocess.run(BASE + ['images', '--no-trunc', '--format', '{{.Id}} {{.Repository}}:{{.Tag}}'], env=ENV,
+                              capture_output=True, text=True, timeout=120).stdout.split('\n')
+    want = [l.split()[0].split(':')[-1] for l in root_ids if l.strip().endswith(' ' + IMAGE)]
+    must('headscale_image_built_in_private_store', len(want) == 1)
+    saver = subprocess.Popen(BASE + ['save', IMAGE], env=ENV, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    acctp = oc.owner_prefix(acct) + [oc.PODMAN_BIN, 'load', '--quiet']
+    loader = subprocess.run(acctp, stdin=saver.stdout, capture_output=True, timeout=900, cwd=acct.pw_dir)
+    saver.stdout.close()
+    saver.wait(timeout=120)
+    must('image_loaded_into_owner_store', saver.returncode == 0 and loader.returncode == 0,
+         save_rc=saver.returncode, load_rc=loader.returncode, load_tail=oc.safe_tail(loader.stderr, 200))
+    owner_ids = oc.podman('images', '--no-trunc', '--format', '{{.Id}} {{.Repository}}:{{.Tag}}').stdout.decode().split('\n')
+    got = [l.split()[0].split(':')[-1] for l in owner_ids if l.strip().endswith(' ' + IMAGE)]
+    must('owner_image_id_equals_built_image', got == want, image_id=want[0][:12])
+
+    out['phase'] = 'package-files'
+    files = {}
+    for path in sorted((PACKAGE / 'quadlet').iterdir()):
+        text = render(path.read_text())
+        if path.name == 'headscale.container':
+            assert text.count(NGROK_PRE) == 1, 'package-ngrok-hook-changed'
+            text = text.replace(NGROK_PRE, '')
+        if path.name == 'headplane.container':
+            assert text.count('\n[Install]\nWantedBy=default.target\n') == 1, 'package-headplane-install-changed'
+            text = text.replace('\n[Install]\nWantedBy=default.target\n', '\n')
+        files['.config/containers/systemd/' + path.name] = ('0644', text)
+    template = render((PACKAGE / 'config/templates/headscale/config.yaml').read_text())
+    body = '\n'.join(l for l in template.splitlines() if not l.lstrip().startswith('#')) + '\n'
+    assert body.count(DERP_PACKAGE) == 1, 'package-derp-block-changed'
+    files['.config/headscale/headscale/config.yaml'] = ('0644', body.replace(DERP_PACKAGE, DERP_ISOLATED))
+    files['.config/headscale/headscale/policy.json'] = ('0644', (PACKAGE / 'config/templates/headscale/policy.json').read_text())
+    oc.write_owner_files(files)
+    facts['installed_files'] = sorted(files)
+    facts['deviations'] = ['user manager PrivateNetwork=yes (lo only; pasta local mode)',
+                           'embedded DERP region instead of the public DERP URL', 'ngrok-sync ExecStartPre dropped',
+                           'headplane.container installed without [Install] and not started (no arm64 image)',
+                           'Headplane secrets are generated test values']
+    for name in ('headscale-headplane-cookie', 'headscale-headplane-api-key'):
+        oc.podman('secret', 'create', name, '-', input=secrets.token_hex(32).encode(), timeout=60)
+    for volume in ('headscale-data', 'headplane-data', 'headscale-run'):
+        oc.podman('volume', 'create', '--label', 'io.woowtech.app=headscale', volume, timeout=60)
+    extra = (PACKAGE / 'config/templates/headscale/extra_records.json').read_bytes()
+    oc.podman('volume', 'import', 'headscale-data', '-', input=volume_tar([('extra_records.json', extra, 0o644)]))
+    oc.podman('volume', 'import', 'headplane-data', '-', input=volume_tar([('target-marker.txt', TARGET_MARKER, 0o600)]))
+
+    out['phase'] = 'start-target'
+    oc.systemctl('daemon-reload', timeout=120)
+    generated = oc.systemctl('list-unit-files', '--no-legend', '--plain', 'headscale*', 'headplane*').stdout.decode()
+    facts['generated_units'] = sorted(l.split()[0] for l in generated.splitlines() if l.strip())
+    oc.systemctl('start', 'headscale.service', timeout=400)
+    ok, last = oc.wait_http(pid, 'http://127.0.0.1:28080/health', 180)
+    must('target_headscale_healthy_on_loopback_of_private_netns', ok, last=last)
+    must('host_netns_has_no_test_listener', b':28080' not in subprocess.run(['ss', '-H', '-lnt'], capture_output=True,
+                                                                           timeout=30).stdout)
+    oc.podman('exec', 'headscale', 'headscale', 'users', 'create', 'target-only', timeout=60)
+    created = oc.podman('exec', 'headscale', 'headscale', 'apikeys', 'create', '--expiration', '2d', timeout=60)
+    key = created.stdout.decode().strip().splitlines()[-1].strip()
+    keyfile = state / 'target-api-key'
+    with open(keyfile, 'x') as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        handle.write(key)
+    users = json.loads(oc.podman('exec', 'headscale', 'headscale', 'users', 'list', '-o', 'json').stdout or b'[]')
+    nodes = json.loads(oc.podman('exec', 'headscale', 'headscale', 'nodes', 'list', '-o', 'json').stdout or b'[]')
+    must('target_state_ready', sorted(u.get('name') for u in users) == ['target-only'] and not nodes and len(key) > 20)
+    active = oc.systemctl('is-active', 'headscale.service', 'headplane.service', check=False).stdout.decode().split()
+    facts['units_active'] = active
+    out['status'] = 'passed'
+    out['phase'] = 'done'
+except Exception as error:  # noqa: BLE001 - the report names the phase; secrets never reach it
+    out['error'] = type(error).__name__
+    out['error_detail'] = oc.safe_tail(str(error), 600)
+finally:
+    out['elapsed_seconds'] = round(time.monotonic() - started, 1)
+    out['failed_check'] = next((k for k, v in checks.items() if not v), None)
+    report(ROOT / 'owner-setup-result.json', out)
+    print(json.dumps(out, sort_keys=True))
+sys.exit(0 if out['status'] == 'passed' else 1)

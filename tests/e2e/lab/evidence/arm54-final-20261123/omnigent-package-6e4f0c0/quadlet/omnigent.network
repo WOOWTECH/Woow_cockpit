@@ -1,0 +1,8 @@
+# omnigent.network: private bridge shared by omnigent-postgres, omnigent-server and
+# omnigent-runner. Its own network (not the default) so the containers address each other
+# by name (aardvark-dns) without leaking DNS into the other stacks on the host. The name is
+# unchanged, so hosts that already run omnigent adopt their network.
+[Network]
+NetworkName=omnigent
+Label=app=omnigent
+Label=io.woowtech.app=omnigent

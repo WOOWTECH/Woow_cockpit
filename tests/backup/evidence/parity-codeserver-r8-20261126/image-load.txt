@@ -1,0 +1,4 @@
+lab: == phase images:code-server
+lab: image ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8: every entry's owner is inside appowner's nested range (0-55000)
+lab: image ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8 loaded in 651s, ID 7999790230ec (same as the host); 5362 MiB, compressed copy 2517 MiB, lowest host free 16811 MiB
+lab: host disk after the images: 21 GiB free

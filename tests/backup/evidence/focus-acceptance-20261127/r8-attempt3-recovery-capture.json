@@ -1,0 +1,21 @@
+{
+ "source_commit": "cde697b8cd89e1782c9e504c3206145229ceb8c1",
+ "scope": "r8-independent-recovery-only",
+ "exit": 1,
+ "elapsed_seconds": 9.2,
+ "stdout_sha256": "8b2b27afe871545536bc7bfa2f05fa09ce385959a37e05e14a65bf1a578331a6",
+ "fixed_status": [
+  "recovery only: no active backup job: PASS",
+  "recovery only: exact original emqx markers: PASS",
+  "recovery only: exact original omnigent markers: PASS",
+  "recovery only: exact original hermes markers: PASS",
+  "recovery only: original durable unit and timer states: PASS",
+  "recovery only: exact original image configs: PASS",
+  "recovery only: exact original schedule state: PASS",
+  "recovery only: original HA fixture hash: PASS",
+  "recovery only: all six old case archives retained: PASS",
+  "recovery only: all six older protected archives retained: FAIL"
+ ],
+ "stderr_bytes_not_published": 704,
+ "commercial_acceptance": "not-complete"
+}

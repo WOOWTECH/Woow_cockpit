@@ -1,0 +1,31 @@
+{
+  "rows": {
+    "OD-23": {
+      "lane": "ODOO",
+      "app": "Odoo",
+      "act": "auto",
+      "status": "done",
+      "issues": {
+        "target.image-pulled": "auto",
+        "target.image-missing": "stop"
+      },
+      "tests": [
+        "tests/backup/test_ha_flows.py::OdooTargetTests.test_an_image_this_device_lacks_is_downloaded_and_said",
+        "tests/backup/test_ha_flows.py::OdooTargetTests.test_an_image_that_cannot_be_had_stops_only_this_app_and_nothing_is_read",
+        "tests/backup/test_pg16_bundle.py::RuntimeTests.test_offline_load_goes_to_app_owner_before_pull_and_returns_config_id",
+        "tests/backup/test_pg16_bundle.py::RuntimeTests.test_tampered_bundle_stops_before_load_or_pull",
+        "tests/test_manage.py::OdooPg16BundleContract.test_ordinary_offline_update_does_not_open_load_pull_or_remove_bundles",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_package_install_and_verify_same_generation_without_loading",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_correct_config_with_wrong_exported_layer_is_rejected",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_each_layer_hash_must_match_config_order",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_rootfs_diff_ids_must_exist_have_correct_count_and_valid_digests",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_installed_files_and_ancestors_must_be_root_trusted",
+        "tests/backup/test_pg16_bundle.py::ReleaseTests.test_200mib_stream_copy_never_requests_or_retains_the_whole_artifact",
+        "tests/backup/test_pg16_docker_dir.py::DockerDirectoryTests.test_real_packager_preserves_pinned_docker_config_and_layers",
+        "tests/backup/test_pg16_docker_dir.py::DockerDirectoryTests.test_links_hardlinks_extra_files_and_multiimage_are_refused",
+        "tests/backup/test_pg16_docker_dir.py::DockerDirectoryTests.test_config_digest_descriptor_and_uncompressed_layer_digest_are_all_mandatory"
+      ],
+      "note": "Opt-in shipped PG16 bundle complete: streaming package/install, independent trusted manifest SHA, exact Linux architecture/ref/config and every ordered uncompressed layer SHA, root-protected sidecar and real app-owner load before pull; ordinary offline updates/local-first/pinned retry preserved. Actual Linux/amd64 proof at source516e02a2: original4278 config pinned by official aa6cb index/ac838 platform manifest; actual docker-dir packaging+install+OwnerRunner load1/reuse, PostgreSQL16.15, pulls0, anonymous volumes0/containers0, original source unchanged. Device release and host /tmp/parity-focus-20261127/odoo-pg16-release-amd64 retained; archive297140736bytes SHAe2f6b112b442a4862cf472b5c9dd59de17db489dd5ba608001c9b1bbe700eeb2, trusted manifest SHAf563a9bf4123af20f65247ab752169e4664c7e0d179806711c7957d70687f9aa. Evidence: snippets/focus-odoo-image/woowbk-odoo-pg16-proof-20261127-od23-r5-result.json, retained-release.json, failed-owned-store-cleanup.json and README.md. Four owned stores cleaned; all protected failed artifacts retained. ARM64 archive support has synthetic coverage; actual artifact proof is amd64. No app auto-install, version change, wave2 or commercial/all-service acceptance claim."
+    }
+  }
+}

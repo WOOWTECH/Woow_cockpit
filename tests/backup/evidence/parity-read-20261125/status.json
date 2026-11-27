@@ -1,0 +1,111 @@
+{
+ "lane": "READ",
+ "owner_instance": "READ-OWNER-1605",
+ "iteration": 3,
+ "branch": "parity/read-20261125",
+ "commercial_acceptance": "not-complete",
+ "tip": "ecfb022 dirty=0 16:40",
+ "merge_tree": "5a991b1 clean=0",
+ "steps": {
+  "b1": {
+   "exit": "1",
+   "summary": "tests=1978 failures=4 errors=4 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=445",
+   "not_ok": [
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_pg_version_and_backup_name_cannot_forge_a_job_log_line",
+    "FAIL tests.backup.test_ha_omnigent.CheckTests.test_has_text_cannot_reorder_a_message_or_a_log_line",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "ERROR tests.backup.test_ha_cli.UploadFinishTests.test_a_broken_ha_file",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ]
+  },
+  "ha118": {
+   "exit": "0",
+   "summary": "tests=1 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied elapsed=7",
+   "not_ok": []
+  },
+  "merge-b1": {
+   "exit": "1",
+   "summary": "tests=2164 failures=2 errors=3 skipped=1 expected_failures=0 unexpected_successes=0 blocked=6 shim_hits=0 run_native=denied elapsed=424",
+   "not_ok": [
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+    "FAIL tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+    "ERROR tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+   ]
+  },
+  "units": {
+   "exit": "0",
+   "last_line": "OK (skipped=1)"
+  },
+  "mutations": {
+   "tally": {
+    "caught": 267,
+    "SURVIVED": 1
+   },
+   "survivors": [
+    "CONTROL (must survive)"
+   ],
+   "seconds": 3877,
+   "one_run": true
+  },
+  "realfiles": {
+   "exit": "0",
+   "last_line": "37 of 37"
+  },
+  "fuzz": {
+   "exit": "0",
+   "last_line": "{\"rounds_per_kind\": 4000, \"kinds\": [\"gzip\", \"plain\", \"v3\", \"v2\"], \"outcomes\": {\"gzip\": {\"corrupt-archive\": 2307, \"read\": 1693}, \"plain\": {\"corrupt-archive\": 2515, \"read\": 1485}, \"v3\": {\"corrupt-archive\": 3261, \"read\": 733, \"wrong-key\": 4, \"unsupported-format\": 2}, \"v2\": {\"corrupt-archive\": 3257, \"re"
+  },
+  "mem4m": {
+   "note": "NOT repeated in iteration 3 (stopped on purpose: the walk and the names table are unchanged, the host was saturated); this is the record of it2b",
+   "last_line": "{\"entries\": 4000000, \"result\": \"complete\", \"base_mib\": 23, \"peak_mib\": 132, \"per_entry_bytes\": 28.6, \"cpu_seconds\": 173}"
+  },
+  "mem4m1": {
+   "note": "NOT repeated in iteration 3 (stopped on purpose: the walk and the names table are unchanged, the host was saturated); this is the record of it2b",
+   "last_line": "{\"entries\": 4000001, \"result\": \"limit-exceeded: too many entries in an inner tar\", \"base_mib\": 23, \"peak_mib\": 132, \"per_entry_bytes\": 28.6, \"cpu_seconds\": 173}"
+  },
+  "check_schema": {
+   "exit": "0",
+   "last_line": "documents 349 agree 349 []"
+  },
+  "diff_tarfile": {
+   "exit": "0",
+   "last_line": "rounds 1500, differences 0"
+  },
+  "struct_fuzz": {
+   "exit": "0",
+   "last_line": "{'refused': 55590, 'ok': 4410} violations 0"
+  },
+  "struct_fuzz2": {
+   "exit": "0",
+   "last_line": "{'refused': 49070, 'ok': 10930} violations 0"
+  },
+  "job_level": {
+   "exit": "0",
+   "last_line": "RESULT 11 of 12 damaged members stop only their own app at check time (fakes, not real); not stopped at check time: ['cut gzip']"
+  },
+  "kinds": {
+   "exit": "0",
+   "last_line": "{\"none\": 31, \"v3\": 40}"
+  },
+  "tests-on-engine-it2": {
+   "exit": "",
+   "last_line": "FAILED (failures=3)"
+  },
+  "probe_diff": {
+   "exit": "",
+   "last_line": "{'rounds': 60000, 'answers': {True: 26367, False: 33633}, 'different': 0}"
+  },
+  "quickmut-intended": {
+   "exit": "",
+   "last_line": "caught   names key: not in the digest | FAILED (failures=1)"
+  },
+  "old-tests": {
+   "note": "run at iteration 2 (it2b); the reading paths of those tests are unchanged since (iteration 3 changed the probe behind a plain tar and the header sum only)"
+  }
+ }
+}

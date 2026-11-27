@@ -1,0 +1,33 @@
+{
+ "kind": "nextcloud-webroot-probe",
+ "date": "2026-11-24T08:01:45+0800",
+ "source_commit": "191f4c0ad6fa33f170128e4126e176e2a9197cb0",
+ "device": "woowbk-dev-e",
+ "codes": {
+  "control": 200,
+  "installed_picture": 404,
+  "no_htaccess_picture": 200,
+  "require_only_picture": 404,
+  "own_htaccess_picture": 200,
+  "own_htaccess_php": 200,
+  "own_htaccess_php_ran": 1,
+  "after_picture": 404,
+  "same_file": 1,
+  "probe_left": 0
+ },
+ "checks": {
+  "dev-e isolation true none {}": "PASS",
+  "as installed: a static file is served, a user picture below /data/ is not": "PASS",
+  "put back exactly: data/.htaccess is the same file, the probe folder is gone": "PASS",
+  "afterwards the user picture is denied again": "PASS"
+ },
+ "measured": {
+  "without data/.htaccess the picture is served without a login": true,
+  "a folder whose own .htaccess says only Require all granted is served": false,
+  "a folder with its own .htaccess is served although data/.htaccess denies everything": true,
+  "a PHP file in such a folder runs": true
+ },
+ "exit": 0,
+ "elapsed_s": 1.5,
+ "acceptance": "not acceptance (why DATA_HTACCESS is written and every other .htaccess refused)"
+}

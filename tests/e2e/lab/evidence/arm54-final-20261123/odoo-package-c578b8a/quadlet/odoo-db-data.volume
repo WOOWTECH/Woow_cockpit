@@ -1,0 +1,8 @@
+# Same name as the compose deployment, so existing hosts adopt the data in place. Without VolumeName=
+# Quadlet would create systemd-odoo-db-data and start on an empty database.
+[Unit]
+Description=Woow Odoo 18 PostgreSQL data volume
+
+[Volume]
+VolumeName=@@DB_VOLUME_NAME@@
+Label=io.woowtech.stack=odoo18

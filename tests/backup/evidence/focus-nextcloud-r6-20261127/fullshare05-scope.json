@@ -1,0 +1,15 @@
+{
+ "source_commit": "550478ae15f4f61945c6bfa699c05d2b88a230b8",
+ "product_commit": "5168f1ecf68e3a22b6909f3c516c4a41e77e3cc2",
+ "case": "fullshare",
+ "baseline_safe": true,
+ "original_fixture_reused": true,
+ "image_pulls": 0,
+ "device_memory_cap_bytes": 3221225472,
+ "reserve_bytes": 13958643712,
+ "sampled_resources": {
+  "minimum_free_bytes": 28847689728,
+  "peak_memory_current_bytes": 1355317248,
+  "probe_failures": 4
+ }
+}

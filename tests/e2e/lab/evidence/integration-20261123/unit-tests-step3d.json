@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "kind": "unit-tests",
+  "lane": "integration-3",
+  "step": "3d (batch2-lab again, emqx security review)",
+  "tested_commits": {
+    "targeted modules": "ce6d652 and f8e0c1d (integration worktree, staged merges)",
+    "full tests/backup + RealBackupTests": "f8e0c1d (second worktree /tmp/int3-trial-20261123 at the same commit)",
+    "node tests/backup-ui.mjs": "f8e0c1d (second worktree /tmp/int3-trial-20261123)"
+  },
+  "tree": "c09486c (step 3c) + ce6d652 (merge lab/batch2-dev-e-20261123 472705c) + f8e0c1d (merge sec/emqx-secreview-20261123 cad50dd)",
+  "merges": [
+    {
+      "lane": "batch2-lab",
+      "branch": "lab/batch2-dev-e-20261123",
+      "tip": "472705c",
+      "merge_commit": "ce6d652",
+      "conflicts": "none; tests/e2e/lab/README.md changed on both sides since 8de186d and auto-merged",
+      "proof": "patch-id(8de186d->472705c) == patch-id(ours->result) and patch-id(8de186d->ours) == patch-id(472705c->result) for the README; the other 5 files == 472705c blobs",
+      "taken_at": "batch2-lab's 23:07/23:13 requests to merge again (lab-only commits)",
+      "targeted_tests": "test_batch2_lab + test_dev_d_guard"
+    },
+    {
+      "lane": "emqx-secreview",
+      "branch": "sec/emqx-secreview-20261123",
+      "tip": "cad50dd",
+      "merge_commit": "f8e0c1d",
+      "conflicts": "none; none of the 33 files changed on this branch since ae5420d",
+      "proof": "33/33 files == cad50dd blobs; PRESERVATION_BLOCKER references in ha_emqx.py 3 before and 3 after; the 3 edited test files only add fixture answers for the new data-volume digest reads",
+      "taken_at": "the review's final hand-off (team/emqx-secreview.md 22:15, status done); its 21:03 note asks for this merge before emqx-product because SR-1 is reachable through the public CHECK; emqx-product already contains 75aad7a, f397590 and 7b173af",
+      "targeted_tests": "18 tests/backup EMQX modules + test_ha_import + test_ha_flows with the real batch-1 backups"
+    }
+  ],
+  "suites": {
+    "batch2 lab modules at ce6d652 (staged)": {
+      "tests": 43,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 65,
+      "not_ok_ids": [],
+      "ok": 43
+    },
+    "EMQX + import + flows modules at f8e0c1d (staged)": {
+      "tests": 177,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 13,
+      "not_ok_ids": [],
+      "ok": 177
+    },
+    "tests/backup full at f8e0c1d (real batch-1 backups)": {
+      "not_ok_explained": "the same 12 ids as at fb284b8 (step 3b): tests.backup.test_ha_omnigent 7 = the public Omnigent SECURITY_BLOCKER still on in this branch (it changes only with the omnigent-product merge under owner decision 1); tests.backup.test_litellm_lab_runner 5 = this lane's host guard refusing the test's own fake child (6/6 with --exe-only at step 3a)",
+      "tests": 1525,
+      "failures": 7,
+      "errors": 5,
+      "skipped": 1,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 6,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 412,
+      "not_ok_ids": [
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_clean_backup",
+        "tests.backup.test_ha_omnigent.CheckTests.test_a_same_named_account_is_a_warning",
+        "tests.backup.test_ha_omnigent.CheckTests.test_versions",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_dump_with_code_is_refused_before_the_restore",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_a_same_named_ha_account_wins",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_counts_that_differ_stop_the_conversion",
+        "tests.backup.test_ha_omnigent.ConvertTests.test_the_whole_conversion_in_test_mode",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_abort_is_forwarded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_exact_reader_capture_boundary",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_input_and_file_output_are_forwarded_and_bounded",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_real_child_overflow_is_bounded_and_sanitized",
+        "tests.backup.test_litellm_lab_runner.LabRunnerTests.test_stderr_and_failures_are_not_returned"
+      ],
+      "ok": 1512
+    },
+    "tests.backup.test_ha_backup.RealBackupTests with the 20261118 backups at f8e0c1d": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "expected_failures": 0,
+      "unexpected_successes": 0,
+      "guard_refused_calls": 0,
+      "shim_hits": 0,
+      "run_native": "denied",
+      "elapsed_seconds": 23,
+      "not_ok_ids": [],
+      "ok": 1
+    },
+    "node tests/backup-ui.mjs at f8e0c1d": {
+      "note": "heavy lock 01:09:52-01:17:54; a duplicate run started by mistake at 01:22:38 (tag m10ui) was stopped by this lane after 77 cases and is void",
+      "tests": 103,
+      "pass": 103,
+      "fail": 0,
+      "skipped": 0,
+      "cancelled": 0,
+      "elapsed_seconds": 481,
+      "not_ok": []
+    }
+  },
+  "not_run_here": "tests/e2e/lab full discover was last run at fb284b8 (step 3b); these merges add lab scripts, evidence and test_batch2_lab cases (run above). Lab tests that need run_native (host /usr/bin/podman) stay unrun.",
+  "not_changed": "No test, assertion or public guard was changed by this lane.",
+  "commercial_acceptance": "not-complete",
+  "private_logs_sha256": {
+    "m8-b2.log": "20f0d07badaa93aa9936bf1595910102c400f6beba1fc9d5639d7a64f80f2173",
+    "m8-b2.out": "f7696d3f591da6cca8df1741277f624353536b6a26f56e085f7069255ace5e04",
+    "m9-esr.log": "3a711a7f91c4b83429c52bd40b07a1a1b7f45729092a52cce043b2c0f28d5e38",
+    "m9-esr.out": "7aaac1acd6cd1830397d332292cc95b7b56800723bbb7e9f2dd1a4eb1bdc91ab",
+    "m10-backup.log": "7723e7feae39743b45e65000570f9f639441bc35594cafd0c63c26845f498556",
+    "m10-backup.out": "8ff607067d5a8cf963047695629da3dfa278548a18c5cfdad5c1abd496e9e585",
+    "m10-ha118.out": "dd6f1095f2a96577ede89aaac0d8b31591e91e83b605946d2e8b6193dcda5d2b",
+    "m10-ui.log": "a3d7fb42546fedbd5ba94f014e36d5747afec3dd8ba47c6abfa4e63564ca25ef"
+  }
+}

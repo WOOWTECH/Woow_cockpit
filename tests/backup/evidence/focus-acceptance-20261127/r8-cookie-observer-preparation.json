@@ -1,0 +1,48 @@
+{
+  "scope": "cookie-observer-readonly-preparation",
+  "preparation_only": true,
+  "actual_probe_executed": false,
+  "acceptance_passed": false,
+  "old_page4_result": "59/63 FAIL",
+  "old_page4_device_cookie_hits": 8,
+  "old_page4_cookie_values_retained": false,
+  "proves_old_page4_cookie_absence": false,
+  "protected_guard_sha256": "329fba10a4e4e290209fa7ae5e5545549214227a38d0c0033473234569581b67",
+  "offline_parser_tests": {
+    "passed": 16,
+    "failed": 0,
+    "skipped": 0,
+    "log_sha256": "cebaf881136aa992a2e35e621cff3b5991a04e27961935942b14af26e1e2559d"
+  },
+  "primary_source_commit": "2248c46ff19ce77dbf12e4d7fc6af0e702072171",
+  "primary_sources": [
+    {
+      "name": "cockpitauth.c",
+      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/2248c46ff19ce77dbf12e4d7fc6af0e702072171/src/ws/cockpitauth.c",
+      "sha256": "465dad6d93bd67eaf64f9dcacec3298d6a4e4c7443a4d583f3d98dacce6952f9",
+      "bytes": 52207
+    },
+    {
+      "name": "cockpithandlers.c",
+      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/2248c46ff19ce77dbf12e4d7fc6af0e702072171/src/ws/cockpithandlers.c",
+      "sha256": "82b211d873242110aa6c357857be4ee35a0b880e891d890c98d14bd7a8bf92e4",
+      "bytes": 24198
+    }
+  ],
+  "primary_source_artifact_sha256": "699f689c5a532ff33133b04b8ee7d038522137227bacc2cc8ec9833e411d3405",
+  "runtime_native_package_version_pending": true,
+  "runtime_websocket_version_pending": true,
+  "runtime_administrative_root_handshake_pending": true,
+  "runtime_cookie_HTTP_metadata_pending": true,
+  "rendered_scanner_sha256": "50b7639d16a14dbe309f5d440f4cdee9ef9a8c665b7244bf14b9675c86445f12",
+  "rendered_scanner_parity_compilation_passed": true,
+  "native_capability_embedded_probe_compiles": true,
+  "expiry_alone_never_excludes_credentials": true,
+  "all_renewed_and_expired_credentials_remain_scanned": true,
+  "only_pinned_public_tombstone_with_actual_native_HTTP_jar_proof_can_be_separate": true,
+  "missing_or_ambiguous_cookie_coverage_fails": true,
+  "no_public_listener_or_network_change": true,
+  "device_actions": 0,
+  "source_or_image_deployments": 0,
+  "new_imports_or_restores": 0
+}

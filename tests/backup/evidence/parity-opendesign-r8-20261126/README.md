@@ -1,0 +1,11 @@
+# OpenDesign R8, current integration on isolated dev-e (2026-11-26)
+
+The exact host image IDs were loaded into network-isolated dev-e and all four package services started successfully. Source `3dad5e06` ran the actual encrypted x86 Home Assistant showcase backup through the installed helper's check, conversion, encrypted packaging, preflight and restore. All **85 checks passed**, with no failures, in 456.7 seconds.
+
+The run verified all 12 HA projects, the marker file hashes and 12 conversations through the real API; Basic/Bearer authentication and wrong-credential refusal; MCP initialize/tools listing; preserved target MCP/Paseo/agent identity and settings; and ownership. It repeated the client checks after restart and after an intentionally failed restore automatically rolled back. It then restored the original lab safety backup and checked the original marker project and file. The records, uploads, staging, run directory, journal and evidence secret scan had zero hits. Test-created backups, uploaded source, temporary objects, staging, key and needle files were removed; outer isolation and the original schedule-timer state were restored.
+
+A separate read-only `batch2_baseline.py --verify opendesign` run passed every check afterwards, including the baseline file hashes and the retained encrypted baseline backup. Only after that verification did the lab rotation stop all four units, confirm no container remained, and drop their cached images. Data, settings, secrets, units and baseline backups remain. Host available space returned to about 26.8 GiB. `deploy-batch2.sh e wake:opendesign` restores the same image IDs under the disk guards when needed again.
+
+`current-full-flow.json` is the capture's fixed-status record and stdout hash; the detailed private run remains under `~/.woowbk-lab/evidence/opendesign-odff/20261126T212128/` and `/tmp/parity-opendesign-current-20261126.private.log`. `baseline-verify.json` records the separate baseline check. Image and wake logs are in `../parity-space-20261126/`.
+
+This is real lab/helper/API evidence. The Cockpit browser page, provider logins/model pairing and host reboot were not exercised here. The ten-service final acceptance is still incomplete; `commercial_acceptance`: `not-complete`.

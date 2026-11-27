@@ -1,0 +1,10 @@
+Reading package lists...
+Building dependency tree...
+0 upgraded, 0 newly installed, 4 reinstalled, 0 to remove and 0 not upgraded.
+Need to get 2470 B of archives.
+After this operation, 0 B of additional disk space will be used.
+Get:1 http://repo.example:80 ./ age 1.1.1-1 [604 B]
+Get:2 http://repo.example:80 ./ python3-cryptography 41.0.7-4 [634 B]
+Get:3 http://repo.example:80 ./ python3-nacl 1.5.0-4 [622 B]
+Get:4 http://repo.example:80 ./ zstd 1.5.5-1 [610 B]
+Fetched 2470 B in 0s (59.7 kB/s)

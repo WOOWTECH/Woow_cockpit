@@ -1,0 +1,5 @@
+registry check (HH-OWNER-2235, 2026-11-25 22:52 by date): the 45 rows of snippets/parity-hh/ha_parity_rows.json merged with
+  python3 tests/backup/test_ha_parity_rows.py --merge ha_parity_rows.json   on a scratch export of parity/hh-20261125 (the lane worktree is not touched),
+  then tests.backup.test_ha_parity_rows + tests.backup.test_ha_issues through guard.py (nice 15, one process):
+tests=65 failures=0 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0 shim_hits=0 run_native=denied
+HERMES-HEADSCALE rows: done 41, part 4 (H-03, HS-15, HS-25, HS-30)

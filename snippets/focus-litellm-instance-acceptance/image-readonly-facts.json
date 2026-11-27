@@ -1,0 +1,82 @@
+{
+  "preparation_only": true,
+  "read_only": true,
+  "device": "woowbk-dev-d",
+  "source_commit": "59a1b0f95132ea51c899f590eea7e3b02c5dba43",
+  "baseline_sha256": "60a8e16f1bfe4d0a86ae9de03b3a16580884eff9e40a4922f54b2451929609aa",
+  "stable_original_container_names": [
+    "hermes-agent",
+    "hermes-postgresql",
+    "hermes-redis",
+    "omnigent-postgres",
+    "omnigent-runner",
+    "omnigent-server",
+    "woow-emqx",
+    "woow-emqx-entrance"
+  ],
+  "active_jobs": 0,
+  "litellm_absent": true,
+  "app_base_config": "0c71bec8f80e3445267e9bc08495d3782b5c80c8fb7ca18261f07abad00ce312",
+  "app_base_metadata": {
+    "architecture": "amd64",
+    "os": "linux",
+    "layers": [
+      "sha256:b76b7633da4fb071018956f4fb772ea2cad2f1dc9c8c4cd3836ac2bdad8d8dfd",
+      "sha256:475ef483a00b76e33a13c8f19883e9a87b63195382c5c40426007f5753a2327b",
+      "sha256:f853e0b8057a7d575e174a3a93c8cc98c733719fc4ec68b4375cf22bb9187dd2",
+      "sha256:b9165a4cb6cc89b5e8f38241838e6d8168cb246fbd306b527a7922efb2e39f48",
+      "sha256:808bba1f7ed07addaf83d9ec5bd20235ac430948d19cfbfb5cf900c83e35f14c",
+      "sha256:6a0c47c1ef4cef192b0d073f0d6344d30ab6d3765fc927df4fb5bb5a8043fad6",
+      "sha256:1ab0a42ee02036016dadab036eabf4115441fe5a22ec7c5f535665ceec724234",
+      "sha256:6a6e12f0d5f2a1f80023642329d6d372297c032c8d34c5af6810290e0f6df141",
+      "sha256:4d95399cd58979bce74141d44d05fb913fd048a370faaf97ee5ed8f7fe30b051",
+      "sha256:33af4ac33fffe2c4daa323176286fa0f3e1064675bbf032de67a874c6c1e4e09",
+      "sha256:82eee4c8993ae8e63d89b991b9c04c773dd153cbad36002ee383a31fbc0ad8b9",
+      "sha256:f1f89df3ad0742aa2d315cce86dbafcce2f68ed1d77cdcdc273b54838d58292a",
+      "sha256:8be3d8277268dcb2dfd97126dbc97f9d4ede8cc170f98b04d61e7156e63bff52",
+      "sha256:277d24dcf9fb72e8659baa29e87b0e417b16628f2ecebdf1ff08a53f488418bb",
+      "sha256:b4a11d96c2a33a8ea4d45fade3b959b086414d67cb41792a72ca77b8abedb3ac",
+      "sha256:58ec8600350e747ee55514b42fadb3e5d2723a0348f1b09993d7e1bd35053751",
+      "sha256:af099b17da026653a089bb513eb0d5ca4cdbc538cef83b604ba0a98869085cca",
+      "sha256:f1b0007fc58da118a6b8dde232cbaad81c534a8c8f9cb50463ed0b98caa81818",
+      "sha256:5169eef3bd91bbe20948f1b59bee73b19ec75c851692dfbcf649bb959aead0b1",
+      "sha256:474d48dc9b33fdbca69e5ebd7d6d4a76ad7455f0b6d292a166d07ef3b836339d",
+      "sha256:4eb7ff9e2e1c30570bc99480a2f8d8746039159703356dae1215fa506c7886a9",
+      "sha256:0e80ac236d6827510091ae6ac354e9235c975e12c694135268d617b8fd522376",
+      "sha256:78238ce69d6ca58c85c4bf924172acb9b1fa03ed494d9a5633c3dcc5e36e7a0f",
+      "sha256:aec491e8f3938611028ee8cc105bcddf2df3dfd625e49adfa7a3b98c0409a437",
+      "sha256:8e06df8726655245c719e9b7da4928e11888217539d0e3587ef797338ee09881"
+    ],
+    "volumes": null,
+    "user": "65534",
+    "base": "",
+    "case": ""
+  },
+  "postgres_config": "094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7",
+  "postgres_metadata": {
+    "architecture": "amd64",
+    "os": "linux",
+    "layers": [
+      "sha256:7900194cf2429d4e860306cd85f7b1d04154ef522ab603ff058bd8221b0cee62",
+      "sha256:ddb6146f9c2dc55bf9cc5ca69e8b437a10db46f39442d78d8ca216b9346cac68",
+      "sha256:84eb2c487a203260985fc2d37e10a49583d0e427cb2c4911b0827f3f4c3bc039",
+      "sha256:af9542e26cf213a31c704ea001b774824e6834d2d78bf06d544a7d0a1e073896",
+      "sha256:f02f60ef27e18001b6012284584c6d2f626af9dc545ec8d0c3b5bd513e48a42c",
+      "sha256:cd9a147044d24573f2f9a4e8d0bd1bbc943993380f567772290f3ce8ce8aa04a",
+      "sha256:b960870c4f3da4741749571fee2f61dab0c86ff9d5fe4819cfd7bc252ca59a02",
+      "sha256:53ef4fea47db2894df21012161db131df875f3806f81b3c6f324f9b99d0d6ed7",
+      "sha256:2e8cae3f96ec3211fd83ffffe2f04f78f849b6f04b62a3795e6a9db922376825",
+      "sha256:62955e4387d2a3586793a756099a49c85dde6bcad9faf46711748109d9f5a577"
+    ],
+    "volumes": {
+      "/var/lib/postgresql/data": {}
+    },
+    "user": "",
+    "base": "",
+    "case": ""
+  },
+  "derived_tag_present": false,
+  "pg17_tag_present": false,
+  "device_min_free_bytes": 26695016448,
+  "host_free_bytes": 26695032832
+}

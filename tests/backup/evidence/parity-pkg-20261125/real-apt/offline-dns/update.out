@@ -1,0 +1,4 @@
+Ign:1 http://no-such-host.invalid/ubuntu ./ InRelease
+Err:1 http://no-such-host.invalid/ubuntu ./ InRelease
+  Could not resolve 'no-such-host.invalid'
+Reading package lists...

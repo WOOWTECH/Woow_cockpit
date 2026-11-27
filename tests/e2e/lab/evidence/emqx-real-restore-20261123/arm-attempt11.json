@@ -1,0 +1,13 @@
+{
+  "source_commit": "041a6ae7fe8038ef5b883879ae013040d8f3e860",
+  "scope": "real ARM same raw imported builtin profile diagnosis without broader admission",
+  "exit": 1,
+  "elapsed_seconds": 250.82705022301525,
+  "stdout_sha256": "d6988e98fdfc8490293504b2e37bbaabc6cd5a97b6a6f6ae6196d348504fad1a",
+  "fixed_status": [
+    "REAL OWNER BUILD_PRODUCT_ACL_PROFILE_BUILTIN_EXACT_TYPE_ENABLE_PRODUCT REFUSED",
+    "REAL OWNER POSTFLIGHT PASSED"
+  ],
+  "stderr_bytes_not_published": 0,
+  "commercial_acceptance": "not-complete"
+}

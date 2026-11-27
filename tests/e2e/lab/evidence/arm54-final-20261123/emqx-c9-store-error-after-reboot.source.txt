@@ -1,0 +1,8 @@
+import json, subprocess, os
+ws = '/var/tmp/woow-arm54-final-20261123-36u3k_gg'
+base = ['podman', '--root', ws + '/store', '--runroot', ws + '/run', '--storage-driver', 'overlay', '--storage-opt',
+        'overlay.skip_mount_home=true', '--events-backend', 'file', '--tmpdir', ws + '/tmp', '--cgroup-manager', 'cgroupfs']
+env = dict(os.environ, HOME=ws, XDG_CONFIG_HOME=ws + '/config', REGISTRY_AUTH_FILE=ws + '/empty-auth.json', TMPDIR=ws + '/tmp',
+           CONTAINERS_CONF_OVERRIDE=ws + '/containers-override.conf')
+p = subprocess.run(base + ['ps', '-a', '--format', '{{.Names}}'], capture_output=True, timeout=60, env=env)
+print(json.dumps({'exit': p.returncode, 'stderr': p.stderr.decode('utf-8', 'replace')[:600], 'stdout_lines': len(p.stdout.splitlines())}, sort_keys=True))

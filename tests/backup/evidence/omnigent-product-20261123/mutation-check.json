@@ -1,0 +1,156 @@
+{
+ "module": "woowbackup/ha_omnigent.py",
+ "module_sha256": "8b04cbb57976dbd3c01f36d5153b165fd863c1a37a3bf440fc4b0e4a290b7b0c",
+ "tests": [
+  "tests.backup.test_ha_omnigent",
+  "tests.backup.test_ha_omnigent_candidate",
+  "tests.backup.test_ha_omnigent_trusted",
+  "tests.backup.test_b1_01_guard",
+  "tests.backup.test_ha_omnigent_install"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 51,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "M01",
+   "protection": "only TABLE DATA / SEQUENCE SET of HA restored (data-only list)",
+   "applied": true,
+   "caught": true,
+   "failures": 24,
+   "tests": 51
+  },
+  {
+   "id": "M02",
+   "protection": "each selected entry names a trusted table/sequence once (line-break injection)",
+   "applied": true,
+   "caught": true,
+   "failures": 5,
+   "tests": 51
+  },
+  {
+   "id": "M03",
+   "protection": "HA's data loaded by the role without privileges, never the superuser",
+   "applied": true,
+   "caught": true,
+   "failures": 4,
+   "tests": 51
+  },
+  {
+   "id": "M04",
+   "protection": "pre-data comes from this device's schema, never HA's archive",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 51
+  },
+  {
+   "id": "M05",
+   "protection": "no DDL during the capture: live schema before == after == snapshot columns",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 51
+  },
+  {
+   "id": "M06",
+   "protection": "the live revision did not move since the check (before the capture)",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M07",
+   "protection": "HA's columns, sequences and types equal the trusted schema (convert)",
+   "applied": true,
+   "caught": true,
+   "failures": 8,
+   "tests": 51
+  },
+  {
+   "id": "M08",
+   "protection": "the new cluster's schema equals the trusted one (after post-data and after the last write)",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M09",
+   "protection": "the new cluster holds no other role, setting, ALTER SYSTEM value or large object",
+   "applied": true,
+   "caught": true,
+   "failures": 4,
+   "tests": 51
+  },
+  {
+   "id": "M10",
+   "protection": "this device's accounts are added back by the restricted role, never the superuser",
+   "applied": true,
+   "caught": true,
+   "failures": 12,
+   "tests": 51
+  },
+  {
+   "id": "M11",
+   "protection": "test mode pauses the scheduled tasks as the restricted role",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M12",
+   "protection": "the loader role has no privilege (NOSUPERUSER ...)",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 51
+  },
+  {
+   "id": "M13",
+   "protection": "the loader role is dropped before the export",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M14",
+   "protection": "every Quadlet secret is registered in the catalog before anything runs",
+   "applied": true,
+   "caught": true,
+   "failures": 5,
+   "tests": 51
+  },
+  {
+   "id": "M15",
+   "protection": "the check names a schema difference as a blocker",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M16",
+   "protection": "the new cluster runs with a read-only root and a noexec data volume",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 51
+  },
+  {
+   "id": "M17",
+   "protection": "the runner's pi volume is this device's (never HA's)",
+   "applied": true,
+   "caught": true,
+   "failures": 3,
+   "tests": 51
+  }
+ ],
+ "all_caught": true,
+ "seconds": 291.1
+}

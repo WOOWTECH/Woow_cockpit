@@ -1,0 +1,8 @@
+{"stage": "isolated_startup", "result": "pass"}
+{"stage": "effective_root_inventory", "roots": ["actions", "alarm", "api_key", "authentication", "authorization", "auto_subscribe", "banned", "bridges", "broker", "cluster", "conn_congestion", "connectors", "crl_cache", "dashboard", "delayed", "durable_sessions", "durable_storage", "exhook", "flapping_detect", "force_gc", "force_shutdown", "gateway", "limiter", "listeners", "log", "mqtt", "node", "overload_protection", "plugins", "prometheus", "psk_authentication", "retainer", "rewrite", "rpc", "rule_engine", "slow_subs", "sources", "stats", "sys_topics", "sysmon", "telemetry", "topic_metrics", "trace", "zones"]}
+{"stage": "effective_config_and_bootstrap_mount", "result": "pass"}
+{"stage": "mqtt_transport", "exit_code": 0, "reason_codes": ["16"], "flags": {"not_authorized": false, "connection_refused": false, "permission_denied": false, "missing_executable": false, "missing_file": false, "puback": true, "connack": true, "not_found": false, "entrypoint": false, "error": false}}
+{"stage": "retained_message_transport", "exit_code": 0, "payload_matches": true, "not_authorized": false, "timed_out": false}
+{"stage": "system_ticker_pause_resume", "before": 1, "paused": 1, "resumed": 4}
+{"stage": "temporary_system_ticker_quiescence_and_resume", "result": "pass"}
+{"image": "3f60addfad2b", "client_image": "93a0bdfcbd9b", "results": [{"stage": "isolated_startup", "result": "pass"}, {"stage": "effective_config_and_bootstrap_mount", "result": "pass"}, {"stage": "temporary_system_ticker_quiescence_and_resume", "result": "pass"}]}

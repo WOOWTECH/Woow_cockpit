@@ -1,0 +1,9 @@
+# Variables that scripts/install.sh may substitute as tokens in quadlet/ and systemd/
+# (decision D2). Values come from ~/.config/n8n/n8n.env. Anything not listed here is a
+# hard render error.
+HOST_BIND
+HOST_PORT
+WEBHOOK_PORT
+WORKER_CONCURRENCY
+GENERIC_TIMEZONE
+TZ

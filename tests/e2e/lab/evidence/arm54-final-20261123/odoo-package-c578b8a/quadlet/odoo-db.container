@@ -1,0 +1,42 @@
+# PostgreSQL 16 + pgvector 0.8.0 for Odoo 18: upstream pgvector image, pinned by tag and digest.
+# It replaces the old local postgres:16 + pgvector 0.7.4 source build (Quadlet 4.9.3 has no .build units).
+# No host port: Odoo reaches it by container name on odoo18-network, so it never collides with a host
+# PostgreSQL on 127.0.0.1:5432.
+#
+# The unit is odoo-db.service, deliberately not odoo18-*: a hand-written unit of the same name in
+# ~/.config/systemd/user would silently shadow the Quadlet-generated one.
+[Unit]
+Description=Woow Odoo 18 database (PostgreSQL + pgvector)
+Documentation=https://github.com/WOOWTECH/Woow_podman_odoo
+
+[Container]
+ContainerName=odoo18-db
+Image=@@DB_IMAGE@@
+Network=odoo.network
+HostName=odoo18-db
+Label=io.woowtech.stack=odoo18
+Volume=odoo-db-data.volume:/var/lib/postgresql/data
+Environment=POSTGRES_USER=@@DB_BOOTSTRAP_USER@@
+Environment=POSTGRES_DB=postgres
+Environment=POSTGRES_INITDB_ARGS=--data-checksums
+# Read only when an empty volume is initialised; the password never enters the container config.
+Environment=POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+Secret=@@DB_BOOTSTRAP_SECRET@@,type=mount,target=postgres_password,uid=999,gid=999,mode=0400
+HealthCmd=pg_isready -U @@DB_BOOTSTRAP_USER@@ -d postgres
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthStartPeriod=30s
+NoNewPrivileges=true
+PodmanArgs=--stop-timeout=60
+
+[Service]
+# A container stopped by systemd is stopped with SIGTERM: an entrypoint that does not
+# trap it exits 143 (128+15), which would leave the unit failed after a clean stop.
+SuccessExitStatus=143
+Restart=always
+TimeoutStartSec=600
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target

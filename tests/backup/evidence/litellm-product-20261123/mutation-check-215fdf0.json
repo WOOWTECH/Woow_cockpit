@@ -1,0 +1,417 @@
+{
+ "modules": {
+  "woowbackup/ha_litellm.py": "e356b55e79efea78a2e45409f74413a7feba55175100d3ae62ed504177e1fd45",
+  "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+  "woowbackup/haimport.py": "2722cc979c55b8ec86eb320fe4bfe564d93d63c85de73b08346812eef6b6a3c1"
+ },
+ "tests": [
+  "tests.backup.test_ha_litellm",
+  "tests.backup.test_adapter_import_secrets",
+  "tests.backup.test_ha_litellm_candidate"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 57,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "M01",
+   "protection": "HA's rows are loaded by the role without privileges, never the superuser",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M02",
+   "protection": "HA's rows are read with this device's column list only",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M03",
+   "protection": "the loader role has no privilege (NOSUPERUSER ...)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M04",
+   "protection": "the loader role is dropped before the export",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M05",
+   "protection": "sequence values are set by the restricted role",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M06",
+   "protection": "no DDL during the capture: live schema before == after == snapshot columns",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M07",
+   "protection": "the live migrations did not move since the check (before the capture)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M08",
+   "protection": "the live database holds no other schema (the capture would take it)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M09",
+   "protection": "HA's columns, sequences and types equal the trusted schema (convert)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M10",
+   "protection": "the check names a schema difference as a blocker",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M11",
+   "protection": "the new cluster's schema equals the trusted one (after post-data and after the last write)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M12",
+   "protection": "the new cluster holds no other role, setting, ALTER SYSTEM value or large object",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M13",
+   "protection": "every table's row count and the migrations equal HA's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M14",
+   "protection": "the salt file must be the salt HA's database is bound to",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M15",
+   "protection": "the salt row the new database got equals the salt that moves",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M16",
+   "protection": "HA's salt becomes the converted backup's litellm-salt-key",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M17",
+   "protection": "the HA salt is masked in every log line",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M18",
+   "protection": "HA's cluster runs with a read-only root and a noexec data volume",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M19",
+   "protection": "HA's cluster gets every library/command setting overridden",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M20",
+   "protection": "the new cluster runs with a read-only root and a noexec data volume",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M21",
+   "protection": "a pulled PostgreSQL 18 must be the pinned image by content",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M22",
+   "protection": "only public/woow_platform/woow schemas in HA",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M23",
+   "protection": "HA objects only a superuser creates refuse",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M24",
+   "protection": "a symlink (tablespace) in HA's cluster refuses",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M25",
+   "protection": "state.json's LiteLLM version must be the add-on's",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M26",
+   "protection": "table/column names are plain identifiers before any HA row is read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M27",
+   "protection": "the target reads litellm-salt-key as LITELLM_SALT_KEY",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M28",
+   "protection": "the converted dump is read in full once",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M29",
+   "protection": "the apps that use LiteLLM keys are named (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 5,
+   "tests": 57
+  },
+  {
+   "id": "M30",
+   "protection": "pre-data and post-data come from the trusted archive",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "A01",
+   "protection": "a converted secret must be one the catalog declares",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "A02",
+   "protection": "a converted secret is one small regular file",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "caught": true,
+   "failures": 3,
+   "tests": 57
+  },
+  {
+   "id": "A03",
+   "protection": "the conversion hands its secrets to import_manifest",
+   "module": "woowbackup/haimport.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M34",
+   "protection": "every session in HA's cluster sends the pinned client options (SR-1/SR-2)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M35",
+   "protection": "the superuser's sessions fire no event trigger and load no preload library (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M36",
+   "protection": "HA's server starts with event triggers off (SR-3)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M37",
+   "protection": "_prisma_migrations is read only as an ordinary table (SR-1)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M38",
+   "protection": "backup_label/tablespace_map never reach HA's volume (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M39",
+   "protection": "backup_label/tablespace_map refuse (SR-4)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M40",
+   "protection": "HA's stored proxy settings are named in the check (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M41",
+   "protection": "HA's stored proxy settings are named in the import notes (SR-5)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M42",
+   "protection": "an app whose Pi agent provider list points at this LiteLLM is named (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  },
+  {
+   "id": "M43",
+   "protection": "only a provider at this device's LiteLLM counts, not any provider (option A)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 2,
+   "tests": 57
+  },
+  {
+   "id": "M44",
+   "protection": "every columns/signature read pins search_path=pg_catalog (all sides render names alike)",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 57
+  }
+ ],
+ "all_caught": true,
+ "seconds": 371.0
+}

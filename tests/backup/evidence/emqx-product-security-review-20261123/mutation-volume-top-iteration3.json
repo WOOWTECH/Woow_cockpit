@@ -1,0 +1,58 @@
+{
+ "what": "mutation check of VolumeTopTests (iteration 3)",
+ "tests": [
+  "tests.backup.test_ha_emqx_security_review2"
+ ],
+ "killed": 6,
+ "total": 6,
+ "mutations": {
+  "M1 emqx-src top directory taken from HA (no engine entry)": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  },
+  "M2 HA files keep their own mode": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  },
+  "M3 HA dirs keep a foreign owner": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  },
+  "M4 the candidate top directory world-writable": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=2 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  },
+  "M5 _apply_root applies another owner": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  },
+  "M6 _apply_root applies another mode": {
+   "applied": true,
+   "killed": true,
+   "failing_tests": [
+    "test_ha_chooses_no_owner_and_no_mode_of_a_throwaway_volume"
+   ],
+   "summary": "tests=8 failures=1 errors=0 skipped=0 expected_failures=0 unexpected_successes=0 blocked=0"
+  }
+ }
+}

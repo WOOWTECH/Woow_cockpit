@@ -1,0 +1,79 @@
+{
+  "started": "2026-11-26T23:45:17.136521+08:00",
+  "before_free": 28884074496,
+  "policy": "explicit superseded local test versions; preserve every container, installed Quadlet and current lab source",
+  "chosen": [
+    {
+      "id": "15add7bc16784faf8d01e56854f2a314f2f8f716c543ec83b7233b82c901a53d",
+      "names": [
+        "localhost/woow-odoo-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "01c2001f592a9de5d094f7b7ec40253432a54ae769675ded200f4f3eff25d150",
+      "names": [
+        "localhost/woow-opendesign-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "3f6895311687e60c9a73a0e26691b2b0a0f2915ad96268bcedb7bb1065bf7d00",
+      "names": [
+        "localhost/woow-nextcloud-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "db88c53fb142dae479b5c63f2e6f8fe0b947d0f8d815fe73b2ab36dce6faf5a0",
+      "names": [
+        "localhost/woow-litellm-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "06540c90a5045d20adfd9eaf22fe39cac85d6d00ac8c8e7b3b4a026115cb4f59",
+      "names": [
+        "localhost/woow-hermes-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "fa3bab9eedee441a71b3e7530928091eb3574ea5d6b88c6d1aef603d770cdb5f",
+      "names": [
+        "localhost/woow-emqx-mcp-admin:paas-c077be9-podman.1"
+      ]
+    },
+    {
+      "id": "73dc6319788a37aebd52ac06507313e82afe2426ecb9e4ab60beb73c858ed6ff",
+      "names": [
+        "localhost/woow-nextcloud:35.0.1-office1"
+      ]
+    },
+    {
+      "id": "5858559051d65703b8d9677f09a180c1a770b7a065f63b895bdd683fc6acb69a",
+      "names": [
+        "localhost/woow-code-server:4.139.1-2"
+      ]
+    },
+    {
+      "id": "5a62098ab3a4e263078bce292e7b5578060834b9be3166a7db64c7d6796b43c5",
+      "names": [
+        "localhost/woow-hermes-agent:v0.22.5-woow3"
+      ]
+    }
+  ],
+  "protected": [],
+  "removed_tags": [
+    "localhost/woow-odoo-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-opendesign-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-nextcloud-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-litellm-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-hermes-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-emqx-mcp-admin:paas-c077be9-podman.1",
+    "localhost/woow-nextcloud:35.0.1-office1",
+    "localhost/woow-code-server:4.139.1-2",
+    "localhost/woow-hermes-agent:v0.22.5-woow3"
+  ],
+  "refused": [],
+  "containers_unchanged": true,
+  "volumes_unchanged": true,
+  "after_free": 31958851584,
+  "finished": "2026-11-26T23:45:49.918432+08:00",
+  "net_free_gain": 3074777088
+}

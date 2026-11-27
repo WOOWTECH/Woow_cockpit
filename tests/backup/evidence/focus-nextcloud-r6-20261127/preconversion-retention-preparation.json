@@ -1,0 +1,20 @@
+{
+  "status": "code-preparation-passed",
+  "runtime": "not-leased-not-started",
+  "lease_opt_in": "retain_verified_ha_on_preconversion_refusal",
+  "default": false,
+  "test": "tests.backup.test_focus_nextcloud_r6_retention.RetentionTests.test_refused_check_retains_only_freshly_proven_quiescent_owned_ha",
+  "tests": 1,
+  "scenarios": 13,
+  "failures": 0,
+  "errors": 0,
+  "skips": 0,
+  "test_log": "/tmp/parity-focus-20261127/nextcloud-r6-retention-final.log",
+  "broader_tests_repeated": false,
+  "product_commit": "6daaa15c046a4c083cdfb1aac44b5433e8f99f6f",
+  "product_manifest_sha256": "b19d03e5a8cdaf850038fbba7f0bd9a061603a47808196582f713733d84231ae",
+  "device_actions": 0,
+  "queued_uploads": 0,
+  "old_fullshare02_ha_exists": false,
+  "credit_from_deleted_old_receipt": 0
+}

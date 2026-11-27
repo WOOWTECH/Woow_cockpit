@@ -1,0 +1,40 @@
+# Synthetic test configuration only. It must run inside the network-none lab.
+server_url: http://127.0.0.1:8080
+listen_addr: 127.0.0.1:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+disable_check_updates: true
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+    write_ahead_log: true
+derp:
+  server:
+    enabled: true
+    region_id: 999
+    region_code: lab
+    region_name: Isolated lab
+    stun_listen_addr: 127.0.0.1:3478
+    private_key_path: /var/lib/headscale/derp.key
+    automatically_add_embedded_derp_region: true
+    ipv4: 127.0.0.1
+  urls: []
+  paths: []
+  auto_update_enabled: false
+dns:
+  magic_dns: false
+  override_local_dns: false
+  base_domain: lab.invalid
+  nameservers:
+    global: []
+policy:
+  mode: database
+unix_socket: /var/run/headscale/headscale.sock
+logtail:
+  enabled: false

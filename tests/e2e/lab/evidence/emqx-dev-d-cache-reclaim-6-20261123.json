@@ -1,0 +1,25 @@
+{
+  "scope": "exact named dev-d delegated cgroup only",
+  "operation": "128MiB cache reclaim swappiness zero",
+  "operation_invoked_once": true,
+  "audit_limitation": "post-write expected byte count assertion incorrect; original before snapshot not persisted; only independently re-read post-state retained",
+  "after": {
+    "current": 2283184128,
+    "max": 4294967296,
+    "anon": 1019580416,
+    "file": 1190076416,
+    "shmem": 900734976,
+    "events": {
+      "low": 0,
+      "high": 0,
+      "max": 6708,
+      "oom": 5,
+      "oom_kill": 4,
+      "oom_group_kill": 0,
+      "sock_throttled": 65
+    }
+  },
+  "headroom": 2011783168,
+  "required": 1887436800,
+  "sufficient": true
+}

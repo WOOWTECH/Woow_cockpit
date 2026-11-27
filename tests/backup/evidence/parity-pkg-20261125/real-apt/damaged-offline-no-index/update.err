@@ -1,0 +1,2 @@
+W: Failed to fetch http://repo.example:80/ubuntu/./InRelease  Could not connect to repo.example:80 (192.0.2.1). - connect (111: Connection refused)
+W: Some index files failed to download. They have been ignored, or old ones used instead.

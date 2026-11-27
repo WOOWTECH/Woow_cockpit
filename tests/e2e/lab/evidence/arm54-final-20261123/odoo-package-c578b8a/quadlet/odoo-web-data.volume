@@ -1,0 +1,8 @@
+# Odoo filestore and sessions (/var/lib/odoo). A fresh volume is copied up from the image, so it is
+# owned by odoo 100:101 inside the user namespace without any chown.
+[Unit]
+Description=Woow Odoo 18 filestore volume
+
+[Volume]
+VolumeName=odoo18-web-data
+Label=io.woowtech.stack=odoo18

@@ -1,0 +1,117 @@
+{
+  "status": "read-only-source-inspected",
+  "device": "woowbk-dev-e",
+  "time_utc": "2026-11-26T22:59:23.427679+00:00",
+  "controller_route": "deploy-batch2.sh:copy_image:podman image inspect",
+  "images": [
+    {
+      "ref": "localhost/woow-nextcloud:35.0.1-office2",
+      "expected_config_id": "sha256:e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+      "present": true,
+      "identity": {
+        "id": "sha256:e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 1969012061,
+        "repo_tags": [
+          "localhost/woow-nextcloud:35.0.1-office2"
+        ],
+        "repo_digests": [
+          "localhost/woow-nextcloud@sha256:7036ec01d8e3792977ccd9eec3ee10e03e17f9154e5a350aa17999381b6f02c0"
+        ]
+      },
+      "identity_matches": true,
+      "canonical_ref_config_id": "sha256:e80170f48ac2534abd0960be4838dbe9fcdc498da924a62f2436cd470dab4165",
+      "canonical_ref_matches": true
+    },
+    {
+      "ref": "docker.io/collabora/code:26.04.4.2.1",
+      "expected_config_id": "sha256:a35ff1de149aeae0b1c9ecc83ab9406bd14a788cd61284e95b88b602df4a6ba3",
+      "present": true,
+      "identity": {
+        "id": "sha256:a35ff1de149aeae0b1c9ecc83ab9406bd14a788cd61284e95b88b602df4a6ba3",
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 1329397778,
+        "repo_tags": [
+          "docker.io/collabora/code:26.04.4.2.1"
+        ],
+        "repo_digests": [
+          "docker.io/collabora/code@sha256:4e983196eb9878f339cc506c38c21f1cc3473bca3d6de883c5de08f9c0cc3a6c",
+          "docker.io/collabora/code@sha256:b1845bd69719363b8cb9e93c71b1b22baaceacb45bcdd83b130e31ee6edaf6f0"
+        ]
+      },
+      "identity_matches": true,
+      "canonical_ref_config_id": "sha256:a35ff1de149aeae0b1c9ecc83ab9406bd14a788cd61284e95b88b602df4a6ba3",
+      "canonical_ref_matches": true
+    },
+    {
+      "ref": "docker.io/pgvector/pgvector:0.8.6-pg16",
+      "expected_config_id": "sha256:9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7",
+      "present": true,
+      "identity": {
+        "id": "sha256:9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7",
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 446255297,
+        "repo_tags": [
+          "docker.io/pgvector/pgvector:0.8.6-pg16"
+        ],
+        "repo_digests": [
+          "docker.io/pgvector/pgvector@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b",
+          "docker.io/pgvector/pgvector@sha256:eac621400b7b7ff52493883e41e930e3d104695fea5b68cc0c42370cf7880067"
+        ]
+      },
+      "identity_matches": true,
+      "canonical_ref_config_id": "sha256:9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7",
+      "canonical_ref_matches": true
+    },
+    {
+      "ref": "docker.io/library/redis:8.10.1-alpine",
+      "expected_config_id": "sha256:d1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad",
+      "present": true,
+      "identity": {
+        "id": "sha256:d1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad",
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 119464062,
+        "repo_tags": [
+          "docker.io/library/redis:8.10.1-alpine"
+        ],
+        "repo_digests": [
+          "docker.io/library/redis@sha256:de4d18872bf67ad0bd62224a712263975ca1d53b9b1d0d5d076082e7fa887890",
+          "docker.io/library/redis@sha256:ef216d85ec44f4fdf7c0e6df2d1757a4734ed32fbb278cabd3181b5a27353b79"
+        ]
+      },
+      "identity_matches": true,
+      "canonical_ref_config_id": "sha256:d1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad",
+      "canonical_ref_matches": true
+    },
+    {
+      "ref": "docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine",
+      "expected_config_id": "sha256:696695300a3c18a324c07ecb41f220e8c470302148b0378770cf5c70e6458ea0",
+      "present": true,
+      "identity": {
+        "id": "sha256:696695300a3c18a324c07ecb41f220e8c470302148b0378770cf5c70e6458ea0",
+        "architecture": "amd64",
+        "os": "linux",
+        "size": 54273323,
+        "repo_tags": [
+          "docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine"
+        ],
+        "repo_digests": [
+          "docker.io/nginxinc/nginx-unprivileged@sha256:5aea7cc516b419e3526f47dd1531be31a56a046cfe44754d94f9383e13e2ee99",
+          "docker.io/nginxinc/nginx-unprivileged@sha256:f7d0d0f2ebc0486dc110278672b9073f7fd641e58376b112b0c8865cf36d2e36"
+        ]
+      },
+      "identity_matches": true,
+      "canonical_ref_config_id": "sha256:696695300a3c18a324c07ecb41f220e8c470302148b0378770cf5c70e6458ea0",
+      "canonical_ref_matches": true
+    }
+  ],
+  "all_originals_present_and_matching": true,
+  "host_mutations": 0,
+  "device_mutations": 0,
+  "image_bytes_copied": 0,
+  "pulls": 0
+}

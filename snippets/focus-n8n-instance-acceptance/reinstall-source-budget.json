@@ -1,0 +1,18 @@
+{
+  "candidate_helper_bytes": 2278,
+  "candidate_library_bytes": 2807391,
+  "components_bytes": {
+    "allocation_and_metadata": 4194304,
+    "candidate_staging": 2809669,
+    "journal_and_atomic_writer": 16777216,
+    "live_growth_max": 2809669,
+    "prior_helper_max": 1048576,
+    "prior_library_max": 67108864,
+    "two_fixed_captures": 2097152,
+    "two_host_receipts": 16777216,
+    "two_pending_files_max": 134217728
+  },
+  "largest_candidate_file_bytes": 284110,
+  "selected_files": 53,
+  "write_budget_bytes": 248512512
+}

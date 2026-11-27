@@ -1,0 +1,22 @@
+{
+  "source_commit": "d7db60cc284138658e93604dd41dafb7fc7d036f",
+  "wrapper_sha256": "d290824e9c15254c886ba5a39185e8e7cafeddc132f93a112b94d5a518c44fd3",
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "-I",
+    "/tmp/parity-focus-20261127/focus_nextcloud_r6_recovery_go.py"
+  ],
+  "primitive_sha256": {
+    "tests/e2e/lab/focus_nextcloud_r6_source.py": "a24955a29a98c2e08e05bd0aac2e227443572f0ff9b1c358efae3869db8954da",
+    "tests/e2e/lab/focus_nextcloud_r6_wake.py": "5b992abd2c537f7e8f2b7ae44e38c808d95279052c719289b5b93221196eeaf1",
+    "tests/e2e/lab/focus_nextcloud_r6_case.py": "4488d8ace8bcfff362375b1643d5d2df14193caee1990cf72374156c2c87c442",
+    "tests/e2e/lab/focus_nextcloud_r6_inventory.py": "58c900a53a0d6c37fb18c2a5ffa211cf5621d7d6ec96ddc04c9a1ce27c16d6bf",
+    "tests/e2e/lab/focus_nextcloud_r6_plan.py": "e43e394b98289e26adfe17ee278ebd865b57152a97e68a5db02f630b436bc324"
+  },
+  "source_transaction_nonce": "24d1dc3d14bfc94e",
+  "product_manifest_sha256": "966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79",
+  "prior_sha256": "cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1",
+  "lease_file": "/tmp/parity-focus-20261127/lease-nextcloud-r6-fullshare.json",
+  "expires_including_grace_epoch": 1795747541.099424
+}

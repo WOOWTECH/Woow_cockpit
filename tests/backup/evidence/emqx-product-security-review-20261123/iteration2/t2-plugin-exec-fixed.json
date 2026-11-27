@@ -1,0 +1,34 @@
+{
+ "attempt": "t2-plugin-exec-fixed",
+ "backup_engine_tree": "ede63cd5dbbd93c853c0ec305fbd66856f7a5ee7",
+ "command": "t2_plugin_exec-fixed",
+ "commercial_acceptance": "not-complete",
+ "credentials": "generated per run; HA key (T11) read in-process by the b1 Secrets reader, never printed",
+ "date": "2026-11-24",
+ "elapsed_s": 101.0,
+ "exit_code": 0,
+ "iteration": 2,
+ "lane": "emqx-secreview (SR-OWNER-1942)",
+ "result": {
+  "code_executed": false,
+  "codebase": "fixed",
+  "elapsed_s": 98.8,
+  "ha_broker": "started+exported",
+  "image": "docker.io/emqx/emqx:5.8.9",
+  "marker_in_src_volume": null,
+  "marker_in_work_volume": null,
+  "network": "none",
+  "node": "emqx@127.0.0.1",
+  "node_blocker": null,
+  "plugin_running": false,
+  "plugins_list_has_secrev": false,
+  "store": "labpodman (separate --root)",
+  "test": "T2 plugin code execution in the HA broker (B1-06)"
+ },
+ "source_commit": "abff1a0 (sec/emqx-secreview2-20261124)",
+ "status_lines": [
+  "{"
+ ],
+ "stdout_sha256": "36a4731e57a42283af0396d441d4b65dae1daff952110ab4af10dd426b38ee3d",
+ "store": "labpodman (separate --root, lab only), every podman run --network none"
+}

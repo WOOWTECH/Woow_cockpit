@@ -1,0 +1,69 @@
+{
+ "schema_version": 1,
+ "kind": "lab-deploy",
+ "device": "woowbk-dev-e (lab, network none, no published port, 3g, 2 CPUs, appowner 1025)",
+ "app": "code-server",
+ "when": "2026-11-23 19:45:22-20:16:20 Asia/Taipei",
+ "source_commit": "35974d9 (code-server phase), b029f96 (check fix), engine/page deployed from 79c0f8d",
+ "package": "Woow_podman_code_server_package e7dbbea (tag 4.139.1-8; bare cache ~/.woowbk-lab/cache/repos/Woow_podman_code_server_package.git, the host checkout is on an older branch)",
+ "installer": "scripts/install.sh --no-build --yes (temporary tag localhost/woow-code-server:4.139.1-8 only while it runs); the package copy got the host's two unit edits first (Environment=WOOW_CONNECTOR_DATA_DIR=/data/pi-agent/connectors-primary, Image= the ghcr image by digest)",
+ "images": [
+  "image ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8: every entry's owner is inside appowner's nested range (0-55000)",
+  "image ghcr.io/woowtech/woow-code-server-amd64:4.139.1-8 loaded in 944s, ID 7999790230ec (same as the host); 5362 MiB, compressed copy 2517 MiB, lowest host free 21863 MiB"
+ ],
+ "idmap_copy": "ID-mapped copy for keep-id:uid=1000,gid=1000 made in 318s by a throwaway `podman create` (removed), lowest host free 21604 MiB; longer than the unit's TimeoutStartSec=180, so it is made before install.sh starts the unit (the first start on the host made the same copy)",
+ "install_warnings": [
+  "install.sh: WARNING: /home/appowner/.ssh has no private key: 'git push' over SSH from inside the container will not authenticate (lab: no SSH key on purpose)"
+ ],
+ "package_smoke": "11 passed, 0 failed (scripts/test-podman.sh-style deployment checks 10 + tests/smoke-container.sh 5 incl. the password gate)",
+ "package_smoke_lines": [
+  "PASS  unit code-server.service is active",
+  "PASS  code-server-health.timer is active",
+  "PASS  container health is healthy",
+  "PASS  user extensions use the persistent volume",
+  "PASS  GET /healthz -> 200",
+  "PASS  port 18443 listens only on 127.0.0.1:18443 (got: 127.0.0.1:18443 )",
+  "PASS  POST /login with the password from the podman secret -> 302",
+  "PASS  the config secret is readable by coder inside the container",
+  "PASS  no PASSWORD / HASHED_PASSWORD in the container's Config.Env",
+  "PASS  no password= in the generated unit (systemctl --user cat)",
+  "PASS  container health = healthy",
+  "PASS  /healthz -> 200",
+  "PASS  / -> 302 (login page)",
+  "PASS  wrong password rejected (login page re-rendered with error)",
+  "PASS  correct password -> 302",
+  "PASS  tests/smoke-container.sh"
+ ],
+ "check_code_server": [
+  "lab: == phase check:code-server",
+  "app woow-code-server: deployed=True state=running owner=appowner units=1 inactive=[] problems=[]",
+  "health http://127.0.0.1:18443/healthz -> 200 (expects 200)",
+  "unit code-server.service: active",
+  "unit code-server-health.timer: active",
+  "healthcheck code-server: healthy",
+  "code-server: /healthz -> 200 (expects 200)",
+  "failed user units: none",
+  "lab: dev-e ready: code-server running and healthy"
+ ],
+ "first_check_attempt": "20:09:38 check:code-server stopped with 'phase_check_code-server: command not found' (script bug, fixed in b029f96); rerun green",
+ "catalog": "woow-code-server from tests/e2e/lab/catalog/woow-code-server.json (lane codeserver-import 0f7335e, cherry-picked as 3cc1286), installed unchanged (owner appowner); the host has no entry (not onboarded)",
+ "compare_with_host": {
+  "identical": [
+   "woow-code-server-pi.volume",
+   "woow-code-server-ide.volume",
+   "woow-code-server-extensions.volume",
+   "code-server-health.service",
+   "code-server-health.timer"
+  ],
+  "differs": {
+   "code-server.container": "Image= digest only (the manifest digest of the copy loaded in dev-e; same image ID 7999790230ec)"
+  },
+  "env": "woow-code-server.env: keys same set, same order (values not compared/shown; the host's equal the example)",
+  "catalog": "the host has none",
+  "private_file": "~/.woowbk-lab/evidence/batch2-lab/compare-prod-code-server-20261123.txt (0600)"
+ },
+ "host_free_after_gib": 21.02,
+ "commercial_acceptance": "not-complete",
+ "what_this_is": "the production-like code-server target for the code-server HA import on dev-e",
+ "what_this_is_not": "not an HA import; no HA backup involved"
+}

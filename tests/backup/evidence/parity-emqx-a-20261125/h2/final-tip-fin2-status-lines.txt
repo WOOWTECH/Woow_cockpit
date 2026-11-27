@@ -1,0 +1,227 @@
+FINAL-TIP RUN of the H2 lab proof on woowbk-dev-d, 2026-11-25 20:43-21:00 by date, tip b9ec458 of parity/emqx-a-20261125 (iteration 3).
+Only the harness's fixed status lines (STEP / CHECK / SMOKE / RESTORE / RESULT / lock / isolation); the details stay in the harness's masked evidence folders.
+
+--- call a (runs/h2-fin2a.out)
+dev-d isolation: true none {}
+dev-d isolation: true none {}
+CHECK setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted): PASS
+CHECK setup: deploy-src.sh d --src <this tree> --no-demo-catalog: PASS
+CHECK setup: the installed engine is this tree (every module and the helper SHA-256 equal): PASS
+CHECK setup: the installed helper answers status with this tree's VERSION: PASS
+CHECK setup: a device key exists (key-init_ the kit is never read): PASS
+CHECK setup: status: emqx running, no problems: PASS
+CHECK setup: no fail-once or tamper drop-in, script or marker of an earlier run: PASS
+STEP setup: PASS seconds=20
+CHECK before: this device's admin logs in_ HA's admin password does not: PASS
+CHECK before: authorization is this device's own (file ACL only, no_match deny): PASS
+CHECK before: no HA data (no b1 user, rule, retained message or API key): PASS
+CHECK before: dev-d's own EMQX baseline markers (batch1_markers.py read): PASS
+CHECK before: EMQX state digest equals the first one recorded before any import (every earlier rollback was exact): PASS
+CHECK before: the test's own baseline backup B0 of EMQX (backup-start, encrypted with the device key): PASS
+CHECK before: the backup changed nothing (digest equal after it): PASS
+STEP before: PASS seconds=82
+SMOKE baseline-unmodified: PASS A1 emqx.service is active
+SMOKE baseline-unmodified: PASS A1 emqx-entrance.service is active
+SMOKE baseline-unmodified: PASS A2 woow-emqx is healthy
+SMOKE baseline-unmodified: PASS A2 woow-emqx-entrance is healthy
+SMOKE baseline-unmodified: PASS A3 five ports published on 127.0.0.1
+SMOKE baseline-unmodified: PASS A4 dashboard login with the generated password
+SMOKE baseline-unmodified: PASS A4 admin/public is rejected
+SMOKE baseline-unmodified: PASS A9 dashboard entrance answers HTTP 200
+SMOKE baseline-unmodified: PASS A9 private endpoints return 404
+SMOKE baseline-unmodified: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE baseline-unmodified: PASS A5 anonymous MQTT is refused (bad user name or password)
+SMOKE baseline-unmodified: PASS A6 authenticated publish/subscribe as woow
+SMOKE baseline-unmodified: PASS A10 cross-user topic subscription is denied
+SMOKE baseline-unmodified: PASS A7 bootstrap CSV is 0400 emqx
+SMOKE baseline-unmodified: PASS A7 base.hocon is mounted read-only
+SMOKE baseline-unmodified: WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+SMOKE baseline-unmodified: PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+SMOKE baseline-unmodified: 16 passed, 0 failed, 1 warnings
+SMOKE baseline-unmodified: exit code 0
+CHECK smoke-base: the marker file is not there on the untouched dev-d EMQX: PASS
+STEP smoke-base: PASS seconds=13
+CHECK store arm-cold: the stored HA file is the real fixture (SHA-256 equal, id from it): PASS
+CHECK store x86-cold: the stored HA file is the real fixture (SHA-256 equal, id from it): PASS
+CHECK check: ha-check-start (emqx) job succeeded: PASS
+CHECK-RESULT importable=True ok=True issues=2 blockers=0 warnings=2 took=232s
+ISSUE auto emqx.access-from-ha items=[] more=0 key=no
+ISSUE notice legacy.warning items=[] more=0 key=no
+CHECK check: the app is importable (no stop issue): PASS
+CHECK check: the check built the candidate (H7): its row counts and settings are known before anything is converted: PASS
+STEP check: PASS seconds=233
+CHECK store arm-cold: the stored HA file is the real fixture (SHA-256 equal, id from it): PASS
+CHECK store x86-cold: the stored HA file is the real fixture (SHA-256 equal, id from it): PASS
+CONVERT-ISSUE auto emqx.access-from-ha
+CHECK convert: the conversion succeeded with a backup id: PASS
+CHECK convert: inspect of the converted backup: preflight passes: PASS
+STEP convert: PASS seconds=261
+dev-d isolation: true none {}
+lock held for 613 s
+RESULT 24/24 passed
+
+--- call b (runs/h2-fin2b.out)
+dev-d isolation: true none {}
+dev-d isolation: true none {}
+RESTORE state=succeeded took=66s rolled_back=False safety=20261125T125442Z-c9166d1e code=None
+RESTORE-LOG 2026-11-25T12:54:34Z 階段：保存還原前資料
+RESTORE-LOG 2026-11-25T12:54:34Z 保存還原前資料…
+RESTORE-LOG 2026-11-25T12:54:35Z 備份應用「EMQX MQTT 代理」（1/1）
+RESTORE-LOG 2026-11-25T12:54:36Z 暫停寫入服務 emqx-entrance.service
+RESTORE-LOG 2026-11-25T12:54:36Z 暫停寫入服務 emqx.service
+RESTORE-LOG 2026-11-25T12:54:41Z 匯出資料卷 woow_emqx_data
+RESTORE-LOG 2026-11-25T12:54:41Z 匯出資料卷 woow_emqx_log
+RESTORE-LOG 2026-11-25T12:54:42Z 已讀取應用機密 woow-emqx-dashboard-password（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:42Z 已讀取應用機密 woow-emqx-node-cookie（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:42Z 已讀取應用機密 woow-emqx-mqtt-bootstrap（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:42Z 寫入服務 emqx.service, emqx-entrance.service 維持停止，由接下來的還原接手
+RESTORE-LOG 2026-11-25T12:54:43Z 還原前資料已保存（947.5 KiB），應用維持停止，接著還原；還原前備份會在應用恢復後封裝。
+RESTORE-LOG 2026-11-25T12:54:43Z 還原應用「EMQX MQTT 代理」（原位還原）
+RESTORE-LOG 2026-11-25T12:54:44Z 停止服務 emqx-entrance.service
+RESTORE-LOG 2026-11-25T12:54:44Z 停止服務 emqx.service
+RESTORE-LOG 2026-11-25T12:54:47Z 已暫時停用 emqx.service, emqx-entrance.service，還原完成前不會自動啟動
+RESTORE-LOG 2026-11-25T12:54:48Z 階段：還原資料
+RESTORE-LOG 2026-11-25T12:54:49Z 已重建應用機密 woow-emqx-dashboard-password（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:49Z 已重建應用機密 woow-emqx-node-cookie（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:49Z 已重建應用機密 woow-emqx-mqtt-bootstrap（內容不記錄）
+RESTORE-LOG 2026-11-25T12:54:49Z 已寫入設定檔 ~/.config/emqx/emqx.env
+RESTORE-LOG 2026-11-25T12:54:50Z 已寫入設定檔 ~/.config/emqx/base.hocon
+RESTORE-LOG 2026-11-25T12:54:50Z 已寫入設定檔 ~/.config/emqx/acl.conf
+RESTORE-LOG 2026-11-25T12:54:50Z 已寫入設定檔 ~/.config/emqx/entrance.conf
+RESTORE-LOG 2026-11-25T12:54:53Z 已重建資料卷 woow_emqx_data
+RESTORE-LOG 2026-11-25T12:54:54Z 已重建資料卷 woow_emqx_log
+RESTORE-LOG 2026-11-25T12:54:56Z 啟動服務 emqx.service
+RESTORE-LOG 2026-11-25T12:54:57Z 啟動服務 emqx-entrance.service
+RESTORE-LOG 2026-11-25T12:55:36Z EMQX 還原後核對一致：設定（含授權來源、ACL 檔案路徑、節點與叢集）和內建資料庫的帳號與 ACL 規則都和轉換時相同
+RESTORE-LOG 2026-11-25T12:55:36Z 「EMQX MQTT 代理」從停止到健康檢查通過共 21.4 秒
+RESTORE-LOG 2026-11-25T12:55:36Z 階段：封裝還原前備份
+RESTORE-LOG 2026-11-25T12:55:36Z 還原完成
+CHECK restore: the restore succeeded with a safety backup and did not roll back: PASS
+CHECK restore: the restore's readback check passed (job log): PASS
+STEP restore: PASS seconds=132
+CHECK smoke-after: the import marker is in the data volume: PASS
+SMOKE after-import-unmodified-full: PASS A1 emqx.service is active
+SMOKE after-import-unmodified-full: PASS A1 emqx-entrance.service is active
+SMOKE after-import-unmodified-full: PASS A2 woow-emqx is healthy
+SMOKE after-import-unmodified-full: PASS A2 woow-emqx-entrance is healthy
+SMOKE after-import-unmodified-full: PASS A3 five ports published on 127.0.0.1
+SMOKE after-import-unmodified-full: FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+SMOKE after-import-unmodified-full: PASS A4 admin/public is rejected
+SMOKE after-import-unmodified-full: PASS A9 dashboard entrance answers HTTP 200
+SMOKE after-import-unmodified-full: PASS A9 private endpoints return 404
+SMOKE after-import-unmodified-full: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE after-import-unmodified-full: PASS A5 anonymous MQTT is refused (bad user name or password)
+SMOKE after-import-unmodified-full: PASS A6 authenticated publish/subscribe as woow
+SMOKE after-import-unmodified-full: FAIL A10 cross-user topic subscription was not explicitly denied
+SMOKE after-import-unmodified-full: PASS A7 bootstrap CSV is 0400 emqx
+SMOKE after-import-unmodified-full: PASS A7 base.hocon is mounted read-only
+SMOKE after-import-unmodified-full: WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+SMOKE after-import-unmodified-full: PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+SMOKE after-import-unmodified-full: 14 passed, 2 failed, 1 warnings
+SMOKE after-import-unmodified-full: exit code 1
+SMOKE after-import-unmodified-quick: PASS A1 emqx.service is active
+SMOKE after-import-unmodified-quick: PASS A1 emqx-entrance.service is active
+SMOKE after-import-unmodified-quick: PASS A2 woow-emqx is healthy
+SMOKE after-import-unmodified-quick: PASS A2 woow-emqx-entrance is healthy
+SMOKE after-import-unmodified-quick: PASS A3 five ports published on 127.0.0.1
+SMOKE after-import-unmodified-quick: FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+SMOKE after-import-unmodified-quick: PASS A4 admin/public is rejected
+SMOKE after-import-unmodified-quick: PASS A9 dashboard entrance answers HTTP 200
+SMOKE after-import-unmodified-quick: PASS A9 private endpoints return 404
+SMOKE after-import-unmodified-quick: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE after-import-unmodified-quick: 9 passed, 1 failed, 0 warnings (quick)
+SMOKE after-import-unmodified-quick: exit code 1
+CHECK h2: the draft-fixed tests/smoke.sh is in a temporary copy of the package inside dev-d: PASS
+SMOKE after-import-fixed-full: PASS A1 emqx.service is active
+SMOKE after-import-fixed-full: PASS A1 emqx-entrance.service is active
+SMOKE after-import-fixed-full: PASS A2 woow-emqx is healthy
+SMOKE after-import-fixed-full: PASS A2 woow-emqx-entrance is healthy
+SMOKE after-import-fixed-full: PASS A3 five ports published on 127.0.0.1
+SMOKE after-import-fixed-full: WARN A4 dashboard login skipped: this broker's Dashboard accounts come from a Home Assistant import (marker woow-ha-import.json in the data volume); reachability was already proved by A1/A2/A9
+SMOKE after-import-fixed-full: PASS A9 dashboard entrance answers HTTP 200
+SMOKE after-import-fixed-full: PASS A9 private endpoints return 404
+SMOKE after-import-fixed-full: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE after-import-fixed-full: WARN A5/A6/A10 MQTT access checks skipped: this broker's authentication and ACL come from a Home Assistant import (marker woow-ha-import.json in the data volume)
+SMOKE after-import-fixed-full: PASS A7 bootstrap CSV is 0400 emqx
+SMOKE after-import-fixed-full: PASS A7 base.hocon is mounted read-only
+SMOKE after-import-fixed-full: PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+SMOKE after-import-fixed-full: 11 passed, 0 failed, 2 warnings
+SMOKE after-import-fixed-full: exit code 0
+SMOKE after-import-fixed-quick: PASS A1 emqx.service is active
+SMOKE after-import-fixed-quick: PASS A1 emqx-entrance.service is active
+SMOKE after-import-fixed-quick: PASS A2 woow-emqx is healthy
+SMOKE after-import-fixed-quick: PASS A2 woow-emqx-entrance is healthy
+SMOKE after-import-fixed-quick: PASS A3 five ports published on 127.0.0.1
+SMOKE after-import-fixed-quick: WARN A4 dashboard login skipped: this broker's Dashboard accounts come from a Home Assistant import (marker woow-ha-import.json in the data volume); reachability was already proved by A1/A2/A9
+SMOKE after-import-fixed-quick: PASS A9 dashboard entrance answers HTTP 200
+SMOKE after-import-fixed-quick: PASS A9 private endpoints return 404
+SMOKE after-import-fixed-quick: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE after-import-fixed-quick: 8 passed, 0 failed, 1 warnings (quick)
+SMOKE after-import-fixed-quick: exit code 0
+CHECK smoke-after: with the marker and the draft fix smoke.sh passes (every other check still counts): PASS
+CHECK h2: systemctl --user restart emqx.service: PASS
+SMOKE after-restart-unmodified-quick: PASS A1 emqx.service is active
+SMOKE after-restart-unmodified-quick: PASS A1 emqx-entrance.service is active
+SMOKE after-restart-unmodified-quick: PASS A2 woow-emqx is healthy
+SMOKE after-restart-unmodified-quick: PASS A2 woow-emqx-entrance is healthy
+SMOKE after-restart-unmodified-quick: PASS A3 five ports published on 127.0.0.1
+SMOKE after-restart-unmodified-quick: FAIL A4 dashboard login returned HTTP 401 (on an adopted volume the admin password predates the secret; see README)
+SMOKE after-restart-unmodified-quick: PASS A4 admin/public is rejected
+SMOKE after-restart-unmodified-quick: PASS A9 dashboard entrance answers HTTP 200
+SMOKE after-restart-unmodified-quick: PASS A9 private endpoints return 404
+SMOKE after-restart-unmodified-quick: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE after-restart-unmodified-quick: 9 passed, 1 failed, 0 warnings (quick)
+SMOKE after-restart-unmodified-quick: exit code 1
+STEP smoke-after: PASS seconds=78
+CHECK h2: manual rollback to the baseline (restore of B0) succeeded: PASS
+CHECK h2 after the baseline restore: this device's admin logs in_ HA's admin password does not: PASS
+CHECK h2 after the baseline restore: authorization is this device's own (file ACL only, no_match deny): PASS
+CHECK h2 after the baseline restore: no HA data (no b1 user, rule, retained message or API key): PASS
+CHECK h2 after the baseline restore: dev-d's own EMQX baseline markers (batch1_markers.py read): PASS
+CHECK h2 after the baseline restore: EMQX state digest equals the one before any import: PASS
+CHECK baseline: the import marker is gone with the restore of B0: PASS
+STEP baseline: PASS seconds=89
+CHECK smoke-fixed-base: the import marker is not there (the un-imported baseline): PASS
+CHECK h2: the draft-fixed tests/smoke.sh is in a temporary copy of the package inside dev-d: PASS
+SMOKE baseline-fixed: PASS A1 emqx.service is active
+SMOKE baseline-fixed: PASS A1 emqx-entrance.service is active
+SMOKE baseline-fixed: PASS A2 woow-emqx is healthy
+SMOKE baseline-fixed: PASS A2 woow-emqx-entrance is healthy
+SMOKE baseline-fixed: PASS A3 five ports published on 127.0.0.1
+SMOKE baseline-fixed: PASS A4 dashboard login with the generated password
+SMOKE baseline-fixed: PASS A4 admin/public is rejected
+SMOKE baseline-fixed: PASS A9 dashboard entrance answers HTTP 200
+SMOKE baseline-fixed: PASS A9 private endpoints return 404
+SMOKE baseline-fixed: PASS A9 MQTT WebSocket upgrade through /mqtt
+SMOKE baseline-fixed: PASS A5 anonymous MQTT is refused (bad user name or password)
+SMOKE baseline-fixed: PASS A6 authenticated publish/subscribe as woow
+SMOKE baseline-fixed: PASS A10 cross-user topic subscription is denied
+SMOKE baseline-fixed: PASS A7 bootstrap CSV is 0400 emqx
+SMOKE baseline-fixed: PASS A7 base.hocon is mounted read-only
+SMOKE baseline-fixed: WARN A8 podman inspect shows the env-type dashboard secret (podman behaviour; it is only read on first boot)
+SMOKE baseline-fixed: PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect
+SMOKE baseline-fixed: 16 passed, 0 failed, 1 warnings
+SMOKE baseline-fixed: exit code 0
+CHECK smoke-fixed-base: without the marker the draft-fixed smoke.sh gives exactly the lines of the unmodified one (nothing changes for an install that was never imported into): PASS
+STEP smoke-fixed-base: PASS seconds=14
+CHECK cleanup: no throwaway container, volume or network of a job left: PASS
+CHECK cleanup: no staging folder and no key file left: PASS
+CHECK cleanup: the test's converted and safety backups are deleted (B0 and dev-d's own backups stay): PASS
+CHECK cleanup: no fail-once or tamper drop-in, script or marker left: PASS
+CHECK cleanup: woow-emqx and woow-emqx-entrance run, no job container exists: PASS
+STEP cleanup: PASS seconds=15
+CHECK leaks: every Dashboard token issued to this run's probes (4) is in the scan (one per successful login): PASS
+CHECK leaks: no test secret, HA key, kit, dev-d EMQX secret or issued token in engine records, logs, journal or evidence: PASS
+STEP leaks: PASS seconds=23
+dev-d isolation: true none {}
+lock held for 353 s
+RESULT 23/23 passed
+
+--- call c (runs/h2-fin2c.out)
+dev-d isolation: true none {}
+dev-d isolation: true none {}
+CHECK cleanup-baseline: B0 deleted: PASS
+STEP cleanup-baseline: PASS seconds=2
+dev-d isolation: true none {}
+lock held for 2 s
+RESULT 1/1 passed

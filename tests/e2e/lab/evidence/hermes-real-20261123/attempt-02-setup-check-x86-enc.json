@@ -1,0 +1,31 @@
+{
+ "source_commit": "ef28b50b2d8071fe76bdd21893623d8fe222f1f7",
+ "scope": "setup-before-check-import-x86-enc",
+ "exit": 1,
+ "elapsed_seconds": 218.0,
+ "stdout_sha256": "6625dcf03dc22c0d618b2892be8336856288868509846950e20799ae653487cd",
+ "fixed_status": [
+  "source commit ef28b50b2d8071fe76bdd21893623d8fe222f1f7",
+  "dev-d isolation: true none {}",
+  "lock acquired after 195 s",
+  "dev-d isolation: true none {}",
+  "dev-d memory current=2076504064 limit=4294967296 headroom=2218463232",
+  "host MemAvailable=3976980 KiB disk free=21343514624 B",
+  "CHECK setup: the scheduled-backup timer is masked before the install (shared lab, no schedule wanted): PASS",
+  "CHECK setup: deploy-src.sh d --src <this tree> --no-demo-catalog: PASS",
+  "CHECK setup: the installed engine is this tree (every module and the helper SHA-256 equal): PASS",
+  "CHECK setup: the installed helper answers status with this tree's VERSION: PASS",
+  "CHECK setup: a device key exists (key-init_ the kit is never read): PASS",
+  "CHECK setup: status: hermes running, no problems: PASS",
+  "STEP setup: PASS seconds=20",
+  "STEP before: SKIP emqx_main_waiting=1",
+  "STEP check: SKIP emqx_main_waiting=1",
+  "STEP import:x86-enc: SKIP emqx_main_waiting=1",
+  "dev-d isolation: true none {}",
+  "lock held for 21 s",
+  "RESULT 6/6 passed"
+ ],
+ "stdout_lines_not_published": 0,
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}

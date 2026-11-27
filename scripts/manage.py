@@ -12,6 +12,7 @@ from pathlib import Path
 import posixpath
 import pwd
 import re
+import signal
 import stat
 import subprocess
 import sys
@@ -55,6 +56,72 @@ SYSTEMD_RUNNING = Path('/run/systemd/system')
 MASKED_NOTICE = (f'{SCHEDULE_TIMER} is masked (systemctl mask): left as it is, so scheduled backups do not start; run '
                  f'"systemctl unmask {SCHEDULE_TIMER}" and install again to turn the schedule checks on.')
 SAFE_ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8', 'LC_ALL': 'C.UTF-8'}
+# Host tools of the backup engine (tool, Ubuntu package, probe): age and zstd for the archives, age-keygen for the keys,
+# PyNaCl and cryptography to read encrypted Home Assistant backups. Probed the way the engine uses them: its fixed PATH
+# (woowbackup/util.py) and the helper's isolated interpreter. scripts/bootstrap-ubuntu.sh installs the same packages;
+# `install` on the live root adds missing ones again; without them it goes on and says what does not work (WITHOUT).
+TOOL_ENV = {**SAFE_ENV, 'PATH': '/usr/local/sbin:/usr/local/bin:' + SAFE_ENV['PATH']}
+PROBE = ('/usr/bin/python3', '-I', '-B', '-c')
+HOST_TOOLS = (
+    ('age', 'age', ('age', '--version')),
+    ('age-keygen', 'age', ('age-keygen', '--version')),
+    ('zstd', 'zstd', ('zstd', '--version')),
+    ('python3-nacl', 'python3-nacl', (*PROBE, (
+        'from nacl import bindings, exceptions; from nacl.pwhash import argon2id; '
+        'argon2id.kdf, exceptions.CryptoError, bindings.crypto_secretstream_xchacha20poly1305_init_pull'))),
+    ('python3-cryptography', 'python3-cryptography', (*PROBE, (
+        'from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes; '
+        'Cipher(algorithms.AES(bytes(16)), modes.CBC(bytes(16))).decryptor().update(bytes(16))'))),
+)
+TOOL_PACKAGES = tuple(dict.fromkeys(package for _tool, package, _probe in HOST_TOOLS))
+APT_GET = '/usr/bin/apt-get'
+APT_UPDATE = (APT_GET, '-q', '-o', 'Acquire::Retries=1', 'update')
+# Waits (up to 300 s) for an automatic update that holds the dpkg lock; never removes a package to make room for these.
+APT_INSTALL = (APT_GET, '-q', '-o', 'Acquire::Retries=1', '-o', 'DPkg::Lock::Timeout=300', '-y',
+               '--no-install-recommends', '--no-remove', '--reinstall', 'install')
+# What cannot be done while a package is missing: (the packages of which one is needed, what stops without it).
+WITHOUT = (
+    (('age', 'zstd'), '建立、檢查與還原加密的備份（預設的備份都是加密的，HA 匯入轉換出來的備份也是，除非關掉預設加密）'),
+    (('age',), '建立與檢查加密金鑰'),
+    (('python3-nacl',), '讀取 2026 年 3 月以後的 HA 加密備份'),
+    (('python3-cryptography',), '讀取 2026 年 3 月以前的 HA 加密備份'),
+)
+# Why apt-get could not add a package, from what it writes in the C locale. The cases of tests/test_manage.py APT_RECORDED
+# were recorded with apt 2.8.4; the other patterns are messages of apt's own catalogue (libapt-pkg, apt) that were not
+# provoked ("No space left on device" is libc's text for ENOSPC). Only the sentences below are shown: apt's own lines can
+# name a private mirror or a proxy. What its lines do not prove is called 原因不明, with the exit code.
+APT_REASONS = (  # on stderr
+    (re.compile(r'Could not get lock|is another process using it'),
+     '另一個套件作業（例如系統自動更新）正在進行，請等它完成'),
+    (re.compile(r'dpkg was interrupted'), '上一次的套件安裝沒有完成，請先執行 sudo dpkg --configure -a'),
+    (re.compile(r'No space left on device|enough free space'), '磁碟空間不足'),
+    (re.compile(r'list of sources could not be read'),
+     '套件來源的設定檔有錯，apt 讀不了（/etc/apt/sources.list 或 sources.list.d，常見是第三方來源）'),
+    (re.compile(r'Held packages were changed'), '套件被鎖定（apt-mark hold），不會自動變更'),
+    (re.compile(r'need to be removed'), '要先移除別的套件才能安裝，不會自動移除'),
+    (re.compile(r'nmet dependencies|held broken packages'), '相依的套件湊不齊（缺少、版本不合或被鎖定）'),
+)
+CONFLICT = re.compile(r'(?m)^ \S+ : (?:Conflicts|Breaks): ')  # on stdout, with "held broken packages" on stderr
+CONFLICT_REASON = '和已安裝的套件衝突，要移除或更換已安裝的套件才能裝，這裡不會自動移除'
+OFFLINE = '這台連不到套件庫（網路、DNS、代理伺服器，或要先登入的網路）'
+GONE = '套件庫已經沒有這台索引記的版本（索引太舊或套件庫正在同步），請先讓 sudo apt-get update 成功'
+SIGNATURE = '套件來源的簽章或有效期限驗證不過（金鑰、這台的時間或來源設定不對）'
+UNSURE = '原因不明（apt-get {what}結束碼 {code}）'
+NO_APT = 'apt-get 無法執行（這台沒有 /usr/bin/apt-get，或它不能執行）'
+BROKEN_TOOL = '套件已經裝好，但這個工具仍然沒有正常回應（status 會顯示是哪一個）'
+SOURCE_PROBLEMS = {'network': '連不上', 'gone': '網址不存在', 'sync': '索引和檔案對不上',
+                   'signature': '簽章或有效期限驗證不過', 'other': '其他錯誤'}
+# One address of apt-get's progress: what became of it, the source (URI, suite) and, after Err, why.
+APT_ITEM = re.compile(r'(?m)^(Hit|Get|Err):\d+ (\S+) (\S+)(?: [^\n]*)?(?:\n  (.*))?')
+FAILED_FETCH = re.compile(r'(?m)^[EW]: Failed to fetch \S+\s+(.*)')
+NETWORK_TEXT = re.compile(r'Temporary failure resolving|Could not (?:resolve|connect)|Unable to connect|wicked happened resolving'
+                          r'|Cannot initiate the connection|Network is unreachable|No route to host'
+                          r'|[Cc]onnection (?:timed out|failed|refused|reset)|^407 |network require authentication')
+SIGNATURE_TEXT = re.compile(r'signature|GPG error|is not signed|no longer signed|is expired|not valid yet')
+GONE_TEXT = re.compile(r'^4(?:04|10) ')
+SYNC_TEXT = re.compile(r'Hash Sum mismatch|File has unexpected size')
+NOT_IN_INDEX = re.compile(r"Unable to locate package (\S+)|Package '(\S+)' has no installation candidate"
+                          r'|Reinstallation of (\S+) is not possible')
 DEMO_APP = 'woowbk-demo'
 DEMO_CATALOG = f'{BACKUP_CATALOG}/{DEMO_APP}.json'
 DEMO_TEMPLATES = f'{BACKUP_TEMPLATES}/{DEMO_APP}'
@@ -82,6 +149,17 @@ SHOTS = ('00-login', '01-overview', '02-logs', '03-storage', '04-network',
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def pg16_bundle_module():
+    # Lazy: source distributions without the optional engine can still update Cockpit offline.
+    path = SOURCE / 'backup-engine/woowbackup/pg16_bundle.py'
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('--odoo-pg16-bundle needs backup-engine/woowbackup/pg16_bundle.py in the source tree.')
+    spec = importlib.util.spec_from_file_location('pg16_bundle', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def safe_path(root, relative):
@@ -605,14 +683,19 @@ def restore_records(root, backup, records):
 
 # ---------------------------------------------------------------- systemd (the live root only)
 
-def run_systemctl(argv):
-    """Run one fixed systemctl argv (no shell, no input, sanitized environment); (returncode, stdout, stderr)."""
+def run_fixed(argv, env=SAFE_ENV, timeout=120):
+    """Run one fixed argv (no shell, no input, sanitized environment); (returncode, stdout, stderr), 127 when it cannot
+    start or does not answer in time."""
     try:
-        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(SAFE_ENV), timeout=120,
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, env=dict(env), timeout=timeout,
                                 check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         return 127, '', str(error)
     return result.returncode, result.stdout.decode('utf-8', 'replace'), result.stderr.decode('utf-8', 'replace')
+
+
+def run_systemctl(argv):
+    return run_fixed(argv)
 
 
 class Systemd:
@@ -709,6 +792,171 @@ def _timer_back(systemd, before, unit_touched, timer_present):
         systemd.run('enable', SCHEDULE_TIMER, check=False)
     if before.get('active'):
         systemd.run('start', SCHEDULE_TIMER, check=False)
+
+
+# ---------------------------------------------------------------- host tools (the live root only)
+
+def run_tool(argv):
+    """A probe (30 s) or apt-get: noninteractive, needrestart's hook suspended (this installer restarts no service) and the
+    administrator's proxy passed on. apt-get must not be killed while dpkg works: no time limit (its network and lock
+    waits are bounded) and Ctrl-C waits for it."""
+    if argv[0] != APT_GET:
+        return run_fixed(argv, TOOL_ENV, 30)
+    proxy = {key: os.environ[key] for key in ('http_proxy', 'https_proxy', 'no_proxy') if key in os.environ}
+    interrupt = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        return run_fixed(argv, {**SAFE_ENV, **proxy, 'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_SUSPEND': '1'}, None)
+    finally:
+        signal.signal(signal.SIGINT, interrupt)
+
+
+def apt_problem(why):
+    """The kind (SOURCE_PROBLEMS) of what apt-get says about one address."""
+    if NETWORK_TEXT.search(why):
+        return 'network'
+    if SIGNATURE_TEXT.search(why):
+        return 'signature'
+    if GONE_TEXT.search(why):
+        return 'gone'
+    return 'sync' if SYNC_TEXT.search(why) else 'other'
+
+
+def index_problems(out, error):
+    """({(uri, suite): kind} of the sources apt-get update could not use, every (uri, suite) it worked on), from its stdout
+    (progress: Err lines say why) and stderr (what is only said there: an expired Release file, a source that is not signed)."""
+    items = APT_ITEM.findall(out)
+    sources = {(uri, suite) for _word, uri, suite, _why in items}
+    bad = {(uri, suite): apt_problem(why) for word, uri, suite, why in items if word == 'Err'}
+    for line in error.splitlines():
+        kind = apt_problem(line) if line.startswith(('E:', 'W:')) else 'other'
+        for uri, suite in sources - set(bad):
+            if (kind != 'other' or line.startswith('E:')) and any(
+                    mark in line for mark in (f'{uri} {suite} ', f'{uri}/dists/{suite}/', f'{uri}/{suite}')):
+                bad[uri, suite] = kind
+    return bad, sources
+
+
+def index_reason(update, absent):
+    """Why the package index of this device does not have the `absent` packages, from what apt-get update answered."""
+    code, out, error = update
+    for pattern, reason in APT_REASONS:  # e.g. another job that holds the lock of the lists
+        if pattern.search(error):
+            return reason
+    bad, sources = index_problems(out, error)
+    names = '、'.join(absent)
+    if not bad:
+        if code:
+            return UNSURE.format(what='update ', code=code)
+        where = ('age 在 Ubuntu 的 universe，可用 sudo add-apt-repository universe 啟用' if absent == ['age']
+                 else 'Ubuntu 的 main 與 universe 都要啟用')
+        return f'這台啟用的套件來源沒有 {names}，或設定把它排除了（{where}）'
+    kinds = set(bad.values())
+    shown = '、'.join(text for kind, text in SOURCE_PROBLEMS.items() if kind in kinds)
+    if sources - set(bad):  # the others are fine and do not have them
+        return (f'有套件來源無法更新（{shown}），其他來源沒有 {names}：請用 sudo apt-get update 找出並修正那個來源，'
+                '也請確認已啟用 universe')
+    if kinds == {'network'}:
+        return OFFLINE
+    if kinds == {'signature'}:
+        return SIGNATURE
+    return f'套件來源都無法更新（{shown}）：請用 sudo apt-get update 找出並修正'
+
+
+def apt_reason(update, install, left):
+    """Why the packages `left` could not be added (zh-TW, never apt's own lines), from the (code, stdout, stderr) of
+    apt-get update and install."""
+    code, out, error = install
+    if code == 127:  # run_fixed: it did not start
+        return NO_APT
+    if CONFLICT.search(out):  # before the general "held broken packages" below
+        return CONFLICT_REASON
+    for pattern, reason in APT_REASONS:
+        if pattern.search(error):
+            return reason
+    # What the downloads said: the Err lines of the progress and the "Failed to fetch" lines.
+    kinds = {apt_problem(why) for word, _uri, _suite, why in APT_ITEM.findall(out) if word == 'Err'}
+    kinds |= {apt_problem(why) for why in FAILED_FETCH.findall(error)}
+    found = {name for names in NOT_IN_INDEX.findall(out + error) for name in names}
+    absent = [package for package in left if package in found]
+    if absent and not kinds:
+        return index_reason(update, absent)
+    if kinds == {'network'}:
+        return OFFLINE
+    if kinds and kinds <= {'gone', 'sync'}:
+        return GONE
+    return UNSURE.format(what='', code=code) if code else BROKEN_TOOL
+
+
+def without(packages):
+    """What cannot be done without these packages, e.g. 缺 age 不能建立與檢查加密金鑰."""
+    return '；'.join(f'缺 {"、".join(names)} 不能{effect}' for needed, effect in WITHOUT
+                    for names in [[name for name in needed if name in packages]] if names)
+
+
+class HostTools:
+    """The probes of HOST_TOOLS and the apt-get steps that add missing packages, through an injectable
+    `runner(argv) -> (code, stdout, stderr)`. Only the fixed argv above are ever run."""
+
+    def __init__(self, runner=run_tool):
+        self.runner = runner
+
+    def working(self):
+        """{tool: whether the engine can use it} (read-only)."""
+        return {tool: self.runner(list(probe))[0] == 0 for tool, _package, probe in HOST_TOOLS}
+
+    def missing(self, working=None):
+        """The packages of the tools that are missing or do not answer (read-only)."""
+        working = self.working() if working is None else working
+        return list(dict.fromkeys(package for tool, package, _probe in HOST_TOOLS if not working[tool]))
+
+    def ensure(self):
+        """Add the missing packages. {} when every tool works (nothing is run), else what the install reports: `packages`
+        (added) and, for tools that still do not work (the probes decide, not apt's exit code), `missing_packages` and
+        `notices`. Never a refusal: the engine itself stops what needs a missing tool, the rest of the update is fine."""
+        packages = self.missing()
+        if not packages:
+            return {}
+        print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(packages)}。正在用 apt 自動補裝（可能要幾分鐘）……',
+              file=sys.stderr)
+        update = self.runner(list(APT_UPDATE))  # best effort: an older index or apt's cache may do
+        added = self.runner([*APT_INSTALL, *packages])
+        left = self.missing()
+        report = {'packages': [package for package in packages if package not in left]}
+        if left:
+            notice = (f'備份與還原需要的套件沒有裝好：{"、".join(left)}。自動補裝沒有成功：{apt_reason(update, added, left)}。'
+                      f'更新照常進行，裝好之前：{without(left)}。'
+                      '排除後重新執行 sudo python3 scripts/manage.py install 會再自動補裝，'
+                      f'也可以自行安裝（sudo apt-get install {" ".join(left)}；不能上網時用帶來的 .deb 檔）；'
+                      'sudo python3 scripts/manage.py status 可以查看現況。')
+            print(f'Note: {notice}', file=sys.stderr)
+            report.update(missing_packages=left, notices=[notice])
+        return report
+
+
+def engine_tools(root, engine, tools=None):
+    """The host tools when the backup engine (`engine`: is there one) runs on the live root; None otherwise (--root)."""
+    if not engine:
+        return None
+    return HostTools() if tools is None and root == Path('/') else tools
+
+
+def install_with_tools(root, desired, state, replan, systemd=None, tools=None):
+    """`install` after the missing packages of the engine's tools were added (a run that manages the engine on the live
+    root). What the installer refuses by itself it refuses first. Once apt-get ran, `replan()` -> (desired, state) is
+    installed instead: it can wait minutes for another package job (e.g. an automatic update), and what that job
+    left (a newer Cockpit page, another cockpit-podman or Cockpit) counts, not what was there before."""
+    tools = engine_tools(root, BACKUP_HELPER in state['files'], tools)
+    report = {}
+    if tools is not None:
+        changes(root, desired)
+        directory_plan(root, state)
+        report = tools.ensure()
+        if report:
+            desired, state = replan()
+    result = install(root, desired, state, systemd)
+    for key, values in report.items():
+        result[key] = [*values, *result.get(key, [])]
+    return result
 
 
 def install(root, desired, state, systemd=None):
@@ -928,6 +1176,25 @@ def verify(root, systemd=None):
     return result
 
 
+def status(root, tools=None):
+    """The installed version and whether the engine's host tools work; read-only (`install` adds missing ones)."""
+    try:
+        state = json.loads(safe_path(root, STATE).read_text())
+    except PermissionError:
+        raise ValueError('讀取安裝紀錄需要管理者權限，請用 sudo 執行：sudo python3 scripts/manage.py status') from None
+    # An engine that --no-backup kept is not in the state of that install: it needs its tools all the same.
+    engine = BACKUP_HELPER in state['files'] or safe_path(root, BACKUP_HELPER).is_file()
+    result = {'status': 'ready', 'source_version': state['source_version'], 'tools': 'no-engine', 'packages': []}
+    tools = engine_tools(root, engine, tools)
+    if tools is not None:
+        working = tools.working()
+        missing = tools.missing(working)
+        result.update(status='tools-missing' if missing else 'ready', tools=working, packages=missing)
+    elif engine:
+        result.update(status='not-checked', tools='not-checked')  # --root: nothing is run there
+    return result
+
+
 def selected_brand(root, requested=None):
     """An explicit switch wins; unattended upgrades retain the installed brand."""
     if requested is not None:
@@ -963,7 +1230,12 @@ def main():
                          help='Do not manage the backup & restore package (page, engine, helper, catalog directory); existing files are kept.')
         sub.add_argument('--backup-demo-catalog', action='store_true',
                          help='LAB ONLY: also install the woowbk-demo trusted catalog entry and its Quadlet templates.')
+        sub.add_argument('--odoo-pg16-bundle', type=Path,
+                         help='Opt-in release directory with manifest.json and postgres16.docker.tar (no image pull/load).')
+        sub.add_argument('--odoo-pg16-manifest-sha256',
+                         help='Manifest SHA256 from authenticated release metadata, required with --odoo-pg16-bundle.')
     subs.add_parser('verify')
+    subs.add_parser('status', help='Installed version and whether the host tools of the engine work; changes nothing.')
     sub = subs.add_parser('rollback')
     sub.add_argument('backup_id')
     args = parser.parse_args()
@@ -972,10 +1244,29 @@ def main():
         parser.error('Live installation/rollback requires sudo.')
     try:
         if args.command in ('plan', 'install'):
+            if bool(args.odoo_pg16_bundle) != bool(args.odoo_pg16_manifest_sha256):
+                raise ValueError('--odoo-pg16-bundle and --odoo-pg16-manifest-sha256 must be supplied together.')
+            if args.odoo_pg16_bundle and args.no_backup:
+                raise ValueError('--odoo-pg16-bundle needs the backup engine; drop --no-backup.')
+            brand = selected_brand(root, args.brand)
+
+            def planned(notices):
+                return desired_files(root, not args.no_preview, args.screenshots, not args.no_services,
+                                     args.service_owner, not args.no_backup, args.backup_demo_catalog, notices, brand=brand)
+
             notices = []
-            desired, state = desired_files(root, not args.no_preview, args.screenshots, not args.no_services,
-                                           args.service_owner, not args.no_backup, args.backup_demo_catalog, notices,
-                                           brand=selected_brand(root, args.brand))
+            desired, state = planned(notices)
+            bundle_plan = None
+            if args.odoo_pg16_bundle:
+                if BACKUP_HELPER not in state['files']:
+                    raise ValueError('--odoo-pg16-bundle needs the backup engine in the source tree.')
+                pg16_bundle = pg16_bundle_module()
+                # Validate the entire sidecar before apt, systemctl, or any Cockpit writes.
+                with pg16_bundle.open_bundle(args.odoo_pg16_bundle, args.odoo_pg16_manifest_sha256) as (record, _, _archive):
+                    if root == Path('/') and record['architecture'] != pg16_bundle.architecture():
+                        raise ValueError('PG16 release bundle architecture does not match this device.')
+                    bundle_plan = {'architecture': record['architecture'], 'image_id': record['image_id'],
+                                   'manifest_sha256': args.odoo_pg16_manifest_sha256, 'archive_size': record['archive_size']}
             if args.backup_demo_catalog:
                 notices.append(f'--backup-demo-catalog adds the lab fixture "{DEMO_APP}" to the trusted backup catalog; '
                                'never use it on customer devices.')
@@ -990,21 +1281,34 @@ def main():
                       file=sys.stderr)
             for notice in notices:
                 print(f'Note: {notice}', file=sys.stderr)
+            if root != Path('/') and BACKUP_HELPER in state['files']:
+                print(f'Note: --root：不會在 {root} 檢查或補裝備份與還原需要的套件；請在那個系統安裝：'
+                      f'sudo apt-get install {" ".join(TOOL_PACKAGES)}', file=sys.stderr)
             if args.command == 'plan':
                 names = changes(root, desired)
                 systemd = live_systemd(root)
                 before = systemd.timer_state() if systemd else None
                 if before and masked(before) and TIMER_FILE in state['files']:
                     notices.append(MASKED_NOTICE)
+                tools = engine_tools(root, BACKUP_HELPER in state['files'])
+                packages = tools.missing() if tools else []
+                if packages:
+                    print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(packages)}。執行 install 時會用 apt 自動補裝'
+                          '（補不了也會照常更新）。', file=sys.stderr)
                 result = {'source_version': state['source_version'], 'cockpit_version': state['cockpit_version'],
-                          'changed': names,
+                          'changed': names, 'packages': packages,
                           'remove': [name for name, (data, _) in desired.items() if data is None],
                           'directories': [f'{rec["path"]}/' for rec in directory_plan(root, state)],
                           'managed_files': len(state['files']), 'notices': notices,
                           'systemctl': timer_plan(names, state, before) if systemd else []}
             else:
-                result = install(root, desired, state)
+                result = install_with_tools(root, desired, state, lambda: planned([]))
+                if bundle_plan is not None:
+                    result['odoo_pg16_bundle'] = pg16_bundle.install_bundle(
+                        args.odoo_pg16_bundle, args.odoo_pg16_manifest_sha256, root)
                 print('After installation, sign out/in and force-refresh the browser. No Cockpit service restart was requested.', file=sys.stderr)
+            if bundle_plan is not None and args.command == 'plan':
+                result['odoo_pg16_bundle'] = {**bundle_plan, 'status': 'verified-for-staging'}
             result['brand'] = state['brand']
         elif args.command == 'rollback':
             if root != Path('/'):
@@ -1013,10 +1317,16 @@ def main():
                 print(f'Note: systemd is not running here ({SYSTEMD_RUNNING} is missing): no systemctl command runs '
                       'for the scheduled-backup timer.', file=sys.stderr)
             result = rollback(root, args.backup_id)
+        elif args.command == 'status':
+            result = status(root)
+            if result['packages']:
+                print(f'Note: 備份與還原需要的套件沒有裝好：{"、".join(result["packages"])}。'
+                      f'裝好之前：{without(result["packages"])}。請重新執行安裝'
+                      '（sudo python3 scripts/manage.py install），會用 apt 自動補裝。', file=sys.stderr)
         else:
             result = verify(root)
         print(json.dumps(result, indent=2, ensure_ascii=False))
-        return 1 if result.get('status') == 'drift' else 0
+        return 1 if result.get('status') in ('drift', 'tools-missing') else 0
     except (OSError, ValueError, KeyError) as error:
         print(f'Error: {error}', file=sys.stderr)
         return 1

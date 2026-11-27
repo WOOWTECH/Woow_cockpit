@@ -1,0 +1,169 @@
+{
+  "actual_error_class": "RuntimeError",
+  "actual_fixed_failure_stage": "no_preexisting_n8n_safety_to_prune",
+  "attempt": "n8n-safety-attempt1",
+  "driver_commit": "b5c5b1a17062d18c76a7a1b7388c7dbb08fdd8cd",
+  "elapsed_seconds": 4.1,
+  "errno": null,
+  "evidence_sha256": {
+    "n8n-safety-attempt1.json": "5c241932f917048104059ef2cee2e9823512a11651c0b4584401d0017596c7e9",
+    "n8n-safety-attempt1.private.log": "45910adcf93674a093ae3c8fe15349e6af4822a7abb3cfbf310b182c7da7c878",
+    "n8n-safety-failed-receipt.private.json": "386a656709a506837dc54374564abc3f72b7d38c0edebcdb115e30719e59167d",
+    "n8n-safety-failure-fixed.private.json": "627fa940d891371112a7cdc2ccd06256d9c505d693bf4e19535050b81d35bc1d",
+    "n8n-safety-failure-readonly-report.private.json": "1daa298ac082988266e3b648574294a97b3d37d049a184b9030ede5dccdc839e"
+  },
+  "exit": 1,
+  "full_safety_created": false,
+  "job_submitted": false,
+  "mutations_started": false,
+  "postgres_started": false,
+  "public_capture_omission_reason": "capturer stage regex accepts only a-z and underscore; this fixed label contains digit8",
+  "readonly_verification": {
+    "active_jobs_count": 0,
+    "all53_source_hashes_exact": true,
+    "all_source1_source2_proofs_exact": true,
+    "cause": "no_preexisting_n8n_safety_to_prune",
+    "device_mutex_released": true,
+    "durable_equal": {
+      "active_jobs": true,
+      "catalog": true,
+      "files": true,
+      "images": true,
+      "protected": true,
+      "retention_sha256": true,
+      "running": true,
+      "timer": true,
+      "units": true,
+      "volumes": true
+    },
+    "native_locks_free": true,
+    "older_n8n_safeties": [
+      {
+        "apps": [
+          "odoo",
+          "n8n"
+        ],
+        "archives": [
+          {
+            "bytes": 12103680,
+            "filename": "20261124T152230Z-5f41c20c.tar",
+            "gid": 0,
+            "mode": 384,
+            "mtime_ns": 1795533865849123502,
+            "uid": 0
+          }
+        ],
+        "id": "20261124T152230Z-5f41c20c",
+        "index_metadata": {
+          "gid": 0,
+          "mode": 384,
+          "mtime_ns": 1795533867143150283,
+          "sha256": "1f09e9894b14283c325d29da0faf422515f50ac3b51019ad50bb518612603ae9",
+          "uid": 0
+        },
+        "origin_jobs": [
+          {
+            "belongs_current_case": false,
+            "job_id": "j20261124T152156Z-e4de80fe",
+            "job_state": "succeeded",
+            "job_type": "restore",
+            "request_family": "other_preexisting",
+            "request_id_sha256": "118f73f5598b7921a1c83eb51ef7f91d253523203a625ebdddc432fe8e5c5098"
+          }
+        ],
+        "type": "safety"
+      },
+      {
+        "apps": [
+          "n8n"
+        ],
+        "archives": [
+          {
+            "bytes": 1372160,
+            "filename": "20261124T153132Z-ee42afe1.tar",
+            "gid": 0,
+            "mode": 384,
+            "mtime_ns": 1795534383692512014,
+            "uid": 0
+          }
+        ],
+        "id": "20261124T153132Z-ee42afe1",
+        "index_metadata": {
+          "gid": 0,
+          "mode": 384,
+          "mtime_ns": 1795534383830514720,
+          "sha256": "2641a0157c7e872323956dddea39c957373207b14ccd2d4bd837beeecfc0d122",
+          "uid": 0
+        },
+        "origin_jobs": [
+          {
+            "belongs_current_case": false,
+            "job_id": "j20261124T153112Z-8b869b35",
+            "job_state": "succeeded",
+            "job_type": "restore",
+            "request_family": "other_preexisting",
+            "request_id_sha256": "1cd60fcea27f2f47a50cc412a038290923730c8b7357a6a79b5ba102cf8ef6a0"
+          }
+        ],
+        "type": "safety"
+      }
+    ],
+    "older_n8n_safety_count": 2,
+    "protected_files": 4,
+    "running_container_count": 0,
+    "source1_journal_sha256": "1efb3230fe3666dee1fb0cfc0789ef3bd1a44b829c2641e775bb6f2c27c9d9a5",
+    "source2_return_journal_sha256": "0f98c76b312449fd99e9bbde0bd73c6194ae1dcaaa979e79c8ebfd9570863296",
+    "source_fullflow_journal_sha256": "99b20bc3053f2f10c3541ad2cd1a78b2e6482e68b28f72f04ee81fb3799523f2",
+    "timer": {
+      "ActiveState": "active",
+      "SubState": "waiting",
+      "UnitFileState": "enabled"
+    },
+    "units": {
+      "n8n-postgres.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n-runners.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n-valkey.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n-webhook.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n-worker-runners.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n-worker.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n.service": {
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "generated"
+      },
+      "n8n.target": {
+        "ActiveState": "active",
+        "SubState": "active",
+        "UnitFileState": "enabled"
+      }
+    }
+  },
+  "retry_or_recovery_run": false,
+  "schema": 1,
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "stage_provenance": "original exclusive private stdout JSON event, ok=false"
+}

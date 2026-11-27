@@ -1,0 +1,68 @@
+import json, os, subprocess, pathlib, tarfile, hashlib
+ROOT=pathlib.Path('/tmp/ha-arm54-isolated-20261122')
+E=ROOT/'tests/e2e/lab/evidence/arm54-native-20261122'
+SSH=['ssh','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile=/tmp/ha-test-54-known-hosts','-o','ConnectTimeout=10','-o','NumberOfPasswordPrompts=1','root@192.168.2.54']
+def remote(code, timeout=60):
+ p=subprocess.run(SSH+['python3 -'],input=code.encode(),stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+ if p.returncode:
+  print('REMOTE_EXIT',p.returncode,p.stderr.decode()[-1500:]); raise SystemExit(1)
+ return p.stdout.decode()
+code='''import json, os, pathlib, shutil, subprocess, tempfile, platform
+os.umask(0o077)
+free=shutil.disk_usage('/var/tmp').free
+assert free >= 12*1024**3+512*1024**2
+root=pathlib.Path(tempfile.mkdtemp(prefix='woow-arm54-ha-20261122-',dir='/var/tmp'))
+for name in ('store','run','tmp','source','native','return'):
+ (root/name).mkdir(mode=0o700)
+def cmd(args):
+ return subprocess.check_output(args,timeout=30).decode().splitlines()
+baseline={'containers':cmd(['podman','ps','-a','--no-trunc','--format','{{.ID}} {{.Names}} {{.Image}} {{.State}} {{.Ports}}']),
+ 'images':cmd(['podman','images','--no-trunc','--format','{{.ID}} {{.Repository}}:{{.Tag}}']),
+ 'volumes':cmd(['podman','volume','ls','--format','{{.Name}}']),
+ 'networks':cmd(['podman','network','ls','--format','{{.Name}}']),
+ 'store':cmd(['podman','info','--format','{{.Store.GraphRoot}} {{.Store.RunRoot}}'])}
+(root/'baseline.json').write_text(json.dumps(baseline,sort_keys=True))
+print(json.dumps({'workspace':str(root),'free_bytes_before':free,'arch':platform.machine(),'baseline':baseline}))
+'''
+state=json.loads(remote(code))
+pathlib.Path('/tmp/arm54-state.json').write_text(json.dumps(state)); os.chmod('/tmp/arm54-state.json',0o600)
+(E/'before.json').write_text(json.dumps(state,indent=2)+'\n')
+source=pathlib.Path('/tmp/arm54-source-20261122')
+with tarfile.open(source/'source-code.tar.gz','w:gz') as tar:
+ for path in sorted((ROOT/'backup-engine').rglob('*')):
+  if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
+   tar.add(path,arcname=str(path.relative_to(ROOT)))
+ tar.add(ROOT/'tests/e2e/lab/native_arm_archive.py',arcname='native_arm_archive.py')
+hashes={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in (ROOT/'backup-engine').rglob('*.py') if '__pycache__' not in p.parts}
+hashes['tests/e2e/lab/native_arm_archive.py']=hashlib.sha256((ROOT/'tests/e2e/lab/native_arm_archive.py').read_bytes()).hexdigest()
+(E/'source-hashes.json').write_text(json.dumps({'base':'5c99b00','files':hashes,'bundle_sha256':hashlib.sha256((source/'source-code.tar.gz').read_bytes()).hexdigest()},indent=2)+'\n')
+for name in ('roundtrip.tar','expected.json','source-code.tar.gz'):
+ p=subprocess.run(['scp',*SSH[1:-1],str(source/name),'root@192.168.2.54:'+state['workspace']+'/source/'+name],capture_output=True,timeout=60)
+ if p.returncode: print('SCP_FAILED',p.stderr.decode()[-1000:]); raise SystemExit(1)
+workspace=state['workspace']
+result=remote(f'''import os,pathlib,tarfile,subprocess,json,hashlib
+root=pathlib.Path({workspace!r}); os.umask(0o077)
+assert hashlib.sha256((root/'source/source-code.tar.gz').read_bytes()).hexdigest()=={hashlib.sha256((source/'source-code.tar.gz').read_bytes()).hexdigest()!r}
+with tarfile.open(root/'source/source-code.tar.gz') as tar:
+ for item in tar:
+  assert item.isfile() and not pathlib.PurePosixPath(item.name).is_absolute() and '..' not in pathlib.PurePosixPath(item.name).parts
+  dest=root/'source'/item.name; dest.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+  with dest.open('xb') as out: out.write(tar.extractfile(item).read())
+env=dict(os.environ,PYTHONPATH=str(root/'source/backup-engine'),PYTHONDONTWRITEBYTECODE='1',TMPDIR=str(root/'tmp'))
+p=subprocess.run(['python3',str(root/'source/native_arm_archive.py'),'arm-unpack',str(root/'native'),'--expected',str(root/'source/expected.json'),'--archive',str(root/'source/roundtrip.tar')],env=env,capture_output=True,timeout=60)
+assert p.returncode==0,p.stderr.decode()[-1000:]
+print(p.stdout.decode(),end='')
+''')
+(E/'native-unpack.json').write_text(result)
+for name in ('roundtrip.tar','expected.json'):
+ p=subprocess.run(['scp',*SSH[1:-1],'root@192.168.2.54:'+workspace+'/native/'+name,str(source/('arm-'+name))],capture_output=True,timeout=60)
+ assert p.returncode==0
+returned=source/'return'; returned.mkdir(mode=0o700)
+env=dict(os.environ,PYTHONPATH=str(ROOT/'backup-engine'),PYTHONDONTWRITEBYTECODE='1')
+p=subprocess.run(['python3',str(ROOT/'tests/e2e/lab/native_arm_archive.py'),'source-unpack',str(returned),'--expected',str(source/'arm-expected.json'),'--archive',str(source/'arm-roundtrip.tar')],env=env,capture_output=True,timeout=60)
+assert p.returncode==0,p.stderr.decode()[-1000:]
+(E/'source-return.json').write_bytes(p.stdout)
+(E/'source-before-transfer.json').write_bytes((source/'expected.json').read_bytes())
+print('WORKSPACE',workspace)
+print('NATIVE',result.strip())
+print('RETURN',p.stdout.decode().strip())

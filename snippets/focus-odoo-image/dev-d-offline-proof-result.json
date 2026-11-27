@@ -1,0 +1,8 @@
+{
+  "status": "failed",
+  "phase": "ordered-layer-verification",
+  "error_type": "ValueError",
+  "reason": "source-archive-header-refused",
+  "reason_proven_by_read_only_replay": true,
+  "pulls": 0
+}

@@ -1,0 +1,15 @@
+{
+  "source_commit": "38ca281a53e23db77a2541916b9e6c4c6dc1ddce",
+  "scope": "actual x86 source Capture with bound parse-only native SQL aliases and digest-bound expanded-size profile; no target or restore",
+  "exit": 0,
+  "elapsed_seconds": 71.20916029205546,
+  "fixed_phases": [
+    "SOURCE COMPLETE PASSED",
+    "ARM POSTFLIGHT PASSED"
+  ],
+  "unpublished_stdout_lines": 0,
+  "stderr_bytes_not_published": 0,
+  "stdout_sha256": "a3e09f3d9e9575379b08fdffe62167f4c63ebbf4d0c376ac8833475c8ae9f0bf",
+  "restore_executed": false,
+  "full_scan_performed": false
+}

@@ -1,0 +1,24 @@
+[
+  {
+    "registry": "ghcr.io",
+    "repository": "juanfont/headscale",
+    "reference": "sha256:2df4cb333db8496801780b8b15ac13026dbe5c0b5207fca4abdde33e1cffaa31",
+    "resolved_digest": "sha256:2df4cb333db8496801780b8b15ac13026dbe5c0b5207fca4abdde33e1cffaa31",
+    "media_type": "application/vnd.oci.image.manifest.v1+json",
+    "architecture": "arm64",
+    "os": "linux",
+    "labels": null,
+    "compressed_bytes": 30285051
+  },
+  {
+    "registry": "registry-1.docker.io",
+    "repository": "library/debian",
+    "reference": "sha256:f6af819c6ac3902cbd1df3c4a00208abf8bfbbdf65fd25bbb330d2f8ad961d29",
+    "resolved_digest": "sha256:f6af819c6ac3902cbd1df3c4a00208abf8bfbbdf65fd25bbb330d2f8ad961d29",
+    "media_type": "application/vnd.oci.image.manifest.v1+json",
+    "architecture": "arm64",
+    "os": "linux",
+    "labels": null,
+    "compressed_bytes": 28082001
+  }
+]

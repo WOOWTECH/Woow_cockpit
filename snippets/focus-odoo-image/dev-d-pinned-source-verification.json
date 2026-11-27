@@ -1,0 +1,12 @@
+{
+  "status": "pinned-config-match-with-different-registry-encoding",
+  "index_digest": "sha256:aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139",
+  "pinned_amd64_platform_digest": "sha256:ac838714b7d794185a866e5a6b479b954e7d8a070568aa0acac6fe07c3070bf5",
+  "pinned_amd64_config_digest": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "source_config_digest": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+  "image_blobs_fetched": 0,
+  "store_mutations": 0,
+  "source_repodigest": "sha256:8d16e6f18cc33ffb153211c40b45056a3589d49c245530469843b368d6786069",
+  "same_pinned_amd64_config": true,
+  "exported_layer_bytes_not_yet_verified": true
+}

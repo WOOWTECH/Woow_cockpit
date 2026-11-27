@@ -1,0 +1,31 @@
+manage.HostTools.ensure() of commit dd491d9 with the real apt-get in a private, unprivileged apt root (own sources, lists, cache and
+dpkg status; dpkg is a stub that unpacks below that root). Nothing on the host was installed or changed. 2026-11-25 06:39
+apt 2.8.4 (amd64)
+
+== online, the four packages and two of their dependencies missing
+Note: 備份與還原需要的套件沒有裝好：age、zstd、python3-nacl、python3-cryptography。正在用 apt 自動補裝（可能要幾分鐘）……
+before {"age": false, "age-keygen": false, "zstd": false, "python3-nacl": false, "python3-cryptography": false}
+added ['age', 'zstd', 'python3-nacl', 'python3-cryptography']
+after {"age": true, "age-keygen": true, "zstd": true, "python3-nacl": true, "python3-cryptography": true}
+{"argv": ["/usr/bin/apt-get", "-q", "-o", "Acquire::Retries=1", "update"], "rc": 0, "stderr_lines": 0, "stdout_tail": ["Get:2 http://tw.archive.ubuntu.com/ubuntu noble/main amd64 Packages [1401 kB]", "Get:3 http://tw.archive.ubuntu.com/ubuntu noble/m
+{"argv": ["/usr/bin/apt-get", "-q", "-o", "Acquire::Retries=1", "-o", "DPkg::Lock::Timeout=300", "-y", "--no-install-recommends", "--no-remove", "--reinstall", "install", "age", "zstd", "python3-nacl", "python3-cryptography"], "rc": 0, "stderr_lines"
+unpack 0-python3-cffi-backend_1.16.0-2build1_amd64.deb
+unpack 1-age_1.1.1-1build1_amd64.deb
+unpack 2-libsodium23_1.0.18-1build3_amd64.deb
+unpack 3-python3-cryptography_41.0.7-4build3_amd64.deb
+unpack 4-python3-nacl_1.5.0-4build1_amd64.deb
+unpack 5-zstd_1.5.5+dfsg2-2build1_amd64.deb
+
+== again: every tool works, apt-get is not run
+before {"age": true, "age-keygen": true, "zstd": true, "python3-nacl": true, "python3-cryptography": true}
+added []
+after {"age": true, "age-keygen": true, "zstd": true, "python3-nacl": true, "python3-cryptography": true}
+
+== old index, nothing cached, the administrator's proxy does not answer (http_proxy passed on)
+refused: 備份與還原需要的套件沒有裝好：age、zstd、python3-nacl、python3-cryptography。自動補裝沒有成功：這台連不到套件庫（網路、DNS 或代理伺服器）。沒有更新任何檔案。請排除後重新執行，或先自行安裝（sudo apt-get install age zstd python3-nacl python3-cryptography；不能上網時用帶來的 .deb 檔）；只要更新備份以外的部分，可以加 --no-backup。
+
+== universe is off (only main)
+refused: 備份與還原需要的套件沒有裝好：age、zstd、python3-nacl、python3-cryptography。自動補裝沒有成功：套件庫沒有這些套件（age 在 Ubuntu 的 universe：sudo add-apt-repository universe）。沒有更新任何檔案。請排除後重新執行，或先自行安裝（sudo apt-get install age zstd python3-nacl python3-cryptography；不能上網時用帶來的 .deb 檔）；只要更新備份以外的部分，可以加 --no-backup。
+
+== offline, never had an index
+refused: 備份與還原需要的套件沒有裝好：age、zstd、python3-nacl、python3-cryptography。自動補裝沒有成功：這台連不到套件庫（網路、DNS 或代理伺服器）。沒有更新任何檔案。請排除後重新執行，或先自行安裝（sudo apt-get install age zstd python3-nacl python3-cryptography；不能上網時用帶來的 .deb 檔）；只要更新備份以外的部分，可以加 --no-backup。

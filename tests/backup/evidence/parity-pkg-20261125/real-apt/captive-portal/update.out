@@ -1,0 +1,4 @@
+Get:1 http://repo.example:80 ./ InRelease [39 B]
+Err:1 http://repo.example:80 ./ InRelease
+  Clearsigned file isn't valid, got 'NOSPLIT' (does the network require authentication?)
+Reading package lists...

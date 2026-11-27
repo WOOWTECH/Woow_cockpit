@@ -1,0 +1,35 @@
+[
+  {
+    "scope": "real HA test backup read-only shape/capacity only",
+    "arch": "arm",
+    "restore_executed": false,
+    "secret_values_exported": false,
+    "expanded_limit_bytes": 268435456,
+    "encrypted_member_bytes": 117195765,
+    "status": "full-read-passed",
+    "expanded_tar_bytes": 117760000,
+    "tar_complete": true,
+    "file_count": 43,
+    "mnesia_file_extension_counts": {
+      ".DCD": 22,
+      ".LOG": 2,
+      ".DAT": 1,
+      ".DCL": 3
+    },
+    "elapsed_seconds": 1.6038737341295928,
+    "archive_sha256": "b6eb257cc5790bee30500f929d51ade66bfa8354dbe5bb61ba7c4bc08582f664"
+  },
+  {
+    "scope": "real HA test backup read-only shape/capacity only",
+    "arch": "x86",
+    "restore_executed": false,
+    "secret_values_exported": false,
+    "expanded_limit_bytes": 268435456,
+    "encrypted_member_bytes": 137936119,
+    "status": "refused-or-unreadable",
+    "raw_error_exported": false,
+    "elapsed_seconds": 4.391542162047699,
+    "archive_sha256": "0a53e93888209316040af505484bba3ee3891c2ad2df7ae689bc0d4fd02690f9",
+    "refusal_reason": "expanded stream exceeds candidate256MiB; independent512MiB bound subsequently completed"
+  }
+]

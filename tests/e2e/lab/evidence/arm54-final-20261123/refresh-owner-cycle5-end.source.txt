@@ -1,0 +1,17 @@
+import hashlib, json, os, pathlib, shutil, tarfile
+root = pathlib.Path('/var/tmp/woow-arm54-final-20261123-rgwo12fe'); os.umask(0o077)
+src = root / 'input' / 'code-refresh-1795504320.tar.gz'
+assert hashlib.sha256(src.read_bytes()).hexdigest() == '1de13dac1913f47d54e86222caa803fe644f27605f5548c376a79e1f30545459', 'code-bundle-digest-differs'
+shutil.rmtree(root / 'source')
+count = 0
+with tarfile.open(src) as tar:
+    for m in tar:
+        p = pathlib.PurePosixPath(m.name)
+        assert m.isfile() and m.size <= 8 * 1024 ** 2 and not p.is_absolute() and '..' not in p.parts
+        dest = root / 'source' / m.name
+        dest.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with dest.open('xb') as handle:
+            handle.write(tar.extractfile(m).read())
+        count += 1
+src.unlink()
+print(json.dumps({'refreshed': True, 'files': count}))

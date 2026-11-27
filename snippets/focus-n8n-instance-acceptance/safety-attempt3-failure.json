@@ -1,0 +1,165 @@
+{
+  "attempt": "n8n-safety-attempt3",
+  "checks_false": 1,
+  "checks_true": 19,
+  "diagnostic_history": {
+    "first_probe": "owned readonly probe terminated rc143 after accidental repeated full-inventory hashing; no app writes; empty stdout/stderr retained",
+    "private_job_log_retained": true,
+    "second_probe": "single streaming full-inventory pass; complete original-state proof"
+  },
+  "driver_commit": "8c28955244842bb1790f4d02283694ed1e0bd5e7",
+  "elapsed_seconds": 75.7,
+  "evidence_sha256": {
+    "n8n-reference-prep-readonly.json": "6908c5e83efbb8853754589a168ab6f97d0ac9683468c6351ef5cf807087e48e",
+    "n8n-safety-attempt3-failed-receipt.private.json": "40b6df2f974c81d8ca0d3309a57dbc93fa72869925eaf4bd8f2bc17dfd8fed38",
+    "n8n-safety-attempt3-fixed-diagnosis.json": "f53a2f3fcc8f61ddb9f3884244d4eca27383362a64c28658c23a0e77e302f3f8",
+    "n8n-safety-attempt3-image-reference-readonly.json": "3076c00deed5b8d6713229ede14b34faa3a4db153e9bd251c520b482674144bc",
+    "n8n-safety-attempt3-readonly.private.json": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "n8n-safety-attempt3-readonly.stderr.private": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "n8n-safety-attempt3-readonly2.private.json": "53ef60e0cae3e6aa59184ac321bc8f4e6653a1e9b614ed97bfaf23a8592c0f92",
+    "n8n-safety-attempt3.json": "4d335a32c902a5c7bd29993f429f68637a3dc400bdb7b3b774b6cee3825681ba",
+    "n8n-safety-attempt3.private.log": "9e4aea841a355e1fbff99928453d5507a012783ae6195723c90ed80fbf12095a"
+  },
+  "exit": 1,
+  "failed_check": "fresh_full_safety_job",
+  "job": {
+    "actual_fixed_cause": {
+      "code": "job-failed",
+      "fixed_message_prefix": "找不到應用使用的映像 ",
+      "image_reference": "docker.io/n8nio/n8n:2.43.6",
+      "phase": "check"
+    },
+    "error_code": "job-failed",
+    "id": "j20261127T021303Z-e2990d01",
+    "phase": "check",
+    "state": "failed",
+    "stop_dump_export_reached": false,
+    "unit_state": "inactive"
+  },
+  "native_safety_passed": false,
+  "native_vendor_fullflow_passed": false,
+  "no_retry_restore_prune_image_or_source_mutation_after_failure": true,
+  "reference_readonly": {
+    "cache_config_count": 6,
+    "cache_selected_fields": {
+      "28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb": {
+        "history": [],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "9915bfbca10c65d8f8c1e91a8b6ff67fea9835e075d5b83f494d5199d659c8e9",
+        "tags": []
+      },
+      "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873": {
+        "history": [
+          "docker.io/library/postgres:16.15-alpine"
+        ],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "3930c41069247737a87bdb436283851a633213e0fcb820ddb75e168c5f4b2e65",
+        "tags": [
+          "docker.io/library/postgres:16.15-alpine"
+        ]
+      },
+      "47ce8258a10e28ce4b4498588c25ef77ae328f4c56cbe3e8d5dcf4f6d8019997": {
+        "history": [
+          "docker.io/nginxinc/nginx-unprivileged:1.27-alpine",
+          "localhost/woow-odoo-gateway-substitute:1.27-alpine"
+        ],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "f9714f24682c856879b6a9ddbcef2da1a8b02ade86f19a5d6ab3b16784798435",
+        "tags": [
+          "docker.io/nginxinc/nginx-unprivileged:1.27-alpine",
+          "localhost/woow-odoo-gateway-substitute:1.27-alpine"
+        ]
+      },
+      "650ff8153447d257696648bc63a77522cf6e760145be45ce65a408a918229915": {
+        "history": [
+          "docker.io/valkey/valkey:8.1.11-alpine"
+        ],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "c3785a6c5eee505c906f89d4e260e07a664b52575008827fba8fc4b0e0164e25",
+        "tags": [
+          "docker.io/valkey/valkey:8.1.11-alpine"
+        ]
+      },
+      "bf8527eb54c3680e728d5b4b383a8ba730d72dae7236fbc8dff97ed6b224a731": {
+        "history": [
+          "docker.io/library/alpine:3.20"
+        ],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "8538bb3340ec4b440d4baed47375278944dd6da4713304d71bbc4a346017b1a8",
+        "tags": [
+          "docker.io/library/alpine:3.20"
+        ]
+      },
+      "c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb": {
+        "history": [],
+        "platform": [
+          "linux",
+          "amd64",
+          ""
+        ],
+        "stable_fields_sha256": "a535805413f7d38d0e9c344011bdd230cdf13852efa25540b1318792653d213d",
+        "tags": []
+      }
+    },
+    "original_quadlet_references": {
+      "n8n-postgres.container": "docker.io/library/postgres:16.15-alpine",
+      "n8n-runners.container": "docker.io/n8nio/runners:2.43.6",
+      "n8n-valkey.container": "docker.io/valkey/valkey:8.1.11-alpine",
+      "n8n-webhook.container": "docker.io/n8nio/n8n:2.43.6",
+      "n8n-worker-runners.container": "docker.io/n8nio/runners:2.43.6",
+      "n8n-worker.container": "docker.io/n8nio/n8n:2.43.6",
+      "n8n.container": "docker.io/n8nio/n8n:2.43.6"
+    },
+    "reference_resolution": {
+      "docker.io/library/postgres:16.15-alpine": "4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873",
+      "docker.io/n8nio/n8n:2.43.6": null,
+      "docker.io/n8nio/runners:2.43.6": null,
+      "docker.io/valkey/valkey:8.1.11-alpine": "650ff8153447d257696648bc63a77522cf6e760145be45ce65a408a918229915"
+    },
+    "tag_mutation": false
+  },
+  "return": {
+    "active_jobs": 0,
+    "all124_preexisting_managed_files_exact": true,
+    "baseline": "native preserved-safety original_inventory captured before service writes; includes previously authorized retained2 image configs",
+    "durable_equal": {
+      "active_jobs": true,
+      "catalog": true,
+      "files": true,
+      "images": true,
+      "protected": true,
+      "retention_sha256": true,
+      "running": true,
+      "timer": true,
+      "units": true,
+      "volumes": true
+    },
+    "full_safety": null,
+    "pending": null,
+    "private_old_pair_copies_verified": true,
+    "running_containers": 0,
+    "source_hashes_equal": true,
+    "timer_catalog_intents_cleared": true
+  },
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a"
+}

@@ -1,0 +1,243 @@
+{
+ "lane": "litellm-product",
+ "date": "2026-11-23",
+ "updated": "2026-11-24T15:29+08:00",
+ "scope": "LiteLLM HA import as the PRODUCT path (owner decision 2026-11-23 「決定1 做」): haapps registers litellm, ha_litellm.py converts with the Omnigent trust rules (this device's schema, HA's rows only), HA's salt replaces litellm-salt-key; the real test runs the Cockpit page's helper commands on dev-d",
+ "branch": "R-COCKPIT feat/ha-import-litellm-product-20261123 (base integration/ha-import-batch1-20261123 d812699; merged into integration as d72ae5f at 033f2f7, ba637b7 at a0475c5 and fdc922f at db9455a); iteration 5: fix/litellm-test-gaps-20261124 from integration fdc922f (merged into integration as 0562c55 at ccfe201; later merges of integration af92b38, d6cbb33, 10b9594 and e07da5a; close-out c78f39f; local only)",
+ "product_commits": [
+  "e0c9e56",
+  "3bde418",
+  "3c1a0a4",
+  "215fdf0",
+  "98427dc (suggest.py: LiteLLM health checks 600 s, owner decision 2026-11-23 23:28)",
+  "cb3527a (suggest.py, ha_litellm.Target, page, docs: the suggested LiteLLM entry is the one the import fills; no import protection changed)",
+  "baac85d (suggest.py: the readiness hint only when the check is proposed)"
+ ],
+ "harness_commits": [
+  "5faef6f",
+  "5c2e435",
+  "db73107",
+  "ce95602",
+  "82e68ac",
+  "6c5610c",
+  "ec6ac32 (real flow: the 600 s draft check + option A positive case with a lab stub)",
+  "b3e587d (litellm_negative_flow.py: real negative product flow; sandbox case planted_objects)",
+  "a066ff4 (litellm_full_flow.py installs the product's own draft unedited, table-digest checks, two-sided container check; not run yet)",
+  "4a3c6d5 (litellm_digest_proof.py: the table digest on LiteLLM's real tables, lab store)",
+  "a2bf48c, baac85d, a3717ca, 44edffe, bf09004, 51ab00a (mutation tool and unit tests; no product change)",
+  "c78f39f (test_r15: state.json that is not a file is not read at all; R15 caught; no product change)"
+ ],
+ "source": "owner-made real encrypted showcase HA backup woow-litellm 0.1.15 (LiteLLM 1.104.0, PostgreSQL 18.6), SHA-256 9dc5994497d9d6ff4c3ee8d3fcf86f295cf25c69d1eae98227854fee85286f27",
+ "target": "dev-d with the WOOWTECH Podman package Woow_podman_litellm dd690ae installed for the run and removed after it (outer network none, isolation checked before/after); production untouched",
+ "real_runs": {
+  "01": {
+   "commit": "e0c9e56",
+   "result": "cancelled while waiting for the lock (no dev-d object)"
+  },
+  "02": {
+   "commit": "5faef6f",
+   "result": "FAIL 11/13: package install (library waiter consumed the startup-probe budget); NOT fixed in the package: the lab installs with QL_HEALTH_ACTIVE=0 (lab workaround, package follow-up)"
+  },
+  "03": {
+   "commit": "5c2e435",
+   "result": "FAIL 28/33: product check refused migration names with spaces (real finding, fixed in 3bde418)"
+  },
+  "04": {
+   "commit": "3bde418",
+   "result": "FAIL 67/69 (CORRECTED 2026-11-24): every product step and the import client checks PASSED; the 2 FAILs are both rollbacks' line \"own data is back (counts, schema), own key 200, HA test key refused\" -- the record does NOT show those rollbacks restoring this device's data and key (the lane read from its private probe files that only spend_logs differed, 1->3->5; vendor proof in the README Corrections); db73107 then let spend_logs grow in that comparison",
+   "elapsed_s": 2337,
+   "lock_held_s": 1881,
+   "proved": [
+    "ha-check ok (versions, PG 18->17, salt binding, schema, 1/1/24)",
+    "ha-convert 171 s (trusted schema, rows only, counts equal, salt moved)",
+    "converted backup manual + encrypted + from_ha; inspect in place, settings same, postgres main PG 17, 5 secrets",
+    "import: HA test key /key/info 200 with alias, /v1/models 200, users/teams/models 1/1/24, 72/72 + 5/5 decrypt with moved salt and 0 with a random one, salt secret and DB salt HA's, other 4 secrets unchanged, master key works, own key 401, 0/3 egress, schema = device's",
+    "restart: same",
+    "leaks 0",
+    "cleanup",
+    "isolation true none {}",
+    "automatic rollback: the restore ended rolled-back, own salt secret and DB salt back, other secrets unchanged, own values decrypt (record PASS); own data/key line FAIL in the record",
+    "manual rollback: restore succeeded, own salt back (record PASS); own data/key line FAIL in the record"
+   ]
+  },
+  "05": {
+   "commit": "db73107",
+   "result": "FAIL 45/49 (CORRECTED 2026-11-24) under host load 40-69: the IMPORT FAILED (its restore ended failed; the phase stopped, no import client check ran) and both engine rollback restores ended failed (\"rollback incomplete\"); only the own state found after them was verified; leaks 0, cleanup, isolation PASS; the lock was held 5738 s, over the 40-minute limit",
+   "elapsed_s": 7032,
+   "lock_held_s": 5738
+  },
+  "06": {
+   "commit": "3c1a0a4",
+   "result": "cancelled while polling for the lock (no dev-d object touched)"
+  },
+  "07": {
+   "commit": "82e68ac",
+   "result": "FAIL 30/33: product check refused the real backup (enum type rendered public.\"JobStatus\" in HA sessions vs \"JobStatus\" here) -> fixed in 215fdf0"
+  },
+  "08": {
+   "commit": "215fdf0",
+   "result": "68/69: every product step and client check PASSED (check, convert, auto rollback, import, HA key, 72/72+5/5 decrypt, restart, manual rollback, leaks, cleanup, isolation); 1 FAIL = the harness's one-sided container check (CORRECTED 2026-11-24: not an equality) saw dev-d headscale restart loop (pre-existing, not LiteLLM)",
+   "note": "215fdf0 lacks the review iteration-2 fixes (SR-6 refusal 1e29974, SR-8..SR-10); not the final product code"
+  },
+  "secreview-01": {
+   "commit": "14be8bc (product code 1a83926)",
+   "result": "PASS 69/69 exit 0: the whole product flow on the final code (run by lane litellm-secreview with this driver)"
+  },
+  "09": {
+   "commit": "a0475c5",
+   "result": "FAIL exit 1 (lock held 0 s): the driver's own memory pre-check stopped it before any dev-d change (cgroup 2.3 of 4.3 GB used right after another lane's run)"
+  },
+  "10": {
+   "commit": "6b55ec5 (final product code: ha_litellm.py of 1a83926, suggest.py of 98427dc)",
+   "result": "PASS 73/73 exit 0: the whole Cockpit helper flow with the owner's real encrypted backup; adds the 600 s draft (owner decision 23:28) and option A's positive case (a lab stub app named in check, note and reminders)",
+   "elapsed_s": 1738.2,
+   "lock_held_s": 1737,
+   "note": "the catalog entry was the driver's edit of the draft (database mode by hand, verify emptied, readiness URL, litellm.env added), not the draft; containers 8 and 8 in the private record (the check itself was one-sided)"
+  },
+  "negative-01": {
+   "commit": "5dcc569",
+   "exit": 0,
+   "result": "litellm negative flow: 58/58 PASS",
+   "elapsed_s": 704.1,
+   "what": "crafted backups (generated data) must be refused by the product: salt mismatch, unknown add-on version, code hooks (six labels, not one of each kind), the SR-8 hidden hooks",
+   "note": "container line PASS is one-sided: 9 containers before (headscale in it), 8 after (dev-d's headscale restart loop); \"unchanged\" is proven for LiteLLM's own state only"
+  }
+ },
+ "unit": {
+  "full tests/backup": {
+   "source_commit": "ebb5562",
+   "tests": 1745,
+   "not_ok": 0,
+   "skipped": 6,
+   "host_process_calls_refused": 0,
+   "shim_hits": 0,
+   "seconds": 455,
+   "file": "tests/backup/evidence/litellm-product-20261123/unit-tests-ebb5562.json"
+  },
+  "mutation check": {
+   "source_commit": "ebb5562",
+   "mutations": 175,
+   "caught": 174,
+   "missed": [
+    "R15"
+   ],
+   "baseline_tests": 172,
+   "controls_not_noticed": 4,
+   "seconds": 1939.1,
+   "file": "tests/backup/evidence/litellm-product-20261123/mutation-check-ebb5562.json",
+   "why_missed": "R15 (the kind test of state.json in scan_member) is invisible through the outcome: Entry.read gives b'' for an entry that is not a file, strict_json makes it None",
+   "fix": {
+    "source_commit": "c78f39f",
+    "what": "test_r15 requires that state.json is not read at all (tests only)",
+    "subset": "--only R15,R15b: 2/2 caught, baseline 172 tests, 4 controls not noticed, 97.7 s",
+    "file": "tests/backup/evidence/litellm-product-20261123/mutation-check-c78f39f-r15.json",
+    "so": "175/175 on c78f39f (only test_r15 and its import changed since ebb5562)"
+   },
+   "misread_run_kept": "mutation-check-4d164a8.json: 93/106 is the tool's own misreading (13 caught removals counted as MISSED), fixed in a2bf48c; the 13 are caught on ebb5562"
+  },
+  "node tests/backup-ui.mjs": {
+   "source_commit": "ebb5562",
+   "tests": 107,
+   "result": "OK"
+  },
+  "tests/e2e/lab LiteLLM driver tests": {
+   "source_commit": "ebb5562",
+   "tests": 39,
+   "result": "OK",
+   "host_process_calls_refused": 0
+  },
+  "LiteLLM unit modules + test_suggest + test_litellm_mutation_tool": {
+   "source_commit": "c78f39f",
+   "tests": 176,
+   "result": "OK",
+   "host_process_calls_refused": 0
+  },
+  "postgres-digest lab proof": {
+   "source_commit": "baac85d",
+   "result": "ok",
+   "real": false,
+   "what": "lab store, PostgreSQL 17.11, LiteLLM 1.104.0's 189 migrations, 85 tables, 53,360 generated rows, the product's adapter code; not the product flow, no real data",
+   "file": "tests/backup/evidence/litellm-product-20261123/postgres-digest-proof.json"
+  },
+  "iteration 4": {
+   "full tests/backup": {
+    "source_commit": "6b55ec5",
+    "tests": 1507,
+    "not_ok": 7,
+    "which": "only the 7 pre-existing test_ha_omnigent (5F/2E; this branch's base; gone in the integration branch)",
+    "skipped": 6,
+    "seconds": 301,
+    "file": "tests/backup/evidence/litellm-product-20261123/unit-tests-6b55ec5.json"
+   },
+   "mutation check": {
+    "source_commit": "6b55ec5",
+    "mutations": 67,
+    "caught": 67,
+    "file": "tests/backup/evidence/litellm-product-20261123/mutation-check-6b55ec5.json"
+   },
+   "tests.backup.test_suggest (readiness 600 s)": {
+    "source_commit": "98427dc",
+    "tests": 46,
+    "result": "OK",
+    "new": 4
+   },
+   "tests/e2e/lab LiteLLM driver tests": {
+    "source_commit": "b3e587d",
+    "tests": 32,
+    "result": "OK"
+   },
+   "earlier": "tests/backup/evidence/litellm-product-20261123/unit-tests.json; final review code 1a83926: mutations 58/58 (mutation-check-1a83926.json in the review folder)"
+  }
+ },
+ "open": [
+  "NEXT REAL RUN (final integrated re-verification, driver a066ff4): the fresh draft is the import's entry without an edit; the draft of an entry of the production shape is exactly two changes; the table digest in the product flow (read twice equal while the proxy is stopped, in the safety backup, equal after the automatic and the manual rollback, not compared at the import) and the downtime it adds; the whole flow on the integrated tree; the two-sided container check",
+  "KNOWN OPEN RISKS: SR-7 and the ssl_verify-type stored settings (see known_open_risks), deferred by the owner",
+  "OWNER (review lane, offered, not asked yet): stricter SR-5 env-var names (the vendor blocklist PATH/LD_PRELOAD/PYTHONPATH...: refuse vs warn); naming stored custom_code guardrails, MCP servers and pass-through hosts in the check",
+  "OWNER to-do: the installed production LiteLLM entry (single-database mode already) keeps 300 s and no data check until the owner installs the new draft from the page 「應用設定」: 600 s and verify[db-main] postgres-digest (the digest reads every table twice per backup while the proxy is stopped; it can be deleted from the draft); a device with a cold or whole-instance entry must choose 「單一資料庫」 there and install it before an import (no production file was touched)",
+  "Woow_podman_litellm install waiter (QL_HEALTH_ACTIVE=1 eats the startup-probe budget): package follow-up",
+  "ARM: no ARM LiteLLM HA backup exists (the add-on is amd64-only)",
+  "not covered by any real run: a device reboot, provider calls, the page in a browser against a device, key_users from config files, the drop-in or models.json in a positive real case, a content digest of every moved row at the import",
+  "dev-d headscale.service restart loop (team/services-a-2.md; not LiteLLM)"
+ ],
+ "owner_notes": [
+  "package library: QL_HEALTH_ACTIVE=1 waiter consumes HealthStartupRetries on slow hosts (scripts/lib/quadlet-lib.sh 2179 vs quadlet/litellm.container 76-78)",
+  "readiness: DONE as decided 2026-11-23 23:28 -- catalog-suggest proposes 600 s for LiteLLM (98427dc); at load 40-69 (attempt 05) even 600 s was not enough"
+ ],
+ "lab_differences": [
+  "app image = lab build 0c71bec8 derived with USER 1000:0 + prisma chown (dev-d maps IDs 0..55000)",
+  "PG17 094ecc9c tagged and pinned to its device digest (litellm-postgres.container re-pinned)",
+  "install with QL_HEALTH_ACTIVE=0 (package waiter workaround)",
+  "attempts 03-10: the catalog entry was the driver's edit of the draft: database mode by hand (the draft was cold, which the import refuses), verify emptied (the draft had db-main postgres-digest), from 04 on /health/readiness instead of /health/liveliness and litellm.env added; the 600 s limit is the product's proposal since 98427dc (before: set by the driver). From a066ff4 on (not run yet) the driver installs the product's own draft unedited",
+  "no network: no provider calls or ChatGPT refresh",
+  "the backup timer is masked during a run; the engine is installed from the source tree; restart = service restart; helper commands without a browser; moved rows are compared by counts, the salt row, decryption and HA's key only",
+  "option A positive case: a lab stub app (never started) from ec6ac32 on"
+ ],
+ "commercial_acceptance": "not-complete",
+ "security_review_fixes_merged": "review/litellm-secreview-20261123 cdf6eba (SR-1..SR-5), fast-forwarded 2026-11-23 22:20",
+ "final_product_code": "ha_litellm.py etc. = 1a83926 + the mode check and its message of cb3527a (Target; no protection removed); suggest.py = 98427dc + cb3527a + baac85d, merged with the other lanes' suggest.py changes through integration (n8n/Hermes modes d528653, EMQX health 575f2fd); ha_litellm.py, haimport.py, digests.py and adapters/quadlet_postgres.py are byte-identical in ebb5562, c78f39f and integration 2b5fee1; proven on the real flow up to 98427dc by attempt 10 (the cb3527a/baac85d changes are unit-tested only)",
+ "corrections_20261124": [
+  "attempt 04: both rollbacks' own-data/key line is FAIL in the record (overclaimed as restored)",
+  "attempts 02/03: one product fix (3bde418) + one lab-only workaround (QL_HEALTH_ACTIVE=0), not \"two issues fixed\"",
+  "attempt 05: the import and both rollback restores failed; lock 5738 s > 40 min",
+  "db73107 spend_logs >= rule: vendor file:line now cited (README Corrections)",
+  "the 23:28 readiness decision was listed as an owner decision although decided: implemented in 98427dc",
+  "iteration 5 (verifier 09:56): the container check was one-sided (attempts 07 and negative-01 lost headscale and passed); planted_objects proves \"nothing ran as the superuser\" only; negative-01 hooks = six labels; attempt 10's catalog entry edits were not listed; the mutation docstring claimed every protection",
+  "iteration 5: the sweep on 4d164a8 (93/106) was misread by the tool itself; the split of M13 found two untested halves (M13b, M13c), line and condition coverage found refusals and operands no test ran or made decisive (R01..R15b, T01..T12b, K01..K07 and others): all tested now, the code refused them already",
+  "close-out (iteration 6): the full sweep on ebb5562 found R15 (added in bf09004 without a sweep) not caught: invisible through the outcome; c78f39f (tests only) checks that state.json is not read at all"
+ ],
+ "known_open_risks": [
+  {
+   "id": "SR-7",
+   "state": "OPEN, deferred by the owner 2026-11-24 07:22 (「這個可以先不用管」; not accepted as closed, no behaviour change); must be named in the PR text",
+   "what": "os.environ/ references in HA's stored model rows make this device's LiteLLM send its own secrets (the master key) to the host the row names",
+   "proof": "real, dev-d: tests/backup/evidence/litellm-product-security-review-20261123/sr7-env-ref-probe.json",
+   "prepared_not_merged": "wip/litellm-sr7-prep-20261124 (option A); do not merge without an owner decision"
+  },
+  {
+   "id": "ssl_verify-type stored settings",
+   "state": "OPEN, deferred with SR-7 (no behaviour change); must be named in the PR text",
+   "what": "a stored litellm_settings key without its own branch is set on the litellm module (e.g. ssl_verify false turns off TLS verification of provider calls); the check does not name it",
+   "proof": "vendor source only (litellm 1.104.0 proxy_server.py:5815-5821, :6048-6063, :6388; llms/custom_httpx/http_handler.py:331-348); not probed on a running LiteLLM"
+  }
+ ]
+}

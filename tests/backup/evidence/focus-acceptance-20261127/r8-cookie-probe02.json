@@ -1,0 +1,10 @@
+{
+ "source_commit": "90395e4365a937ad6fd8904dc47c5dd488f750a0",
+ "scope": "cookie-observer-readonly",
+ "exit": 0,
+ "elapsed_seconds": 29.8,
+ "stdout_sha256": "7ea94ffe3a55589f8db7de94b1d41fac53ff18cb2f4b8f64847e56799061c597",
+ "fixed_status": [],
+ "stderr_bytes_not_published": 320,
+ "commercial_acceptance": "not-complete"
+}

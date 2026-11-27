@@ -1,0 +1,115 @@
+{
+ "modules": {
+  "woowbackup/ha_litellm.py": "f601e109f624adc7e1bac970296bfe341d58b350eaa662adc38f8972f6d3322b",
+  "woowbackup/adapters/quadlet_postgres.py": "f7e3eba019fb7074fad8aa4bf52380ab9810d5e65e7fde1a2d9b9bb4d648c4ac",
+  "woowbackup/haimport.py": "6ca0c47f399e64fc9b615e6d04ef77b0438588c67efb79cc3da2c4adc48de9ee",
+  "woowbackup/suggest.py": "4d28c43776e656e8cb0a30f8d411b8ff036583ff02a42a8b945710c6df3504a9"
+ },
+ "tests": [
+  "tests.backup.test_ha_litellm",
+  "tests.backup.test_adapter_import_secrets",
+  "tests.backup.test_ha_litellm_candidate",
+  "tests.backup.test_suggest"
+ ],
+ "baseline": {
+  "returncode": 0,
+  "tests": 172,
+  "failures": 0
+ },
+ "mutations": [
+  {
+   "id": "R15",
+   "protection": "a state.json that is not a file is not read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 49,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "R15b",
+   "protection": "a large state.json is not read",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "caught": true,
+   "failures": 1,
+   "tests": 49,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  }
+ ],
+ "controls": [
+  {
+   "id": "C01",
+   "change": "a changed comment in ha_litellm.py",
+   "module": "woowbackup/ha_litellm.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C02",
+   "change": "a changed comment in quadlet_postgres.py",
+   "module": "woowbackup/adapters/quadlet_postgres.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C03",
+   "change": "a changed comment in haimport.py",
+   "module": "woowbackup/haimport.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 108,
+   "test_modules": [
+    "tests.backup.test_ha_litellm",
+    "tests.backup.test_adapter_import_secrets",
+    "tests.backup.test_ha_litellm_candidate"
+   ]
+  },
+  {
+   "id": "C04",
+   "change": "a changed comment in suggest.py",
+   "module": "woowbackup/suggest.py",
+   "applied": true,
+   "unnoticed": true,
+   "failures": 0,
+   "tests": 64,
+   "test_modules": [
+    "tests.backup.test_suggest"
+   ]
+  }
+ ],
+ "all_caught": true,
+ "subset": [
+  "R15",
+  "R15b"
+ ],
+ "seconds": 97.7,
+ "source_commit": "c78f39f",
+ "where": "clean detached worktree /tmp/litellm-r15-20261124, one team/heavy.sh step holding the host-heavy lock",
+ "commercial_acceptance": "not-complete",
+ "note": "--only R15,R15b (the baseline and the 4 controls always run); git diff ebb5562 c78f39f = test_r15 only, so the other 173 entries keep their ebb5562 result (only test_r15 and its import changed)"
+}

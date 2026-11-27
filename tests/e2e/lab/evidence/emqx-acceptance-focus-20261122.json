@@ -1,0 +1,63 @@
+{
+  "scope": "HA EMQX backup to isolated Podman",
+  "commercial_acceptance": false,
+  "public_guard": "retained",
+  "candidate_commit": "1497dd3",
+  "passed": [
+    {
+      "check": "native HOCON strict parsing + spool consumer integration",
+      "commit": "c49acc4",
+      "tests": 53,
+      "limit": "generated fixtures/native parser; cold Mnesia refused"
+    },
+    {
+      "check": "actual137936119byte generated private spool",
+      "commit": "23323dd",
+      "evidence": "emqx-private-spool-20261122/generated-large-source.json",
+      "limit": "capacity/hash only; not HA source"
+    },
+    {
+      "check": "actual registration counts bound before login/evidence",
+      "commit": "a8cbf5b",
+      "tests": 24,
+      "limit": "local regression; no broker claim"
+    },
+    {
+      "check": "real isolated EMQX5.8.9 login token producer",
+      "commit": "1497dd3",
+      "checks": 12,
+      "evidence": "emqx-runtime-live-20261122/final.jsonl",
+      "limit": "source/target completeness not assessed; no HA restore/MQTT claim"
+    }
+  ],
+  "running": [
+    {
+      "owner": "Turing",
+      "id": "01a2025f-4294-7301-a4b9-4d624f51ab0e",
+      "scope": "sole dev-d owner; nativecheckpoint and MQTT expansion",
+      "observation": "runtime evidence committed and integrated; cleanup confirmed including six early anonymous volumes"
+    },
+    {
+      "owner": "Mencius",
+      "id": "01a2025f-7206-7f43-8259-f058033f3889",
+      "scope": "bounded native Mnesia read-only exporter; real cold files gate retained"
+    }
+  ],
+  "remaining": [
+    "cold Mnesia DAT/DCD/DCL complete safe semantic extraction",
+    "all source secrets registered before workload/evidence",
+    "real HA cold backup candidate restore",
+    "target settings/ACL/data readback and MQTT allowed/denied probes",
+    "restart/rollback and cleanup on final integrated source",
+    "both actual source and issued credentials covered by exact evidence scans"
+  ],
+  "historical_preflight": "real x86/ARM encrypted HA metadata/full-stream read passed; not restore",
+  "notes": [
+    "spool consumes already decrypted/decompressed open_addon stream",
+    "c7a7cd0 incorrect compressed-input change fully reverted by5cff165; affected24 tests passed after revert",
+    "no Hermes review retry; no public guard bypass; no original production mutation",
+    "nativeparser image-volume ignore31f576e passed one affected real native test; broker adjacent18 tests passed after integration",
+    "Capacity correction: historical117/138MB member_bytes are encrypted outer-member sizes, not decompressed tar sizes. Actual generated137MB spool evidence does not establish real-source expanded fit within256MiB; oversized streams remain refused.",
+    "2026-11-23 clarification: 'no original production mutation' means no production service, secret, image or catalog was changed; host-run run_native unit tests use the host /usr/bin/podman (production rootless storage) for transient --rm network=none containers of the pinned EMQX image (recorded for 2026-11-23 in emqx-acceptance-focus-20261123.json); whether such tests ran on the host on 2026-11-22 is not recorded."
+  ]
+}

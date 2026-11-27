@@ -1,0 +1,27 @@
+{
+  "status": "passed",
+  "stores": [
+    {
+      "containers_before": 0,
+      "free_bytes_after": 34234052608,
+      "images_before": 0,
+      "protected_quarantine_retained": true,
+      "pulls": 0,
+      "removed": "/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r3/preparation-store",
+      "source_unchanged": true,
+      "status": "owned-failed-store-removed",
+      "volumes_before": 0
+    },
+    {
+      "containers_before": 0,
+      "free_bytes_after": 34531409920,
+      "images_before": 0,
+      "protected_quarantine_retained": true,
+      "pulls": 0,
+      "removed": "/var/lib/woowbk-odoo-pg16-proof-20261127-od23-r4/preparation-store",
+      "source_unchanged": true,
+      "status": "owned-failed-store-removed",
+      "volumes_before": 0
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "N8-01": {
+    "status": "part",
+    "tests_add": [
+      "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_resolves_the_app_database_separately",
+      "tests/backup/test_ha_n8n.py::ConvertFlowTests.test_instance_conversion_keeps_credentials_key_and_all_live_databases",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+      "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup"
+    ],
+    "tests_remove": [
+      "tests/backup/test_ha_n8n.py::TargetTests.test_the_whole_instance_cannot_be_made_here_and_says_so"
+    ],
+    "note": "Whole instance converts actual app DB; current outsiders/roles/passwords/access preserved. Endpoint/future-input checks and new-object refusal protect DROP. Installed extensions preseeded; current full safety rollback verified. Generated PG c04:87/87 on engine058; handover followup12/12. Saved real n8n full flow remains complementary.",
+    "evidence_add": [
+      "snippets/focus-instances/evidence/generated-pg-c-04.json"
+    ]
+  },
+  "L-03": {
+    "status": "part",
+    "tests_add": [
+      "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_the_instance_maintenance_database_is_not_the_litellm_database",
+      "tests/backup/test_ha_litellm.py::ConvertTests.test_instance_conversion_keeps_salt_schema_guards_and_all_live_databases",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+      "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+      "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup",
+      "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped",
+      "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides"
+    ],
+    "note": "Proxy URL/local litellm backend validated; salt/schema guards retained. Current outsiders/credentials/access preserved; full safety rollback verified. Generated PG c04:87/87 on engine058; handover followup12/12. Base HaInstanceTests refs run via LiteLlmInstanceTests inheritance. Saved real service flow remains complementary.",
+    "evidence_add": [
+      "snippets/focus-instances/evidence/generated-pg-c-04.json"
+    ]
+  }
+}

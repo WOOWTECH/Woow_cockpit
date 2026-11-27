@@ -1,0 +1,21 @@
+{
+  "kind": "guarded-integration-regression",
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "suite": "tests/backup",
+  "flags": ["--b1", "--ha118", "--discover"],
+  "tests": 3568,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 2,
+  "elapsed_seconds": 868.095,
+  "blocked": [],
+  "shim_hits": [],
+  "run_native": "absent",
+  "raw_guardlog": "/tmp/parity-focus-20261127/final-d09f4fe8-backup.guardlog",
+  "raw_guardlog_bytes": 618585,
+  "raw_guardlog_sha256": "08bf6b919d4b94469ff1fc96fc9a45cea426e050e85fa1b5028d66889601468a",
+  "source_check": "passed: 52 engine sources and existing assets/catalog/scheduled-unit checks",
+  "original_service_acceptance": "not-proved-by-this-suite",
+  "commercial_acceptance": "not-complete",
+  "limits": "This source predates the standard LiteLLM companion-environment reader correction; real service cases and later source changes need their own evidence."
+}
