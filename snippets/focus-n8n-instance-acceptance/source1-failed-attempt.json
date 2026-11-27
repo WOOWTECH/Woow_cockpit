@@ -1,0 +1,12 @@
+{
+ "source_commit": "cf28f50b87129e9574c592bda9fe6846412f0a07",
+ "scope": "n8n-instance-source",
+ "exit": 1,
+ "elapsed_seconds": 19.5,
+ "stdout_sha256": "454ca6acfa1dfc7619659ae0200b402e2eaf2dc766968e0121f2cf10369e5242",
+ "fixed_status": [
+  "{\"stage\": \"source_phase_failed\", \"phase\": \"source-install\", \"failure_class\": \"RuntimeError\", \"recovery_verified\": false}"
+ ],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
