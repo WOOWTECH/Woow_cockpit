@@ -1,5 +1,45 @@
 # Focused real acceptance, 2026-11-27
 
+## Actual PAGE5 —85/85 PASS, including import-time cookie coverage
+
+Parent's ONE real PAGE5 exited0 in623.9s with frozen driver
+`0118d53d094c85b7210025b1de1b89fa1ff3dc94`, product
+`59a1b0f95132ea51c899f590eea7e3b02c5dba43`, case102112. All85saved checks
+passed. One actual page confirmation/click produced two conversions and two
+same-unit restores, retained the excluded corrupt EMQX row, changed both live
+apps to HA data and restored both originals. The private guard is complete,
+baseline_restored/recovery_verifiedtrue, inflightnull. All7owned jobs are saved
+terminal/succeeded; the actual no-active-job check passed before baseline
+restores. This host review made no new device query.
+
+The SAME PAGE5 browser observed2values through its real imports with no gaps,
+stable final jar and no unscanned late values. Its96byte live session hash
+`c5082ae5...18100b` had0device/host matches. The7byte proved public362 protocol
+marker hash`1185f37d...f898e` had8matches in8job files only and0host matches;
+those matches remain counted. Native362/root/HTTP/source/jar proof passed.
+Neither value had Expires/Max-Age: no genuine expired or renewed credential
+history was observed in this run. Every nonpublic value remains strict0.
+Actual scans covered651records,19of19archive sidecars and2required JSON roots;
+registered/observed-value and host matches were0.
+
+All6new owned archives were deleted after baseline/privacy proof, original
+catalog returned through exact CAS, original masked/inactive schedule and all8
+selected images/durable units returned. Existing HA was reused without acquiring
+ownership and remained protected. Of12prior test archive IDs,4owned safety
+copies were normally pruned with actual successful job-log events;8remain.
+No manual/original-baseline deletion is excused. Previous PAGE4's59/63FAIL files
+and guard copy remain immutable; PAGE5 does not retroactively prove its lost
+cookie absent. Probe02 also used a different session. Broader commercial
+acceptance remains incomplete.
+
+Safe artifacts: `r8-page5-capture.json` and `r8-page5-summary.json` are exact
+fixed-field copies; `r8-page5-fixed-receipt.json` contains only selected metadata,
+hashes/counts and recovery facts. Raw private guard, cookies, headers, screenshots,
+logs and job bodies are not copied. The capture stdout hashb0baab26... matches
+the saved launch log's4958byte stdout prefix. The full launch log has96additional
+trailer bytes and a different hash; both hashes and that distinction are retained
+without publishing trailer contents. Parent reports80stderr bytes withheld.
+
 ## Coordinator page4, cookie diagnosis and original catalog return
 
 | Actual step | Driver / runtime | Result and scope |
