@@ -1367,6 +1367,38 @@ def _n8n_env(extra):
     return env
 
 
+# n8n's import:entities (2.43.6, ImportService) inserts every row WITH its own id and afterwards advances only IDENTITY sequences
+# (advanceIdentitySequences: `identity_generation IS NOT NULL`). A serial column such as execution_entity.id keeps the new database's
+# sequence, so the first execution n8n records after the import collides with an imported id: PostgreSQL unique violation, which n8n
+# answers as HTTP 500 "There is already an entry with this name" (dev-c, instance flow attempt 5: every manual run failed). One
+# statement moves every column-owned sequence (serial or identity, outside the system schemas) to the column's largest value, only
+# forward and only when it is behind; the answer counts them.
+ADVANCE_SEQUENCES = (
+    "WITH owned AS (SELECT format('%I.%I', n.nspname, c.relname) AS tab, a.attname AS col, "
+    "pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) AS seq "
+    "FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped "
+    "AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_' "
+    "AND pg_get_serial_sequence(format('%I.%I', n.nspname, c.relname), a.attname) IS NOT NULL), "
+    "tops AS (SELECT seq, "
+    "(xpath('/row/m/text()', query_to_xml(format('SELECT max(%I)::bigint AS m FROM %s', col, tab), false, true, '')))[1]::text::bigint AS top, "
+    "(xpath('/row/l/text()', query_to_xml(format('SELECT CASE WHEN is_called THEN last_value ELSE last_value - 1 END AS l FROM %s', seq), "
+    "false, true, '')))[1]::text::bigint AS last FROM owned), "
+    "moved AS (SELECT setval(seq::regclass, top, true) FROM tops WHERE top IS NOT NULL AND top > last) "
+    "SELECT json_build_object('sequences', (SELECT count(*) FROM owned), 'advanced', (SELECT count(*) FROM moved))")
+
+
+def advance_sequences(pg, database):
+    """{sequences, advanced}: every column-owned sequence of `database` in the throwaway PostgreSQL is at least the largest value
+    its column holds (ADVANCE_SEQUENCES). An answer that is not two sane counts stops the conversion: n8n would fail its first write."""
+    found = pg.query_json(ADVANCE_SEQUENCES, database)
+    if (not isinstance(found, dict) or set(found) != {'sequences', 'advanced'}
+            or not all(isinstance(found[k], int) and not isinstance(found[k], bool) for k in found)
+            or not 0 <= found['advanced'] <= found['sequences']):
+        raise BackupError('job-failed', 'n8n 匯入後無法把資料表的自動編號調到資料之後，已停止（新的執行紀錄會和匯入的編號衝突）。')
+    return found
+
+
 def count_rows(pg, tables, database='n8n'):
     """{table: rows} in the throwaway PostgreSQL for the tables that exist there (COUNT_CHUNK tables per query: a
     function takes at most 100 arguments; review C-11) in the database `database`: the name the app settings give (N8-21;
@@ -1470,6 +1502,8 @@ def convert(work, app, test_mode, out_dir):
     tmp.run('n8n-import', items.n8n_image, ['import:entities', '--inputDir=/work/out', '--truncateTables=true'],
             network=network, volumes=[(tmp.name('n8nsrc'), '/work', None)], env=db_env, secrets=items.import_secrets,
             timeout=3600, max_output=4 * 1024 * 1024)
+    sequences = advance_sequences(pg, items.pg['database'])
+    work.log(f'n8n 資料表的自動編號已調到匯入的資料之後（{sequences["advanced"]} 個需要調整，共 {sequences["sequences"]} 個）')
     compared = {name: rows for name, rows in info['tables'].items() if rows and name not in NOT_COMPARED}
     found = count_rows(pg, compared, items.pg['database'])
     missing = [name for name in compared if name not in found]

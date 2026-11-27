@@ -1393,6 +1393,9 @@ class World(fk.World):
         self.pulls = []
         self.unreadable = set()                    # volumes whose top folder podman cannot be asked about
         self.asked = []                            # (role, database) of every question the new PostgreSQL answered
+        self.sequence_answer = {'sequences': 3, 'advanced': 1}   # what ADVANCE_SEQUENCES answers in the new PostgreSQL
+        self.sequence_asked = []                   # (role, database, roles run so far, dumped so far) when it was asked
+        self.dumped = False                        # pg_dump ran or the new cluster's volume was exported
         self.live = {}                             # this device's own volumes: volume -> entries of a tar
         self.root = b'1000 1000 755\n'
         self.dir_data = {}                         # the folders the adapter was handed: path -> tar
@@ -1437,11 +1440,15 @@ class World(fk.World):
             return ConnectionRunner(self.connection_env).podman('exec', '--env', 'NODE_OPTIONS=', '--env', 'NODE_PATH=', 'n8n', *command,
                                                                timeout=30, max_output=1024, check=False)
         if command[0] == 'pg_dump':
+            self.dumped = True
             stdout.write(b'PGDMP-n8n')
         return fk.Result(0, b'', b'')
 
     def answer(self, role, sql, database):
         self.asked.append((role, database))
+        if role == 'n8n-pg' and sql == ha_n8n.ADVANCE_SEQUENCES:
+            self.sequence_asked.append((role, database, [run[0] for run in self.runs], self.dumped))
+            return self.sequence_answer
         if role == 'n8n-pg':
             if 'pg_tables' in sql:
                 return list(self.n8n_tables)
@@ -1457,6 +1464,7 @@ class World(fk.World):
 
     def export(self, volume):
         if volume.endswith('n8n-pgdata'):   # the new cluster of a cold backup (owner postgres = 70 in the image)
+            self.dumped = True
             return fk.tar_of([{'name': '.', 'type': 'dir', 'uid': 70, 'gid': 70, 'mode': 0o700},
                               {'name': 'PG_VERSION', 'data': b'16\n', 'uid': 70, 'gid': 70, 'mode': 0o600}])
         return fk.tar_of(self.live.get(volume, [{'name': '.', 'type': 'dir'}]))
@@ -1508,6 +1516,55 @@ class N8nCase(fk.ConversionCase):
 
     def data_tar(self, name='n8n_n8n_data'):
         return {entry: (info, data) for entry, (info, data) in self.volume(name).items()}
+
+
+class SequenceTests(N8nCase):
+    """dev-c instance flow attempt 5 (real n8n 2.43.6): after the conversion every new execution collided with an imported id (HTTP 500
+    "There is already an entry with this name"), because import:entities advances only IDENTITY sequences, not serial ones."""
+
+    def test_every_owned_sequence_is_moved_after_the_import_and_before_any_data_leaves(self):
+        result = self.convert(self.upload_n8n(), ['n8n'])
+        self.assertEqual(result['results'][0]['status'], 'converted')
+        (role, database, runs, dumped), = self.world.sequence_asked
+        self.assertEqual((role, database), ('n8n-pg', self.database))
+        self.assertIn('n8n-import', runs)
+        self.assertEqual(runs[-1], 'n8n-import')        # right after the import, before anything else is started
+        self.assertFalse(dumped)                        # and before the dump or the cluster export
+        self.assertTrue(self.world.dumped)
+
+    def test_a_missing_answer_stops_n8n_before_any_data_leaves(self):
+        self.world.sequence_answer = None
+        error = self.convert_stopped(self.upload_n8n())
+        self.assertEqual(error.code, 'job-failed'); self.assertIn('自動編號', error.message)
+        self.assertFalse(self.world.dumped)
+
+    def test_more_moved_than_owned_stops_n8n(self):
+        self.world.sequence_answer = {'sequences': 3, 'advanced': 4}
+        self.assertIn('自動編號', self.convert_stopped(self.upload_n8n()).message)
+        self.assertFalse(self.world.dumped)
+
+    def test_a_boolean_or_an_extra_field_is_not_a_count(self):
+        self.world.sequence_answer = {'sequences': True, 'advanced': 0}
+        self.assertIn('自動編號', self.convert_stopped(self.upload_n8n()).message)
+
+    def test_an_answer_with_an_extra_field_stops_n8n(self):
+        self.world.sequence_answer = {'sequences': 3, 'advanced': 1, 'note': 0}
+        self.assertIn('自動編號', self.convert_stopped(self.upload_n8n()).message)
+
+    def test_nothing_to_move_is_fine(self):
+        self.world.sequence_answer = {'sequences': 0, 'advanced': 0}
+        self.assertEqual(self.convert(self.upload_n8n(), ['n8n'])['results'][0]['status'], 'converted')
+
+    def test_the_statement_moves_only_column_owned_sequences_and_only_forward(self):
+        sql = ha_n8n.ADVANCE_SEQUENCES
+        self.assertNotIn(';', sql)                                         # one statement: it goes through psql -c
+        self.assertIn('pg_get_serial_sequence(', sql)                      # serial AND identity columns own their sequence
+        self.assertIn("setval(seq::regclass, top, true)", sql)
+        self.assertIn('top IS NOT NULL AND top > last', sql)                # never backwards, never for an empty table
+        self.assertIn("CASE WHEN is_called THEN last_value ELSE last_value - 1 END", sql)
+        for system in ("'pg_catalog'", "'information_schema'", "'^pg_'"):
+            self.assertIn(system, sql)
+        self.assertIn("json_build_object('sequences'", sql)
 
 
 class StoppedTargetTests(N8nCase):
