@@ -907,6 +907,8 @@ def stderr_tail(data, lines=3, width=200):
 # substrings, a `re.Pattern` is searched). Only the sentence is ever shown: stderr may hold a password in a registry
 # URL, an SQL statement or a row of the customer's data, so none of its words reach a message. First match wins, the
 # specific kinds before the general ones. Each sentence says what happened; the page adds what to do (haissues.ACTIONS).
+# libpq 14 and later start every failed connection with 'connection to server on socket/at ... failed:', the server's
+# refusal after it: the account and name kinds (no retry helps them) come before db-not-ready, which matches those words.
 REASONS = (
     ('no-space', '磁碟空間不足。',
      ('no space left on device', 'disk quota exceeded', 'not enough free space', 'insufficient disk space')),
@@ -916,15 +918,15 @@ REASONS = (
     ('unit-missing', '找不到這個服務單元。',
      (re.compile(r'unit \S{1,100} (?:not found|could not be found)'), 'no such unit')),
     ('unit-failed', '服務單元啟動失敗（詳情在系統日誌）。', ('job for ', 'control process exited with error code')),
-    ('db-not-ready', '資料庫還沒有準備好（還在啟動，或沒有在執行）。',
-     ('the database system is starting up', 'the database system is shutting down', 'is not accepting connections',
-      'is the server running', 'could not connect to server', 'connection to server on socket',
-      'connection to server at', 'pg_isready')),
     ('db-auth', '資料庫帳號或密碼和這台的設定不符。',
      ('password authentication failed', 'authentication failed for user', 'no pg_hba.conf entry',
       'peer authentication failed', 'scram authentication')),
     ('db-missing', '資料庫不存在。', (re.compile(r'database "[^"]{0,200}" does not exist'),)),
     ('role-missing', '資料庫帳號不存在。', (re.compile(r'role "[^"]{0,200}" does not exist'),)),
+    ('db-not-ready', '資料庫還沒有準備好（還在啟動，或沒有在執行）。',
+     ('the database system is starting up', 'the database system is shutting down', 'is not accepting connections',
+      'is the server running', 'could not connect to server', 'connection to server on socket',
+      'connection to server at', 'pg_isready')),
     ('pull-denied', '映像倉庫拒絕下載（需要登入，或沒有權限）。',
      ('pull access denied', 'authentication required', 'requested access to the resource is denied',
       'unauthorized')),
