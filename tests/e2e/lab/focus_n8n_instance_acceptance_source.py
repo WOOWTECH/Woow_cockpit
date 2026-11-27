@@ -94,12 +94,14 @@ def invoke(h,request):
     return json.loads(p.stdout)
 
 
-def resources(h,expiry,*,recovering=False):
+def resources(h,expiry,*,recovering=False,write_budget_bytes=None):
     if time.time()+(0 if recovering else BOUNDS['recovery_reserve_seconds'])>=expiry:
         raise TimeoutError('source recovery reserve reached')
     available=next(int(x.split()[1]) for x in Path('/proc/meminfo').read_text().splitlines() if x.startswith('MemAvailable:'))
     s=os.statvfs(REPO)
-    if available<1200*1024 or s.f_bavail*s.f_frsize<(13+8)*1024**3:raise RuntimeError('source host resource floor')
+    budget=BOUNDS['host_write_budget_gib']*1024**3 if write_budget_bytes is None else write_budget_bytes
+    if type(budget) is not int or budget<0:raise ValueError('invalid source write budget')
+    if available<1200*1024 or s.f_bavail*s.f_frsize<13*1024**3+budget:raise RuntimeError('source host resource floor')
     p=h.root('python3','-B','-I','-c',"from pathlib import Path;import json;s=Path('/sys/fs/cgroup/memory.stat').read_text().splitlines();u=sum(int(x.split()[1]) for x in s if x.startswith(('anon ','kernel ')));print(json.dumps(int(Path('/sys/fs/cgroup/memory.max').read_text())-u))",timeout=30)
     if p.returncode or json.loads(p.stdout)<1900*1024**2:raise RuntimeError('source device resource floor')
 

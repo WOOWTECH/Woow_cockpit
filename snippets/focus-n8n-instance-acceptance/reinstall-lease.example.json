@@ -1,0 +1,26 @@
+{
+  "bounds": {
+    "device_headroom_mib": 1900,
+    "host_available_mib": 1200,
+    "host_reserve_gib": 13,
+    "operation_timeout_seconds": 300,
+    "recovery_reserve_seconds": 600,
+    "source_write_budget_bytes": 248512512
+  },
+  "case": "n8n-instance-source-fullflow",
+  "device": "woowbk-dev-c",
+  "driver_commit": "REPLACE_WITH_REVIEWED_COMMIT",
+  "expires_utc": null,
+  "granted": false,
+  "method": "samefs-per-file-os.replace-journal-v3",
+  "name": "woowbk_focus_n8n_28a4a4b1cbcd",
+  "not_before_utc": null,
+  "phases": [
+    "source-fullflow-install",
+    "source-fullflow-recover"
+  ],
+  "protected_capture_sha256": "39de8fdbad60bbf2e8b80f9a01cc1c4dbbb66e37cb1d6c54a289405809b612d7",
+  "source2_return_journal_sha256": "0f98c76b312449fd99e9bbde0bd73c6194ae1dcaaa979e79c8ebfd9570863296",
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "source_manifest_sha256": "6f513ec909df950d10ea32ba6f919943052d7892130c96d26be77f17b7a82de8"
+}
