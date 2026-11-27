@@ -64,12 +64,12 @@ export function observedValues(rows, liveJar, initialJar = []) {
 }
 
 export function provedPublicTombstone(row, liveJar, proof) {
-  // Pinned primary source: Cockpit337 cockpit_auth_empty_cookie_value(),
-  // src/ws/cockpitauth.c SHA465dad6d...6952f9 and login-page handler. No
+  // Pinned primary source: Cockpit362 cockpit_auth_empty_cookie_value(),
+  // src/ws/cockpitauth.c SHAd3ad1a81...0b43e7 and login-page handler. No
   // exclusion by expiry, length, cookie name alone, or arbitrary literal.
-  return proof.source_version === '337' && proof.administrative_root_verified === true
+  return proof.source_version === '362' && proof.administrative_root_verified === true
     && proof.primary_source_hashes_verified === true
-    && /^(?:[0-9]+:)?337(?:[-+~.]|$)/.test(proof.native_package_version || '')
+    && /^(?:[0-9]+:)?362(?:[-+~.]|$)/.test(proof.native_package_version || '')
     && /^[0-9a-f]{64}$/.test(proof.native_ws_binary_sha256 || '')
     && proof.authenticated_cookie_observed === true && row.rootGet === true
     && row.name === 'cockpit' && !row.ambiguous && !member(row, liveJar)

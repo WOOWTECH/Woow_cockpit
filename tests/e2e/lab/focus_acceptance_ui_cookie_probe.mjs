@@ -119,8 +119,8 @@ async function finish() {
         public_tombstone_proofs:publicRows.map(r=>({name:r.name,sha256:digest(r.value),
           initial_https_root_get_200:true,source_version:sourceVersion,http_only:true,secure:true,
           same_site_strict:true,root_path:true,live_jar_member:false,
-          source_auth_sha256:'465dad6d93bd67eaf64f9dcacec3298d6a4e4c7443a4d583f3d98dacce6952f9',
-          source_handler_sha256:'82b211d873242110aa6c357857be4ee35a0b880e891d890c98d14bd7a8bf92e4'})),
+          source_auth_sha256:'d3ad1a818ec7b7d2270f6c36f8364f96ffe34a42018800381a78ee68100b43e7',
+          source_handler_sha256:'7c6551f0a993da62ff1aecbd5382fc4087f9f6d327fe53055e3d0a931c0e9cca'})),
         authenticated_cookie_observed:authObserved,live_jar_stable_during_scan:jarStable,
         strict_credential_zero_hits:credentialsZero && jarStable,registered_credentials_zero_hits:report.registered_values_hits===0 && registeredHostHits===0,
         all_observed_values_zero_hits:jarStable && report.all_values_hits===0 && matchedValues.every(v=>v.host.hits===0),
@@ -140,7 +140,7 @@ process.once('SIGTERM',()=>{failure='probe-timeout';finish().finally(()=>process
 const deadline=setTimeout(()=>process.kill(process.pid,'SIGTERM'),6*60*1000);deadline.unref();
 try {
   primarySource=JSON.parse(readFileSync(new URL('./focus_acceptance_ui_cookie_source.json',import.meta.url),'utf8'));
-  if (primarySource.commit!=='2248c46ff19ce77dbf12e4d7fc6af0e702072171' || primarySource.version!=='337' || primarySource.files.length!==2)
+  if (primarySource.commit!=='ca0d360e3a858a7eb189edde15cf7b976018404b' || primarySource.version!=='362' || primarySource.files.length!==2)
     throw new Error('source proof pin mismatch');
   for (const source of primarySource.files) {
     if (!['cockpitauth.c','cockpithandlers.c'].includes(source.name)

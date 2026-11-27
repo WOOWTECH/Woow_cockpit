@@ -1,21 +1,22 @@
 {
   "scope": "pinned-public-primary-source-only",
   "project": "cockpit-project/cockpit",
-  "version": "337",
-  "commit": "2248c46ff19ce77dbf12e4d7fc6af0e702072171",
-  "cache_directory": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-cookie-source/2248c46ff19ce77dbf12e4d7fc6af0e702072171",
+  "version": "362",
+  "tag_object_sha": "08dbdcb457591135b096cbb4eccf4bd89d6f3eae",
+  "commit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+  "cache_directory": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-ui-cookie-source/ca0d360e3a858a7eb189edde15cf7b976018404b",
   "files": [
     {
       "name": "cockpitauth.c",
-      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/2248c46ff19ce77dbf12e4d7fc6af0e702072171/src/ws/cockpitauth.c",
-      "sha256": "465dad6d93bd67eaf64f9dcacec3298d6a4e4c7443a4d583f3d98dacce6952f9",
-      "bytes": 52207
+      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/ca0d360e3a858a7eb189edde15cf7b976018404b/src/ws/cockpitauth.c",
+      "sha256": "d3ad1a818ec7b7d2270f6c36f8364f96ffe34a42018800381a78ee68100b43e7",
+      "bytes": 51219
     },
     {
       "name": "cockpithandlers.c",
-      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/2248c46ff19ce77dbf12e4d7fc6af0e702072171/src/ws/cockpithandlers.c",
-      "sha256": "82b211d873242110aa6c357857be4ee35a0b880e891d890c98d14bd7a8bf92e4",
-      "bytes": 24198
+      "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/ca0d360e3a858a7eb189edde15cf7b976018404b/src/ws/cockpithandlers.c",
+      "sha256": "7c6551f0a993da62ff1aecbd5382fc4087f9f6d327fe53055e3d0a931c0e9cca",
+      "bytes": 23528
     }
   ],
   "public_tombstone_sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",

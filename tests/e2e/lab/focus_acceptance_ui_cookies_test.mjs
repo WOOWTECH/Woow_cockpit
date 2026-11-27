@@ -4,8 +4,8 @@ import { parseSetCookie, cookieMetadata, observedValues, coverage, digest, prove
 const now = Date.parse('2026-11-27T00:00:00Z');
 const parse = header => parseSetCookie(header, now);
 const jar = (name, value) => ({ name, value });
-const sourceProof = () => ({source_version:'337', administrative_root_verified:true, authenticated_cookie_observed:true,
-  primary_source_hashes_verified:true,native_package_version:'337-1',native_ws_binary_sha256:'a'.repeat(64)});
+const sourceProof = () => ({source_version:'362', administrative_root_verified:true, authenticated_cookie_observed:true,
+  primary_source_hashes_verified:true,native_package_version:'362-1~bpo24.04.1',native_ws_binary_sha256:'a'.repeat(64)});
 
 test('Max-Age zero and negative are expired, never an automatic non-auth exemption', () => {
   for (const age of ['0', '-1', '-99']) {
@@ -102,12 +102,20 @@ test('public source constant needs actual root HTTP, matching source version and
   const row = {...parse('cockpit='+Buffer.from('64656c65746564', 'hex').toString()+'; Path=/; SameSite=Strict; Secure; HttpOnly'), rootGet:true};
   const proof = sourceProof();
   assert.equal(provedPublicTombstone(row, [], proof), true);
-  for (const change of [{source_version:'unknown'}, {source_version:'338'},
+  for (const change of [{source_version:'unknown'}, {source_version:'335'}, {source_version:'337'},
     {administrative_root_verified:false}, {authenticated_cookie_observed:false},
-    {primary_source_hashes_verified:false}, {native_package_version:'338-1'}, {native_ws_binary_sha256:''}])
+    {primary_source_hashes_verified:false}, {native_package_version:'337-1'}, {native_ws_binary_sha256:''}])
     assert.equal(provedPublicTombstone(row, [], {...proof,...change}), false);
   for (const change of [{rootGet:false}, {name:'other'}, {ambiguous:true}, {maxAge:0}, {expires:0},
     {path:'/other'}, {sameSite:'lax'}, {secure:false}, {httpOnly:false}])
     assert.equal(provedPublicTombstone({...row,...change}, [], proof), false);
   assert.equal(provedPublicTombstone(row, [jar('cockpit',row.value)], proof), false);
+});
+test('actual362 policy rejects old335/337 WS or native package pins', () => {
+  const row={...parse('cockpit='+Buffer.from('64656c65746564','hex').toString()+'; Path=/; SameSite=Strict; Secure; HttpOnly'),rootGet:true};
+  assert.equal(provedPublicTombstone(row,[],sourceProof()),true);
+  for (const version of ['335','337']) {
+    assert.equal(provedPublicTombstone(row,[],{...sourceProof(),source_version:version}),false);
+    assert.equal(provedPublicTombstone(row,[],{...sourceProof(),native_package_version:version+'-1'}),false);
+  }
 });
