@@ -1,0 +1,115 @@
+{
+  "scope": "only-own-catalog-return",
+  "status": "passed",
+  "guard_sha256": "329fba10a4e4e290209fa7ae5e5545549214227a38d0c0033473234569581b67",
+  "wrapper_sha256": "ceb5fa417fe393f463b4658422bc5b370350c7118a8c6fb918e7b7225237923e",
+  "checks": [
+    {
+      "check": "helper-status",
+      "ok": true
+    },
+    {
+      "check": "no-active-job",
+      "ok": true
+    },
+    {
+      "check": "original-emqx-markers",
+      "ok": true
+    },
+    {
+      "check": "original-omnigent-markers",
+      "ok": true
+    },
+    {
+      "check": "original-hermes-markers",
+      "ok": true
+    },
+    {
+      "check": "bounded-owner-read",
+      "ok": true
+    },
+    {
+      "check": "unit-metadata-read",
+      "ok": true
+    },
+    {
+      "check": "original-durable-units",
+      "ok": true
+    },
+    {
+      "check": "bounded-root-read",
+      "ok": true
+    },
+    {
+      "check": "image-read",
+      "ok": true
+    },
+    {
+      "check": "original-eight-images",
+      "ok": true
+    },
+    {
+      "check": "original-schedule",
+      "ok": true
+    },
+    {
+      "check": "helper-list",
+      "ok": true
+    },
+    {
+      "check": "bounded-root-read",
+      "ok": true
+    },
+    {
+      "check": "catalog-only-own-entry",
+      "ok": true
+    },
+    {
+      "check": "helper-catalog-remove",
+      "ok": true
+    },
+    {
+      "check": "exact-catalog-cas",
+      "ok": true
+    },
+    {
+      "check": "helper-catalog-remove",
+      "ok": true
+    },
+    {
+      "check": "bounded-root-read",
+      "ok": true
+    },
+    {
+      "check": "original-catalog-returned",
+      "ok": true
+    },
+    {
+      "check": "helper-list",
+      "ok": true
+    },
+    {
+      "check": "all-archives-and-ha-unchanged",
+      "ok": true
+    },
+    {
+      "check": "helper-status",
+      "ok": true
+    },
+    {
+      "check": "no-active-job-after",
+      "ok": true
+    },
+    {
+      "check": "guard-and-failed-evidence-unchanged",
+      "ok": true
+    }
+  ],
+  "original_catalog_equal": true,
+  "archive_and_ha_inventory_unchanged": true,
+  "original_markers_units_images_timer_verified": true,
+  "old_failed_guard_evidence_unchanged": true,
+  "imports_restores_deploys_image_changes": 0,
+  "active_jobs": 0,
+  "commercial_acceptance": "not-complete"
+}

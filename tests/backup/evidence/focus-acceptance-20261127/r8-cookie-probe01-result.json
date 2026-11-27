@@ -1,0 +1,90 @@
+{
+  "scope": "cookie-observer-readonly",
+  "acceptance_passed": false,
+  "proves_old_page4_cookie_absence": false,
+  "old_page4_result_unchanged": true,
+  "administrative_root_verified": true,
+  "source_version": "362",
+  "primary_source_hashes_verified": true,
+  "primary_source_commit": "2248c46ff19ce77dbf12e4d7fc6af0e702072171",
+  "native_cockpit_capability": {
+    "package_version": "362-1~bpo24.04.1",
+    "binary_sha256": "4b09c1484234c0b49d00a3e63d108217b5b9270801958e86a4b80cd560848845"
+  },
+  "cookie_metadata": [
+    {
+      "name": "cockpit",
+      "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+      "length": 7,
+      "expires": null,
+      "maxAge": null,
+      "classification": "http-session",
+      "initial_jar_member": true,
+      "live_jar_member": false
+    },
+    {
+      "name": "cockpit",
+      "sha256": "5ce9116ad138fb1470b47267b01afaba0bc7006dd5de802a28fb03601e2d684f",
+      "length": 96,
+      "expires": null,
+      "maxAge": null,
+      "classification": "http-session",
+      "initial_jar_member": false,
+      "live_jar_member": true
+    }
+  ],
+  "match_counts": [
+    {
+      "names": [
+        "cockpit"
+      ],
+      "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+      "length": 7,
+      "classification": "credential-zero-hits-required",
+      "device": {
+        "hits": 8,
+        "categories": {
+          "jobs": {
+            "hits": 8,
+            "matched_files": 8
+          }
+        }
+      },
+      "host": {
+        "hits": 0,
+        "categories": {}
+      }
+    },
+    {
+      "names": [
+        "cockpit"
+      ],
+      "sha256": "5ce9116ad138fb1470b47267b01afaba0bc7006dd5de802a28fb03601e2d684f",
+      "length": 96,
+      "classification": "credential-zero-hits-required",
+      "device": {
+        "hits": 0,
+        "categories": {}
+      },
+      "host": {
+        "hits": 0,
+        "categories": {}
+      }
+    }
+  ],
+  "observations_complete": true,
+  "unscanned_late_jar_metadata": [],
+  "public_tombstone_proofs": [],
+  "authenticated_cookie_observed": true,
+  "live_jar_stable_during_scan": true,
+  "strict_credential_zero_hits": false,
+  "registered_credentials_zero_hits": true,
+  "all_observed_values_zero_hits": false,
+  "scanned": 648,
+  "archive_index_sidecars": 17,
+  "actual_archive_index_sidecars_expected": 17,
+  "regular_json_roots": 2,
+  "host_files": 2,
+  "failure_kind": "cookie-coverage-or-credential-match",
+  "diagnostic_completed": false
+}

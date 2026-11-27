@@ -1,6 +1,37 @@
 # Focused real acceptance, 2026-11-27
 
-## Actual page attempt4: functional flow passes; cookie observation unresolved
+## Coordinator page4, cookie diagnosis and original catalog return
+
+| Actual step | Driver / runtime | Result and scope |
+| --- | --- | --- |
+| Real three-app page4 |14ebdf8e / frozen product1ad |**59/63 FAIL**, exit1/757.7s. One confirmation/click, two imports/four same-unit jobs, safety copies, HA live data and both original baseline restores passed. Browser completed; cookie observation complete but8aggregate hits. Registered/moved-value static scan passed. Old issued values were memory-only. |
+| Read-only cookie probe01 |fceb0153 / actual Cockpit362; source policy337 |**FAIL**, exit1/20.3s. Complete root/HTTP/jar evidence; seven-byte public-source-hash candidate had8matches in8job files;96-byte real session had0matches. Registered and host matches0. Version mismatch correctly prevented an exemption; original failed metadata remains unchanged. |
+| Parent exact own catalog return |wrapperceb5fa41 / guard329fba10 |**25/25 PASS**. All3original markers, all8trusted image/source bindings, durable units/schedule/nojob verified. Only recorded own Omnigent entry was removed via exact CAS; original catalog returned. Archive/HA inventory, old guard and failed evidence stayed equal. |
+| Read-only cookie probe02 |90395e43 / actual Cockpit362 and pinned official362 source |**PASS**, exit0/29.8s. Actual administrative root bridge, WS/native package362, pinned primary hashes, initial root HTTP attributes and not-live marker proved. New96-byte real session97051da4... had0matches; documented seven-byte public marker1185f37d... had8matches in8jobs only. Host/registered matches0;648records/17actual sidecars/2regular JSON roots. |
+
+Probe02 retains `all_observed_values_zero_hits:false` because the public marker
+really occurs, and `strict_credential_zero_hits:true`. The marker is a documented
+clearing placeholder without Expires/Max-Age, not an HTTP-expired credential.
+Every other live, expired, renewed or overwritten credential still requires zero
+hits. Official362 tag resolves to `ca0d360e3a858a7eb189edde15cf7b976018404b`;
+the source artifact binds exact URLs and auth/handler hashes. Actual installed
+package was362-1~bpo24.04.1, binarySHA4b09c148... .
+
+The two probes used **different real session cookies**. Neither can prove absence
+of page4's lost cookie, change its59/63FAIL, or retroactively pass probe01. DESIGN
+G4 R8's stated full-browser functional scenario is evidenced by page4, with
+screenshots/records; G5 requires failed results retained. This composite supports
+that functional scope plus independent current privacy proof. It does **not**
+close same-run page4 cookie hygiene or all R8/commercial acceptance. A future clean
+instrumented page gate, if required by coordinator, needs separately reviewed
+observer code and a new lease; no further full import was run for diagnosis.
+
+`r8-cookie-and-catalog-chronology.json` binds all seven copied public artifact
+hashes. Probe result/receipt files are exact fixed-field copies; raw cookie values,
+headers, frames and matching text are absent. Catalog resultSHA is420b9d4fe582af93eef3aa37b958d6b71b57a0580e8775eda39c0478720490fb.
+
+
+## Historical page attempt4 terminal state: cookie observation unresolved
 
 `r8-attempt4.json` records driver `14ebdf8e`, frozen product `1adf4df2`, exit1
 in757.7 seconds: **59/63 FAIL**. The real page completed one acknowledgement,

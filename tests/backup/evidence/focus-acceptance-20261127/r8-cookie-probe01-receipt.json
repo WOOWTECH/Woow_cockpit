@@ -1,0 +1,13 @@
+{
+  "scope": "cookie-observer-readonly",
+  "driver_commit": "fceb01536f363273583f8c584fbf78282a5179a5",
+  "exit": 1,
+  "child_stderr_bytes": 0,
+  "guard_sha256": "329fba10a4e4e290209fa7ae5e5545549214227a38d0c0033473234569581b67",
+  "protected_case_files_unchanged": true,
+  "catalog_archive_HA_schedule_inventory_unchanged": true,
+  "network_isolation_preserved": true,
+  "acceptance_passed": false,
+  "result_sha256": "bea6eb859bb28f69797e42d9a1eefa73c99bdc6d705cdf80c5e7fcef476c98ca",
+  "rendered_scan_sha256": "50b7639d16a14dbe309f5d440f4cdee9ef9a8c665b7244bf14b9675c86445f12"
+}
