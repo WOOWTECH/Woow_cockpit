@@ -288,6 +288,7 @@ class World(fk.World):
         self.memories_after_count = 2
         self.pg_major = 16              # PG_MAJOR of this device's database image
         self.restore_fails = False      # PostgreSQL refuses the restore of HA's dump (NC-32, NC-46)
+        self.redis_banner = b'Redis server v=8.10.1 sha=00000000:1 malloc=jemalloc-5.3.0 bits=64 build=test\n'
         self.down = set()               # containers that are stopped until their unit is started (NC-04)
         self.cannot_start = set()
         self.live_config = LIVE_CONFIG  # what `cat config.php` of the live app prints
@@ -340,6 +341,8 @@ class World(fk.World):
         return Result(0, b'', b'')
 
     def exec(self, role, command, data, stdout):
+        if role == 'nextcloud-redis' and command == ['redis-server', '--version']:
+            return Result(0, self.redis_banner, b'')
         if role == 'nextcloud-app' and command[:1] == ['cat']:
             return Result(0, self.live_config, b'')
         if role == 'nextcloud-app' and command[:1] == ['php']:
@@ -1987,6 +1990,14 @@ class LiveTargetTests(NextcloudCase):
     def systemctl(self, verb=None):
         return [c[1:] for c in self.world.owner.calls if c[0] == 'systemctl' and (verb is None or c[1] == verb)]
 
+    def test_wrong_data_mount_service_stops_before_building_any_ha_data(self):
+        self.world.redis_banner = b'Other server v=8.10.1\n'
+        with self.assertRaises(BackupError) as caught:
+            self.convert(self.upload_nextcloud(), ['nextcloud'])
+        self.assertEqual(caught.exception.code, 'incompatible')
+        self.assertFalse(self.runs('hapg') or self.runs('nc-db'))
+        self.assertFalse(self.world.manifests)
+
     def test_a_stopped_nextcloud_and_database_are_started_to_be_read_and_put_back(self):
         # NC-04: they are started, read and put back as they were; the line says which
         self.world.down = {'nextcloud-app', 'nextcloud-db'}
@@ -2471,6 +2482,31 @@ class ShapeTests(unittest.TestCase):
 
 
 class TargetTests(unittest.TestCase):
+    def test_pinning_the_same_layout_to_sha_images_preserves_all_mount_roles(self):
+        app = fk.app('nextcloud', 'Nextcloud', data_dirs=[{'path': p} for p in DIRS])
+        named = nc.Live(QUADLETS, '/home/appowner', app)
+        pinned = {name: re.sub(rb'(?m)^Image=.*$', ('Image=sha256:%064x' % (i+1)).encode(), text)
+                  for i, (name, text) in enumerate(QUADLETS.items())}
+        live = nc.Live(pinned, '/home/appowner', app)
+        self.assertEqual((live.db_file, live.app_file, live.redis_file, live.rels),
+                         (named.db_file, named.app_file, named.redis_file, named.rels))
+        self.assertTrue(live.redis_image.startswith('sha256:'))
+
+    def test_missing_or_ambiguous_data_mount_still_refuses_pinned_target(self):
+        app = fk.app('nextcloud', 'Nextcloud', data_dirs=[{'path': p} for p in DIRS])
+        pinned = {name: re.sub(rb'(?m)^Image=.*$', b'Image=sha256:' + b'a'*64, text)
+                  for name, text in QUADLETS.items()}
+        for kind in ('missing', 'ambiguous', 'shared-app-role'):
+            quadlets = dict(pinned)
+            if kind == 'missing':quadlets.pop('nextcloud-redis.container')
+            elif kind == 'ambiguous':quadlets['extra.container'] = (b'[Container]\nImage=sha256:' + b'b'*64 +
+                                                                    b'\nVolume=%h/foreign-cache:/data\n')
+            else:
+                quadlets.pop('nextcloud-redis.container')
+                quadlets['nextcloud-app.container'] += b'Volume=%h/.local/share/nextcloud-office/redis:/data\n'
+            with self.subTest(kind=kind), self.assertRaises(BackupError):
+                nc.Live(quadlets, '/home/appowner', app)
+
     def test_shape_checks(self):
         app = fk.app('nextcloud', 'Nextcloud', data_dirs=[{'path': p} for p in DIRS])
         live = nc.Live(QUADLETS, '/home/appowner', app)

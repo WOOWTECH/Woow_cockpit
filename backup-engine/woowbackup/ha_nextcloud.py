@@ -1148,9 +1148,10 @@ class Live:
                             and any(t == '/var/lib/postgresql/data' for _s, t, _o in mounts))
         self.app_file = find(lambda _text, mounts: {'/var/www/html', '/var/www/html/data'}
                              <= {t for _s, t, _o in mounts})
-        self.redis_file = find(lambda text, mounts: 'redis' in (tempctr.quadlet_image(text) or '')
-                               and any(t == '/data' for _s, t, _o in mounts))
-        if None in (self.db_file, self.app_file, self.redis_file):
+        # Image refs may be immutable config IDs: a tag's spelling does not identify a service.
+        self.redis_file = find(lambda _text, mounts: any(t == '/data' for _s, t, _o in mounts))
+        if None in (self.db_file, self.app_file, self.redis_file) \
+                or len({self.db_file, self.app_file, self.redis_file}) != 3:
             raise BackupError('incompatible', '這台的 Nextcloud 不是 WOOWTECH 的 Podman 版本（找不到資料庫、Nextcloud 或 '
                                               'Redis 的 Quadlet 檔）。', app=app.id)
         for name in (self.db_file, self.app_file, self.redis_file):
@@ -2430,11 +2431,16 @@ def convert(work, app, test_mode, out_dir):
     target = Target(work, app)
     live = target.live
     tmp = work.temp(app)
+    hatarget.ensure_running(work, app, live.redis_container)      # NC-04; cleanup returns a stopped service
+    # Resolve by mounts, then check the actual service before building any converted data.
+    banner = _exec(work, app, live.redis_container, ['redis-server', '--version'], 'Redis 版本', max_output=4096)
+    if not re.fullmatch(rb'Redis server v=[0-9]+\.[0-9]+\.[0-9]+(?:[ \t][^\r\n]*)?\r?\n?', banner):
+        raise BackupError('incompatible', '這台 Nextcloud 的 /data 服務無法核對為 Redis，請先確認 Redis 映像和掛載設定。',
+                          app=app.id)
     ids = adapter.owner_ids()
     staging = work.staging / 'nextcloud-work'
     staging.mkdir(mode=0o700)
     (out_dir / 'dirs').mkdir(mode=0o700, parents=True, exist_ok=True)
-    hatarget.ensure_running(work, app, live.redis_container)      # NC-04 (the app and the database were started by Target)
     tops = {'postgres': live_stat(work, app, live.db_container, live.db_target),
             'redis': live_stat(work, app, live.redis_container, '/data'),
             'data': live_stat(work, app, live.app_container, '/var/www/html/data')}
