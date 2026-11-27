@@ -179,18 +179,38 @@ class DriverBoundaryTests(unittest.TestCase):
         self.assertEqual(set(consts['HTTP_AUTH_CASES']), {'http_dummy', 'lost_auth_setting'})
         def login(case_id, codes, ticks):
             answers, clock, probes = iter(codes), iter(ticks), []
-            scope = runtime_parts('login_code', mqtt_probe=lambda *a, **k: next(answers), PROBES=probes,
+            def probe(*_, **__):
+                answer = next(answers)
+                if answer is None: raise RuntimeError('mqtt_probe_unreadable')
+                return answer
+            scope = runtime_parts('login_code', mqtt_probe=probe, PROBES=probes,
                                   time=SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None), **consts)
             return scope['login_code'](None, 'emqx-ha', case_id), probes
         code, probes = login('http_dummy', [5, 5, 0], [0] * 10)
         self.assertEqual((code, probes), (0, [{'role': 'emqx-ha', 'codes': [5, 5, 0]}]))
-        # Every other case is judged on its first answer: a dead row stays one refused login.
+        # native02: no CONNACK within the probe's 3 s while the backend waited; recorded as -1 and tried again.
+        self.assertEqual(login('http_dummy', [None, 0], [0] * 10), (0, [{'role': 'emqx-ha', 'codes': [-1, 0]}]))
+        # Every other case is judged on its first answer: a dead row stays one refused login, unreadable raises.
         self.assertEqual(login('dead_row', [5], [0] * 10), (5, [{'role': 'emqx-ha', 'codes': [5]}]))
+        with self.assertRaisesRegex(RuntimeError, 'mqtt_probe_unreadable'):
+            login('plain', [None], [0] * 10)
         # The wait is bounded and the last code is what counts.
         step = consts['HTTP_AUTH_SETTLE'] // 4
         code, probes = login('http_dummy', [5] * 20, range(0, 1000, step))
         self.assertEqual(code, 5)
         self.assertLessEqual(len(probes[0]['codes']), 6)
+
+    def test_http_dummy_serves_each_connection_in_its_own_process(self):
+        # EMQX keeps a pool of idle HTTP connections open; a dummy that waits on one connection at a time leaves the
+        # real authentication request queued behind them until it times out (http_dummy native01 and native02).
+        dummy = runtime_constants('HTTP_DUMMY')['HTTP_DUMMY']
+        accept = dummy.index('gen_tcp:accept(L,')
+        handoff = dummy.index('gen_tcp:controlling_process(S,C)')
+        self.assertLess(accept, handoff)
+        self.assertNotIn('gen_tcp:recv', dummy[accept:handoff])
+        self.assertEqual(dummy.count('spawn('), 2)
+        self.assertIn('127,0,0,1', dummy)
+        self.assertIn('"allow"', dummy.replace('\\"', '"'))
 
     def test_all_prepared_python_is_parseable_without_executing_native(self):
         for path in HERE.glob('focus_emqx_r4*.py'): ast.parse(path.read_text())

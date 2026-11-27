@@ -164,13 +164,17 @@ def exec_read(tmp, role):
 
 # Local HTTP dummy discards the entire bounded request and returns only fixed fixture authorization.
 # No request body, credentials, file, environment, response token or external address is logged/captured.
+# Each accepted connection gets its own process: EMQX's HTTP backend keeps a pool of idle connections open, and a
+# loop that waited on one connection at a time queued the real request behind them (http_dummy native01/02).
 HTTP_DUMMY = '''case whereis(woow_r4_http) of undefined ->
 {ok,L}=gen_tcp:listen(18091,[binary,{active,false},{reuseaddr,true},{ip,{127,0,0,1}}]),
-P=spawn(fun() -> Loop=fun F() -> case gen_tcp:accept(L,1000) of
-{ok,S}->case gen_tcp:recv(S,0,3000) of {ok,B} when byte_size(B)=<8192 ->
+Serve=fun(Sock) -> case gen_tcp:recv(Sock,0,30000) of {ok,B} when byte_size(B)=<8192 ->
 Body = <<"{\\"result\\":\\"allow\\",\\"is_superuser\\":false}">>,
-gen_tcp:send(S,["HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nConnection: close\\r\\nContent-Length: ",
-integer_to_list(byte_size(Body)),"\\r\\n\\r\\n",Body]);_->ok end,gen_tcp:close(S),F();
+gen_tcp:send(Sock,["HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nConnection: close\\r\\nContent-Length: ",
+integer_to_list(byte_size(Body)),"\\r\\n\\r\\n",Body]);_->ok end,gen_tcp:close(Sock) end,
+P=spawn(fun() -> Loop=fun F() -> case gen_tcp:accept(L,1000) of
+{ok,S}->C=spawn(fun() -> receive {go,T} -> Serve(T) end end),
+ok=gen_tcp:controlling_process(S,C),C ! {go,S},F();
 {error,timeout}->F();_->ok end end,Loop() end),
 true=register(woow_r4_http,P),ok=gen_tcp:controlling_process(L,P);_->ok end,
 io:format("WOOWHTTP:ready:END").'''
@@ -240,12 +244,20 @@ def mqtt_probe(tmp, role, username='r4_source', password=fx.DUMMY_PASSWORD, *, t
 def login_code(tmp, role, case_id, *args, **kwargs):
     """mqtt_probe's CONNACK code. The HTTP-authentication cases start their loopback dummy only after the broker
     booted, so EMQX's HTTP backend may still be reconnecting to it (it retries on its resource health check): there
-    a refused login is tried again for up to HTTP_AUTH_SETTLE seconds. Only the last code counts; all are in PROBES."""
-    codes = [mqtt_probe(tmp, role, *args, **kwargs)]
-    deadline = time.monotonic() + (HTTP_AUTH_SETTLE if case_id in HTTP_AUTH_CASES else 0)
+    a refused login is tried again for up to HTTP_AUTH_SETTLE seconds. Only the last code counts; all are in PROBES
+    (-1: no readable CONNACK within the probe's 3 s, which there counts as one more refused try)."""
+    http = case_id in HTTP_AUTH_CASES
+    def attempt():
+        try:
+            return mqtt_probe(tmp, role, *args, **kwargs)
+        except RuntimeError as error:
+            if not http or str(error) != 'mqtt_probe_unreadable': raise
+            return -1
+    codes = [attempt()]
+    deadline = time.monotonic() + (HTTP_AUTH_SETTLE if http else 0)
     while codes[-1] != 0 and time.monotonic() < deadline:
         time.sleep(HTTP_AUTH_PAUSE)
-        codes.append(mqtt_probe(tmp, role, *args, **kwargs))
+        codes.append(attempt())
     PROBES.append({'role': role, 'codes': codes})
     return codes[-1]
 
