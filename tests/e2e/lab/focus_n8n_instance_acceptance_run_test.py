@@ -288,11 +288,16 @@ class FilesAndPredicateTests(Fixture):
 
 
 class RestoreTests(Fixture):
-    def safety_fixture(self):
+    def safety_fixture(self,private_copies=True):
         before=inventory();before['images']=list(run.plan.IMAGE_IDS.values());self.c.r['before']=before;order=[]
         snap={'database_names':['n8n','postgres'],'databases':{}}
+        # The preserved old safety pairs (cbbc68f7) and the four canonical image references (7820caf1) are read by
+        # safety() before any service, catalog or timer action; these fakes answer exactly those fixed questions.
+        prepared={'private_copy_verified':private_copies,'private_files':4 if private_copies else 0,'protected_old_ids':[]}
+        self.c.h.owner=lambda *a,**kw:SimpleNamespace(returncode=0,stdout=run.plan.IMAGE_IDS[a[3]].encode())
         self.c.resources=lambda:None;self.c.acquire_original=lambda:before;self.c.frozen_engine=lambda:None
-        self.c.op=lambda op,**kw: before if op=='inventory' else snap if op=='snapshot' else {}
+        self.c.op=lambda op,**kw: (before if op=='inventory' else snap if op=='snapshot'
+                                   else prepared if op=='preserved_safety_prepare' else {})
         def helper(command,request=None):
             if command=='list':return {'backups':[],'ha_backups':[]}
             if command=='inspect':return {'backup':{'encrypted':True}}
@@ -322,6 +327,12 @@ class RestoreTests(Fixture):
         with self.assertRaises(TimeoutError):self.c.safety()
         self.assertEqual(order[-3:],['stop-all','catalog-back','timer-back'])
         self.assertFalse(self.c.r['safety_verified'])
+
+    def test_unverified_private_copies_refuse_before_any_service_catalog_or_timer_action(self):
+        order=self.safety_fixture(private_copies=False)
+        self.c.job=lambda *a,**kw:self.fail('no backup job may start without the private copies')
+        with self.assertRaisesRegex(RuntimeError,'old_pairs_private_copy_verified'):self.c.safety()
+        self.assertEqual(order,[]);self.assertFalse(self.c.r['safety_verified'])
 
     def test_unconfigured_optional_digests_are_not_invented_and_any_real_failure_stops(self):
         job={'state':'succeeded','result':{'rolled_back':False,'safety_backup_id':BID,'health':[{'status':'ok'}]}}
@@ -362,6 +373,7 @@ class RestoreTests(Fixture):
             if op=='restore_files':store.restore([str(p) for p in files]);return True
             if op=='snapshot':return snapshot
             if op=='secrets':return {}
+            if op=='preserved_safety_return':return {'all_preexisting_files_exact':True}
             raise AssertionError(op)
         self.c.op=operation
         def job(*a,**kw):
@@ -372,6 +384,21 @@ class RestoreTests(Fixture):
         self.c.job=job
         with patch.object(run.plan,'preflight_ready',return_value=True):self.c.recover()
         self.assertEqual(found(),before);self.assertTrue(self.c.r['recovery_verified'])
+
+    def test_recovery_is_not_verified_until_the_old_safety_pairs_are_returned_exactly(self):
+        self.c.r.update(before=inventory(),fixture_intent=False,safety_verified=False)
+        self.c.helper=lambda *a,**kw:{}
+        self.c.stop_units=lambda:None;self.c.restore_catalog=lambda:None;self.c.restore_timer=lambda:None
+        self.c.cleanup_owned=lambda:self.fail('no cleanup before recovery is verified')
+        self.c.command=lambda *a,**kw:None
+        def operation(op,**kwargs):
+            if op=='inventory':return inventory()
+            if op=='restore_files':return True
+            if op=='preserved_safety_return':return {'all_preexisting_files_exact':False}
+            raise AssertionError(op)
+        self.c.op=operation
+        with self.assertRaisesRegex(RuntimeError,'preserved_old_pairs_returned'):self.c.recover()
+        self.assertFalse(self.c.r.get('recovery_verified'))
 
     def test_no_cleanup_with_cookie_scan_uncertainty(self):
         self.c.r.update(recovery_verified=True,upload_intent=True,secret_scan=False)
