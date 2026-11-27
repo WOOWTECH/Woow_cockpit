@@ -274,6 +274,18 @@ def login_code(tmp, role, case_id, *args, **kwargs):
     return codes[-1]
 
 
+def restart_stable(case_id, record, after):
+    """The restart check: normally nothing may differ from the import's record. H1: this device's environment takes over
+    the authorization setting at this start, and the product's own restore check reminds of a settings difference and
+    fails only on a table one (compare_parts, E-90), so there exactly the authorization setting may differ."""
+    if case_id != 'env_wins_h1':
+        return not emqx.compare_readback(record, after)
+    settings, tables = emqx.compare_parts(record, after)
+    OBSERVED['h1_restart_settings_difference'] = settings
+    only_authorization = emqx.compare_readback({'config_roots': {'authorization': 0}}, {'config_roots': {'authorization': 1}})
+    return not tables and settings == only_authorization
+
+
 NO_MATCH_EXPR = 'io:format("WOOWNM:~s:END",[emqx:get_config([authorization,no_match])]).'
 
 
@@ -330,7 +342,7 @@ def lines(tmp, target, readings, notes, acknowledged=None):
     return sink
 
 
-def verify(tmp, record):
+def verify(tmp, record, case_id=None):
     body = ('[Container]\nImage=' + fx.IMAGE + '\nContainerName=' + tmp.name('emqx-new') + '\n' +
             'Volume=' + tmp.name('emqx-new') + ':/opt/emqx/data\n' +
             'Volume=' + tmp.name('emqx-new-log') + ':/opt/emqx/log\n').encode()
@@ -339,7 +351,11 @@ def verify(tmp, record):
                           postgres=None, data_dirs=[])
     messages = []
     emqx.verify_restored(adapter, app, record, log=messages.append)
-    check('unmocked_postcheck_has_no_skipped_receipt', len(messages) == 1 and '核對一致' in messages[0])
+    if case_id == 'env_wins_h1':   # E-90: the setting this device's environment took over is reminded, never failed
+        check('h1_restore_check_reminds_not_fails',
+              len(messages) == 1 and messages[0].startswith('提醒') and 'authorization' in messages[0])
+    else:
+        check('unmocked_postcheck_has_no_skipped_receipt', len(messages) == 1 and '核對一致' in messages[0])
     corrupt = copy.deepcopy(record); corrupt['tables']['emqx_admin'][0] += 1
     try: emqx.verify_restored(adapter, app, corrupt, log=lambda _: None)
     except BackupError as error: check('wrong_admin_receipt_refuses', error.code == 'job-failed')
@@ -468,14 +484,15 @@ def main(case_id):
             emqx.wait_ready(tmp, 'emqx-new', checkpoint=work.checkpoint)
             check('restart_ticker_paused', emqx.quiesce_system_ticker(tmp, 'emqx-new') is not None)
             after = emqx.candidate_readback(tmp)
-            check('all_roots_and_tables_stable_after_restart', not emqx.compare_readback(record, after))
+            check('h1_restart_changes_only_the_authorization_setting' if case_id == 'env_wins_h1'
+                  else 'all_roots_and_tables_stable_after_restart', restart_stable(case_id, record, after))
             if case_id == 'http_dummy': emqx.evaluate(tmp, 'emqx-new', HTTP_DUMMY)
             case_assertions(tmp, case_id, restarted=True)
             if case_id == 'dead_row': check('dead_row_remains_dead', login_code(tmp, 'emqx-new', case_id) != 0)
             elif case_id == 'noauth':
                 check('anonymous_remains_enabled', login_code(tmp, 'emqx-new', case_id, None, None) == 0)
             else: check('source_account_works_after_restart', login_code(tmp, 'emqx-new', case_id) == 0)
-            verify(tmp, record)
+            verify(tmp, record, case_id)
         check('generated_target_unchanged', original == emqx.boot_form(exec_read(tmp, 'emqx-ha')))
     STAGE = 'cleanup'
     check('tempobjects_empty', not tmp.containers and not tmp.volumes and not tmp.networks)

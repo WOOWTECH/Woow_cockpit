@@ -230,6 +230,56 @@ class DriverBoundaryTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             assertions('allow', True)
 
+    def test_h1_restart_may_change_only_the_authorization_setting_as_the_restore_check_allows(self):
+        # env_wins_h1 native02: the environment took over at the restart, so the authorization setting differed from the
+        # import's record. The product's restore check reminds of a settings difference and fails only on tables (E-90).
+        sys.path.insert(0, str(ROOT / 'backup-engine'))
+        try:
+            from woowbackup import ha_emqx
+        finally:
+            sys.path.remove(str(ROOT / 'backup-engine'))
+        observed = {}
+        stable = runtime_parts('restart_stable', emqx=ha_emqx, OBSERVED=observed)['restart_stable']
+        record = {'config_roots': {'authorization': {'no_match': 'allow'}, 'mqtt': {'a': 1}}, 'tables': {'emqx_acl': 3}}
+        same = json.loads(json.dumps(record))
+        env_won = json.loads(json.dumps(record)); env_won['config_roots']['authorization']['no_match'] = 'deny'
+        other = json.loads(json.dumps(env_won)); other['config_roots']['mqtt']['a'] = 2
+        rows = json.loads(json.dumps(env_won)); rows['tables']['emqx_acl'] = 2
+        self.assertTrue(stable('plain', record, same))
+        self.assertFalse(stable('plain', record, env_won))
+        self.assertTrue(stable('env_wins_h1', record, env_won))
+        self.assertEqual(observed['h1_restart_settings_difference'], ha_emqx.compare_readback(record, env_won))
+        for changed in (other, rows):
+            with self.subTest(changed=changed):
+                self.assertFalse(stable('env_wins_h1', record, changed))
+
+    def test_h1_restore_check_must_remind_of_the_authorization_setting_not_fail(self):
+        # E-90: after the restore the product reminds of a settings-only difference and fails only on tables. H1's
+        # environment-owned authorization setting must give exactly that reminder; every other case stays "consistent".
+        class Failure(Exception):
+            def __init__(self, code): super().__init__(code); self.code = code
+        def run(case_id, message):
+            checks = []
+            def check(name, value=True):
+                checks.append((name, bool(value)))
+                if not value: raise RuntimeError('fixed_check_failed')
+            def verify_restored(adapter, app, record, *, log):
+                if record['tables']['emqx_admin'][0] != 1: raise Failure('job-failed')
+                log(message)
+            scope = runtime_parts('verify', emqx=SimpleNamespace(verify_restored=verify_restored), check=check,
+                                  copy=__import__('copy'), BackupError=Failure, SimpleNamespace=SimpleNamespace)
+            scope['verify'](SimpleNamespace(name=lambda role: 'woowbk-x-' + role, runner=None),
+                            {'tables': {'emqx_admin': [1, 'receipt']}}, case_id)
+            return checks
+        reminder = '提醒：EMQX 還原後的設定（authorization）和轉換時核對的不同（通常是轉換之後這台 EMQX 的設定改過）'
+        consistent = 'EMQX 還原後核對一致：設定和內建資料庫都和轉換時相同'
+        self.assertEqual(run('env_wins_h1', reminder), [('h1_restore_check_reminds_not_fails', True),
+                                                        ('wrong_admin_receipt_refuses', True)])
+        self.assertEqual(run('plain', consistent)[0], ('unmocked_postcheck_has_no_skipped_receipt', True))
+        for case_id, message in (('plain', reminder), ('env_wins_h1', consistent)):
+            with self.subTest(case_id=case_id), self.assertRaises(RuntimeError):
+                run(case_id, message)
+
     def test_h1_device_is_read_by_the_products_own_target(self):
         # The other cases hand the engine a plain object; H1 needs the product's Target, which reads the Quadlet file,
         # gives the candidate this device's environment and names its access settings for the env-wins notice.
