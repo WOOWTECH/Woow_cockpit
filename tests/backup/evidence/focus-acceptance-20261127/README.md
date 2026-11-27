@@ -371,3 +371,17 @@ the PR #23 engine): 70/70 in about 500 s.
 
 Files: `r1-helper-20261128-checks.txt` (the 70 fixed check lines) and `r1-helper-20261128-summary.json`. The private
 run is `~/.woowbk-lab/evidence/focus-acceptance-r1-helper/20261128T044707/`.
+
+## page-emqx: a normal EMQX import through the real Cockpit page, 81/81 (2026-11-28, dev-d)
+
+The page harness's new `--page-emqx` mode (driver `e236d5d6`, source `ce8c4cfb` = dev-d's installed engine) took the
+ORIGINAL, undamaged B1 encrypted HA backup through the real page in headless Chromium: upload, only EMQX selected,
+EMQX importable, every confirmation line the check listed shown and acknowledged exactly once, one import click whose
+request carried every listed key once, the result page showing EMQX imported. Then two linked jobs (EMQX conversion
+and restore) in the first job's unit, the restore with its own safety backup; EMQX held HA's data (HA's Dashboard
+admin logs in, no dev-d marker left, every HA MQTT account present); dev-d's own EMQX baseline restored and its
+markers read back with dev-d's admin; strict secret scans clean; the upload this run created deleted; PAGE5's and
+R1's guards and evidence byte-unchanged. 81/81 in 565 s.
+
+Files: `page-emqx-20261128-capture.json` (the capture's fixed-status record and stdout hash) and
+`page-emqx-20261128-summary.json`. Private run: `~/.woowbk-lab/evidence/focus-acceptance-page-emqx/20261128T054946/`.
