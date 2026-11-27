@@ -90,6 +90,43 @@ def owned_command(command, request, state):
         raise ValueError('fixed-ha-delete-not-owned-by-this-case')
 
 
+def cleanup_after_refusal(run,args,lease,driver,ev,deadline,*,baseline_safe,baseline_exact):
+    """Opt in to keeping a proven owned HA after refusal before any conversion request."""
+    receipt=getattr(args,'retained_upload',None)
+    requested=any(r.get('command') in ('ha-convert-start','restore-start')
+                  for r in driver.STATE.get('requests',{}).values())
+    if (lease.get('retain_verified_ha_on_preconversion_refusal') is not True or receipt is None
+            or run.created_store is None or getattr(run,'converted',None) or getattr(run,'safety',None) or requested):
+        run.cleanup();return False
+    if not baseline_safe or not baseline_exact:
+        raise RuntimeError('fixed-retained-ha-baseline-not-proven')
+    expected=lease.get('retained_upload_receipt_sha256')
+    if (not expected or driver.STATE.get('retained_upload_receipt_sha256')!=expected
+            or driver.STATE.get('ha_backup_id')!=run.created_store or driver.STATE.get('upload_id') is not None
+            or receipt.get('ha_backup_id')!=run.created_store):
+        raise ValueError('fixed-retained-ha-owner-binding-refused')
+    import focus_nextcloud_r6_case as control
+    import focus_nextcloud_r6_upload as upload_proof
+    def quiescent():
+        # CLI jobs is limited to50; the existing native probe checks the complete bounded store.
+        if control.wake.device(control.QUIESCENT,root=True)['active_jobs']!=0:
+            raise RuntimeError('fixed-retained-ha-native-writer-active')
+    quiescent()
+    trace=upload_proof.Evidence(LAB/'evidence/focus-nextcloud-r6-retained-after-refusal'/time.strftime('%Y%m%dT%H%M%S'))
+    current=upload_proof.verify_retained(run.created_store,deadline,trace)
+    upload_proof.retained_credit(receipt,current)  # Recheck full SHA/bytes/inode/sidecar/provenance; add no budget credit.
+    quiescent()
+    ev.save('preconversion-owned-ha-retained.json',{
+        'ha_backup_id':run.created_store,'retained_upload_receipt_sha256':expected,'current_proof':current,
+        'baseline_exact':True,'complete_native_jobs_quiescent':True,'conversion_requested':False})
+    driver.STATE['retained_verified_ha_id']=run.created_store;driver.save_state()
+    owned_ha=run.created_store;run.created_store=None
+    try:run.cleanup()  # Keep this HA only; retain all existing owned-object cleanup and leak gates.
+    finally:run.created_store=owned_ha
+    ev.check('cleanup: verified owned HA retained after preconversion refusal',True)
+    return True
+
+
 def execute(args):
     import focus_nextcloud_r6_case as case
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
@@ -379,11 +416,13 @@ def run_locked(args, lease, commit, facts, inventory):
                 r.manual_rollback('recovery')
             safe = baseline_verify() and (not r.safety or r.restored_back) and not inflight
             require('cleanup gate: original baseline independently verified', safe)
+            baseline_exact=False
             if r.before:
                 r.after_state()
-                require('cleanup gate: exact baseline state comparisons passed',
-                        all(x['ok'] for x in ev.results if x['check'].startswith('after:')))
-            r.cleanup()
+                after_checks=[x for x in ev.results if x['check'].startswith('after:')]
+                baseline_exact=bool(after_checks) and all(x['ok'] for x in after_checks)
+                require('cleanup gate: exact baseline state comparisons passed',baseline_exact)
+            cleanup_after_refusal(r,args,lease,d,ev,expires+1800,baseline_safe=safe,baseline_exact=baseline_exact)
             if d.STATE.get('upload_id'):
                 d.ok('upload-abort', {'upload_id': d.STATE['upload_id']}, ev=ev)
             r.leaks()

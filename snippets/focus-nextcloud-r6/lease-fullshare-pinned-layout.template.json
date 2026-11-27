@@ -24,5 +24,6 @@
   "not_before_utc": "1970-01-01T00:00:00Z",
   "expires_utc": "1970-01-01T00:00:01Z",
   "reserve_bytes": 13958643712,
-  "memory_cap_bytes": 3221225472
+  "memory_cap_bytes": 3221225472,
+  "retain_verified_ha_on_preconversion_refusal": true
 }
