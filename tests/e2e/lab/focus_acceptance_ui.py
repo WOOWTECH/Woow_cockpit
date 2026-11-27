@@ -310,11 +310,19 @@ def case_safety_prunes(before, after, owned_prior, captured_jobs):
         proof.append({'id':bid,'type':'safety','events':matches})
     return proof
 
-def run(source, recovery_proof=None, recovery_proof_sha256=None):
+def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three_selected=False, helper_lease_path=None):
     sys.path.insert(0, str(HERE))
     import ha_import_e2e as h
     import ha_import_b1_e2e as b1
-    from focus_acceptance_ui_relay import Relay
+    if helper_three_selected:
+        import focus_acceptance_ui_helper as helper
+        helper_lease_path = helper_lease_path or Path('/tmp/parity-focus-20261127/lease-r1-helper-dev-d.json')
+        helper_lease = json.loads(helper_lease_path.read_bytes())
+        helper.validate_lease(helper_lease, subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
+            subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), time.time())
+    else:
+        from focus_acceptance_ui_relay import Relay
+    state_path = LAB/'run/focus_acceptance_r1_helper.json' if helper_three_selected else STATE
     h.DEVICE = 'woowbk-dev-d'
     h.require_isolated_device()  # before credentials or mutation lock
     fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
@@ -324,28 +332,41 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
         os.close(fd)
         raise RuntimeError('dev-d mutation lock busy') from None
     os.umask(0o077)
+    if helper_three_selected and os.path.lexists(state_path):
+        os.close(fd)
+        raise ValueError('helper guard already exists; preserve it and stop')
     previous = provenance = None
-    prior_guard = STATE.read_bytes() if STATE.exists() else None
+    prior_guard = state_path.read_bytes() if state_path.exists() else None
+    predecessor_guard = prior_guard
+    protected_page_files = {}
     try:
-        lease = json.loads(LEASE.read_text())
+        lease = json.loads((helper_lease_path if helper_three_selected else LEASE).read_text())
         pinned = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         if (lease['device'] != h.DEVICE or Path(lease['source']).resolve() != source
                 or not pinned.startswith(lease['source_commit'])
                 or (datetime.datetime.fromisoformat(lease['expires'])-datetime.datetime.now(datetime.timezone.utc)).total_seconds() < 45*60):
             raise ValueError('current exact R8 device/source lease needs45minutes for flow and recovery')
-        pending = prior_guard is not None and json.loads(prior_guard).get('recovery_verified') is not True
-        if pending:
-            if not recovery_proof:
-                raise ValueError('previous R8 recovery pending; explicit verified receipt required')
-            previous, provenance = verified_recovery(prior_guard, recovery_proof, recovery_proof_sha256)
-        elif recovery_proof or recovery_proof_sha256:
-            raise ValueError('independent recovery proof does not match a pending failed case')
+        if helper_three_selected:
+            helper.validate_lease(lease, subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(), pinned, time.time())
+            if prior_guard is not None or recovery_proof or recovery_proof_sha256:
+                raise ValueError('helper requires a fresh guard; no old helper override')
+            predecessor_guard = STATE.read_bytes()
+            previous, provenance, protected_page_files = helper.predecessor(lease, predecessor_guard, STATE, LAB/'evidence')
+        else:
+            pending = prior_guard is not None and json.loads(prior_guard).get('recovery_verified') is not True
+            if pending:
+                if not recovery_proof:
+                    raise ValueError('previous R8 recovery pending; explicit verified receipt required')
+                previous, provenance = verified_recovery(prior_guard, recovery_proof, recovery_proof_sha256)
+            elif recovery_proof or recovery_proof_sha256:
+                raise ValueError('independent recovery proof does not match a pending failed case')
     except Exception:
         os.close(fd)
         raise
     secrets = b1.Secrets([LAB/'secrets/b1-creds.env', LAB/'secrets/ha-import-creds.env'], LAB/'secrets/dev-d-markers.json')
     secrets.redact_tree = secrets.redact_structure
-    secrets.register('COCKPIT_PASSWORD', (LAB/'secrets/devadmin.pass').read_text().strip())
+    if not helper_three_selected:
+        secrets.register('COCKPIT_PASSWORD', (LAB/'secrets/devadmin.pass').read_text().strip())
     secrets.register('DEV_D_KIT', (LAB/'secrets/dev-d-kit.txt').read_text().strip())
     class Evidence(h.Evidence):
         def log(self, text):
@@ -357,7 +378,7 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
             print(name+(': PASS' if result else ': FAIL'), flush=True)
             return result
 
-    ev = Evidence(secrets, 'focus-acceptance-ui')
+    ev = Evidence(secrets, 'focus-acceptance-r1-helper' if helper_three_selected else 'focus-acceptance-ui')
     started = int(time.time()) - 1
     receipt = {'device': h.DEVICE, 'phase': 'preconditions', 'created_backups': [], 'ha_id': None,
                'ha_record_owned': False, 'catalog_added': False, 'baseline_restored': False,
@@ -375,19 +396,22 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
     uploaded = False
     state_armed = False
     recovery_deadline = None
+    helper_deadline = None
+    helper_trace = {'mode':'helper-three-selected','browser_used':False,'completed':False}
+    observed_marker_tokens = []
     if provenance:
         receipt['previous_independent_recovery'] = provenance
         receipt['protected_existing_backups'] = provenance['retained_case_archive_ids']
         # Preserve the pointer bytes in the NEW private case before any approved
         # new state can replace it. Old case files remain byte-identical.
         with (ev.dir/'previous-guard.json').open('xb') as handle:
-            handle.write(prior_guard)
+            handle.write(predecessor_guard)
 
     def save():
         ev.save('recovery.json', receipt)
         if not state_armed:
             return
-        with os.fdopen(os.open(STATE,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600),'w') as handle:
+        with os.fdopen(os.open(state_path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600),'w') as handle:
             json.dump(dict(receipt,evidence_dir=str(ev.dir)),handle)
 
     def require(name, condition):
@@ -481,6 +505,10 @@ print(json.dumps(out))''',{'sources':sources})
             raise h.Failed('read-only marker probe failed')
         reply = json.loads(proc.stdout)
         secrets.register_issued(reply['issued'])
+        if helper_three_selected:
+            for token in reply['issued']:
+                observed_marker_tokens.append({'app':app,'sha256':hashlib.sha256(token.encode()).hexdigest(),
+                    'length':len(token),'registered':token in secrets.secret_values()})
         if app == 'emqx' and not reply['issued']:
             raise h.Failed('EMQX marker token issuance not observed')
         return reply['markers']
@@ -494,6 +522,8 @@ print(json.dumps(out))''',{'sources':sources})
 
     def wait(job_id):
         remaining = 600 if recovery_deadline is None else min(600,int(recovery_deadline-time.monotonic()))
+        if helper_three_selected and recovery_deadline is None and helper_deadline is not None:
+            remaining = min(remaining, int(helper_deadline-time.monotonic()))
         if remaining <= 0:
             raise h.Failed('bounded recovery budget exhausted; retain copies')
         return h.wait_job(job_id,ev=ev,timeout=remaining)
@@ -502,7 +532,7 @@ print(json.dumps(out))''',{'sources':sources})
         chain, seen = [], set()
         current = first
         while current:
-            if current in seen or len(chain) >= 4:
+            if current in seen or len(chain) >= (5 if helper_three_selected else 4):
                 raise h.Failed('unexpected R8 chain layout')
             seen.add(current)
             receipt['inflight'] = current
@@ -519,12 +549,19 @@ print(json.dumps(out))''',{'sources':sources})
     # Same strict scan for static/moved values and the Cockpit cookie scan, using
     # the existing encoded-needle builder. Only counts return from the device.
     scan = scan_program(inspect.getsource(b1.secret_scan_needles))
+    old_helper_signals = {}
+    if helper_three_selected:
+        def interrupt_helper(_signum, _frame):
+            raise h.Failed('helper flow interrupted; recover own jobs')
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            old_helper_signals[signum] = signal.signal(signum, interrupt_helper)
     try:
         save()
         require('scan: exact reviewed rendered program parity',(REPO/'snippets/focus-acceptance/r8-scan-rendered.py').read_text()==scan)
         require('source: both reviewed checkouts clean', all(not subprocess.check_output(['git','-C',str(p),'status','--porcelain','--untracked-files=no'], text=True).strip() for p in (source, REPO)))
         require('fixture: original recorded full encrypted HA hash matches', FIXTURE.is_file() and sha(FIXTURE) == FIXTURE_SHA)
-        require('browser: existing package and Chromium ready', PLAYWRIGHT.is_file() and CHROMIUM.is_file())
+        if not helper_three_selected:
+            require('browser: existing package and Chromium ready', PLAYWRIGHT.is_file() and CHROMIUM.is_file())
         resources()
         installed = root_json(__import__('focus_acceptance_n8n').ENGINE_HASHES)
         lib = source/'backup-engine/woowbackup'
@@ -532,7 +569,8 @@ print(json.dumps(out))''',{'sources':sources})
                 and installed.get('helper') == sha(source/'backup-engine/woowtech-cockpit-backup'))
         ui = root_json('import hashlib,json; from pathlib import Path; p=Path("/usr/local/share/cockpit/woowtechbackup"); print(json.dumps({n:hashlib.sha256((p/n).read_bytes()).hexdigest() for n in ("backup.js","backup.css","index.html","manifest.json")}))')
         require('source: installed actual page equals frozen source', ui == {n:sha(source/'backup'/n) for n in ui})
-        require('Cockpit: existing socket active', h.root('systemctl','is-active','--quiet','cockpit.socket',timeout=60).returncode == 0)
+        if not helper_three_selected:
+            require('Cockpit: existing socket active', h.root('systemctl','is-active','--quiet','cockpit.socket',timeout=60).returncode == 0)
         status = ok('status')
         require('before: no active backup job', not status.get('active_job'))
         original_catalog, original_units, original_images, original_timer = catalog(), units(), images(), timer()
@@ -568,9 +606,10 @@ print(json.dumps(out))''',{'sources':sources})
         before_uploads={x['id'] for x in listing.get('ha_backups',[])}
         if previous:
             require('replay: every old archive remains a protected existing backup',set(receipt['protected_existing_backups']) <= before_backups)
-            require('replay: old HA record retained at exact derived SHA',
-                    any(x['id'] == previous['ha_id'] and x.get('sha256') == previous['derived_fixture_sha256']
-                        for x in listing.get('ha_backups',[])))
+            if not helper_three_selected or previous.get('ha_record_owned') is not True:
+                require('replay: old HA record retained at exact derived SHA',
+                        any(x['id'] == previous['ha_id'] and x.get('sha256') == previous['derived_fixture_sha256']
+                            for x in listing.get('ha_backups',[])))
         before_jobs={x['id'] for x in ok('jobs').get('jobs',[])}
         for app in APPS:
             before[app]=markers(app)
@@ -600,7 +639,7 @@ print(json.dumps(out))''',{'sources':sources})
         if original_timer.get('UnitFileState') not in ('masked','masked-runtime'):
             timer_changed=True
             require('setup: schedule masked as a bounded case', h.root('systemctl','mask',TIMER,timeout=60).returncode==0)
-        receipt['phase']='derive-and-ui'
+        receipt['phase']='derive-and-helper' if helper_three_selected else 'derive-and-ui'
         save()
         derive(FIXTURE,derived)
         receipt['ha_id']='ha-'+sha(derived)[:20]
@@ -610,36 +649,69 @@ print(json.dumps(out))''',{'sources':sources})
         require('upload: ownership is new or exact protected retained record',
                 receipt['ha_record_owned'] or (previous is not None and receipt['ha_id'] in before_uploads))
         save()
-        config={'ha_id':receipt['ha_id'],'fixture':str(derived),'password':secrets['COCKPIT_PASSWORD'],
-                'key':secrets['HA_BACKUP_KEY'],'evidence':str(ev.dir),'result':str(ev.dir/'browser.json'),
-                'playwright':str(PLAYWRIGHT),'chromium':str(CHROMIUM),'since':started,'cookie_scan':scan}
-        resources()
-        with Relay() as relay:
-            config['base']=relay.base
-            proc=subprocess.Popen(['node',str(HERE/'focus_acceptance_ui_page.mjs'),'--run'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        if helper_three_selected:
+            helper_deadline = time.monotonic()+20*60
+            receipt['mode']='helper-three-selected';save()
+            resources()
+            rc, uploaded_reply = h.upload(derived,ev=ev)
+            require('helper: exact derived real HA uploaded',rc==0 and uploaded_reply.get('ha_backup',{}).get('id')==receipt['ha_id'])
+            receipt['helper_check_request_id']=h.request_id('focus-r1-helper-check');save()
+            reply=ok('ha-check-start',{'ha_backup_id':receipt['ha_id'],'apps':helper.APPS,
+                'key':secrets['HA_BACKUP_KEY'],'request_id':receipt['helper_check_request_id']})
+            receipt['check_jobs']=[reply['job_id']];save()
+            checked=wait(reply['job_id'])
+            require('helper: current exact three-app check and no unreviewed confirmation',helper.check_ready(checked,receipt['ha_id']))
+            receipt['helper_import_request_id']=h.request_id('focus-r1-helper-import');save()
+            reply=ok('ha-import-start',{'ha_backup_id':receipt['ha_id'],'apps':helper.APPS,
+                'key':secrets['HA_BACKUP_KEY'],'request_id':receipt['helper_import_request_id'],
+                'check_job_id':checked['id'],'test_mode':False,'confirm':True,'then_restore':True,'overwrite':True})
+            receipt['helper_root_job_id']=reply['job_id'];save()
+            helper_trace['first_job_id']=reply['job_id']
+            sampler=helper.FirstUnitMemory(reply['job_id'],h.root);sampler.thread.start()
+            terminal=False
             try:
-                proc.communicate(json.dumps(config).encode(),timeout=20*60)
-            except subprocess.TimeoutExpired:
-                # SIGTERM lets Playwright close its Chromium children. Never
-                # use subprocess.run's immediate SIGKILL on a browser owner.
-                proc.send_signal(signal.SIGTERM)
+                records=follow(reply['job_id']);terminal=True
+                require('helper: failed EMQX followed by both linked successful pairs',helper.chain_complete(records))
+                helper_trace['completed']=True
+            finally:
+                helper_trace['memory']=sampler.finish(terminal)
+                ev.save('helper-trace.json',helper_trace)
+        else:
+            config={'ha_id':receipt['ha_id'],'fixture':str(derived),'password':secrets['COCKPIT_PASSWORD'],
+                    'key':secrets['HA_BACKUP_KEY'],'evidence':str(ev.dir),'result':str(ev.dir/'browser.json'),
+                    'playwright':str(PLAYWRIGHT),'chromium':str(CHROMIUM),'since':started,'cookie_scan':scan}
+            resources()
+            with Relay() as relay:
+                config['base']=relay.base
+                proc=subprocess.Popen(['node',str(HERE/'focus_acceptance_ui_page.mjs'),'--run'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
                 try:
-                    proc.communicate(timeout=15)
+                    proc.communicate(json.dumps(config).encode(),timeout=20*60)
                 except subprocess.TimeoutExpired:
-                    proc.kill(); proc.communicate()
-                raise h.Failed('bounded page timeout; adopt own jobs before recovery') from None
-        require('transport: private relay closed all exec children', not relay.children and not relay.thread.is_alive())
-        require('UI: real page completed one bounded flow',proc.returncode==0)
-        browser=json.loads((ev.dir/'browser.json').read_text())
-        for item in browser['checks']:
-            require(item['check'],item['ok'])
-        require('UI: browser result and issued-value scan complete',browser['completed'] and browser['issued_values_scanned'])
+                    # SIGTERM lets Playwright close its Chromium children. Never
+                    # use subprocess.run's immediate SIGKILL on a browser owner.
+                    proc.send_signal(signal.SIGTERM)
+                    try:
+                        proc.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        proc.kill(); proc.communicate()
+                    raise h.Failed('bounded page timeout; adopt own jobs before recovery') from None
+            require('transport: private relay closed all exec children', not relay.children and not relay.thread.is_alive())
+            require('UI: real page completed one bounded flow',proc.returncode==0)
+            browser=json.loads((ev.dir/'browser.json').read_text())
+            for item in browser['checks']:
+                require(item['check'],item['ok'])
+            require('UI: browser result and issued-value scan complete',browser['completed'] and browser['issued_values_scanned'])
     except Exception as error:
-        ev.check('R8: bounded real page flow completed',False,type(error).__name__)
+        ev.check('R1 helper: bounded flow completed' if helper_three_selected else 'R8: bounded real page flow completed',False,type(error).__name__)
     finally:
+        if helper_three_selected:
+            # One soft stop enters bounded recovery. Further soft signals must
+            # not race its ordinary baseline restores; hard loss retains guard.
+            for signum in old_helper_signals:
+                signal.signal(signum, signal.SIG_IGN)
         if not state_armed:
             ev.check('preconditions: old guard retained without device mutation',
-                     (STATE.read_bytes() if STATE.exists() else None) == prior_guard)
+                     (state_path.read_bytes() if state_path.exists() else None) == prior_guard)
             receipt['phase']='preconditions-stopped'
             save()
             ev.finish()
@@ -648,6 +720,8 @@ print(json.dumps(out))''',{'sources':sources})
                                    'recovery_verified':False,'previous_guard_unchanged':True,
                                    'commercial_acceptance':'not-complete'})
             os.close(fd)
+            for signum, handler in old_helper_signals.items():
+                signal.signal(signum, handler)
             print('R8 preconditions stopped; previous failed case retained')
             return 1
         recovery_deadline=time.monotonic()+20*60
@@ -657,19 +731,54 @@ print(json.dumps(out))''',{'sources':sources})
             if receipt['ha_id'] and before_jobs is not None:
                 listing=ok('list')
                 uploaded=receipt['ha_id'] in {x['id'] for x in listing.get('ha_backups',[])}
-                own=[x for x in ok('jobs').get('jobs',[]) if x['id'] not in before_jobs and x.get('params',{}).get('ha_backup_id')==receipt['ha_id']]
-                receipt['check_jobs']=[x['id'] for x in own if x.get('type')=='verify']
-                save()
-                roots=[x for x in own if x.get('type')=='backup' and x.get('params',{}).get('source')=='ha']
-                roots.sort(key=lambda x:x['id'])
+                if helper_three_selected:
+                    intents={kind:receipt[name] for kind,name in (('check','helper_check_request_id'),('import','helper_import_request_id')) if name in receipt}
+                    resolved=root_json(helper.RESOLVE,{'requests':intents,'ha_id':receipt['ha_id']})
+                    receipt['check_jobs']=[resolved['check']] if 'check' in resolved else []
+                    own=[{'id':jid,'type':'verify'} for kind,jid in resolved.items() if kind=='check']
+                    roots=[{'id':resolved['import']}] if 'import' in resolved else []
+                    save()
+                else:
+                    own=[x for x in ok('jobs').get('jobs',[]) if x['id'] not in before_jobs and x.get('params',{}).get('ha_backup_id')==receipt['ha_id']]
+                    receipt['check_jobs']=[x['id'] for x in own if x.get('type')=='verify']
+                    save()
+                    roots=[x for x in own if x.get('type')=='backup' and x.get('params',{}).get('source')=='ha']
+                    roots.sort(key=lambda x:x['id'])
                 if roots:
                     records=follow(roots[0]['id'])
-                    ev.check('chain: two real conversions and restores succeeded',chain_complete(records))
-                    job_units=root_json('import json,re,sys; from pathlib import Path; ids=json.load(sys.stdin)["ids"]; assert all(re.fullmatch(r"j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}",x) for x in ids); p=Path("/var/lib/woowtech-backup/jobs"); print(json.dumps([json.loads((p/(x+".json")).read_text()).get("unit") for x in ids]))',{'ids':[j['id'] for j in records]})
-                    ev.check('chain: every job shares the first systemd unit',job_units==['woowtech-backup-'+records[0]['id']+'.service']*len(records))
-                    ev.check('chain: each restore has its own safety backup',all(j.get('result',{}).get('safety_backup_id') for j in records if j.get('type')=='restore'))
-                    ev.check('live: Hermes HA sessions replaced original marker',markers('hermes').get('session_count',0)>=5 and 'woowbk-lab-baseline' not in markers('hermes').get('sessions',{}))
-                    ev.check('live: Omnigent data changed from original baseline',markers('omnigent')!=before['omnigent'])
+                    if helper_three_selected:
+                        helper_trace['chain_verified']=helper.chain_complete(records)
+                        ev.check('helper: five actual linked jobs with isolated EMQX failure',helper_trace['chain_verified'])
+                        try:
+                            native=root_json('import json,re,sys; from pathlib import Path; ids=json.load(sys.stdin)["ids"]; assert len(ids)==5 and all(re.fullmatch(r"j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}",x) for x in ids); p=Path("/var/lib/woowtech-backup/jobs"); rows=[json.loads((p/(x+".json")).read_bytes()) for x in ids]; print(json.dumps([{k:r.get(k) for k in ("id","unit","type","state")} for r in rows]))',{'ids':[j['id'] for j in records]})
+                            helper_trace['native_units']=[j['unit'] for j in native]
+                            helper_trace['native_units_verified']=(len(native)==5 and all(n['id']==r['id'] and n['type']==r['type'] and n['state']==r['state'] for n,r in zip(native,records))
+                                and helper_trace['native_units']==['woowtech-backup-'+records[0]['id']+'.service']*5)
+                            ev.save('helper-native-jobs.json',native)
+                        except Exception as error:
+                            helper_trace['native_units_verified']=False
+                            helper_trace['native_units_error_class']=type(error).__name__
+                        ev.check('helper: native actual job metadata shares the first unit',helper_trace.get('native_units_verified') is True)
+                        memory=helper_trace.get('memory',{})
+                        ev.check('helper: first unit sampled through terminal chain below1GiB',memory.get('samples',0)>0
+                            and 0<memory.get('peak_bytes',0)<1024**3 and memory.get('through_terminal_chain') is True and memory.get('sampler_stopped') is True)
+                        ev.save('helper-trace.json',helper_trace)
+                    else:
+                        ev.check('chain: two real conversions and restores succeeded',chain_complete(records))
+                        job_units=root_json('import json,re,sys; from pathlib import Path; ids=json.load(sys.stdin)["ids"]; assert all(re.fullmatch(r"j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}",x) for x in ids); p=Path("/var/lib/woowtech-backup/jobs"); print(json.dumps([json.loads((p/(x+".json")).read_text()).get("unit") for x in ids]))',{'ids':[j['id'] for j in records]})
+                        ev.check('chain: every job shares the first systemd unit',job_units==['woowtech-backup-'+records[0]['id']+'.service']*len(records))
+                    if helper_three_selected:
+                        safeties=[j.get('result',{}).get('safety_backup_id') for j in records if j.get('type')=='restore']
+                        helper_trace['distinct_restore_safeties_verified']=len(safeties)==2 and all(safeties) and len(set(safeties))==2
+                        hermes_live,omni_live=markers('hermes'),markers('omnigent')
+                        helper_trace['live_data_verified']=(hermes_live.get('session_count',0)>=5
+                            and 'woowbk-lab-baseline' not in hermes_live.get('sessions',{}) and omni_live!=before['omnigent'])
+                        ev.check('helper: distinct safety backups and both actual HA live data',
+                            helper_trace['distinct_restore_safeties_verified'] and helper_trace['live_data_verified'])
+                    else:
+                        ev.check('chain: each restore has its own safety backup',all(j.get('result',{}).get('safety_backup_id') for j in records if j.get('type')=='restore'))
+                        ev.check('live: Hermes HA sessions replaced original marker',markers('hermes').get('session_count',0)>=5 and 'woowbk-lab-baseline' not in markers('hermes').get('sessions',{}))
+                        ev.check('live: Omnigent data changed from original baseline',markers('omnigent')!=before['omnigent'])
                 # A check may still run after the browser exited. Wait for it,
                 # and refuse unknown active jobs before any baseline restore.
                 for j in own:
@@ -719,8 +828,20 @@ print(json.dumps(out))''',{'sources':sources})
                     and report['regular_json_roots_scanned']==2
                     and report['archive_index_sidecars_scanned'] == sidecars
                     and sidecars >= len(after))
-            browser_file=ev.dir/'browser.json'
-            require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)
+            if helper_three_selected:
+                helper_trace.update(observed_marker_tokens=len(observed_marker_tokens),
+                    all_observed_marker_tokens_registered=bool(observed_marker_tokens) and all(t['registered'] for t in observed_marker_tokens),
+                    marker_token_metadata=observed_marker_tokens,actual_sidecars=sidecars,
+                    registered_token_scan=report,host_registered_value_hits=host_hits,
+                    cookie_coverage='not-applicable-no-browser-or-relay')
+                ev.save('helper-trace.json',helper_trace)
+                require('helper: actual chain memory metadata baseline and registered-token scan before deletion',
+                    helper.cleanup_ready(helper_trace,receipt,report,host_hits))
+                require('helper: terminal page guard and evidence remain byte unchanged',
+                    all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
+            else:
+                browser_file=ev.dir/'browser.json'
+                require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)
             require('recovery: backup inventory contains no untracked new archive', before_backups is not None and after-before_backups==set(receipt['created_backups']))
             safe=True
             receipt['phase']='owned-cleanup'; save()
@@ -741,7 +862,7 @@ print(json.dumps(out))''',{'sources':sources})
                     {x['id'] for x in ok('list').get('backups',[])}==expected_prior)
             retained_uploads=ok('list').get('ha_backups',[])
             require('cleanup: original HA inventory retained',{x['id'] for x in retained_uploads}==before_uploads)
-            if previous:
+            if previous and (not helper_three_selected or previous.get('ha_record_owned') is not True):
                 require('cleanup: protected old HA remains at exact derived SHA',
                         any(x['id']==previous['ha_id'] and x.get('sha256')==previous['derived_fixture_sha256'] for x in retained_uploads))
         except Exception as error:
@@ -754,6 +875,9 @@ print(json.dumps(out))''',{'sources':sources})
                 require('recovery: original schedule state returned',timer()==original_timer)
             h.require_isolated_device()
             require('after: networknone and zero published ports preserved',True)
+            if helper_three_selected:
+                require('helper: terminal page guard and evidence unchanged after recovery',
+                    all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
         except Exception as error:
             safe=False
             ev.check('after: timer and isolation verified',False,type(error).__name__)
@@ -766,7 +890,9 @@ print(json.dumps(out))''',{'sources':sources})
                                'baseline_restored':receipt['baseline_restored'],'recovery_verified':safe,
                                'commercial_acceptance':'not-complete'})
         os.close(fd)
-        print('R8 real Cockpit: '+str(sum(x['ok'] for x in ev.results))+'/'+str(len(ev.results))+(' PASS' if good and safe else ' FAIL'))
+        for signum, handler in old_helper_signals.items():
+            signal.signal(signum, handler)
+        print(('R1 helper: ' if helper_three_selected else 'R8 real Cockpit: ')+str(sum(x['ok'] for x in ev.results))+'/'+str(len(ev.results))+(' PASS' if good and safe else ' FAIL'))
     return 0 if good and safe else 1
 
 
@@ -776,12 +902,19 @@ def main(argv=None):
     parser.add_argument('--source',type=Path,default=REPO)
     parser.add_argument('--recovery-proof',type=Path)
     parser.add_argument('--recovery-proof-sha256')
+    parser.add_argument('--helper-three-selected',action='store_true')
+    parser.add_argument('--lease',type=Path,help='separate exact R1 helper lease only')
     args=parser.parse_args(argv)
     if not args.run:
         for p in (Path(__file__),HERE/'focus_acceptance_ui_relay.py'):
             compile(p.read_text(),str(p),'exec')
         print('R8 controller prepared: offline syntax PASS; review and dev-d lease required')
         return 0
+    if args.helper_three_selected:
+        return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256,
+            helper_three_selected=True,helper_lease_path=args.lease)
+    if args.lease:
+        parser.error('--lease is only for --helper-three-selected')
     return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256)
 
 
