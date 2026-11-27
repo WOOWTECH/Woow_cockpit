@@ -628,6 +628,12 @@ def nc_version(value):
     return value if isinstance(value, str) and NC_VERSION_RE.fullmatch(value) else None
 
 
+def nc_true(value):
+    """An app config boolean read the way Nextcloud reads it (AppConfig::getValueBool: 1, true, yes or on, any case).
+    Nextcloud 35's `occ encryption:enable` stores '1', older releases stored 'yes'."""
+    return isinstance(value, str) and value.lower() in ('1', 'true', 'yes', 'on')
+
+
 def _enforced(config):
     """Nextcloud enforces two-factor only for the string 'true' (lib/private/Authentication/TwoFactorAuth/
     MandatoryTwoFactor.php getState)."""
@@ -1739,7 +1745,7 @@ def database_issues(sink, src, data, details, target):
                           action='請先在這台安裝帶有這個擴充功能的 PostgreSQL 映像，或在 HA 移除它之後重新備份。')
             if details.get('schemas'):
                 sink.confirm('nextcloud.schemas-skipped', MSG_SCHEMAS, details['schemas'])
-            if details.get('encryption') == 'yes':
+            if nc_true(details.get('encryption')):
                 reasons.append('encryption_enabled')
             storages = [s for s in details.get('local_storages') or [] if isinstance(s, str)]
             if isinstance(config, dict) and isinstance(config.get('datadirectory'), str):
