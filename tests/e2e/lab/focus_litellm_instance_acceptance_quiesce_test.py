@@ -125,6 +125,25 @@ class QuiescenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'foreign unit/config'):d.controller().pause()
             self.assertEqual(d.actions,[])
 
+    def test_a_restart_between_admission_and_recheck_is_not_a_changed_unit(self):
+        # dev-d b11: NRestarts went up by one between the admission look and the recheck; nothing had been done
+        def restarted(facts):facts['unit']['NRestarts']='43'
+        def starting(facts):facts['unit'].update(SubState='start',MainPID='77')
+        with tempfile.TemporaryDirectory() as root:
+            d=Device(root);d.glitches=[lambda f:None,starting,restarted]        # admission ok, recheck caught mid-start, then restarted
+            d.controller().pause()
+            self.assertTrue(d.j['paused']);self.assertEqual(d.actions,['stop'])
+            self.assertEqual(d.j['before_stop_recheck']['unit']['NRestarts'],'43')
+
+    def test_another_failure_before_the_stop_still_refuses_without_acting(self):
+        def other_failure(facts):facts['unit']['ExecMainStatus']='2'
+        def recovered(facts):facts['unit'].update(ActiveState='active',SubState='running',MainPID='9',Result='success')
+        for label,glitch in (('another exit status',other_failure),('the unit started working',recovered)):
+            with self.subTest(label),tempfile.TemporaryDirectory() as root:
+                d=Device(root);d.glitches=[lambda f:None]+[glitch]*m.ADMISSION_TRIES
+                with self.assertRaisesRegex(ValueError,'unit changed before pause'):d.controller().pause()
+                self.assertEqual(d.actions,[]);self.assertEqual(d.j['pending'],'pause');self.assertFalse(d.j['paused'])
+
     def test_the_admission_bounds_are_small_and_the_lease_bounds_did_not_change(self):
         self.assertLessEqual(m.ADMISSION_TRIES*(m.ADMISSION_WAIT_SECONDS+5),120)             # well inside the 300 s outer limit
         self.assertEqual(m.BOUNDS['outer_seconds'],300)

@@ -99,9 +99,14 @@ class Protocol:
         facts=self.admit()
         self.j.update(original=facts,pending='pause',paused=False,resumed=False)
         self.save()  # full original metadata + durable obligation BEFORE stop
-        latest=self.read(False);self.j['before_stop_recheck']=latest;self.save()
-        binding(latest,self.r['before'],facts)
-        if latest['unit']!=facts['unit']:raise ValueError('unit changed before pause')
+        # The unit restarts every few seconds, so NRestarts and the moment in its restart cycle can change between two reads
+        # (b11: one restart between the admission and this recheck). What must not change is that it is the SAME known failure.
+        for attempt in range(1,self.tries+1):
+            latest=self.read(False);self.j['before_stop_recheck']=latest;self.save()
+            binding(latest,self.r['before'],facts)
+            if known_failure(latest['unit']) and failure(latest['unit'])==failure(facts['unit']):break
+            if attempt==self.tries:raise ValueError('unit changed before pause')
+            self.sleep(self.wait)
         self.act('stop')
         after=self.read(True);self.j['after_pause']=after;self.save() # retain failed samples too
         binding(after,self.r['before'],facts);exact_inventory(after,self.r)
