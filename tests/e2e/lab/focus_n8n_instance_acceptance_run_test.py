@@ -666,11 +666,14 @@ class SecretKeepTests(Fixture):
 
 class ImportHygieneTests(unittest.TestCase):
     def test_importing_the_device_operations_does_not_change_the_hosts_bytecode_settings(self):
-        # final integration tip: a later py_compile in the same test process was sent to /nonexistent by this import
-        code=("import sys;sys.path.insert(0,%r);before=(sys.pycache_prefix,sys.dont_write_bytecode);"
-              "import focus_n8n_instance_acceptance_ops;print(before==(sys.pycache_prefix,sys.dont_write_bytecode))")%str(Path(run.__file__).parent)
-        p=subprocess.run([sys.executable,'-I','-c',code],capture_output=True,timeout=60)
-        self.assertEqual((p.returncode,p.stdout.strip()),(0,b'True'),p.stderr[-300:])
+        # final integration tip: a later py_compile in the same test process was sent to /nonexistent by such an import
+        for module in ('focus_n8n_instance_acceptance_ops','focus_n8n_instance_acceptance_source_ops',
+                       'focus_n8n_instance_acceptance_source2_ops'):
+            with self.subTest(module):
+                code=("import sys;sys.path.insert(0,%r);before=(sys.pycache_prefix,sys.dont_write_bytecode);"
+                      "import %s;print(before==(sys.pycache_prefix,sys.dont_write_bytecode))")%(str(Path(run.__file__).parent),module)
+                p=subprocess.run([sys.executable,'-I','-c',code],capture_output=True,timeout=60)
+                self.assertEqual((p.returncode,p.stdout.strip()),(0,b'True'),p.stderr[-300:])
 
     def test_as_the_device_program_it_still_turns_bytecode_off_first(self):
         text=(Path(run.__file__).parent/'focus_n8n_instance_acceptance_ops.py').read_text()
