@@ -1,0 +1,36 @@
+{
+  "broker": {
+    "artifact_sha256": null,
+    "destination_digest_lookup": "not tested; MQTT client full pinned reference remains separate strict gate",
+    "every_ordered_layer_diff_id_proof": "mandatory future actual shared-validator gate",
+    "raw_config_and_all_fields_match_proof": "not yet exported in proposed format; exact raw config SHA required",
+    "required_cached_manifest": "sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937",
+    "required_config": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+    "source_reference": "docker.io/emqx/emqx:5.8.9"
+  },
+  "direct_docker_archive": "diagnostic alternative; strict legacy-link refusal retained; no fallback save",
+  "existing_emqx_future_diagnostic_commit": "230ad6b4a3ea4ccaca4f5525bbb677972ae4edac",
+  "existing_od_manifest_sha256": "f563a9bf4123af20f65247ab752169e4664c7e0d179806711c7957d70687f9aa",
+  "existing_od_native_source": "516e02a2808e8fe709d91dda976fac42990ec6c7",
+  "implementation_boundary": "one-broker caller and reviewed identity API still required; current three-image controller does not implement proposed case",
+  "kind": "one-broker-transport-prepared-choices",
+  "native_executed": false,
+  "no_new_device_or_cleanup_or_d_reads": true,
+  "primary_sources": [
+    "https://raw.githubusercontent.com/containers/podman/v6.1.1/docs/source/markdown/podman-save.1.md.in",
+    "https://raw.githubusercontent.com/containers/podman/v6.1.1/vendor/go.podman.io/common/libimage/save.go",
+    "https://raw.githubusercontent.com/containers/podman/v6.1.1/vendor/go.podman.io/image/v5/docker/internal/tarfile/writer.go"
+  ],
+  "product_files_modified": false,
+  "proposal_patch_sha256": "107664ba75d1eba68e9867689930ea3e83d2d7798a267ca81fb9aa352800cabf",
+  "recommended": "docker-dir-to-regular-docker-archive",
+  "shared_api_patch_base": "b8a8e21d7ac985d327451cafbd12d05dc7aefb37",
+  "shared_api_patch_state": "unapplied; git apply --check passes; no behavior gate yet",
+  "shared_modules_sha256": {
+    "backup-engine/woowbackup/pg16_bundle.py": "d03a6c21999e6b89136603ee9c60505fc9ba86987c7a195bf6693ad14eaa76e5",
+    "backup-engine/woowbackup/pg16_docker_dir.py": "68b37da7e4c09e1e83a8037d77a74d251693bf8f37b665e687e1542f63414613",
+    "backup-engine/woowbackup/pg16_oci.py": "dcaa85c5c066cc836efe7efb1e8e3f0c67c04f28eef1147b5d0b8a2c4ae5a37d",
+    "scripts/package_odoo_pg16.py": "8caf734efb9e0225ed34c26a4ceb76317fc9240ad0ee2bdf1d0e710ec4a3217a"
+  },
+  "summary_written_at": "2026-11-27T01:59:50.905098+00:00"
+}
