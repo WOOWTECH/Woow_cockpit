@@ -200,6 +200,7 @@ class PG16SourceTests(unittest.TestCase):
                 old=rows[i];rows[i]=[old[0],old[1],['changed=1']]
                 self.assertNotEqual(common.role_state()['role_settings'],original['role_settings']);rows[i]=old
         self.assertNotIn('rolconfig',common.ROLE_ROWS_SQL)
+        self.assertFalse(any('rolconfig' in q for q in host.plan.case_sql(NAME).values()))
         self.assertNotIn('WHERE',common.ROLE_SETTINGS_SQL.upper())
         self.assertEqual(common.ROLE_SETTINGS_SQL.count('LEFT JOIN'),2)
 
