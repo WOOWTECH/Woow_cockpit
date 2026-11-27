@@ -27,14 +27,25 @@ def load(name):
 fx = load('focus_emqx_r4_fixtures')
 
 
-def runtime_parts(*names):
+def runtime_parts(*names, **extra):
     source = ast.parse((HERE / 'focus_emqx_r4_runtime.py').read_text())
     nodes = [x for x in source.body if isinstance(x, (ast.FunctionDef, ast.ClassDef)) and x.name in names]
     scope = {'Path': Path, 're': __import__('re'), 'ROOT': HERE, 'JOB': 'offline-r4', 'fx': fx,
              'base64': __import__('base64'), 'subprocess': SimpleNamespace(PIPE=-1, run=mock.Mock()),
              'shutil': SimpleNamespace(disk_usage=lambda _: SimpleNamespace(free=20 * 1024**3))}
+    scope.update(extra)
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), '<r4-owned-functions>', 'exec'), scope)
     return scope
+
+
+def runtime_constants(*names):
+    """Literal module constants of the runtime, read without importing it (it needs the device's engine)."""
+    found = {}
+    for node in ast.parse((HERE / 'focus_emqx_r4_runtime.py').read_text()).body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in names):
+            found[node.targets[0].id] = ast.literal_eval(node.value)
+    return found
 
 
 class GeneratedInputsTests(unittest.TestCase):
@@ -160,6 +171,26 @@ class DriverBoundaryTests(unittest.TestCase):
         self.assertEqual(anonymous[9], 2); self.assertEqual(named[9], 194)
         self.assertEqual(named[1], len(named) - 2)
         self.assertIn(fx.DUMMY_PASSWORD.encode(), named)
+
+    def test_http_auth_cases_retry_a_refused_login_while_the_backend_reconnects(self):
+        # http_dummy native01 (2026-11-27): the loopback dummy was ready, yet the first login was refused. EMQX's HTTP
+        # backend had tried the dummy before it listened and reconnects only on its own health check.
+        consts = runtime_constants('HTTP_AUTH_CASES', 'HTTP_AUTH_SETTLE', 'HTTP_AUTH_PAUSE')
+        self.assertEqual(set(consts['HTTP_AUTH_CASES']), {'http_dummy', 'lost_auth_setting'})
+        def login(case_id, codes, ticks):
+            answers, clock, probes = iter(codes), iter(ticks), []
+            scope = runtime_parts('login_code', mqtt_probe=lambda *a, **k: next(answers), PROBES=probes,
+                                  time=SimpleNamespace(monotonic=lambda: next(clock), sleep=lambda _: None), **consts)
+            return scope['login_code'](None, 'emqx-ha', case_id), probes
+        code, probes = login('http_dummy', [5, 5, 0], [0] * 10)
+        self.assertEqual((code, probes), (0, [{'role': 'emqx-ha', 'codes': [5, 5, 0]}]))
+        # Every other case is judged on its first answer: a dead row stays one refused login.
+        self.assertEqual(login('dead_row', [5], [0] * 10), (5, [{'role': 'emqx-ha', 'codes': [5]}]))
+        # The wait is bounded and the last code is what counts.
+        step = consts['HTTP_AUTH_SETTLE'] // 4
+        code, probes = login('http_dummy', [5] * 20, range(0, 1000, step))
+        self.assertEqual(code, 5)
+        self.assertLessEqual(len(probes[0]['codes']), 6)
 
     def test_all_prepared_python_is_parseable_without_executing_native(self):
         for path in HERE.glob('focus_emqx_r4*.py'): ast.parse(path.read_text())

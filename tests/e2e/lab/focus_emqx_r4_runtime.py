@@ -29,7 +29,11 @@ from woowbackup.errors import BackupError
 LIMIT = 256 * 1024**2
 JOB = ''
 CHECKS = []
+PROBES = []  # every login's CONNACK codes, in order (login_code)
 STAGE = 'preflight'
+HTTP_AUTH_CASES = ('http_dummy', 'lost_auth_setting')
+HTTP_AUTH_SETTLE = 45  # seconds a refused login is retried while EMQX's HTTP backend reconnects to the dummy
+HTTP_AUTH_PAUSE = 3
 
 
 def check(name, value=True):
@@ -233,6 +237,19 @@ def mqtt_probe(tmp, role, username='r4_source', password=fx.DUMMY_PASSWORD, *, t
     return int(match[1])
 
 
+def login_code(tmp, role, case_id, *args, **kwargs):
+    """mqtt_probe's CONNACK code. The HTTP-authentication cases start their loopback dummy only after the broker
+    booted, so EMQX's HTTP backend may still be reconnecting to it (it retries on its resource health check): there
+    a refused login is tried again for up to HTTP_AUTH_SETTLE seconds. Only the last code counts; all are in PROBES."""
+    codes = [mqtt_probe(tmp, role, *args, **kwargs)]
+    deadline = time.monotonic() + (HTTP_AUTH_SETTLE if case_id in HTTP_AUTH_CASES else 0)
+    while codes[-1] != 0 and time.monotonic() < deadline:
+        time.sleep(HTTP_AUTH_PAUSE)
+        codes.append(mqtt_probe(tmp, role, *args, **kwargs))
+    PROBES.append({'role': role, 'codes': codes})
+    return codes[-1]
+
+
 def read_source(tmp):
     readings = {'counts': emqx.parse_counts(emqx.evaluate(tmp, 'emqx-ha', emqx.COUNT_EXPR)),
         'authn': emqx.parse_authn(emqx.evaluate(tmp, 'emqx-ha', emqx.AUTHN_EXPR)),
@@ -329,7 +346,8 @@ def main(case_id):
             emqx.ctl(tmp, 'emqx-ha', ['conf', 'load', '--replace', '/fixture/dead-update.json'])
             check('normal_hash_change_makes_row_dead', mqtt_probe(tmp, 'emqx-ha') != 0)
         else:
-            code = mqtt_probe(tmp, 'emqx-ha', None, None) if case_id == 'noauth' else mqtt_probe(tmp, 'emqx-ha')
+            code = (login_code(tmp, 'emqx-ha', case_id, None, None) if case_id == 'noauth'
+                    else login_code(tmp, 'emqx-ha', case_id))
             check('synthetic_source_connects', code == 0)
         readings = read_source(tmp)
         raw = emqx.read_effective_config(exec_read(tmp, 'emqx-ha'))
@@ -391,9 +409,10 @@ def main(case_id):
             check('all_roots_and_tables_stable_after_restart', not emqx.compare_readback(record, after))
             if case_id == 'http_dummy': emqx.evaluate(tmp, 'emqx-new', HTTP_DUMMY)
             case_assertions(tmp, case_id)
-            if case_id == 'dead_row': check('dead_row_remains_dead', mqtt_probe(tmp, 'emqx-new') != 0)
-            elif case_id == 'noauth': check('anonymous_remains_enabled', mqtt_probe(tmp, 'emqx-new', None, None) == 0)
-            else: check('source_account_works_after_restart', mqtt_probe(tmp, 'emqx-new') == 0)
+            if case_id == 'dead_row': check('dead_row_remains_dead', login_code(tmp, 'emqx-new', case_id) != 0)
+            elif case_id == 'noauth':
+                check('anonymous_remains_enabled', login_code(tmp, 'emqx-new', case_id, None, None) == 0)
+            else: check('source_account_works_after_restart', login_code(tmp, 'emqx-new', case_id) == 0)
             verify(tmp, record)
         check('generated_target_unchanged', original == emqx.boot_form(exec_read(tmp, 'emqx-ha')))
     STAGE = 'cleanup'
@@ -403,12 +422,12 @@ def main(case_id):
     return {'ok': True, 'case': case_id, 'job_id': JOB, 'checks': CHECKS, 'image': fx.IMAGE,
         'scope': 'generated internal candidate/restart/postcheck delta, not package install or original D0 fullflow',
         'package_smoke_executed': False, 'catalog_access': False, 'installed_source_access': False,
-        'unrelated_container_churn': after[0] != before[0]}
+        'unrelated_container_churn': after[0] != before[0], 'probes': PROBES}
 
 
 if __name__ == '__main__':
     try: result = main(sys.argv[1])
     except Exception as error:
         result = {'ok': False, 'case': sys.argv[1], 'job_id': JOB, 'stage': STAGE,
-                  'reason': type(error).__name__, 'checks': CHECKS, 'private_dir': str(ROOT)}
+                  'reason': type(error).__name__, 'checks': CHECKS, 'probes': PROBES, 'private_dir': str(ROOT)}
     print(json.dumps(result, sort_keys=True)); raise SystemExit(0 if result['ok'] else 1)
