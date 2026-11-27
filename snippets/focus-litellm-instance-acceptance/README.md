@@ -60,7 +60,14 @@ space >=13GiB reserve +8GiB peak. Private work is under `/home/appowner`, never
 the device's small `/tmp`. Engine SpaceGuard/Watchdog/output guards stay active.
 
 First offline slice: four real filesystem CAS/absence/foreign-edit and catalog
-shape checks pass under the host guard. Additional controller/recovery tests
-and exact image-only proposal follow before requesting any runtime lease.
+shape checks passed under the host guard. The final controller gate additionally
+covers lost replies, compiled programs, real process groups and strict rollback
+requirements. Exact image-only command, source/recipe bindings, ownership,
+budgets, baseline pin and recovery are in `image-only-proposal.md` for review.
+The updated full read-only baseline pin is
+`60a8e16f1bfe4d0a86ae9de03b3a16580884eff9e40a4922f54b2451929609aa`.
+Earlier raw observations remain preserved. The builder has a device-side600s
+process-group supervisor,30s termination/wait and actual disk reserve watch;
+host transport timeout alone cannot satisfy terminal-state proof.
 Historical original80, generated PG87, product companion5 and parent145 gates
 remain separately scoped evidence; none is an original whole-instance pass.

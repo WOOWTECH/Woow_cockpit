@@ -174,14 +174,21 @@ def inventory():
         volumes[name] = owner('podman','volume','inspect','--format','{{.CreatedAt}}',name).stdout.decode().strip()
     secrets = dict(line.split(' ',1) for line in owner('podman','secret','ls','--format','{{.Name}} {{.ID}}').stdout.decode().splitlines())
     containers = dict(line.split(' ',1) for line in owner('podman','ps','-a','--no-trunc','--format','{{.Names}} {{.ID}}').stdout.decode().splitlines())
-    images = owner('podman','images','--no-trunc','--format','{{.ID}}').stdout.decode().splitlines()
+    external = dict(line.split(' ',1) for line in owner('podman','ps','-a','--external','--no-trunc','--format','{{.Names}} {{.ID}}').stdout.decode().splitlines())
+    images = owner('podman','images','--all','--no-trunc','--format','{{.ID}}').stdout.decode().splitlines()
+    refs = {}
+    for line in owner('podman','images','--all','--no-trunc','--format','{{.Repository}}:{{.Tag}} {{.ID}}').stdout.decode().splitlines():
+        ref, image = line.split(' ',1)
+        if '<none>' not in ref: refs[ref] = image.removeprefix('sha256:')
     active = []
     for p in Path('/var/lib/woowtech-backup/jobs').glob('j*.json'):
         value = json.loads(read_regular(p)[0])
         if value.get('state') in ('queued','running'): active.append(p.stem)
     networks = dict(line.split(' ',1) for line in owner('podman','network','ls','--no-trunc','--format','{{.Name}} {{.ID}}').stdout.decode().splitlines())
-    return {'catalogs':catalogs,'files':files,'volumes':volumes,'secrets':secrets,'containers':containers,'networks':networks,
+    return {'catalogs':catalogs,'files':files,'volumes':volumes,'secrets':secrets,'containers':containers,
+            'external_containers':external,'networks':networks,
             'images':sorted(set(x.removeprefix('sha256:') for x in images)),
+            'image_refs':refs,
             'running':sorted(owner('podman','ps','--format','{{.Names}}').stdout.decode().splitlines()),
             'units':{u:unit_state(u) for u in UNITS},'timer':unit_state(TIMER,root=True),'active_jobs':active,
             'package':Path(APP+'/Woow_podman_litellm').exists(),
@@ -193,6 +200,99 @@ def engine_hashes():
     result = {str(p.relative_to(root)):read_regular(p)[1]['sha256'] for p in root.rglob('*.py') if '__pycache__' not in p.parts}
     result['../woowtech-cockpit-backup'] = read_regular('/usr/local/libexec/woowtech-cockpit-backup')[1]['sha256']
     return result
+
+
+def image_configs():
+    result = {}
+    for image in inventory()['images']:
+        if not re.fullmatch(r'[0-9a-f]{64}',image): raise ValueError('image config identity')
+        p = owner('podman','image','inspect','--format',
+            '{{.ID}}\n{{.Architecture}}\n{{.Os}}\n{{json .RootFS.Layers}}\n{{json .Config.Volumes}}\n{{.Config.User}}\n'
+            '{{index .Config.Labels "io.woowtech.lab.derived-from"}}\n{{index .Config.Labels "io.woowtech.focus.case"}}',image)
+        lines = p.stdout.decode().removesuffix('\n').split('\n')
+        if len(lines) != 8: raise ValueError('fixed image metadata unreadable')
+        if lines[0].removeprefix('sha256:') != image: raise ValueError('image config changed')
+        result[image] = {'architecture':lines[1],'os':lines[2],'layers':json.loads(lines[3]) or [],
+                         'volumes':json.loads(lines[4]),'user':lines[5],'base':lines[6],'case':lines[7]}
+    return result
+
+
+def disk_free():
+    return min(os.statvfs(p).f_bavail*os.statvfs(p).f_frsize for p in
+               (APP,'/var/lib/woowtech-backup/staging','/var/lib/woowtech-backup'))
+
+
+def image_build(store, program):
+    base = '0c71bec8f80e3445267e9bc08495d3782b5c80c8fb7ca18261f07abad00ce312'
+    tag = 'localhost/woow-litellm:1.104.0-0.3.16'
+    if digest(program) != 'b15f9c4d19b95f51e85e8ec5b6ca1e52b63e064298b8bc3b0b9eb80c912a555a': raise ValueError('unreviewed derivation')
+    if program.splitlines()[0] != ('FROM sha256:'+base).encode(): raise ValueError('FROM not exact base config')
+    before = inventory(); configs = image_configs()
+    if tag in before['image_refs'] or base not in configs: raise ValueError('image precondition changed')
+    if configs[base]['architecture'] != 'amd64' or configs[base]['os'] != 'linux' or configs[base]['volumes']:
+        raise ValueError('unexpected base config/declared volumes')
+    context = Path(APP+'/.local/state')/(store.name+'_images')
+    if context.exists() or context.is_symlink(): raise ValueError('build context already exists')
+    store.state['image_build'] = {'intent':True,'before':before,'configs_before':configs,
+                                 'derivation_sha256':digest(program),'disk_before':disk_free()}; store.save()
+    uid = int(owner('id','-u').stdout); gid = int(owner('id','-g').stdout)
+    context.mkdir(mode=0o700); os.chown(context,uid,gid)
+    temp = context/'tmp'; temp.mkdir(mode=0o700); os.chown(temp,uid,gid)
+    atomic(context/'Containerfile',program,mode=0o400,uid=uid,gid=gid)
+    # --from binds the actual builder input as well as the literal FROM line.
+    # No mutable tag participates in resolving the source image.
+    # Spawn Podman directly as the same ordinary owner, with the installed
+    # device/woowbk-owner wrapper's fixed environment. Supervising runuser's
+    # wrapper group would not prove the actual builder remained in that group.
+    env = {'PATH':'/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin','HOME':APP,'USER':'appowner','LOGNAME':'appowner',
+           'LANG':'C.UTF-8','TERM':'dumb','XDG_RUNTIME_DIR':f'/run/user/{uid}',
+           'DBUS_SESSION_BUS_ADDRESS':f'unix:path=/run/user/{uid}/bus','TMPDIR':str(temp)}
+    argv = ['/usr/bin/podman','build','--from','sha256:'+base,
+            '--network=none','--pull=never','--memory=512m','--memory-swap=512m',
+            '--cpu-period=100000','--cpu-quota=100000','--jobs=1','--layers=false','--force-rm=true','--rm=true',
+            '--http-proxy=false','--label','io.woowtech.focus.case='+store.name,
+            '--layer-label','io.woowtech.focus.case='+store.name,'--iidfile',str(context/'iid'),
+            '-q','-t',tag,'-f',str(context/'Containerfile'),str(context)]
+    minimum = [disk_free()]
+    def resource_guard():
+        minimum[0] = min(minimum[0],disk_free()); return minimum[0] >= 13*1024**3
+    def checkpoint(value):
+        store.state['image_build'].setdefault('process',{}).update(value); store.save()
+    fd = os.open(store.path/'image-build-private.log',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'wb') as log:
+        # supervise() is prepended from the committed companion module, never
+        # installed on the device and never read from the HA fixture.
+        result = supervise(argv,log,timeout=600,grace=30,checkpoint=checkpoint,guard=resource_guard,
+                           identity={'uid':uid,'gid':gid,'home':APP,'env':env})
+    after = inventory()
+    store.state['image_build'].update(after=after,disk_after=disk_free(),minimum_free=minimum[0]); store.save()
+    after_configs = image_configs()
+    owned = set(after['images'])-set(before['images'])
+    verified = []
+    base_layers = configs[base]['layers']
+    for image in sorted(owned):
+        c = after_configs[image]
+        if (c['case'] == store.name and c['base'] == 'sha256:'+base and c['user']=='1000:0'
+                and c['architecture']=='amd64' and c['os']=='linux' and c['layers'][:len(base_layers)]==base_layers):
+            verified.append(image)
+    iid = read_regular(context/'iid',128)[0].decode().strip().removeprefix('sha256:') if (context/'iid').exists() else None
+    state = store.state['image_build']
+    state.update(result=result,after=after,configs_after=after_configs,owned_images=verified,
+                 unknown_images=sorted(owned-set(verified)),disk_after=disk_free(),minimum_free=minimum[0],iid=iid)
+    state['new_layers'] = sorted({x for i in owned for x in after_configs[i]['layers']}-
+                                {x for c in configs.values() for x in c['layers']})
+    state['verified'] = (result['ok'] and owned==set(verified) and iid in verified
+        and after['image_refs'].get(tag)==iid and all(after['image_refs'].get(k)==v for k,v in before['image_refs'].items())
+        and set(after['image_refs'])-set(before['image_refs'])=={tag}
+        and all(after_configs.get(i)==c for i,c in configs.items())
+        and not after['active_jobs'] and all(after[k]==before[k] for k in
+            ('catalogs','files','containers','external_containers','volumes','networks','secrets','running','units','timer','package','config_directory')))
+    store.save()
+    if state['verified'] and result['terminal']:
+        # Any working container/volume/network leak is detected by the host
+        # durable inventory comparison; it cannot count as a successful image phase.
+        tree_files(context); shutil.rmtree(context)
+    return {k:state[k] for k in ('verified','result','owned_images','unknown_images','iid','disk_before','disk_after','minimum_free','new_layers')}
 
 
 def snapshot(store, tag):
@@ -300,6 +400,23 @@ def capture_installed(store):
     store.save(); return True
 
 
+def remove_owned_containers(current):
+    """Quadlet stop may already remove its exact container; never adopt a replacement."""
+    for name in ('litellm','litellm-postgres'):
+        cid = current.get(name)
+        if not cid: continue
+        if not re.fullmatch(r'[0-9a-f]{64}',cid): raise ValueError('container journal identity')
+        found = owner('podman','container','exists',name,check=False).returncode
+        if found == 1:
+            gone = owner('podman','container','exists',cid,check=False).returncode
+            if gone != 1: raise ValueError('container renamed or unreadable after stop')
+            continue
+        if found != 0: raise ValueError('container state unreadable')
+        now = owner('podman','inspect','--format','{{.ID}}',name).stdout.decode().strip()
+        if now != cid: raise ValueError('container replaced outside case')
+        owner('podman','rm',cid)  # no force; foreign consumers/references refuse
+
+
 def cleanup_owned_package(store):
     before = store.state['before']; current = inventory()
     if current['active_jobs']: raise ValueError('active jobs prevent cleanup')
@@ -323,12 +440,7 @@ def cleanup_owned_package(store):
             journal['mounts'][name] = json.loads(owner('podman','inspect','--format','{{json .Mounts}}',current['containers'][name]).stdout)
     atomic(store.path/'cleanup-owned-private.json',json.dumps(journal).encode())
     owner('systemctl','--user','stop',*reversed(UNITS),timeout=300)
-    for name in ('litellm','litellm-postgres'):
-        cid = current['containers'].get(name)
-        if cid:
-            now = owner('podman','inspect','--format','{{.ID}}',name).stdout.decode().strip()
-            if now != cid: raise ValueError('container replaced outside case')
-            owner('podman','rm',cid)  # no force; references/foreign consumers refuse
+    remove_owned_containers(current['containers'])
     for name,created in store.state['owned_resources']['volumes'].items():
         if owner('podman','volume','inspect','--format','{{.CreatedAt}}',name).stdout.decode().strip() != current['volumes'][name]:
             raise ValueError('volume replaced outside cleanup journal')
@@ -391,6 +503,16 @@ def dispatch(q):
             store.restore([CATALOG])
         return True
     if op == 'snapshot': return snapshot(store,q['tag'])
+    if op == 'image_build': return image_build(store,base64.b64decode(q['program'],validate=True))
+    if op == 'image_context_cleanup':
+        state = store.state.get('image_build',{})
+        if state.get('process',{}).get('terminal') is not True: raise ValueError('builder terminal state unproved')
+        context = Path(APP+'/.local/state')/(name+'_images')
+        if context.exists() or context.is_symlink():
+            if read_regular(context/'Containerfile')[1]['sha256'] != state['derivation_sha256']:
+                raise ValueError('build program changed outside case')
+            tree_files(context); shutil.rmtree(context)
+        return True
     if op == 'fixture': return owned_fixture(store,q['action'],q.get('password'))
     if op == 'hook': return hook(store,q['enable'])
     if op == 'hook_consumed': return store.state.get('hook') is True and not Path(APP+'/.local/state/'+name+'/fail-once').exists()

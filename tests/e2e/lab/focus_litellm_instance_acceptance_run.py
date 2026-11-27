@@ -7,6 +7,7 @@ conversion path. Every required instance checkpoint is mandatory.
 """
 import argparse
 import base64
+import hashlib
 from datetime import datetime, timezone
 import importlib.util
 import json
@@ -39,11 +40,16 @@ def validate_lease(lease, phase, *, now, driver_commit, source_commit):
             or phase not in plan.PHASES or lease.get('driver_commit') != driver_commit
             or not plan.CASE.fullmatch(lease.get('name',''))
             or lease.get('fixture_sha256') != plan.FIXTURE_SHA
+            or lease.get('derivation_sha256') != plan.DERIVATION_SHA
+            or lease.get('package_commit') != plan.PACKAGE_COMMIT
+            or not isinstance(lease.get('baseline_sha256'),str) or not plan.SHA256.fullmatch(lease['baseline_sha256'])
             or lease.get('source_commit') != source_commit or source_commit != plan.FROZEN_PRODUCT
             or lease.get('baseline_policy') != 'require-litellm-absent'
             or lease.get('image_policy') not in ('retain-for-case','remove-own-after-case')):
         raise ValueError('exact coordinator lease does not authorize this phase')
-    expires = datetime.fromisoformat(lease['expires_utc']).timestamp()
+    expiry = datetime.fromisoformat(lease['expires_utc'])
+    if expiry.tzinfo is None: raise ValueError('lease expiry requires timezone')
+    expires = expiry.timestamp()
     if not now < expires <= now+80*60: raise ValueError('expired or unbounded lease')
     return expires
 
@@ -55,9 +61,9 @@ def save_receipt(path, value):
 
 
 def unchanged(current, original, *, images=False):
-    keys = ('catalogs','files','volumes','secrets','containers','networks','running','units','timer','package','config_directory')
+    keys = ('catalogs','files','volumes','secrets','containers','external_containers','networks','running','units','timer','package','config_directory')
     return (all(current.get(k) == original.get(k) for k in keys) and not current.get('active_jobs')
-            and (not images or current['images'] == original['images']))
+            and (not images or (current['images'] == original['images'] and current['image_refs']==original['image_refs'])))
 
 
 class Controller:
@@ -65,7 +71,8 @@ class Controller:
         self.args=args; self.lease=lease; self.saved=saved; self.h=saved.drv
         self.clock=clock; self.sleep=sleep; self.path=Path(args.receipt); self.name=lease['name']
         self.deadline=datetime.fromisoformat(lease['expires_utc']).timestamp(); self.recovering=False
-        self.ops_source=(HERE/'focus_litellm_instance_acceptance_ops.py').read_text()
+        self.ops_source=(HERE/'focus_litellm_instance_acceptance_supervisor.py').read_text()+'\n'+(
+            HERE/'focus_litellm_instance_acceptance_ops.py').read_text()
         self.r=json.loads(ops.read_regular(self.path)[0]) if self.path.exists() else {
             'name':self.name,'device':plan.DEVICE,'version':1,'pending':None,'jobs':{},
             'created_backups':[],'full_safety':None,'safety_verified':False,
@@ -86,15 +93,18 @@ class Controller:
 
     def command(self,*args,root=False,timeout=180,input=None):
         p=(self.h.root if root else self.h.owner)(*args,input=input,timeout=timeout)
-        if p.returncode: raise RuntimeError('fixed operation failed; raw output withheld')
+        if p.returncode:
+            path=self.path.with_name(self.path.name+'.private-error-'+str(time.time_ns()))
+            ops.atomic(path,p.stdout+b'\nSTDERR\n'+getattr(p,'stderr',b''))
+            raise RuntimeError('fixed operation failed; private diagnostic retained')
         return p.stdout
 
     def root_json(self,script,request=None,timeout=180):
         return json.loads(self.command('python3','-I','-c',script,root=True,
             input=json.dumps(request or {}).encode(),timeout=timeout))
 
-    def op(self,operation,**kwargs):
-        return self.root_json(self.ops_source,dict(kwargs,op=operation,case=self.name))
+    def op(self,operation,*,_timeout=180,**kwargs):
+        return self.root_json(self.ops_source,dict(kwargs,op=operation,case=self.name),timeout=_timeout)
 
     def helper(self,command,request=None,timeout=180):
         rc,value=self.h.helper(command,request,timeout=timeout)
@@ -121,8 +131,15 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.require('actual_staging_disk_reserve_plus_peak',found['free'] >= plan.MIN_FREE+plan.PEAK)
 
     def begin(self):
-        if 'before' in self.r: return
+        if 'before' in self.r:
+            self.require('captured_device_receipt_matches',self.op('receipt').get('before')==self.r['before'])
+            return
         before=self.op('inventory')
+        observations=self.r.setdefault('baseline_observations',[])
+        if len(observations)>=10: raise ValueError('too many pre-mutation attempts; review retained receipts')
+        observations.append({'at':int(self.clock()),'inventory':before}); self.save()
+        observed=hashlib.sha256(json.dumps(before,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        self.require('reviewed_baseline_pin',observed==self.lease['baseline_sha256'])
         self.require('no_active_jobs',not before['active_jobs'])
         self.require('fresh_owned_package_namespace',not before['package'] and not before['config_directory']
             and 'litellm.json' not in before['catalogs'] and not any(x.startswith('litellm') for x in before['volumes'])
@@ -148,15 +165,21 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
 
     def images(self):
         self.resources(); self.begin()
+        self.require('phase_baseline_still_exact',unchanged(self.op('inventory'),self.r['before']))
         self.require('cached_app_base_pin',self.image_facts('sha256:'+plan.APP_BASE)==plan.APP_BASE)
         self.require('cached_pg17_pin',self.image_facts('sha256:'+plan.PG)==plan.PG)
         self.require('derived_tag_initially_absent',self.h.owner('podman','image','exists',plan.APP_TAG).returncode != 0)
+        program=self.saved.DERIVE.encode()
+        self.require('reviewed_saved80_bytes',plan.sha(HERE/'litellm_full_flow.py')==plan.SAVED_DRIVER_SHA)
+        self.require('exact_builder_FROM_and_program',program.splitlines()[0]==('FROM sha256:'+plan.APP_BASE).encode()
+            and hashlib.sha256(program).hexdigest()==plan.DERIVATION_SHA)
         self.r['image_intent']=True; self.save()
-        # Exact saved80 derivation, no network/pull. Its only output is a new
-        # lab-owned image; it starts no application or database.
-        self.command('podman','build','--network=none','--pull=never','--memory=512m',
-            '-q','-t',plan.APP_TAG,'-',input=self.saved.DERIVE.encode(),timeout=900)
-        self.r['derived_image']=self.image_facts(plan.APP_TAG); self.save()
+        built=self.op('image_build',program=base64.b64encode(program).decode(),_timeout=720)
+        self.r['image_build_result']=built; self.r['owned_images']=built['owned_images']; self.save()
+        self.require('owned_build_group_terminal',built['result']['terminal'] is True)
+        self.require('bound_derivation_verified',built['verified'] is True)
+        self.r['derived_image']=built['iid']; self.save()
+        self.require('derived_tag_exact_id',self.image_facts(plan.APP_TAG)==self.r['derived_image'])
         self.require('only_derived_image_added',set(self.op('inventory')['images'])-
             set(self.r['before']['images']) == {self.r['derived_image']})
         self.require('images_no_application_changes',unchanged(self.op('inventory'),self.r['before']))
@@ -243,12 +266,16 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.r['install_intent']=True; self.save()
         self.op('claim_install')
         rev=git(self.saved.PACKAGE,'rev-parse',plan.PACKAGE_REV+'^{commit}')
+        self.require('trusted_package_full_commit',rev==plan.PACKAGE_COMMIT)
         archive=subprocess.check_output(['git','-C',str(self.saved.PACKAGE),'archive','--format=tar',rev],timeout=180)
         self.command('mkdir','-m','700',ops.APP+'/Woow_podman_litellm')
         private=ops.APP+'/.local/state/'+self.name
         self.command('mkdir','-m','700',private)
         self.command('mkdir','-m','700',private+'/tmp')
         self.command('tar','-C',ops.APP+'/Woow_podman_litellm','-xf','-',input=archive)
+        if plan.PG_TAG not in self.r['before']['image_refs']:
+            self.r['pg_tag_intent']=True; self.save()
+            self.command('podman','tag','sha256:'+plan.PG,plan.PG_TAG)
         self.require('existing_pg_tag_pin',self.image_facts(plan.PG_TAG)==plan.PG)
         digest=self.command('podman','image','inspect','--format','{{.Digest}}',plan.PG_TAG).decode().strip()
         self.op('patch_package_pg',digest=digest)
@@ -298,15 +325,20 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.require('later_app_api_witness_'+action,found.get('status')==200 and found.get('found') is True)
 
     def flow(self):
-        self.resources(); self.begin(); self.frozen_engine(); self.credentials()
+        self.resources(); self.begin()
+        self.require('phase_baseline_still_exact',unchanged(self.op('inventory'),self.r['before']))
+        self.frozen_engine(); self.credentials()
         self.require('fresh_flow_only',not self.r['install_intent'] and not self.r['complete'])
         listing=self.helper('list'); self.r['before_backups']=[x['id'] for x in listing['backups']]
         self.r['before_uploads']=[x['id'] for x in listing.get('ha_backups',[])]; self.save()
         self.require('no_prior_litellm_safety_pruning',not any(x.get('type')=='safety' and any(
             a.get('id')=='litellm' for a in x.get('apps',[])) for x in listing['backups']))
         try:
-            self.r['timer_intent']=True; self.save()
-            self.command('systemctl','mask','--runtime','--now',plan.TIMER,root=True)
+            timer=self.r['before']['timer']
+            if timer['UnitFileState'] not in ('masked','masked-runtime'):
+                self.r['timer_intent']=True; self.save()
+                self.command('systemctl','mask','--runtime','--now',plan.TIMER,root=True)
+            else: self.require('preexisting_masked_timer_inactive',timer['ActiveState']=='inactive')
             self.install(); self.endpoint()
             self.r['original_db']=self.op('snapshot',tag='original'); self.save()
             full=self.job('backup-start',{'apps':['litellm'],'encrypt':True,'include_images':False,
@@ -374,6 +406,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         # Copies survive every uncertainty. Cleanup runs only after successful
         # recovery and the saved credential scanner, never in a blind finally.
         self.op('cleanup_owned_package')
+        if self.r.get('pg_tag_intent'):
+            self.require('owned_pg_tag_pin_before_untag',self.image_facts(plan.PG_TAG)==plan.PG)
+            self.command('podman','untag','sha256:'+plan.PG,plan.PG_TAG)
+            self.r['pg_tag_intent']=False; self.save()
         if self.r.get('catalog_intent'): self.op('restore_catalog'); self.r['catalog_intent']=False; self.save()
         if self.r.get('timer_intent'):
             self.command('systemctl','unmask','--runtime',plan.TIMER,root=True)
@@ -392,11 +428,23 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
 
     def images_recover(self):
         self.settle(); self.require('no_application_left',unchanged(self.op('inventory'),self.r['before']))
-        image=self.r.get('derived_image')
+        state=self.op('receipt').get('image_build',{})
+        self.require('build_terminal_receipt',state.get('process',{}).get('terminal') is True)
+        self.require('no_unknown_image_ownership',not state.get('unknown_images',[]))
+        images=self.r.get('owned_images') or state.get('owned_images',[])
+        current=self.op('inventory')
         if self.r.get('image_intent'):
-            self.require('known_owned_derived_id',bool(image) and image not in self.r['before']['images'])
-            self.require('owned_tag_still_same',self.image_facts(plan.APP_TAG)==image)
-            self.command('podman','image','rm','--no-prune','sha256:'+image)
+            self.require('known_owned_derived_ids',bool(images) and not (set(images)&set(self.r['before']['images'])))
+            remaining=set(current['images'])-set(self.r['before']['images'])
+            removals=self.r.setdefault('image_removal_intents',[])
+            self.require('exact_owned_image_delta',remaining<=set(images) and set(images)-remaining<=set(removals))
+            before_refs=self.r['before']['image_refs']
+            self.require('no_foreign_image_tags',all(current['image_refs'].get(k)==v for k,v in before_refs.items())
+                and set(current['image_refs'])-set(before_refs)<={plan.APP_TAG})
+            self.op('image_context_cleanup')
+            for image in sorted(remaining,key=lambda i:i!=state.get('iid')):
+                if image not in removals: removals.append(image); self.save()
+                self.command('podman','image','rm','--no-prune','sha256:'+image)
         self.require('original_images_returned',unchanged(self.op('inventory'),self.r['before'],images=True))
         self.r['images_recovered']=True; self.save()
 
@@ -423,13 +471,18 @@ def main(argv=None):
     for signum in (signal.SIGINT,signal.SIGTERM): signal.signal(signum,interrupted)
     try:
         validate_lease(lease,args.phase,now=time.time(),driver_commit=git(plan.REPO,'rev-parse','HEAD'),source_commit=git(args.source,'rev-parse','HEAD'))
-        controller=Controller(args,lease,saved)
+        controller=Controller(args,lease,saved); controller.r['phase_succeeded']=False; controller.save()
         getattr(controller,args.phase.replace('-','_'))()
+        controller.require('outer_isolation_returned',saved.verify_isolation()=='dev-d isolation: true none {}')
+        controller.r['phase_succeeded']=True; controller.save()
         return 0
     finally:
         if controller:
             save_receipt(args.output,{'preparation_only':False,'case':'litellm-instance-original',
                 'phase':args.phase,'driver_commit':lease['driver_commit'],'source_commit':lease['source_commit'],
+                'phase_succeeded':controller.r.get('phase_succeeded',False),
+                'baseline_sha256':lease['baseline_sha256'],'derivation_sha256':plan.DERIVATION_SHA,
+                'owned_images':controller.r.get('owned_images',[]),'images_ready':controller.r.get('images_ready',False),
                 'complete':controller.r['complete'],'flow_verified':controller.r.get('flow_verified',False),
                 'recovery_verified':controller.r['recovery_verified'],'checks':controller.results})
         os.close(fd)
