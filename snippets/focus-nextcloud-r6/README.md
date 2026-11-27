@@ -217,3 +217,13 @@ frozen controller adaptation/shell syntax and simulated inside-device load
 termination/reaping. Guard log:
 `/tmp/parity-focus-20261127/nextcloud-r6-boundaries-01.log`.
 No actual image recovery, wake, acceptance or fixture construction was performed.
+
+## Current full-share proposal (d09)
+
+Strict wake proof is committed in f0ae8b95, independent7/7 and exact cold return.
+Next executable phase is [fullshare-PROPOSAL.md](fullshare-PROPOSAL.md), with inert
+[lease-fullshare.template.json](lease-fullshare.template.json). It uses frozen d09
+source-only deployment, protected prior engine/helper/VERSION, original4.47GB
+fullshare fixture in place, and full data/source/unit rollback. No deployment or
+fullshare execution has occurred. Preparation result and every frozen source
+file hash are retained under the lane's public evidence directory.

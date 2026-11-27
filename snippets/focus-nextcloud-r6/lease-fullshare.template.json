@@ -1,0 +1,17 @@
+{
+  "lane": "nextcloud-r6",
+  "device": "woowbk-dev-e",
+  "source_commit": "REPLACE_WITH_EXACT_REVIEWED_R6_COMMIT",
+  "product_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "product_manifest_sha256": "966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79",
+  "phases": ["fullshare"],
+  "source_policy": "always-return-exact-prior-engine-helper-version-after-data-recovery",
+  "pin_refresh_policy": "same-config-only-private-copy-revert",
+  "host_source_operations": [],
+  "original_inactive_units": ["nextcloud.target", "nextcloud-app.service", "nextcloud-db.service", "nextcloud-redis.service", "nextcloud-office.service", "nextcloud-gateway.service", "nextcloud-cron.timer", "woowtech-backup-schedule.timer"],
+  "recovery_grace_seconds": 1800,
+  "not_before_utc": "1970-01-01T00:00:00Z",
+  "expires_utc": "1970-01-01T00:00:01Z",
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472
+}

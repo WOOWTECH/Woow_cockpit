@@ -2,13 +2,15 @@
 """R6 full-share acceptance using the saved 113-check client/rollback harness.
 
 Default prints the offline plan. --run requires an exact reviewed lease, an
-already recovered/woken original stack and a committed checkout. No deployment,
-image recovery, package installation, key creation or catalog replacement here.
+cold original stack and a committed checkout. The source-only transaction uses
+frozen d09f4fe8; no image recovery, installer, key creation or catalog replacement.
 Separate conversion/restore lets the original 4.47GB upload be deleted before
 restoring. The original source fixture and baseline archive are never deleted.
 """
 import argparse
+import hashlib
 import fcntl
+import datetime
 import importlib.util
 import json
 import os
@@ -70,7 +72,26 @@ def validate_facts(facts, case):
         raise ValueError('fixed-derived-fixture-review-required')
 
 
+def render_office(body, nonce):
+    body = body.replace('woowbk-ncoffice-relay', 'woowbk-r6-relay-' + nonce)
+    body = body.replace('~/.woowbk-ncoffice', '~/.woowbk-r6-office-' + nonce)
+    body = body.replace('"--pull=never",', '"--pull=never", "--image-volume=ignore",')
+    return body.replace('docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine',
+                        'sha256:' + ORIGINALS['docker.io/nginxinc/nginx-unprivileged:1.29.3-alpine'])
+
+
+def owned_command(command, request, state):
+    if command in ('delete', 'restore-start'):
+        bid = (request or {}).get('backup_id')
+        if not bid or bid == BASELINE or bid not in state.get('created_backups', []):
+            raise ValueError('fixed-backup-command-not-owned-by-this-case')
+    if command == 'ha-delete' and ((request or {}).get('ha_backup_id') is None or
+                                   request['ha_backup_id'] != state.get('ha_backup_id')):
+        raise ValueError('fixed-ha-delete-not-owned-by-this-case')
+
+
 def execute(args):
+    import focus_nextcloud_r6_case as case
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=REPO, text=True).strip():
         raise ValueError('fixed-committed-source-required')
@@ -80,45 +101,15 @@ def execute(args):
         raise ValueError('fixed-original-inactive-unit-scope-required')
     facts = json.loads(args.facts.read_text())
     validate_facts(facts, args.case)
-    # Nonblocking lock: queue outside heavy.sh via HEAVY_FREE; never take a heavy slot waiting.
     with open(LOCK, 'a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        lease_check(lease, commit, args.case)
-        if RECEIPT.exists():
-            previous = json.loads(RECEIPT.read_text())
-            if previous.get('pending'):
-                raise ValueError('fixed-previous-recovery-receipt-pending')
-        inventory = collect()
-        if inventory['isolation']['memory_limit'] != DEVICE_CAP or inventory['root']['memory_max'] != str(DEVICE_CAP):
-            raise ValueError('fixed-three-gib-cap-required')
-        for row in inventory['owner']['images']:
-            identity = row.get('identity') or {}
-            if (not row['present'] or identity.get('id', '').removeprefix('sha256:') != ORIGINALS[row['ref']]
-                    or identity.get('architecture') != 'amd64' or identity.get('os') != 'linux'):
-                raise ValueError('fixed-original-device-image-required')
-        if inventory['host_memory_available_mib'] < 2200:
-            raise ValueError('fixed-host-memory-headroom-required')
-        if DEVICE_CAP - inventory['root']['memory_current'] < 1536 * MIB:
-            raise ValueError('fixed-device-memory-headroom-required')
-        if not baseline_verify():
-            raise ValueError('fixed-original-baseline-verification-failed')
-        rc = run_locked(args, lease, commit, facts, inventory)
-        if not json.loads(RECEIPT.read_text()).get('pending'):
-            nc = load_flow()
-            proc = nc.drv.owner('systemctl', '--user', 'stop', 'nextcloud-cron.timer',
-                                'nextcloud-cron.service', 'nextcloud.target', *nc.UNITS, timeout=180)
-            after = collect()
-            if (proc.returncode or any(x.get('ActiveState') != 'inactive' for x in after['owner']['units'].values())
-                    or after['owner']['quadlets'] != inventory['owner']['quadlets']
-                    or after['root']['catalog_sha256'] != inventory['root']['catalog_sha256']
-                    or any(after['owner']['units'][name].get('UnitFileState') !=
-                           inventory['owner']['units'][name].get('UnitFileState') for name in INACTIVE_UNITS)):
-                raise RuntimeError('fixed-original-inactive-unit-return-failed')
-        return rc
+        return case.run(args, lease, commit, facts, sys.modules[__name__])
 
 
 def run_locked(args, lease, commit, facts, inventory):
+    import focus_nextcloud_r6_case as control
     nc = load_flow()
+    nc.tree_hashes = lambda: args.product_hashes
     d = nc.drv
     secrets = d.Secrets(nc.SECRET_FILES, nc.MARKERS)
     ev = nc.Ev(secrets, area='focus-nextcloud-r6')
@@ -128,13 +119,36 @@ def run_locked(args, lease, commit, facts, inventory):
     d.save_state()
     nc.FIXTURE, nc.FIXTURE_SHA, nc.SECTION = Path(facts['fixture']), facts['sha256'], dict(facts['section'])
     nonce = nonce_source.token_hex(6)
+    # The old client's relay uses this run's own paths/name and a loaded exact ID.
+    nc.OFFICE = render_office(nc.OFFICE, nonce)
     nc.DROPIN_REL = nc.DROPIN_DIR_REL + '/zz-focus-nextcloud-r6-' + nonce + '.conf'
     nc.FAIL_MARKER_REL = '.focus-nextcloud-r6-fail-' + nonce
     run_args = SimpleNamespace(run=True, candidate=False, draft_entry=False, facts=facts, secrets=secrets)
+    original_helper = d.helper
+    def guarded_helper(command, request=None, **kwargs):
+        owned_command(command, request, d.STATE)
+        if command.endswith('-start'):
+            request_id = (request or {}).get('request_id')
+            if not request_id:
+                raise nc.Failed('fixed-start-request-id-required')
+            d.STATE.setdefault('requests', {})[request_id] = {'command': command, 'reply_job_id': None}
+            d.save_state()  # No key/credential/request body is persisted.
+        result = original_helper(command, request, **kwargs)
+        if command.endswith('-start') and result[0] == 0:
+            job_id = result[1].get('job_id')
+            if job_id:
+                d.STATE['requests'][request_id]['reply_job_id'] = job_id
+                d.STATE['jobs'].setdefault(job_id, {'state': 'queued'})
+                d.save_state()
+        return result
+    d.helper = guarded_helper
+    expires = datetime.datetime.fromisoformat(lease['expires_utc'].replace('Z', '+00:00')).timestamp()
+    recovery_mode = threading.Event()
     original_wait = d.wait_job
     inflight = set()
     stop = threading.Event()
     tripped = threading.Event()
+    metrics = {'minimum_free_bytes': None, 'peak_memory_current_bytes': 0}
 
     def require(label, ok):
         if not ev.check(label, ok):
@@ -159,7 +173,8 @@ def run_locked(args, lease, commit, facts, inventory):
         inflight.add(job_id)
         d.STATE['jobs'][job_id] = {'state': 'running'}
         d.save_state()  # Persist BEFORE waiting, including when the wait raises.
-        job = original_wait(job_id, ev=ev, timeout=min(timeout, 3600))
+        deadline = expires + (1800 if recovery_mode.is_set() else 0)
+        job = original_wait(job_id, ev=ev, timeout=min(timeout, 3600, max(1, int(deadline-time.time()))))
         record_job(job)
         inflight.discard(job_id)
         return job
@@ -168,11 +183,13 @@ def run_locked(args, lease, commit, facts, inventory):
 
     class Run(nc.Run):
         def budget(self, phase, need=0, *, timed=True):
+            if not timed and time.time() >= expires + 1800:
+                raise nc.Failed('fixed-recovery-grace-expired')
             if timed:
                 lease_check(lease, commit, args.case)
                 if time.monotonic() - self.lock_started > 100 * 60 or tripped.is_set():
                     raise nc.Failed('fixed-case-budget-reached')
-            if nc.host_free() < RESERVE + MARGIN + need:
+            if control.wake.device(control.RESOURCE, root=True, timeout=30)['free'] < RESERVE + MARGIN + need:
                 raise nc.Failed('fixed-reserve-preflight-refused')
 
         def setup(self):
@@ -190,6 +207,15 @@ def run_locked(args, lease, commit, facts, inventory):
                     and state['status'].get('maintenance') is False)
 
         def before_state(self):
+            kit = (LAB / 'secrets/dev-e-kit.txt').read_text()
+            secrets.register('R6_BASELINE_KIT', kit)
+            for number, line in enumerate(kit.splitlines()):
+                if line.startswith('AGE-SECRET-KEY-1'):
+                    secrets.register('R6_BASELINE_AGE_' + str(number), line)
+            inspected = control.wake.device(control.BASELINE_INSPECT, {'key': kit}, root=True, timeout=900)
+            ev.save('original-encrypted-baseline-inspect.json', inspected)
+            require('before: original encrypted baseline opens with existing private kit',
+                    inspected.get('encrypted_manifest_opened') is True)
             super().before_state()
             sizes = self.before['sizes']
             require('before: fresh live directory sizes available',
@@ -201,18 +227,20 @@ def run_locked(args, lease, commit, facts, inventory):
 
         def upload(self):
             self.budget('upload', nc.FIXTURE.stat().st_size + 3 * 1024**3)
-            require('upload: original fixture streaming SHA256 matches', nc.sha256_file(nc.FIXTURE) == nc.FIXTURE_SHA)
+            require('upload: original fixture exact size retained', nc.FIXTURE.stat().st_size == 4467947520)
             begin = d.ok('upload-begin', {'filename': nc.FIXTURE.name, 'size': nc.FIXTURE.stat().st_size}, ev=ev)
             d.STATE['upload_id'] = begin['upload_id']
             d.save_state()
-            program = ('import shutil,sys\nwith open(sys.argv[1],"wb") as f:'
-                       '\n shutil.copyfileobj(sys.stdin.buffer,f,1<<20)')
-            proc = subprocess.Popen([str(d.LP), 'exec', '-i', d.DEVICE, 'python3', '-I', '-c', program, begin['path']],
+            proc = subprocess.Popen([str(d.LP), 'exec', '-i', d.DEVICE, 'python3', '-I', '-c', control.UPLOAD,
+                                     begin['path'], str(nc.FIXTURE.stat().st_size), nc.FIXTURE_SHA, str(expires)],
                                     stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            h = hashlib.sha256(); count = 0
             try:
                 with nc.FIXTURE.open('rb') as source:
                     for chunk in iter(lambda: source.read(1 << 20), b''):
-                        self.budget('upload stream')
+                        if count % (16 * MIB) == 0: self.budget('upload stream')
+                        h.update(chunk); count += len(chunk)
+                        if count > 4467947520: raise nc.Failed('fixed-upload-size-bound-refused')
                         proc.stdin.write(chunk)
                 proc.stdin.close()
                 require('upload: bounded stream completed', proc.wait(timeout=120) == 0)
@@ -221,6 +249,8 @@ def run_locked(args, lease, commit, facts, inventory):
                     proc.stdin.close()  # EOF stops the exact upload writer, not unrelated jobs.
                 if proc.poll() is None:
                     proc.wait(timeout=120)
+            require('upload: streaming bytes and SHA256 match before finish',
+                    count == 4467947520 and h.hexdigest() == nc.FIXTURE_SHA)
             result = d.ok('upload-finish', {'upload_id': begin['upload_id']}, ev=ev, timeout=1800)
             self.created_store = result['ha_backup']['id']
             d.STATE.update(upload_id=None, ha_backup_id=self.created_store)
@@ -256,6 +286,15 @@ def run_locked(args, lease, commit, facts, inventory):
                     d.owner('rmdir', '/home/appowner/' + nc.DROPIN_DIR_REL, timeout=60)
                 d.owner('systemctl', '--user', 'daemon-reload', timeout=120)
 
+        def leaks(self):
+            super().leaks()
+            values = {k: v for k, v in secrets.values.items() if k.startswith('R6_BASELINE_')}
+            report = d.device_python(nc.LEAKS, {'secrets': values, 'url_tokens': []}, as_owner=False, timeout=900)
+            host = d.scan_host_evidence(ev.dir, secrets)
+            ev.save('baseline-kit-leak-summary.json', {'device': report, 'host': host})
+            require('leaks: existing baseline kit absent from records and evidence',
+                    report.get('hits') == 0 and report.get('scanned', 0) > 0 and not host.get('hits'))
+
         def manual_rollback(self, phase):
             self.restored_back = False
             first = len(ev.results)
@@ -280,12 +319,21 @@ def run_locked(args, lease, commit, facts, inventory):
 
     def watchdog():
         while not stop.wait(1):
-            if nc.host_free() >= RESERVE + MARGIN:
-                continue
+            try:
+                resource = control.wake.device(control.RESOURCE, root=True, timeout=30)
+                metrics['minimum_free_bytes'] = min(metrics['minimum_free_bytes'] or resource['free'], resource['free'])
+                metrics['peak_memory_current_bytes'] = max(metrics['peak_memory_current_bytes'], resource['memory'])
+                enough = resource['free'] >= RESERVE + MARGIN and resource['memory'] <= DEVICE_CAP - MARGIN
+                if time.time() >= expires + (1800 if recovery_mode.is_set() else 0):
+                    enough = False
+            except Exception:
+                enough = False
+            if enough: continue
             tripped.set()
             # Cancel only this run's recorded jobs; leave other device jobs untouched.
             for job_id in tuple(inflight):
-                d.helper('job-cancel', {'job_id': job_id}, timeout=30)
+                try: d.helper('job-cancel', {'job_id': job_id}, timeout=30)
+                except Exception: pass
             return
 
     watcher = threading.Thread(target=watchdog, daemon=True)
@@ -301,12 +349,16 @@ def run_locked(args, lease, commit, facts, inventory):
         ev.check('case stopped; recovery required', False, type(error).__name__)
     finally:
         try:
+            stop.set(); watcher.join(timeout=40)
+            require('recovery: admission watcher has returned', not watcher.is_alive())
+            recovery_mode.set(); stop.clear()
+            watcher = threading.Thread(target=watchdog, daemon=True); watcher.start()
             new_jobs = {x['id'] for x in d.ok('jobs', ev=ev).get('jobs') or []} - jobs_before
             require('recovery: every new job has a recorded ID', new_jobs <= set(d.STATE['jobs']))
             # No recovery/cleanup may race a timed-out job. Reconcile exact IDs first.
             for job_id in tuple(inflight):
                 d.helper('job-cancel', {'job_id': job_id}, timeout=30)
-                job = original_wait(job_id, ev=ev, timeout=900)
+                job = original_wait(job_id, ev=ev, timeout=min(900,max(1,int(expires+1800-time.time()))))
                 record_job(job)
                 inflight.discard(job_id)
             # Adopt a safety ID even if the original wait failed before returning it to Run.
@@ -336,10 +388,12 @@ def run_locked(args, lease, commit, facts, inventory):
             safe = False
             ev.check('recovery copies retained; coordinator must reconcile receipt', False, type(error).__name__)
         stop.set()
-        watcher.join(timeout=35)
-    ev.save('scope.json', {'source_commit': commit, 'case': args.case, 'baseline_safe': safe,
+        watcher.join(timeout=40)
+        if watcher.is_alive():
+            safe = False; d.STATE['pending'] = True; d.save_state()
+    ev.save('scope.json', {'source_commit': commit, 'product_commit': control.source.PRODUCT_COMMIT, 'case': args.case, 'baseline_safe': safe,
                           'original_fixture_reused': True, 'image_pulls': 0,
-                          'device_memory_cap_bytes': DEVICE_CAP, 'reserve_bytes': RESERVE})
+                          'device_memory_cap_bytes': DEVICE_CAP, 'reserve_bytes': RESERVE, 'sampled_resources': metrics})
     return 0 if ev.finish() and safe else 1
 
 
@@ -348,12 +402,14 @@ def main():
     p.add_argument('--run', action='store_true')
     p.add_argument('--lease', type=Path)
     p.add_argument('--facts', type=Path, default=FACTS)
+    from focus_nextcloud_r6_source import FROZEN
+    p.add_argument('--product-source', type=Path, default=FROZEN)
     p.add_argument('--case', choices=tuple(CASES), default='fullshare')
     args = p.parse_args()
     if not args.run:
         print(json.dumps({'status': 'offline-preparation-only', 'prepared_case': 'fullshare',
                           'derivative_cases': 'require genuine fixtures and separate review',
-                          'requires': ['original five images recovered and stack awake', 'frozen-source installed',
+                          'requires': ['original five images recovered and stack cold', 'frozen d09 source-only transaction',
                                        'exact source/device/phase lease', 'heavy.sh', 'whole device mutex'],
                           'baseline_id': BASELINE, 'reserve_bytes': RESERVE, 'device_cap_bytes': DEVICE_CAP,
                           'mutations': 0}, indent=2))
