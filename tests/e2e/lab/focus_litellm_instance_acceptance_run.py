@@ -34,6 +34,16 @@ def git(path, *args):
     return subprocess.check_output(['git','-C',str(path),*args],text=True,timeout=30).strip()
 
 
+def delete_request(backup_id):
+    """Exactly what the engine's `delete` accepts: the CLI schema is {backup_id} and rejects any other field (a `confirm` here
+    stopped the b7 cleanup on dev-d with both case backups still present)."""
+    return {'backup_id': backup_id}
+
+
+def ha_delete_request(ha_backup_id):
+    return {'ha_backup_id': ha_backup_id, 'confirm': True}
+
+
 def snapshot_difference(current, original, *, limit=30):
     """WHERE two case snapshots differ, by field name only: digests, names and ids are never saved."""
     out = []
@@ -445,7 +455,12 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.recovering=True; self.settle()
         if self.r.get('hook_intent'):
             self.op('hook',enable=False); self.r['hook_intent']=False; self.save()
-        if self.r.get('full_safety'):
+        if self.r.get('recovery_verified'):
+            # An earlier pass restored and verified the data and own state, then stopped in the cleanup below (b7: the delete
+            # request). The stack may already be removed, so nothing is restored or verified again; only the saved credential
+            # values are re-registered for the leak scan that guards the cleanup.
+            self.credentials()
+        elif self.r.get('full_safety'):
             self.credentials()
             restored=self.job('restore-start',{'backup_id':self.r['full_safety'],'apps':['litellm'],'confirm':True},'recover-full')
             self.require('original_full_safety_restored',plan.success(restored,digest=True))
@@ -475,9 +490,9 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         listing=self.helper('list'); existing={x['id'] for x in listing['backups']}
         self.require('preexisting_backups_preserved',set(self.r.get('before_backups',[])) <= existing)
         for bid in self.r['created_backups']:
-            if bid in existing: self.helper('delete',{'backup_id':bid,'confirm':True})
+            if bid in existing: self.helper('delete',delete_request(bid))
         sid=self.r.get('store_id')
-        if sid and sid not in self.r.get('before_uploads',[]): self.helper('ha-delete',{'ha_backup_id':sid,'confirm':True})
+        if sid and sid not in self.r.get('before_uploads',[]): self.helper('ha-delete',ha_delete_request(sid))
         self.r['complete']=True; self.save()
 
     def images_recover(self):

@@ -112,6 +112,57 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(c.r['recovery_snapshot_difference'],['.databases.litellm.digest','.roles'])
             self.assertNotIn('SECRET-LOOKING',json.dumps(c.r['recovery_snapshot_difference']))
 
+    def test_cleanup_requests_are_accepted_by_the_engines_own_request_validation(self):
+        # dev-d, b7 recover: the cleanup sent {"backup_id", "confirm"} to `delete`; the CLI schema has no such field, the request
+        # was refused and both case backups stayed. The real validator now judges exactly what the controller builds.
+        from woowbackup import cli
+        self.assertEqual(driver.delete_request('20261127T062347Z-b872183e'),{'backup_id':'20261127T062347Z-b872183e'})
+        self.assertTrue(cli.validate('delete',driver.delete_request('20261127T062347Z-b872183e')))
+        self.assertTrue(cli.validate('ha-delete',driver.ha_delete_request('ha-9dc5994497d9d6ff4c3e')))
+        with self.assertRaises(Exception):   # the old request really is refused by the same validator
+            cli.validate('delete',{'backup_id':'20261127T062347Z-b872183e','confirm':True})
+
+    def test_the_package_cleanup_is_not_repeated_once_it_finished_and_still_refuses_active_jobs(self):
+        with tempfile.TemporaryDirectory() as root:
+            store=ops.Store('woowbk_focus_litellm_012345abcdef',parent=Path(root),create=True)
+            store.state.update(before={},install_intent=True,package_cleaned=True);store.save()
+            with patch.object(ops,'inventory',return_value={'active_jobs':[]}),patch.object(ops,'owner',side_effect=AssertionError('no device call')):
+                self.assertTrue(ops.cleanup_owned_package(store))
+            with patch.object(ops,'inventory',return_value={'active_jobs':['j1']}),self.assertRaisesRegex(ValueError,'active jobs'):
+                ops.cleanup_owned_package(store)
+            store.state.pop('package_cleaned');store.state['installed_files']=None
+            with patch.object(ops,'inventory',return_value={'active_jobs':[]}),self.assertRaisesRegex(ValueError,'partial install'):
+                ops.cleanup_owned_package(store)   # without the flag the old protections are untouched
+
+    def test_a_repeated_recovery_after_verified_data_skips_the_restore_and_finishes_the_cleanup(self):
+        from woowbackup import cli
+        with tempfile.TemporaryDirectory() as root:
+            lease={'name':'woowbk_focus_litellm_012345abcdef','expires_utc':'2026-11-27T04:00:00+00:00'}
+            c=driver.Controller(SimpleNamespace(receipt=Path(root)/'case.private.json'),lease,SimpleNamespace(drv=None))
+            before={k:{} for k in ('catalogs','files','volumes','secrets','containers','external_containers','networks','units','timer')}
+            before.update(running=[],package=False,config_directory=False,active_jobs=[],images=[],image_refs={})
+            mine=['20261127T062347Z-b872183e','20261127T062657Z-cb247387']
+            c.r.update(before=before,recovery_verified=True,full_safety=mine[0],install_intent=True,created_backups=mine,
+                       before_backups=['20260101T000000Z-aaaaaaaa'],store_id='ha-9dc5994497d9d6ff4c3e',before_uploads=[])
+            calls=[]
+            c.credentials=lambda:calls.append('credentials');c.run=None
+            c.job=lambda *a,**k:self.fail('no restore job may start again')
+            def op(name,**kw):
+                calls.append(name)
+                if name=='inventory':return before
+                if name=='cleanup_owned_package':return True
+                raise AssertionError(name)
+            c.op=op
+            def helper(command,request=None):
+                calls.append(command)
+                if command=='list':return {'backups':[{'id':x} for x in ['20260101T000000Z-aaaaaaaa']+mine]}
+                self.assertTrue(cli.validate(command,request))      # every request the cleanup sends is valid for the engine
+                return {}
+            c.helper=helper
+            c.recover()
+            self.assertEqual(calls.count('delete'),2);self.assertEqual(calls.count('ha-delete'),1)
+            self.assertNotIn('snapshot',calls);self.assertTrue(c.r['complete'])
+
     def test_failed_operation_is_retained_on_device_and_host_before_cleanup(self):
         for denied in (False,True):
             with self.subTest(errno=denied),tempfile.TemporaryDirectory() as root:

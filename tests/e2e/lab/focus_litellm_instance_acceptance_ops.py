@@ -457,6 +457,9 @@ def cleanup_owned_package(store):
     before = store.state['before']; current = inventory()
     if current['active_jobs']: raise ValueError('active jobs prevent cleanup')
     if not store.state.get('install_intent'): return True
+    # Finished by an earlier pass whose later step stopped (b7: the delete request): the owned files are gone, so a second run
+    # must not read them again.
+    if store.state.get('package_cleaned'): return True
     expected = store.state.get('installed_files')
     if expected is None: raise ValueError('partial install requires explicit ownership reconciliation; retain receipt')
     # Replacements performed by successful engine jobs can change container,
