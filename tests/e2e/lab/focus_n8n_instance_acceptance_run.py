@@ -186,6 +186,17 @@ def scrub_log(text,secrets,*,keep=40):
     return out[-keep:]
 
 
+def secret_difference(current,kept):
+    """WHICH n8n secret differs and HOW ('<name>:id', '<name>:value', '<name>:missing'), never an id or a value."""
+    out=[]
+    for name in sorted(set(current or {})|set(kept or {})):
+        a,b=(current or {}).get(name),(kept or {}).get(name)
+        if not isinstance(a,dict) or not isinstance(b,dict):out.append(name+':missing');continue
+        if a.get('id')!=b.get('id'):out.append(name+':id')
+        if a.get('value_sha256')!=b.get('value_sha256'):out.append(name+':value')
+    return out
+
+
 def recording_api_program(program, path):
     """Keep EVERY cookie issuance, including overwritten values and exceptions."""
     if program.count('http.cookiejar.CookieJar()') != 1: raise ValueError('fixed API cookie constructor')
@@ -615,11 +626,19 @@ class Controller:
             'SELECT to_json(count(*)>0) FROM execution_entity e JOIN workflow_entity w ON e."workflowId"=w.id '
             "WHERE w.name='WOOW 匯入測試 - 手動' AND e.status='success';") is True)
 
-    def kept(self,tag):
+    def kept(self,tag,*,ids_may_change=False):
         expected=self.r['kept_state']
         now=self.op('snapshot',tag=tag,databases=list(expected['databases']))
         self.require('original_outside_rows_types_access_roles',now==expected)
-        self.require('retained_current_secret_ids_values',self.op('secrets')==self.r['kept_secrets'])
+        changed=secret_difference(self.op('secrets'),self.r['kept_secrets'])
+        if changed:self.r.setdefault('secret_differences',{})[tag]=changed;self.save()
+        if ids_may_change:
+            # A rollback is a COMPLETE restore of the instance from its own fresh safety, so the engine may recreate the app's
+            # podman secrets from it (new ids); their names and values must be exactly the ones kept. The selective import
+            # above is checked strictly: it must not touch them at all. dev-c FLOW6 stopped here with the ids-and-values check.
+            self.require('rolled_back_secret_names_values_kept',all(x.endswith(':id') for x in changed))
+        else:
+            self.require('retained_current_secret_ids_values',not changed)
         return now
 
     def flow(self):
@@ -739,7 +758,7 @@ class Controller:
             after=self.op('snapshot',tag='after_forced')
             equal=after==self.r['before_forced']
             self.require('deterministic_hook_failed_and_allowed',witness['refused'] is True and witness['allowed'] is True)
-            self.app_ready();self.endpoint();self.kept('after_rollback');self.api()
+            self.app_ready();self.endpoint();self.kept('after_rollback',ids_may_change=True);self.api()
             self.require('automatic_full_rollback_proven',plan.rollback_proven(job,consumed=witness['refused'],
                          marker=marker,digests=equal,application=True))
         finally:
@@ -775,6 +794,7 @@ class Controller:
         self.restore_catalog();self.restore_timer()
         self.require_original_state('original_durable_services_catalog_files')
         returned=self.op('preserved_safety_return',jobs=list(self.r['jobs']),full_safety=self.r.get('full_safety'),
+                         recover_request_id=self.request_id('recover'),
                          baseline_restored=self.r.get('baseline_restored') is True)
         self.require('preserved_old_pairs_returned',returned.get('all_preexisting_files_exact') is True)
         self.r['preserved_old_safeties_return']=returned;self.save()

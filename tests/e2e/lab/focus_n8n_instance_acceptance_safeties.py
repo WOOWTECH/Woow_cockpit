@@ -150,7 +150,12 @@ class PreservedSafeties:
                     pruning_proofs={bid:state['return_intents'][bid]['witness'] for bid in self.known if bid in state['return_intents']})
 
 
-def pruning_witnesses(c,name,jobs,full_safety):
+def pruning_witnesses(c,name,jobs,full_safety,recover_request_id=None):
+    """`recover_request_id`: the exact request id of the case's full-safety return. Lease attempts give retries their own ids
+    (name-recover-aN); dev-c FLOW6 was refused here because only the attempt-1 id name-recover was recognised."""
+    expected=name+'-recover' if recover_request_id is None else recover_request_id
+    if not isinstance(expected,str) or not re.fullmatch(re.escape(name)+r'-recover(-a[0-9]{1,2})?',expected):
+        raise ValueError('recover request id')
     witnesses={}; initial_return=False
     if len(jobs)>16: raise ValueError('owned job bound')
     for jid in jobs:
@@ -164,7 +169,7 @@ def pruning_witnesses(c,name,jobs,full_safety):
         p=c.call(['systemctl','show',unit,'-P','ActiveState'],check=False)
         if p.stdout.strip() not in (b'inactive',b'failed'): raise ValueError('owned unit not quiescent')
         if j.get('state')!='succeeded' or j.get('type')!='restore': continue
-        if (params.get('backup_id')==full_safety and j.get('request_id')==name+'-recover' and
+        if (params.get('backup_id')==full_safety and j.get('request_id')==expected and
                 result.get('rolled_back') is False and result.get('health') and
                 all(x.get('status')=='ok' for x in result['health'])): initial_return=True
         log,lmeta=c.read_regular(JOBS/(jid+'.log'),8*1024**2)
@@ -208,6 +213,6 @@ def _operate_locked(q,c):
         keys=('catalog','files','protected','units','timer','volumes','images','running','active_jobs','retention_sha256')
         if any(inv[k]!=obj.store.state['original_inventory'][k] for k in keys):
             raise ValueError('original catalog cold state not returned')
-        witness,returned=pruning_witnesses(c,q['case'],q['jobs'],q.get('full_safety'))
+        witness,returned=pruning_witnesses(c,q['case'],q['jobs'],q.get('full_safety'),q.get('recover_request_id'))
         return obj.put_back(witness,original_returned=returned and q.get('baseline_restored') is True)
     raise ValueError('preserved safety operation')

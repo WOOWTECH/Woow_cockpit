@@ -619,4 +619,49 @@ class ApiLogTests(Fixture):
         self.assertEqual(run.scrub_log('error short',['sh']),['error short'])          # secrets under 4 characters are never substituted
 
 
+class SecretKeepTests(Fixture):
+    KEPT={'n8n-db-password':{'id':'a'*12,'value_sha256':'1'*64},'n8n-runners-auth-token':{'id':'b'*12,'value_sha256':'2'*64},
+          'n8n-valkey-password':{'id':'c'*12,'value_sha256':'3'*64}}
+
+    def setUp(self):
+        super().setUp()
+        self.c.r.update(kept_state={'databases':{'n8n':{}}},kept_secrets=self.KEPT)
+        self.now=json.loads(json.dumps(self.KEPT))
+        self.c.op=lambda op,**kw:{'databases':{'n8n':{}}} if op=='snapshot' else self.now
+
+    def test_secret_difference_names_what_differs_and_never_a_value(self):
+        self.now['n8n-db-password']['id']='z'*12;self.now['n8n-valkey-password']['value_sha256']='9'*64
+        del self.now['n8n-runners-auth-token']
+        self.assertEqual(run.secret_difference(self.now,self.KEPT),
+                         ['n8n-db-password:id','n8n-runners-auth-token:missing','n8n-valkey-password:value'])
+        self.assertEqual(run.secret_difference(self.KEPT,self.KEPT),[])
+
+    def test_after_the_import_ids_and_values_must_stay(self):
+        self.c.kept('after_import')
+        self.now['n8n-db-password']['id']='z'*12
+        with self.assertRaisesRegex(RuntimeError,'retained_current_secret_ids_values'):self.c.kept('after_restart')
+        self.assertEqual(self.c.r['secret_differences']['after_restart'],['n8n-db-password:id'])
+
+    def test_after_a_rollback_new_ids_are_fine_but_not_a_new_value_or_a_missing_secret(self):
+        for name in self.KEPT:self.now[name]['id']='z'*12
+        self.c.kept('after_rollback',ids_may_change=True)
+        self.assertEqual(len(self.c.r['secret_differences']['after_rollback']),3)
+        self.now['n8n-valkey-password']['value_sha256']='9'*64
+        with self.assertRaisesRegex(RuntimeError,'rolled_back_secret_names_values_kept'):self.c.kept('after_rollback',ids_may_change=True)
+        self.now=json.loads(json.dumps(self.KEPT));del self.now['n8n-db-password']
+        with self.assertRaisesRegex(RuntimeError,'rolled_back_secret_names_values_kept'):self.c.kept('after_rollback',ids_may_change=True)
+
+    def test_recovery_passes_the_exact_attempt_request_id_of_its_full_safety_return(self):
+        seen={}
+        self.c.lease=dict(self.c.lease,attempt=11)
+        self.assertEqual(self.c.request_id('recover'),NAME+'-recover-a11')
+        def op(name,**kw):
+            if name=='preserved_safety_return':seen.update(kw);raise RuntimeError('stop here')
+            return inventory() if name=='inventory' else {}
+        self.c.op=op;self.c.r['before']=inventory();self.c.settle=lambda:None
+        self.c.stop_units=lambda:None;self.c.command=lambda *a,**k:b'';self.c.restore_catalog=lambda:None;self.c.restore_timer=lambda:None
+        with self.assertRaisesRegex(RuntimeError,'stop here'):self.c.recover()
+        self.assertEqual(seen['recover_request_id'],NAME+'-recover-a11')
+
+
 if __name__=='__main__':unittest.main()

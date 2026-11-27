@@ -62,6 +62,27 @@ class PreservationTests(unittest.TestCase):
             job['state']='failed';common.atomic(jobs/(JID+'.json'),json.dumps(job).encode())
             with patch.object(safety,'JOBS',jobs):self.assertEqual(safety.pruning_witnesses(c,NAME,[JID],FULL),({},False))
 
+    def test_a_retry_return_is_recognised_by_its_exact_attempt_request_id(self):
+        # dev-c FLOW6: the full-safety return ran as name-recover-a11 and only name-recover was recognised, so the pruned old
+        # pairs could not be returned. The controller now passes the exact id; nothing looser is accepted.
+        with tempfile.TemporaryDirectory() as folder:
+            jobs=Path(folder)/'jobs';jobs.mkdir(mode=0o700)
+            job={'id':JID,'type':'restore','state':'succeeded','request_id':NAME+'-recover-a11',
+                 'unit':'woowtech-backup-'+JID+'.service','params':{'backup_id':FULL,'apps':['n8n']},
+                 'result':{'rolled_back':False,'health':[{'id':'n8n/health-1','status':'ok'}]}}
+            common.atomic(jobs/(JID+'.json'),json.dumps(job).encode())
+            common.atomic(jobs/(JID+'.log'),''.join('2026-11-27T01:01:01Z 已刪除較舊的還原前備份 '+bid+'\n' for bid in safety.KNOWN).encode())
+            c=SimpleNamespace(read_regular=common.read_regular,digest=common.digest,
+                              call=lambda argv,**kw:SimpleNamespace(stdout=b'inactive\n'))
+            with patch.object(safety,'JOBS',jobs):
+                self.assertFalse(safety.pruning_witnesses(c,NAME,[JID],FULL)[1])                        # the old default
+                witness,returned=safety.pruning_witnesses(c,NAME,[JID],FULL,NAME+'-recover-a11')
+                self.assertTrue(returned);self.assertEqual(set(witness),set(safety.KNOWN))
+                self.assertFalse(safety.pruning_witnesses(c,NAME,[JID],FULL,NAME+'-recover-a12')[1])   # another attempt
+                for bad in (NAME+'-recover-a999','woowbk_focus_n8n_000000000000-recover',NAME+'-import',5,''):
+                    with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'recover request id'):
+                        safety.pruning_witnesses(c,NAME,[JID],FULL,bad)
+
     def test_corrupted_private_copy_stops_before_any_missing_original_is_recreated(self):
         with tempfile.TemporaryDirectory() as folder:
             obj,before=self.setup_files(folder);obj.prepare();self.prune(obj)
