@@ -450,4 +450,60 @@ class RestoreTests(Fixture):
         self.assertFalse(run.same_found(dict(before,images=['different']),before,images=True))
 
 
+class MismatchTests(Fixture):
+    """Real flow attempt 2 (dev-c): the engine ACCEPTS a restore whose converted backup names another database and refuses it inside
+    the job (error code incompatible, nothing changed, no safety backup). The case must prove exactly that, and own the job."""
+    MESSAGE='相容性檢查未通過：應用連線設定在轉換後已變更，無法確認下次啟動仍使用相同資料庫；請先套用目前設定再重新轉換。'
+
+    def setUp(self):
+        super().setUp()
+        self.log=[];self.snapshots={'mismatch_before':{'rows':1},'mismatch_after':{'rows':1}}
+        self.c.r['converted']=BID
+        self.c.op=lambda op,**kw:(self.log.append((op,kw.get('tag') or kw.get('database'))),
+                                  self.snapshots.get(kw.get('tag')) if op=='snapshot' else {})[1]
+        self.c.command=lambda *a,**kw:self.log.append(('command',a[0]))
+        self.c.start_units=lambda units:self.log.append(('start',len(units)))
+        self.c.stop_units=lambda:self.log.append(('stop',None))
+        self.c.app_ready=lambda:None
+        self.c.root_json=lambda script,request=None,**kw:{'database':'n8n','local':True}
+        self.sent=[]
+        self.verdict={'state':'failed','error':{'code':'incompatible','message':self.MESSAGE},
+                      'result':{'changed':False,'rolled_back':False,'safety_backup_id':None}}
+        self.c.job=lambda command,request,tag:(self.sent.append((command,request,tag)),self.verdict)[1]
+        self.c.helper=lambda *a,**kw:self.fail('the request must be tracked through the controller job, never sent directly')
+
+    def test_an_accepted_request_that_the_job_refuses_without_change_passes_and_the_job_is_tracked(self):
+        self.c.mismatch_case()
+        self.assertEqual(self.sent,[('restore-start',{'backup_id':BID,'apps':['n8n'],'confirm':True},'mismatch')])
+        self.assertEqual(self.log[-3:],[('stop',None),('fixture',NAME),('command','systemctl')])      # the case config is put back
+        self.assertEqual([x for x in self.log if x[0]=='snapshot'],[('snapshot','mismatch_before'),('snapshot','mismatch_after')])
+
+    def test_every_other_outcome_is_a_failure(self):
+        cases={'the restore succeeded':{'state':'succeeded','result':{'changed':True,'rolled_back':False,'safety_backup_id':None}},
+               'another error code':dict(self.verdict,error={'code':'failed','message':self.MESSAGE}),
+               'another message':dict(self.verdict,error={'code':'incompatible','message':'缺少映像'}),
+               'data was changed':dict(self.verdict,result={'changed':True,'rolled_back':False,'safety_backup_id':None}),
+               'it had to roll back':dict(self.verdict,result={'changed':False,'rolled_back':True,'safety_backup_id':None}),
+               'a safety backup was taken':dict(self.verdict,result={'changed':False,'rolled_back':False,'safety_backup_id':BID}),
+               'no result at all':{'state':'failed','error':{'code':'incompatible','message':self.MESSAGE}}}
+        for label,verdict in cases.items():
+            with self.subTest(label):
+                self.verdict=verdict;self.log.clear()
+                with self.assertRaises(RuntimeError):self.c.mismatch_case()
+                self.assertNotIn(('stop',None),self.log)
+
+    def test_a_changed_database_is_a_failure_even_when_the_job_refused(self):
+        self.snapshots['mismatch_after']={'rows':2}
+        with self.assertRaisesRegex(RuntimeError,'mismatch_no_database_change'):self.c.mismatch_case()
+
+    def test_the_request_id_follows_the_lease_attempt(self):
+        seen=[];reply={'job_id':'j20261127T000000Z-0000000a'}
+        del self.c.job                                                    # use the real job(): it owns the request id
+        self.c.helper=lambda command,request=None:(seen.append(request['request_id']),dict(reply))[1]
+        self.c.settle=lambda:(self.c.r.__setitem__('pending',None),self.verdict)[1]
+        self.c.mismatch_case()
+        self.c.lease=dict(self.c.lease,attempt=3);reply['job_id']='j20261127T000000Z-0000000b';self.c.mismatch_case()
+        self.assertEqual(seen,[NAME+'-mismatch',NAME+'-mismatch-a3'])
+
+
 if __name__=='__main__':unittest.main()

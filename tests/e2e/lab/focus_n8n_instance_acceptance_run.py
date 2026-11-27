@@ -642,13 +642,16 @@ class Controller:
         found=self.root_json(plan.ENDPOINT_PROBE)
         self.require('mismatch_has_actual_other_database',found.get('database')=='n8n' and found.get('local') is True)
         before=self.op('snapshot',tag='mismatch_before')
-        rid=self.name+'-mismatch'
-        self.r['negative_request_intent']=rid;self.save()
-        rc,response=self.h.helper('restore-start',{'backup_id':self.r['converted'],'apps':['n8n'],'confirm':True,
-                                           'request_id':rid},timeout=180)
-        error=response.get('error') or {}
-        self.require('mismatch_refuses_before_job',rc!=0 and '重新轉換' in error.get('message','') and
-                     self.op('intent',request_id=rid) is None)
+        # The engine accepts this request and refuses INSIDE the job: its compatibility preflight (flows._preflight) runs before
+        # any safety backup. Real flow attempt 2 on dev-c: a job that failed 'incompatible' within 4 s, changed nothing. The job is
+        # tracked like every other one (own request id per lease attempt, receipt entry), so recovery can never begin while it
+        # still runs; the earlier untracked request raced the recovery's no-active-job check.
+        job=self.job('restore-start',{'backup_id':self.r['converted'],'apps':['n8n'],'confirm':True},'mismatch')
+        refusal=job.get('error') or {};result=job.get('result') or {}
+        self.require('mismatch_refused_by_the_compatibility_check_without_change',
+                     job.get('state')=='failed' and refusal.get('code')=='incompatible' and '重新轉換' in refusal.get('message','')
+                     and result.get('changed') is False and result.get('rolled_back') is False
+                     and not result.get('safety_backup_id'))
         self.require('mismatch_no_database_change',self.op('snapshot',tag='mismatch_after')==before)
         self.stop_units();self.op('fixture',database=self.name);self.command('systemctl','--user','daemon-reload')
 
