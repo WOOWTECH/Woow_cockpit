@@ -15,6 +15,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.dont_write_bytecode = True
+sys.pycache_prefix = '/nonexistent/woowbk-focus-n8n-pycache'
+
 APP = '/home/appowner'
 CATALOG = '/etc/woowtech-cockpit/backup/apps/n8n.json'
 QDIR = APP + '/.config/containers/systemd/'
@@ -25,6 +28,14 @@ OWNER = '/usr/local/bin/woowbk-owner'
 PROTECTED = ['20261118T095520Z-33eb7474', '20261118T095247Z-388c9bd7']
 BASE = re.compile(r'woowbk_focus_n8n_[0-9a-f]{12}\Z')
 MARKER_SQL = "SELECT to_json(count(*)=1) FROM public.settings WHERE key='woowbk.lab.baseline.before';"
+# Exact queries exercised on real PG16 by generated helper95617696/c04. The
+# LEFT JOINs retain setrole=0 / setdatabase=0 as NULL names (global settings).
+ROLE_ROWS_SQL = ("SELECT json_agg(json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,"
+    "rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text,coalesce(md5(rolpassword),'')) "
+    "ORDER BY rolname) FROM pg_authid")
+ROLE_SETTINGS_SQL = ("SELECT coalesce(json_agg(json_build_array(r.rolname,d.datname,s.setconfig) "
+    "ORDER BY r.rolname,d.datname),'[]'::json) FROM pg_db_role_setting s LEFT JOIN pg_roles r ON r.oid=s.setrole "
+    "LEFT JOIN pg_database d ON d.oid=s.setdatabase")
 
 
 def digest(data):
@@ -258,6 +269,11 @@ def resolve_intent(request_id):
     return found.get('job_id') if isinstance(found, dict) else None
 
 
+def role_state():
+    return {'roles':digest(json.dumps(sql('postgres',ROLE_ROWS_SQL),sort_keys=True).encode()),
+            'role_settings':digest(json.dumps(sql('postgres',ROLE_SETTINGS_SQL),sort_keys=True).encode())}
+
+
 def state(store, tag, databases=None):
     if not re.fullmatch(r'[a-z_]{1,40}', tag): raise ValueError('invalid snapshot tag')
     sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
@@ -287,13 +303,10 @@ def state(store, tag, databases=None):
         result['databases'][name] = {'digest':snap['digest'], 'access':digest(json.dumps(access,sort_keys=True).encode()),
                                     'types':digest(json.dumps(types).encode()),'extensions':extensions}
     # Read as JSON, including role password fingerprint, never the password/hash itself.
-    role_rows = sql('postgres', "SELECT json_agg(json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,"
-                    "rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil,rolconfig,md5(coalesce(rolpassword,''))) "
-                    'ORDER BY rolname) FROM pg_authid;')
+    result.update(role_state())
     members = sql('postgres', "SELECT coalesce(json_agg(json_build_array(pg_get_userbyid(roleid),pg_get_userbyid(member),"
                   "pg_get_userbyid(grantor),admin_option,inherit_option,set_option) ORDER BY roleid,member),'[]'::json) "
                   'FROM pg_auth_members;')
-    result['roles'] = digest(json.dumps(role_rows,sort_keys=True).encode())
     result['members'] = digest(json.dumps(sorted(members),sort_keys=True).encode())
     result['database_names'] = names
     result['metadata'] = sql('postgres', "SELECT json_agg(json_build_array(datname,pg_get_userbyid(datdba),"
