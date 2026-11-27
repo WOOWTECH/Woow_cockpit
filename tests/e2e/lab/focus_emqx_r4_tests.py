@@ -209,6 +209,27 @@ class DriverBoundaryTests(unittest.TestCase):
         self.assertEqual(code, 5)
         self.assertLessEqual(len(probes[0]['codes']), 6)
 
+    def test_h1_judges_the_environment_after_the_restart_and_records_the_import_value(self):
+        # env_wins_h1 native01: right after the import HA's allow was in effect. The product's notice says this
+        # device's variables win at the next start, so only the restarted broker must deny; the import's value is kept.
+        checks, observed = [], {}
+        def check(name, value=True):
+            checks.append((name, bool(value)))
+            if not value: raise RuntimeError('fixed_check_failed')
+        hocon = b'authorization {\n  no_match = allow\n  sources = []\n}\n'
+        tmp = SimpleNamespace(exec=lambda role, command: SimpleNamespace(stdout=hocon))
+        def assertions(value, restarted):
+            del checks[:]
+            scope = runtime_parts('case_assertions', check=check, no_match=lambda _t, _r: value, OBSERVED=observed)
+            scope['case_assertions'](tmp, 'env_wins_h1', restarted=restarted)
+            return list(checks)
+        self.assertEqual(assertions('allow', False), [('h1_config_file_holds_has_value', True)])
+        self.assertEqual(observed, {'h1_no_match_after_import': 'allow'})
+        self.assertEqual(assertions('deny', True), [('h1_device_environment_wins_after_the_restart', True),
+                                                    ('h1_config_file_holds_has_value', True)])
+        with self.assertRaises(RuntimeError):
+            assertions('allow', True)
+
     def test_h1_device_is_read_by_the_products_own_target(self):
         # The other cases hand the engine a plain object; H1 needs the product's Target, which reads the Quadlet file,
         # gives the candidate this device's environment and names its access settings for the env-wins notice.

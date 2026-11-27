@@ -30,6 +30,7 @@ LIMIT = 256 * 1024**2
 JOB = ''
 CHECKS = []
 PROBES = []  # every login's CONNACK codes, in order (login_code)
+OBSERVED = {}  # values a case records without judging them (H1: the effective no_match right after the import)
 STAGE = 'preflight'
 HTTP_AUTH_CASES = ('http_dummy', 'lost_auth_setting')
 HTTP_AUTH_SETTLE = 45  # seconds a refused login is retried while EMQX's HTTP backend reconnects to the dummy
@@ -184,11 +185,17 @@ ACL_ROW = ('ok=emqx_authz_mnesia:store_rules({username,<<"r4_source">>},'
            'io:format("WOOWACL:seeded:END").')
 
 
-def case_assertions(tmp, case_id):
+def case_assertions(tmp, case_id, *, restarted=False):
     """Only fixed owned inputs; no general file/env reader or caller-supplied evaluation expression."""
     if case_id == 'env_wins_h1':
-        # HA's value arrived in the file, and this device's environment still decides (after the import and the restart).
-        check('h1_effective_no_match_is_this_devices_env', no_match(tmp, 'emqx-new') == fx.H1_ENV['EMQX_AUTHORIZATION__NO_MATCH'])
+        # The import applies HA's settings to the running broker; this device's environment takes over at the next start,
+        # as the product's env-wins notice says (native01 saw HA's allow right after the import). So only the restarted
+        # broker is judged; the import's value is recorded. HA's value must be in the file both times.
+        value = no_match(tmp, 'emqx-new')
+        if restarted:
+            check('h1_device_environment_wins_after_the_restart', value == fx.H1_ENV['EMQX_AUTHORIZATION__NO_MATCH'])
+        else:
+            OBSERVED['h1_no_match_after_import'] = value
         conf = tmp.exec('emqx-new', ['cat', '/opt/emqx/data/configs/cluster.hocon']).stdout
         check('h1_config_file_holds_has_value', re.findall(rb'no_match\s*[=:]\s*"?(allow|deny)', conf) == [b'allow'])
     if case_id == 'changed_acl':
@@ -463,7 +470,7 @@ def main(case_id):
             after = emqx.candidate_readback(tmp)
             check('all_roots_and_tables_stable_after_restart', not emqx.compare_readback(record, after))
             if case_id == 'http_dummy': emqx.evaluate(tmp, 'emqx-new', HTTP_DUMMY)
-            case_assertions(tmp, case_id)
+            case_assertions(tmp, case_id, restarted=True)
             if case_id == 'dead_row': check('dead_row_remains_dead', login_code(tmp, 'emqx-new', case_id) != 0)
             elif case_id == 'noauth':
                 check('anonymous_remains_enabled', login_code(tmp, 'emqx-new', case_id, None, None) == 0)
@@ -477,12 +484,13 @@ def main(case_id):
     return {'ok': True, 'case': case_id, 'job_id': JOB, 'checks': CHECKS, 'image': fx.IMAGE,
         'scope': 'generated internal candidate/restart/postcheck delta, not package install or original D0 fullflow',
         'package_smoke_executed': False, 'catalog_access': False, 'installed_source_access': False,
-        'unrelated_container_churn': after[0] != before[0], 'probes': PROBES}
+        'unrelated_container_churn': after[0] != before[0], 'probes': PROBES, 'observed': OBSERVED}
 
 
 if __name__ == '__main__':
     try: result = main(sys.argv[1])
     except Exception as error:
         result = {'ok': False, 'case': sys.argv[1], 'job_id': JOB, 'stage': STAGE,
-                  'reason': type(error).__name__, 'checks': CHECKS, 'probes': PROBES, 'private_dir': str(ROOT)}
+                  'reason': type(error).__name__, 'checks': CHECKS, 'probes': PROBES, 'observed': OBSERVED,
+                  'private_dir': str(ROOT)}
     print(json.dumps(result, sort_keys=True)); raise SystemExit(0 if result['ok'] else 1)
