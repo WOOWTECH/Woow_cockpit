@@ -1,0 +1,170 @@
+{
+  "cases": {
+    "admin_public": {
+      "checks_passed": 24,
+      "checks_total": 24,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T160129Z-c76df947",
+      "login_codes": null,
+      "native": "01",
+      "source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "changed_acl": {
+      "checks_passed": 31,
+      "checks_total": 31,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T160719Z-d41bd27f",
+      "login_codes": null,
+      "native": "01",
+      "source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "env_dummy": {
+      "checks_passed": 27,
+      "checks_total": 27,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T164230Z-046fe078",
+      "login_codes": [
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-ha"
+        },
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-new"
+        }
+      ],
+      "native": "01",
+      "source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "file_dummy": {
+      "checks_passed": 27,
+      "checks_total": 27,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T163227Z-d1e20196",
+      "login_codes": [
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-ha"
+        },
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-new"
+        }
+      ],
+      "native": "01",
+      "source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "http_dummy": {
+      "checks_passed": 29,
+      "checks_total": 29,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T162703Z-5bfeae70",
+      "login_codes": [
+        {
+          "codes": [
+            5,
+            0
+          ],
+          "role": "emqx-ha"
+        },
+        {
+          "codes": [
+            5,
+            5,
+            0
+          ],
+          "role": "emqx-new"
+        }
+      ],
+      "native": "03",
+      "source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "jq_constant": {
+      "checks_passed": 27,
+      "checks_total": 27,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T163725Z-b2c70508",
+      "login_codes": [
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-ha"
+        },
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-new"
+        }
+      ],
+      "native": "01",
+      "source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "lost_auth_setting": {
+      "checks_passed": 15,
+      "checks_total": 15,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T164731Z-d91391df",
+      "login_codes": [
+        {
+          "codes": [
+            5,
+            0
+          ],
+          "role": "emqx-ha"
+        }
+      ],
+      "native": "01",
+      "source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
+    "psk": {
+      "checks_passed": 26,
+      "checks_total": 26,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T161248Z-cd1d98ba",
+      "login_codes": null,
+      "native": "01",
+      "source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    }
+  },
+  "device": "woowbk-dev-d",
+  "device_mutex_free_at_check": true,
+  "failed_attempt_work_folders_removed": {
+    "http_dummy native01 (j20261127T161750Z-4a01c64e)": "/home/appowner/woowbk-r4-gvogwurt",
+    "http_dummy native02 (j20261127T162338Z-360747f9)": "/home/appowner/woowbk-r4-wavfxeje"
+  },
+  "job_owned_containers": 0,
+  "job_owned_networks": 0,
+  "job_owned_volumes": 0,
+  "native02_private_log": "nodetool exception {badmatch,{error,timeout}}: no CONNACK within the probe's 3 s",
+  "remaining_r4_payload_directories": [
+    "/home/appowner/woowbk-r4-prepare-b6f4e120d93a (earlier lane's failed OCI export, ~116 MB; its own cleanup-only lease is still required, untouched)"
+  ],
+  "scope": "independent read-only scan after the generated-case queue; the cases themselves report tempobjects_empty and durable image/volume equality",
+  "written_at": "2026-11-28T00:58+08:00"
+}

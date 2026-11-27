@@ -52,7 +52,9 @@
       "decision": "D4/S1",
       "expected": "candidate-and-restart",
       "id": "http_dummy",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/http_dummy/",
+      "native_source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "native_status": "passed-generated-delta-29-of-29",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -64,7 +66,9 @@
       "decision": "D4/S1",
       "expected": "candidate-and-restart",
       "id": "file_dummy",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/file_dummy/",
+      "native_source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "native_status": "passed-generated-delta-27-of-27",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -76,7 +80,9 @@
       "decision": "D4/S1",
       "expected": "candidate-and-restart",
       "id": "jq_constant",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/jq_constant/",
+      "native_source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "native_status": "passed-generated-delta-27-of-27",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -88,7 +94,9 @@
       "decision": "D4/S1",
       "expected": "candidate-and-restart",
       "id": "env_dummy",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/env_dummy/",
+      "native_source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "native_status": "passed-generated-delta-27-of-27",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -98,7 +106,9 @@
       "decision": "D2/H3",
       "expected": "candidate-and-restart",
       "id": "admin_public",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/admin_public/",
+      "native_source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "native_status": "passed-generated-delta-24-of-24",
       "notices": [
         "emqx.default-dashboard"
       ],
@@ -110,7 +120,9 @@
       "decision": "D3",
       "expected": "candidate-and-restart",
       "id": "changed_acl",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/changed_acl/",
+      "native_source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "native_status": "passed-generated-delta-31-of-31",
       "notices": [
         "emqx.acl-replaced"
       ],
@@ -124,7 +136,9 @@
       "decision": "E-43/R4",
       "expected": "candidate-and-restart",
       "id": "psk",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/psk/",
+      "native_source_commit": "42d9f5edac165e095e2ae2004ee34006eab889c6",
+      "native_status": "passed-generated-delta-26-of-26",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -134,7 +148,9 @@
       "decision": "E-67/D0",
       "expected": "incompatible-before-packaging",
       "id": "lost_auth_setting",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/lost_auth_setting/",
+      "native_source_commit": "c1f03cf06d45e10f8360bff1e74fc8a079b6a3d1",
+      "native_status": "passed-generated-refusal-15-of-15",
       "notices": [],
       "package_smoke_status": "not-applicable-refusal",
       "smoke": "requires-separate-owned-package-device"
@@ -160,5 +176,5 @@
       "status": "not-executed-existing-H2-smoke-decision-evidence-preserved"
     }
   ],
-  "new_native_runs": 3
+  "new_native_runs": 11
 }
