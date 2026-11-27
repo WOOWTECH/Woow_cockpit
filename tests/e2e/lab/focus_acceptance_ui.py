@@ -4,6 +4,8 @@
 No device access, credentials or listener without --run. Requires a reviewed
 commit and separate dev-d lease; existing heavy guard and device lock suffice.
 Installed source must already equal --source; no deploy/install/pull here.
+--page-emqx: the same real page imports only EMQX from the ORIGINAL B1 backup
+under its own lease and guard (focus_acceptance_ui_page_emqx.py).
 """
 import argparse
 import ast
@@ -310,10 +312,13 @@ def case_safety_prunes(before, after, owned_prior, captured_jobs):
         proof.append({'id':bid,'type':'safety','events':matches})
     return proof
 
-def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three_selected=False, helper_lease_path=None):
+def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three_selected=False, helper_lease_path=None,
+        page_emqx=False, page_emqx_lease_path=None):
     sys.path.insert(0, str(HERE))
     import ha_import_e2e as h
     import ha_import_b1_e2e as b1
+    if helper_three_selected and page_emqx:
+        raise ValueError('one mode per run')
     if helper_three_selected:
         import focus_acceptance_ui_helper as helper
         helper_lease_path = helper_lease_path or Path('/tmp/parity-focus-20261127/lease-r1-helper-dev-d.json')
@@ -322,7 +327,17 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three
             subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), time.time())
     else:
         from focus_acceptance_ui_relay import Relay
+        if page_emqx:
+            # Its own lease, checked before any device access (focus_acceptance_ui_page_emqx.validate_lease).
+            import focus_acceptance_ui_helper as helper
+            import focus_acceptance_ui_page_emqx as pe
+            page_emqx_lease_path = page_emqx_lease_path or pe.LEASE
+            pe.validate_lease(json.loads(page_emqx_lease_path.read_bytes()),
+                subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
+                subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip(), source, time.time())
     state_path = LAB/'run/focus_acceptance_r1_helper.json' if helper_three_selected else STATE
+    if page_emqx:
+        state_path = LAB/'run'/pe.STATE_NAME
     h.DEVICE = 'woowbk-dev-d'
     h.require_isolated_device()  # before credentials or mutation lock
     fd = os.open(LOCK, os.O_RDWR | os.O_CREAT, 0o600)
@@ -335,12 +350,16 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three
     if helper_three_selected and os.path.lexists(state_path):
         os.close(fd)
         raise ValueError('helper guard already exists; preserve it and stop')
+    if page_emqx and os.path.lexists(state_path):
+        os.close(fd)
+        raise ValueError('page-emqx guard already exists; preserve it and stop')
     previous = provenance = None
     prior_guard = state_path.read_bytes() if state_path.exists() else None
     predecessor_guard = prior_guard
     protected_page_files = {}
+    page_guard = page_provenance = None
     try:
-        lease = json.loads((helper_lease_path if helper_three_selected else LEASE).read_text())
+        lease = json.loads((helper_lease_path if helper_three_selected else page_emqx_lease_path if page_emqx else LEASE).read_text())
         pinned = subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
         if (lease['device'] != h.DEVICE or Path(lease['source']).resolve() != source
                 or not pinned.startswith(lease['source_commit'])
@@ -352,6 +371,19 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three
                 raise ValueError('helper requires a fresh guard; no old helper override')
             predecessor_guard = STATE.read_bytes()
             previous, provenance, protected_page_files = helper.predecessor(lease, predecessor_guard, STATE, LAB/'evidence')
+        elif page_emqx:
+            pe.validate_lease(lease, subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip(),
+                pinned, source, time.time())
+            if prior_guard is not None or recovery_proof or recovery_proof_sha256:
+                raise ValueError('page-emqx requires a fresh guard; no old override')
+            # PAGE5's terminal page guard (bound by the lease) and R1's terminal helper guard that followed it: both stay
+            # byte-for-byte; R1's records are the newest original state this case replays against.
+            page_guard = STATE.read_bytes()
+            _page_old, page_provenance, protected_page_files = helper.predecessor(lease, page_guard, STATE, LAB/'evidence')
+            r1_guard_path = LAB/'run'/pe.R1_STATE_NAME
+            predecessor_guard = r1_guard_path.read_bytes()
+            previous, provenance, protected_r1 = pe.r1_predecessor(lease, predecessor_guard, r1_guard_path, LAB/'evidence')
+            protected_page_files = {**protected_page_files, **protected_r1}
         else:
             pending = prior_guard is not None and json.loads(prior_guard).get('recovery_verified') is not True
             if pending:
@@ -378,11 +410,17 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three
             print(name+(': PASS' if result else ': FAIL'), flush=True)
             return result
 
-    ev = Evidence(secrets, 'focus-acceptance-r1-helper' if helper_three_selected else 'focus-acceptance-ui')
+    ev = Evidence(secrets, 'focus-acceptance-r1-helper' if helper_three_selected else pe.EVIDENCE_AREA if page_emqx else 'focus-acceptance-ui')
     started = int(time.time()) - 1
     receipt = {'device': h.DEVICE, 'phase': 'preconditions', 'created_backups': [], 'ha_id': None,
                'ha_record_owned': False, 'catalog_added': False, 'baseline_restored': False,
                'driver_commit':subprocess.check_output(['git','-C',str(REPO),'rev-parse','HEAD'],text=True).strip()}
+    if page_emqx:
+        receipt['mode'] = 'page-emqx'
+    # The mode's own baseline and catalog entry; the default R8 case keeps its two baselines and Omnigent's entry.
+    baselines = {pe.APP: pe.BASELINE} if page_emqx else BASELINES
+    catalog_app, catalog_label = ('emqx', 'EMQX') if page_emqx else ('omnigent', 'Omnigent')
+    page_trace = {'mode':'page-emqx','browser_used':True,'completed':False}
     before = {}
     before_backups = before_uploads = before_jobs = None
     original_catalog = original_units = original_images = original_timer = None
@@ -406,6 +444,10 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None, *, helper_three
         # new state can replace it. Old case files remain byte-identical.
         with (ev.dir/'previous-guard.json').open('xb') as handle:
             handle.write(predecessor_guard)
+    if page_provenance:
+        receipt['page_guard_provenance'] = page_provenance
+        with (ev.dir/'previous-page-guard.json').open('xb') as handle:
+            handle.write(page_guard)
 
     def save():
         ev.save('recovery.json', receipt)
@@ -498,6 +540,7 @@ print(json.dumps(out))''',{'sources':sources})
         return dict(x.split('=', 1) for x in proc.stdout.decode().splitlines())
 
     marker = marker_program((HERE/'batch1_markers.py').read_text())
+    ha_marker = pe.ha_admin_marker_program(marker) if page_emqx else None
 
     def markers(app):
         proc = h.owner('python3', '-I', '-c', marker, app, 'read', input=b'{}', timeout=180)
@@ -505,11 +548,27 @@ print(json.dumps(out))''',{'sources':sources})
             raise h.Failed('read-only marker probe failed')
         reply = json.loads(proc.stdout)
         secrets.register_issued(reply['issued'])
-        if helper_three_selected:
+        if helper_three_selected or page_emqx:
             for token in reply['issued']:
                 observed_marker_tokens.append({'app':app,'sha256':hashlib.sha256(token.encode()).hexdigest(),
                     'length':len(token),'registered':token in secrets.secret_values()})
         if app == 'emqx' and not reply['issued']:
+            raise h.Failed('EMQX marker token issuance not observed')
+        return reply['markers']
+
+    def ha_markers():
+        # The same read-only EMQX marker read after the import, as HA's Dashboard admin (dev-d's admin password no
+        # longer logs in while HA's administrator table is live); the password travels on stdin only.
+        proc = h.owner('python3', '-I', '-c', ha_marker, pe.APP, 'read',
+                       input=json.dumps({'ha_dashboard_password':secrets['B1_EMQX_ADMIN_PW']}).encode(), timeout=180)
+        if proc.returncode:
+            raise h.Failed('read-only HA-admin marker probe failed')
+        reply = json.loads(proc.stdout)
+        secrets.register_issued(reply['issued'])
+        for token in reply['issued']:
+            observed_marker_tokens.append({'app':'emqx-ha-admin','sha256':hashlib.sha256(token.encode()).hexdigest(),
+                'length':len(token),'registered':token in secrets.secret_values()})
+        if not reply['issued']:
             raise h.Failed('EMQX marker token issuance not observed')
         return reply['markers']
 
@@ -532,7 +591,7 @@ print(json.dumps(out))''',{'sources':sources})
         chain, seen = [], set()
         current = first
         while current:
-            if current in seen or len(chain) >= (5 if helper_three_selected else 4):
+            if current in seen or len(chain) >= (5 if helper_three_selected else 2 if page_emqx else 4):
                 raise h.Failed('unexpected R8 chain layout')
             seen.add(current)
             receipt['inflight'] = current
@@ -550,9 +609,9 @@ print(json.dumps(out))''',{'sources':sources})
     # the existing encoded-needle builder. Only counts return from the device.
     scan = scan_program(inspect.getsource(b1.secret_scan_needles))
     old_helper_signals = {}
-    if helper_three_selected:
+    if helper_three_selected or page_emqx:
         def interrupt_helper(_signum, _frame):
-            raise h.Failed('helper flow interrupted; recover own jobs')
+            raise h.Failed('page flow interrupted; recover own jobs' if page_emqx else 'helper flow interrupted; recover own jobs')
         for signum in (signal.SIGINT, signal.SIGTERM):
             old_helper_signals[signum] = signal.signal(signum, interrupt_helper)
     try:
@@ -562,6 +621,9 @@ print(json.dumps(out))''',{'sources':sources})
         require('fixture: original recorded full encrypted HA hash matches', FIXTURE.is_file() and sha(FIXTURE) == FIXTURE_SHA)
         if not helper_three_selected:
             require('browser: existing package and Chromium ready', PLAYWRIGHT.is_file() and CHROMIUM.is_file())
+        if page_emqx:
+            require('secrets: HA EMQX admin credential registered for the live data read',
+                    len(secrets.values.get('B1_EMQX_ADMIN_PW') or '') >= 6 and 'B1_EMQX_ADMIN_PW' not in secrets.names)
         resources()
         installed = root_json(__import__('focus_acceptance_n8n').ENGINE_HASHES)
         lib = source/'backup-engine/woowbackup'
@@ -610,6 +672,11 @@ print(json.dumps(out))''',{'sources':sources})
                 require('replay: old HA record retained at exact derived SHA',
                         any(x['id'] == previous['ha_id'] and x.get('sha256') == previous['derived_fixture_sha256']
                             for x in listing.get('ha_backups',[])))
+        if page_emqx:
+            # The product keeps the newest three safety backups per app; this run adds two of EMQX. No archive this run
+            # does not own may disappear by that, so stop here when one could.
+            page_trace['safety_copies_at_risk']=pe.safety_at_risk(listing.get('backups',[]),receipt.get('protected_existing_backups',[]))
+            require('before: no unowned EMQX safety backup can be pruned by this run',not page_trace['safety_copies_at_risk'])
         before_jobs={x['id'] for x in ok('jobs').get('jobs',[])}
         for app in APPS:
             before[app]=markers(app)
@@ -621,11 +688,11 @@ print(json.dumps(out))''',{'sources':sources})
         receipt['before_markers']=before
         state_armed=True  # fresh originals proved; next phase may add own catalog
         save()
-        for app,bid in BASELINES.items():
+        for app,bid in baselines.items():
             pre=ok('inspect',{'backup_id':bid,'key':secrets['DEV_D_KIT']})
             require('before: encrypted '+app+' baseline opens', pre.get('ok') is True)
             if app+'.json' not in original_catalog:
-                require('catalog: only missing Omnigent can be added', app=='omnigent')
+                require('catalog: only missing '+catalog_label+' can be added', app==catalog_app)
                 carried=next((x.get('settings',{}).get('entry') for x in pre.get('preflight',{}).get('apps',[]) if x.get('id')==app),None)
                 require('catalog: trusted carried entry matches appowner', isinstance(carried,dict) and carried.get('id')==app and carried.get('owner')=='appowner')
                 preview=ok('catalog-install',{'entry':carried})
@@ -636,18 +703,30 @@ print(json.dumps(out))''',{'sources':sources})
                 ok('catalog-install',{'entry':carried,'confirm':True,'expected_sha256':preview['expected_sha256']})
             ready=ok('inspect',{'backup_id':bid,'key':secrets['DEV_D_KIT']})
             require('before: '+app+' original baseline restore preflight ready', ready.get('preflight',{}).get('ok') is True)
+            if page_emqx:
+                # Recovery restores this baseline without asking anyone: prove now, before any import, that it can.
+                require('before: '+app+' original baseline has no unreviewed confirmation', pe.baseline_ready(ready.get('preflight',{})))
         if original_timer.get('UnitFileState') not in ('masked','masked-runtime'):
             timer_changed=True
             require('setup: schedule masked as a bounded case', h.root('systemctl','mask',TIMER,timeout=60).returncode==0)
-        receipt['phase']='derive-and-helper' if helper_three_selected else 'derive-and-ui'
+        receipt['phase']='derive-and-helper' if helper_three_selected else 'page-emqx-ui' if page_emqx else 'derive-and-ui'
         save()
-        derive(FIXTURE,derived)
-        receipt['ha_id']='ha-'+sha(derived)[:20]
-        receipt['original_fixture_sha256']=FIXTURE_SHA
-        receipt['derived_fixture_sha256']=sha(derived)
-        receipt['ha_record_owned']=ha_record_owned(listing.get('ha_backups',[]),receipt['ha_id'],receipt['derived_fixture_sha256'],previous)
-        require('upload: ownership is new or exact protected retained record',
-                receipt['ha_record_owned'] or (previous is not None and receipt['ha_id'] in before_uploads))
+        if page_emqx:
+            # The ORIGINAL fixture, never a derived copy: an upload of it may already be dev-d's protected record.
+            receipt['ha_id']='ha-'+FIXTURE_SHA[:20]
+            receipt['original_fixture_sha256']=FIXTURE_SHA
+            receipt['uploaded_fixture_sha256']=FIXTURE_SHA
+            receipt['ha_record_owned']=pe.original_record_owned(listing.get('ha_backups',[]),receipt['ha_id'],FIXTURE_SHA)
+            require('upload: original HA record is new or an exact protected existing record',
+                    receipt['ha_record_owned'] or receipt['ha_id'] in before_uploads)
+        else:
+            derive(FIXTURE,derived)
+            receipt['ha_id']='ha-'+sha(derived)[:20]
+            receipt['original_fixture_sha256']=FIXTURE_SHA
+            receipt['derived_fixture_sha256']=sha(derived)
+            receipt['ha_record_owned']=ha_record_owned(listing.get('ha_backups',[]),receipt['ha_id'],receipt['derived_fixture_sha256'],previous)
+            require('upload: ownership is new or exact protected retained record',
+                    receipt['ha_record_owned'] or (previous is not None and receipt['ha_id'] in before_uploads))
         save()
         if helper_three_selected:
             helper_deadline = time.monotonic()+20*60
@@ -676,6 +755,38 @@ print(json.dumps(out))''',{'sources':sources})
             finally:
                 helper_trace['memory']=sampler.finish(terminal)
                 ev.save('helper-trace.json',helper_trace)
+        elif page_emqx:
+            # The same real page and private relay as R8, told to select only EMQX and what to expect (page_settings).
+            config={'ha_id':receipt['ha_id'],'fixture':str(FIXTURE),'password':secrets['COCKPIT_PASSWORD'],
+                    'key':secrets['HA_BACKUP_KEY'],'evidence':str(ev.dir),'result':str(ev.dir/'browser.json'),
+                    'playwright':str(PLAYWRIGHT),'chromium':str(CHROMIUM),'since':started,'cookie_scan':scan,
+                    **pe.page_settings()}
+            resources()
+            with Relay() as relay:
+                config['base']=relay.base
+                proc=subprocess.Popen(['node',str(HERE/'focus_acceptance_ui_page.mjs'),'--run'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+                try:
+                    proc.communicate(json.dumps(config).encode(),timeout=20*60)
+                except BaseException as error:
+                    # A timeout or a soft stop never orphans the browser: further soft signals are ignored, SIGTERM lets
+                    # Playwright close its Chromium children, SIGKILL only after 15 seconds.
+                    for signum in old_helper_signals:
+                        signal.signal(signum, signal.SIG_IGN)
+                    proc.send_signal(signal.SIGTERM)
+                    try:
+                        proc.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        proc.kill(); proc.communicate()
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        raise h.Failed('bounded page timeout; adopt own jobs before recovery') from None
+                    raise
+            require('transport: private relay closed all exec children', not relay.children and not relay.thread.is_alive())
+            require('UI: real page completed one bounded flow',proc.returncode==0)
+            browser=json.loads((ev.dir/'browser.json').read_text())
+            for item in browser['checks']:
+                require(item['check'],item['ok'])
+            require('UI: browser result and issued-value scan complete',browser['completed'] and browser['issued_values_scanned'])
+            page_trace['completed']=True
         else:
             config={'ha_id':receipt['ha_id'],'fixture':str(derived),'password':secrets['COCKPIT_PASSWORD'],
                     'key':secrets['HA_BACKUP_KEY'],'evidence':str(ev.dir),'result':str(ev.dir/'browser.json'),
@@ -702,9 +813,10 @@ print(json.dumps(out))''',{'sources':sources})
                 require(item['check'],item['ok'])
             require('UI: browser result and issued-value scan complete',browser['completed'] and browser['issued_values_scanned'])
     except Exception as error:
-        ev.check('R1 helper: bounded flow completed' if helper_three_selected else 'R8: bounded real page flow completed',False,type(error).__name__)
+        ev.check('R1 helper: bounded flow completed' if helper_three_selected else 'page-emqx: bounded real page flow completed' if page_emqx
+                 else 'R8: bounded real page flow completed',False,type(error).__name__)
     finally:
-        if helper_three_selected:
+        if helper_three_selected or page_emqx:
             # One soft stop enters bounded recovery. Further soft signals must
             # not race its ordinary baseline restores; hard loss retains guard.
             for signum in old_helper_signals:
@@ -722,7 +834,7 @@ print(json.dumps(out))''',{'sources':sources})
             os.close(fd)
             for signum, handler in old_helper_signals.items():
                 signal.signal(signum, handler)
-            print('R8 preconditions stopped; previous failed case retained')
+            print('page-emqx preconditions stopped; no device mutation' if page_emqx else 'R8 preconditions stopped; previous failed case retained')
             return 1
         recovery_deadline=time.monotonic()+20*60
         try:
@@ -744,6 +856,9 @@ print(json.dumps(out))''',{'sources':sources})
                     save()
                     roots=[x for x in own if x.get('type')=='backup' and x.get('params',{}).get('source')=='ha']
                     roots.sort(key=lambda x:x['id'])
+                if page_emqx:
+                    # The page's own check ended before its import could start; its record is what the import is judged by.
+                    checked=[wait(j['id']) for j in own if j.get('type')=='verify']
                 if roots:
                     records=follow(roots[0]['id'])
                     if helper_three_selected:
@@ -763,6 +878,36 @@ print(json.dumps(out))''',{'sources':sources})
                         ev.check('helper: first unit sampled through terminal chain below1GiB',memory.get('samples',0)>0
                             and 0<memory.get('peak_bytes',0)<1024**3 and memory.get('through_terminal_chain') is True and memory.get('sampler_stopped') is True)
                         ev.save('helper-trace.json',helper_trace)
+                    elif page_emqx:
+                        page_trace['first_job_id']=records[0].get('id')
+                        page_trace['check_jobs']=[j.get('id') for j in checked]
+                        try:
+                            expected,section=pe.check_accepted(checked[0] if len(checked)==1 else {},receipt['ha_id'])
+                        except ValueError as error:
+                            expected=section=None
+                            page_trace['check_refusal']=str(error)
+                        page_trace['check_accepted']=expected is not None
+                        page_trace['expected_acknowledged']=expected
+                        ev.check('check: one current EMQX-only check, EMQX importable, every confirmation line keyed',page_trace['check_accepted'])
+                        browser_file=ev.dir/'browser.json'
+                        sent=(json.loads(browser_file.read_text()).get('confirmations') or {}).get('sent_keys') if browser_file.is_file() else None
+                        page_trace['acknowledged_exact']=expected is not None and pe.acknowledged_exactly(expected,records[0].get('params') or {},sent)
+                        ev.check('confirmation: page and import carry every listed confirmation key exactly once',page_trace['acknowledged_exact'])
+                        page_trace['chain_verified']=pe.chain_complete(records,receipt['ha_id'])
+                        ev.check('chain: one EMQX conversion and its restore succeeded as two linked jobs',page_trace['chain_verified'])
+                        try:
+                            native=root_json(pe.NATIVE_UNITS,{'ids':[j['id'] for j in records]})
+                            page_trace['native_units']=[n.get('unit') for n in native]
+                            page_trace['native_units_verified']=pe.native_units_ok(native,records)
+                            ev.save('page-emqx-native-jobs.json',native)
+                        except Exception as error:
+                            page_trace['native_units_verified']=False
+                            page_trace['native_units_error_class']=type(error).__name__
+                        ev.check('chain: both jobs share the first systemd unit',page_trace['native_units_verified'] is True)
+                        safety=(records[-1].get('result') or {}).get('safety_backup_id')
+                        page_trace['restore_safety_verified']=records[-1].get('type')=='restore' and isinstance(safety,str) and bool(safety)
+                        ev.check('chain: the EMQX restore has its own safety backup',page_trace['restore_safety_verified'])
+                        ev.save('page-emqx-trace.json',page_trace)
                     else:
                         ev.check('chain: two real conversions and restores succeeded',chain_complete(records))
                         job_units=root_json('import json,re,sys; from pathlib import Path; ids=json.load(sys.stdin)["ids"]; assert all(re.fullmatch(r"j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}",x) for x in ids); p=Path("/var/lib/woowtech-backup/jobs"); print(json.dumps([json.loads((p/(x+".json")).read_text()).get("unit") for x in ids]))',{'ids':[j['id'] for j in records]})
@@ -775,6 +920,17 @@ print(json.dumps(out))''',{'sources':sources})
                             and 'woowbk-lab-baseline' not in hermes_live.get('sessions',{}) and omni_live!=before['omnigent'])
                         ev.check('helper: distinct safety backups and both actual HA live data',
                             helper_trace['distinct_restore_safeties_verified'] and helper_trace['live_data_verified'])
+                    elif page_emqx:
+                        try:
+                            live=ha_markers()
+                            ev.save('live-emqx.json',live)
+                            page_trace['live_data_verified']=section is not None and pe.live_matches_ha(live,section,before['emqx'])
+                        except Exception as error:
+                            page_trace['live_data_verified']=False
+                            page_trace['live_error_class']=type(error).__name__
+                        ev.check('live: EMQX holds HA data (HA admin logs in, no dev-d marker left, every HA MQTT account present)',
+                                 page_trace['live_data_verified'])
+                        ev.save('page-emqx-trace.json',page_trace)
                     else:
                         ev.check('chain: each restore has its own safety backup',all(j.get('result',{}).get('safety_backup_id') for j in records if j.get('type')=='restore'))
                         ev.check('live: Hermes HA sessions replaced original marker',markers('hermes').get('session_count',0)>=5 and 'woowbk-lab-baseline' not in markers('hermes').get('sessions',{}))
@@ -787,10 +943,21 @@ print(json.dumps(out))''',{'sources':sources})
                 require('recovery: no active job before baseline restore',not ok('status').get('active_job'))
             receipt['phase']='baseline-recovery'
             save()
-            for app,bid in BASELINES.items():
+            for app,bid in baselines.items():
                 if app not in before:
                     continue
-                if markers(app)!=before[app]:
+                if page_emqx:
+                    # Once the import's restore ran, HA's administrator table may be live and dev-d's own admin cannot read
+                    # the markers: restore the baseline without probing. Otherwise an unreadable or changed EMQX restores too.
+                    changed=any(j.get('type')=='restore' for j in records)
+                    if not changed:
+                        try:
+                            changed=markers(app)!=before[app]
+                        except h.Failed:
+                            changed=True
+                else:
+                    changed=markers(app)!=before[app]
+                if changed:
                     resources(2)
                     pre=ok('inspect',{'backup_id':bid,'key':secrets['DEV_D_KIT']}).get('preflight',{})
                     require('recovery: original baseline has no unreviewed confirmation',pre.get('ok') is True and not any(i.get('level') in ('confirm','stop') for a in pre.get('apps',[]) for i in a.get('issues',[])))
@@ -800,7 +967,11 @@ print(json.dumps(out))''',{'sources':sources})
                     require('recovery: original '+app+' restore succeeded',job.get('state')=='succeeded')
                     receipt['inflight']=None; save()
                 require('recovery: exact original '+app+' markers returned',markers(app)==before[app])
-            require('recovery: excluded EMQX unchanged', 'emqx' in before and markers('emqx')==before['emqx'])
+            if page_emqx:
+                require('recovery: unselected Omnigent and Hermes unchanged',
+                        markers('omnigent')==before['omnigent'] and markers('hermes')==before['hermes'])
+            else:
+                require('recovery: excluded EMQX unchanged', 'emqx' in before and markers('emqx')==before['emqx'])
             require('recovery: original app unit states and image configs returned',units_equal(units(),original_units,unit_metadata) and images()==original_images)
             require('recovery: original full HA fixture hash retained',sha(FIXTURE)==FIXTURE_SHA)
             receipt['baseline_restored']=True
@@ -839,6 +1010,19 @@ print(json.dumps(out))''',{'sources':sources})
                     helper.cleanup_ready(helper_trace,receipt,report,host_hits))
                 require('helper: terminal page guard and evidence remain byte unchanged',
                     all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
+            elif page_emqx:
+                browser_file=ev.dir/'browser.json'
+                browser_doc=json.loads(browser_file.read_text()) if browser_file.is_file() else {}
+                require('leaks: browser issued-value scan completed before deletion',browser_doc.get('issued_values_scanned') is True)
+                page_trace.update(observed_marker_tokens=len(observed_marker_tokens),
+                    all_observed_marker_tokens_registered=bool(observed_marker_tokens) and all(t['registered'] for t in observed_marker_tokens),
+                    marker_token_metadata=observed_marker_tokens,actual_sidecars=sidecars,
+                    registered_token_scan=report,host_registered_value_hits=host_hits)
+                ev.save('page-emqx-trace.json',page_trace)
+                require('page-emqx: check, keys, chain, live data, baseline and scans complete before deletion',
+                    pe.cleanup_ready(page_trace,receipt,report,host_hits,browser_doc))
+                require('page-emqx: PAGE5 and R1 guards and evidence remain byte unchanged',
+                    all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
             else:
                 browser_file=ev.dir/'browser.json'
                 require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)
@@ -847,10 +1031,10 @@ print(json.dumps(out))''',{'sources':sources})
             receipt['phase']='owned-cleanup'; save()
             if receipt['catalog_added']:
                 current=catalog()
-                require('catalog: only own new entry changed', {k:v for k,v in current.items() if k!='omnigent.json'}==original_catalog)
-                preview=ok('catalog-remove',{'id':'omnigent'})
+                require('catalog: only own new entry changed', {k:v for k,v in current.items() if k!=catalog_app+'.json'}==original_catalog)
+                preview=ok('catalog-remove',{'id':catalog_app})
                 require('catalog: remove matches own installed entry',preview.get('expected_sha256')==receipt['catalog_expected_sha256'])
-                ok('catalog-remove',{'id':'omnigent','confirm':True,'expected_sha256':preview['expected_sha256']})
+                ok('catalog-remove',{'id':catalog_app,'confirm':True,'expected_sha256':preview['expected_sha256']})
             require('recovery: original catalog hashes returned',catalog()==original_catalog)
             for bid in receipt['created_backups']:
                 ok('delete',{'backup_id':bid})
@@ -862,6 +1046,9 @@ print(json.dumps(out))''',{'sources':sources})
                     {x['id'] for x in ok('list').get('backups',[])}==expected_prior)
             retained_uploads=ok('list').get('ha_backups',[])
             require('cleanup: original HA inventory retained',{x['id'] for x in retained_uploads}==before_uploads)
+            if page_emqx and not receipt['ha_record_owned']:
+                require('cleanup: protected original HA record remains at exact fixture SHA',
+                        any(x['id']==receipt['ha_id'] and x.get('sha256')==FIXTURE_SHA for x in retained_uploads))
             if previous and (not helper_three_selected or previous.get('ha_record_owned') is not True):
                 require('cleanup: protected old HA remains at exact derived SHA',
                         any(x['id']==previous['ha_id'] and x.get('sha256')==previous['derived_fixture_sha256'] for x in retained_uploads))
@@ -878,6 +1065,9 @@ print(json.dumps(out))''',{'sources':sources})
             if helper_three_selected:
                 require('helper: terminal page guard and evidence unchanged after recovery',
                     all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
+            elif page_emqx:
+                require('page-emqx: PAGE5 and R1 guards and evidence unchanged after recovery',
+                    all(sha(Path(path))==digest for path,digest in protected_page_files.items()))
         except Exception as error:
             safe=False
             ev.check('after: timer and isolation verified',False,type(error).__name__)
@@ -892,7 +1082,8 @@ print(json.dumps(out))''',{'sources':sources})
         os.close(fd)
         for signum, handler in old_helper_signals.items():
             signal.signal(signum, handler)
-        print(('R1 helper: ' if helper_three_selected else 'R8 real Cockpit: ')+str(sum(x['ok'] for x in ev.results))+'/'+str(len(ev.results))+(' PASS' if good and safe else ' FAIL'))
+        print(('R1 helper: ' if helper_three_selected else 'page-emqx real Cockpit: ' if page_emqx else 'R8 real Cockpit: ')
+              +str(sum(x['ok'] for x in ev.results))+'/'+str(len(ev.results))+(' PASS' if good and safe else ' FAIL'))
     return 0 if good and safe else 1
 
 
@@ -903,8 +1094,11 @@ def main(argv=None):
     parser.add_argument('--recovery-proof',type=Path)
     parser.add_argument('--recovery-proof-sha256')
     parser.add_argument('--helper-three-selected',action='store_true')
-    parser.add_argument('--lease',type=Path,help='separate exact R1 helper lease only')
+    parser.add_argument('--page-emqx',action='store_true',help='real page: the original B1 backup, EMQX only, normal import')
+    parser.add_argument('--lease',type=Path,help='separate exact R1 helper or page-emqx lease only')
     args=parser.parse_args(argv)
+    if args.helper_three_selected and args.page_emqx:
+        parser.error('--helper-three-selected and --page-emqx are separate cases')
     if not args.run:
         for p in (Path(__file__),HERE/'focus_acceptance_ui_relay.py'):
             compile(p.read_text(),str(p),'exec')
@@ -913,8 +1107,11 @@ def main(argv=None):
     if args.helper_three_selected:
         return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256,
             helper_three_selected=True,helper_lease_path=args.lease)
+    if args.page_emqx:
+        return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256,
+            page_emqx=True,page_emqx_lease_path=args.lease)
     if args.lease:
-        parser.error('--lease is only for --helper-three-selected')
+        parser.error('--lease is only for --helper-three-selected or --page-emqx')
     return run(args.source.resolve(),args.recovery_proof,args.recovery_proof_sha256)
 
 

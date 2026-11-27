@@ -4,7 +4,8 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
+import { issueKeyCount, validImportIntent, pageExpectations, issueKeys, confirmLineCount, acknowledgedOf,
+  exactAcknowledged } from './focus_acceptance_ui_protocol.mjs';
 import { parseSetCookie, digest, coverage, observedValues, provedPublicTombstone,
   nativeCapabilityProgram, readPrimarySourceProof } from './focus_acceptance_ui_cookies.mjs';
 
@@ -15,8 +16,13 @@ if (process.argv.slice(2).join(' ') !== '--run') {
 const config = JSON.parse(readFileSync(0, 'utf8'));
 if (!/^https:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(config.base)
     || !/^ha-[0-9a-f]{20}$/.test(config.ha_id)) throw new Error('invalid private transport configuration');
+// The apps to select and what to expect come from the controller; without them the R8 three-selected case.
+const expect = pageExpectations(config);
 const { chromium } = await import(pathToFileURL(config.playwright).href);
 const checks = [];
+// Exact mode only: the check's confirmation keys and lines against the one request the page sent (keys, never values).
+const confirmations = expect.exact
+  ? { expected_keys: null, sent_keys: null, lines_expected: null, lines_shown: null, check_importable: null } : null;
 const channels = new Map();
 const requests = new Set();
 const responseBuffers = new Map();
@@ -52,6 +58,7 @@ function observe(payload) {
     wire.confirm = value.confirm === true;
     wire.overwrite = value.overwrite === true;
     wire.acknowledged_keys = Object.values(value.acknowledged || {}).reduce((n, xs) => n + (Array.isArray(xs) ? xs.length : 0), 0);
+    if (confirmations) confirmations.sent_keys = acknowledgedOf(value.acknowledged);
   }
 }
 
@@ -85,6 +92,14 @@ function observeReply(payload) {
   if (job?.type !== 'verify' || job.params?.ha_backup_id !== config.ha_id || !job.result?.ha_check) return;
   try { wire.expected_acknowledged_keys = issueKeyCount(job.result.ha_check); }
   catch { wire.malformed++; }
+  if (confirmations) {
+    try {
+      confirmations.expected_keys = issueKeys(job.result.ha_check);
+      confirmations.lines_expected = confirmLineCount(job.result.ha_check);
+      confirmations.check_importable = job.result.ha_check.apps.filter(app => app.importable === true)
+        .map(app => String(app.app_id)).sort();
+    } catch { wire.malformed++; }
+  }
 }
 
 let browser;
@@ -165,16 +180,16 @@ try {
   await frame.locator('[data-focus="restore-upload"]').click();
   await frame.waitForFunction(id => window.location.hash === `#/ha/${id}`, config.ha_id, { timeout: 10 * 60 * 1000 });
   await frame.locator('#ha-info').waitFor();
-  check('UI uploaded derived real fixture through actual page', true);
-  stage = 'select-three-apps';
+  check(expect.texts.upload, true);
+  stage = expect.select_stage;
   await frame.locator(`[data-focus="ha-import-${config.ha_id}"]`).click();
   const initiallySelected = await frame.locator('input[id^="ha-app-"]:checked').evaluateAll(xs => xs.map(x => x.id));
   for (const id of initiallySelected) await frame.locator(`#${id}`).uncheck();
-  for (const app of ['emqx', 'omnigent', 'hermes']) {
+  for (const app of expect.apps) {
     await frame.locator(`#ha-app-${app}`).check();
   }
   const selected = await frame.locator('input[id^="ha-app-"]:checked').evaluateAll(xs => xs.map(x => x.id.slice(7)).sort());
-  check('UI selects exactly the three reviewed apps', JSON.stringify(selected) === JSON.stringify(['emqx', 'hermes', 'omnigent']));
+  check(expect.texts.select, JSON.stringify(selected) === JSON.stringify([...expect.apps].sort()));
   await frame.locator('[data-focus="ha-apps-next"]').click();
   stage = 'key-and-check';
   await frame.locator('#ha-key').fill(config.key);
@@ -182,10 +197,19 @@ try {
   await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
   stage = 'one-confirmation';
   check('UI actual check confirmation keys observed including valid zero', wire.expected_acknowledged_keys !== null);
-  check('UI corrupt EMQX blocked and both other apps importable',
-    await frame.locator('[data-ha-app="emqx"][data-importable="no"] .ha-issue-stop').count() > 0
-    && await frame.locator('[data-ha-app="hermes"][data-importable="yes"]').count() === 1
-    && await frame.locator('[data-ha-app="omnigent"][data-importable="yes"]').count() === 1);
+  let viewOk = true;
+  for (const app of expect.blocked)
+    viewOk = viewOk && await frame.locator(`[data-ha-app="${app}"][data-importable="no"] .ha-issue-stop`).count() > 0;
+  for (const app of expect.importable)
+    viewOk = viewOk && await frame.locator(`[data-ha-app="${app}"][data-importable="yes"]`).count() === 1;
+  check(expect.texts.view, viewOk);
+  if (confirmations) {
+    // Every confirmation line the check lists is on the page, and the check itself calls exactly the expected apps importable.
+    confirmations.lines_shown = await frame.locator('#ha-confirm-list .ha-issue-confirm').count();
+    check(expect.texts.lines, Number.isInteger(confirmations.lines_expected)
+      && confirmations.lines_shown === confirmations.lines_expected
+      && JSON.stringify(confirmations.check_importable) === JSON.stringify(expect.importApps));
+  }
   check('UI has exactly one acknowledgement and import waits for it',
     await frame.locator('#ha-ack').count() === 1 && !(await frame.locator('#ha-ack').isChecked())
     && await frame.locator('[data-focus="ha-import"]').isDisabled());
@@ -199,12 +223,13 @@ try {
   await frame.locator('[data-focus="ha-import"]').click(); clicks++;
   stage = 'import-and-result';
   await frame.locator('[data-result="group"]').waitFor({ timeout: 20 * 60 * 1000 });
-  check('UI result imports both apps and retains excluded EMQX row',
-    await frame.locator('[data-ha-app="hermes"][data-status="imported"]').count() === 1
-    && await frame.locator('[data-ha-app="omnigent"][data-status="imported"]').count() === 1
-    && await frame.locator('[data-ha-app="emqx"][data-status="excluded"]').count() === 1);
-  check('UI one click sends one real acknowledged import intent for only importable apps',
-    validImportIntent(wire, ticks, clicks));
+  let resultOk = true;
+  for (const [app, status] of expect.result_rows)
+    resultOk = resultOk && await frame.locator(`[data-ha-app="${app}"][data-status="${status}"]`).count() === 1;
+  if (expect.exact) resultOk = resultOk && await frame.locator('#view li.ha-group-row').count() === expect.result_rows.length;
+  check(expect.texts.result, resultOk);
+  check(expect.texts.intent, validImportIntent(wire, ticks, clicks, expect.importApps));
+  if (confirmations) check(expect.texts.keys, exactAcknowledged(confirmations.expected_keys, confirmations.sent_keys));
   check('UI no page script errors during this page flow', pageErrors === 0);
   await frame.locator('#view').screenshot({ path: join(config.evidence, 'result.png'), mask: [frame.locator('input,textarea')] });
   completed = true;
@@ -341,7 +366,8 @@ async function finishBrowser() {
     catch { checks.push({ check: 'UI browser closed', ok: false }); }
   }
   const result = { stage, failure_kind: failureKind, completed, issued_values_scanned: issuedScan, page_errors: pageErrors,
-    issued_scan_counts: issuedScanCounts, acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks };
+    issued_scan_counts: issuedScanCounts, acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks,
+    ...(confirmations ? { confirmations } : {}) };
   writeFileSync(config.result, JSON.stringify(result, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   })();
   return finishing;
