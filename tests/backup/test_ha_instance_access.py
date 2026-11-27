@@ -1,6 +1,7 @@
 """Structured instance access: app data objects only, bounded facts and quoted identifiers."""
 import copy
 import contextlib
+import importlib.util
 import io
 import json
 from pathlib import Path
@@ -76,6 +77,8 @@ class AccessPlanTests(unittest.TestCase):
     def test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides(self):
         # Execute the production fixed probe, redirecting ONLY /proc enumeration to bounded synthetic process files.
         # URL/YAML parsing, file reads and redaction run unchanged; no podman response stands in for this resolver.
+        # The probe parses the config with PyYAML (inside the LiteLLM container), so this interpreter needs it too.
+        self.assertIsNotNone(importlib.util.find_spec('yaml'), 'PyYAML is required to run the LiteLLM probe')
         with tempfile.TemporaryDirectory() as directory:
             proc=Path(directory)/'3141599'; proc.mkdir()
             config=Path(directory)/'config.yaml'
