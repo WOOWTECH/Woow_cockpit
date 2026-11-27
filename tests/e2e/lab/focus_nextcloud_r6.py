@@ -103,6 +103,40 @@ def stop_detail(error, secrets):
     return (type(error).__name__ + ': ' + secrets.redact(str(error)))[:600]
 
 
+PROBE_TRIES = 3  # failed or timed-out resource probes in a row before the watchdog stops the case
+
+
+class ResourceWatch:
+    """The watchdog's decision. A breach of the reserve or of the memory limit, or the lease end, stops the case at
+    once; a failed or timed-out probe only after PROBE_TRIES in a row (fullshare04 lost its auto-rollback restore to
+    one probe on a host at load 26 while the device had 27.3 GiB free and used 1.59 GiB). Between readings the
+    kernel still enforces the device's memory.max and the engine its own space guard."""
+
+    def __init__(self, metrics, tries=PROBE_TRIES):
+        self.metrics, self.tries, self.failures = metrics, tries, 0
+
+    def sample(self, resource, *, expired):
+        """None while the reading is within bounds, else why to stop (a malformed reading raises: a failed probe)."""
+        free, memory = resource['free'], resource['memory']
+        self.failures = 0
+        m = self.metrics
+        m['minimum_free_bytes'] = min(m['minimum_free_bytes'] or free, free)
+        m['peak_memory_current_bytes'] = max(m['peak_memory_current_bytes'], memory)
+        if expired:
+            return 'lease-expired'
+        if free < RESERVE + MARGIN or memory > DEVICE_CAP - MARGIN:
+            return {'free': free, 'memory': memory}
+        return None
+
+    def failed(self, error):
+        """None until PROBE_TRIES probes in a row failed, then why to stop."""
+        self.failures += 1
+        self.metrics['probe_failures'] = self.metrics.get('probe_failures', 0) + 1
+        if self.failures < self.tries:
+            return None
+        return f'{self.failures} resource probes in a row failed, the last with {type(error).__name__}'
+
+
 def cleanup_after_refusal(run,args,lease,driver,ev,deadline,*,baseline_safe,baseline_exact):
     """Opt in to keeping a proven owned HA after refusal before any conversion request."""
     receipt=getattr(args,'retained_upload',None)
@@ -373,17 +407,16 @@ def run_locked(args, lease, commit, facts, inventory):
     d.convert = convert
 
     def watchdog():
+        watch = ResourceWatch(metrics)
         while not stop.wait(1):
+            expired = time.time() >= expires + (1800 if recovery_mode.is_set() else 0)
             try:
-                resource = control.wake.device(control.RESOURCE, root=True, timeout=30)
-                metrics['minimum_free_bytes'] = min(metrics['minimum_free_bytes'] or resource['free'], resource['free'])
-                metrics['peak_memory_current_bytes'] = max(metrics['peak_memory_current_bytes'], resource['memory'])
-                enough = resource['free'] >= RESERVE + MARGIN and resource['memory'] <= DEVICE_CAP - MARGIN
-                if time.time() >= expires + (1800 if recovery_mode.is_set() else 0):
-                    enough = False
-            except Exception:
-                enough = False
-            if enough: continue
+                reason = watch.sample(control.wake.device(control.RESOURCE, root=True, timeout=30), expired=expired)
+            except Exception as error:
+                reason = 'lease-expired' if expired else watch.failed(error)
+            if reason is None: continue
+            metrics['trip'] = {'reason': reason, 'at': time.time()}
+            ev.log(f'watchdog: stopping this run: {reason}')
             tripped.set()
             # Cancel only this run's recorded jobs; leave other device jobs untouched.
             for job_id in tuple(inflight):

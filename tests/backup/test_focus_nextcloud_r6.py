@@ -88,6 +88,44 @@ class ConvertRequestTests(unittest.TestCase):
         self.assertLessEqual(len(flow.stop_detail(RuntimeError('x' * 5000), Secrets())), 600)
 
 
+class WatchdogTests(unittest.TestCase):
+    OK = {'free': 20 * plan.GIB, 'memory': plan.GIB}
+
+    def watch(self):
+        return flow.ResourceWatch({'minimum_free_bytes': None, 'peak_memory_current_bytes': 0})
+
+    def test_a_failed_or_slow_probe_stops_the_case_only_after_several_in_a_row(self):
+        # fullshare04 (2026-11-27): one probe failed on a host at load 26 and the auto-rollback restore was cancelled,
+        # although the device never came near the reserve (27.3 GiB free) or the memory limit (1.59 GiB used).
+        w = self.watch()
+        for _ in range(flow.PROBE_TRIES - 1):
+            self.assertIsNone(w.failed(subprocess.TimeoutExpired('labpodman', 30)))
+        self.assertIsNone(w.sample(self.OK, expired=False))  # a good reading starts the count again
+        for _ in range(flow.PROBE_TRIES - 1):
+            self.assertIsNone(w.failed(OSError('probe')))
+        reason = w.failed(subprocess.TimeoutExpired('labpodman', 30))
+        self.assertIn('TimeoutExpired', reason)
+        self.assertIn(str(flow.PROBE_TRIES), reason)
+        self.assertEqual(w.metrics['probe_failures'], 2 * flow.PROBE_TRIES - 1)
+
+    def test_a_breach_or_the_lease_end_stops_the_case_at_once(self):
+        low = {'free': plan.RESERVE + plan.MARGIN - 1, 'memory': plan.GIB}
+        full = {'free': 20 * plan.GIB, 'memory': plan.DEVICE_CAP - plan.MARGIN + 1}
+        for resource in (low, full):
+            with self.subTest(resource=resource):
+                self.assertEqual(self.watch().sample(resource, expired=False), resource)
+        self.assertEqual(self.watch().sample(self.OK, expired=True), 'lease-expired')
+        w = self.watch()
+        w.sample(self.OK, expired=False)
+        w.sample({'free': 18 * plan.GIB, 'memory': 2 * plan.GIB}, expired=False)
+        self.assertEqual((w.metrics['minimum_free_bytes'], w.metrics['peak_memory_current_bytes']),
+                         (18 * plan.GIB, 2 * plan.GIB))
+
+    def test_a_malformed_reading_is_a_failed_probe(self):
+        with self.assertRaises(KeyError):
+            self.watch().sample({}, expired=False)
+
+
 class ConfirmationTests(unittest.TestCase):
     def test_original_share_has_no_confirmation(self):
         self.assertEqual(plan.confirmation_keys(checked('fullshare'), 'fullshare'), [])
