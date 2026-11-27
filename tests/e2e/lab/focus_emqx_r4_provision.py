@@ -22,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE))
 import focus_emqx_r4_artifact as artifact
+import focus_emqx_r4_profile as profile
 
 LABEL = 'io.woowtech.r4.fixture'
 STATE = Path('/tmp/parity-focus-20261127')
@@ -202,6 +203,8 @@ def verified_inputs(args, lease):
 
 def build_payload(path,args,lease,images):
     manifest=json.loads((ROOT/'snippets/focus-emqx-r4/package-provision-source.json').read_text())
+    if manifest['commit']!=profile.PACKAGE_COMMIT or manifest['files']!=profile.PACKAGE_FILES:
+        raise ValueError('shared_package_profile_source_binding')
     members=[]
     for relative,expected in manifest['files'].items():
         data=subprocess.check_output(['git','-C',str(PACKAGE_ROOT),'show',manifest['commit']+':'+relative])
@@ -211,7 +214,7 @@ def build_payload(path,args,lease,images):
            (args.artifact/'candidate.json','candidate.json',lease['manifest_sha256'])]
     files +=[(args.images/(role+'.oci.tar'),role+'.oci.tar',facts['archive_sha256']) for role,facts in images.items()]
     files +=[(HERE/('focus_emqx_r4_'+name+'.py'),'focus_emqx_r4_'+name+'.py',None)
-              for name in ('inner','artifact','fixtures','client_guard','package')]
+              for name in ('inner','artifact','fixtures','client_guard','package','profile')]
     files +=[(p,'woowbackup/'+p.name,None) for p in sorted((ROOT/'backup-engine/woowbackup').glob('*.py'))]
     context={'device':lease['device'],'case':lease['case'].split(':',1)[1],
         'artifact_source_commit':lease['artifact_source_commit'],'data_sha256':lease['data_sha256'],

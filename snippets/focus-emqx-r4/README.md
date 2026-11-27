@@ -1,6 +1,6 @@
 # EMQX R4: plain delta proven; remaining cases/package pending
 
-Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. One plain generated delta ran23/23PASS from frozen27cb52c4 (coordinator-promoted `tests/backup/evidence/focus-emqx-r4-20261127/`); no installer, upgrader or new package smoke ran. No product/package/shared registry file was changed. E44's branch remains clean. The package draft remains local and unpushed.
+Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. Plain and dead-row generated deltas each ran23/23PASS from frozen27cb52c4 (coordinator-promoted `tests/backup/evidence/focus-emqx-r4-20261127/`); no installer, upgrader or new package smoke ran. No product/package/shared registry file was changed. E44's branch remains clean. The package draft remains local and unpushed.
 
 ## Evidence already complete and preserved
 
@@ -10,7 +10,7 @@ Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. One p
 
 ## Exact remaining matrix
 
-Plain is **23/23PASS generated delta**; the other ten rows remain **prepared / native pending**. Every positive broker case uses a real vendor-generated export, product `candidate_from_target`, actual target snapshot and vendor import, row-count check, named issue boundary, exact acknowledgement/no-ack refusal when required, restart and full configuration/admin receipts, unmocked postcheck plus negative admin-receipt refusal. Its target is generated, not an installed app. This is the internal conversion delta; public helper/package/install/safety-rollback acceptance remains the preserved real D0 evidence plus the separately pending package phase.
+Plain and dead-row are **23/23PASS generated deltas**; the other nine rows remain **prepared / native pending**. Every positive broker case uses a real vendor-generated export, product `candidate_from_target`, actual target snapshot and vendor import, row-count check, named issue boundary, exact acknowledgement/no-ack refusal when required, restart and full configuration/admin receipts, unmocked postcheck plus negative admin-receipt refusal. Its target is generated, not an installed app. This is the internal conversion delta; public helper/package/install/safety-rollback acceptance remains the preserved real D0 evidence plus the separately pending package phase.
 
 | Case ID | Decision | Generated input and required distinct result | New package smoke |
 |---|---|---|---|
@@ -43,3 +43,5 @@ See `lease-plan.md` for the next bounded case and cleanup, `package-source.json`
 ## Package provisioning source ready for review
 
 The new `_provision.py` transaction, `_artifact.py` verifier/export hook, `_inner.py` real fixture setup/postcheck/smoke, `_client_guard.py` resource wrapper and `_provision_tests.py` now implement the separate provisioning/cleanup driver. Offline12/12PASS; no fresh device or package command executed. See `package-provision.md` for exact image IDs, command, new lease schema, resource bounds and recovery. A matching package-profile candidate producer/artifact and verified OCI archives are prerequisites still pending; queued27cb broker-only runs are not promoted. The earlier standalone `_package.py` executor is not the provisioning entrypoint. Plain lease released, owned resources/payloads0; dead_row/noauth await R8 retry release.
+
+The matching package-profile producer/cache-export preparation is now implemented and guarded (`package-producer.md`). It requires new exact leases and generates fresh sources/targets; no plain reuse. Shared profile/material checks, complete target/converted receipts and exact loaded-client config are mandatory. No native producer, archive export or fresh device ran. Dead-row proof is independently committed under `tests/backup/evidence/focus-emqx-r4-20261127/dead_row/`; noauth remains queued after R8 recovery.

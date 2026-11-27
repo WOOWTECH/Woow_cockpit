@@ -1,0 +1,56 @@
+{
+  "counts_overlap": true,
+  "gates": [
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-r4-profile-offline01.guardlog",
+      "log_sha256": "cea4ab92f274a613b3a1027b254bf482626cb97d8339fbda4b525aa5ff271bb2",
+      "run_native": "absent",
+      "scope": "Initial producer/profile and dependent provisioning boundaries",
+      "shim_hits": 0,
+      "skipped": 0,
+      "tests": 23
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-r4-profile-cache-normalization.guardlog",
+      "log_sha256": "6c9086fa600d37d9301d0d0a0ac33213f33a01f47959019780511da330840b68",
+      "run_native": "absent",
+      "scope": "RepoDigests canonical metadata + exact pinned save reference",
+      "shim_hits": 0,
+      "skipped": 0,
+      "tests": 3
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-r4-profile-transport-final.guardlog",
+      "log_sha256": "8a13a96b3d2dda8c011f2dbbdf2e8bb5a8c84a5eb76d1c3f76f0cc112941a1a5",
+      "run_native": "absent",
+      "scope": "Transport/lease/recovery plus cleanup wall-budget refusal",
+      "shim_hits": 0,
+      "skipped": 0,
+      "tests": 7
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-r4-profile-client-binding.guardlog",
+      "log_sha256": "f6b7348344d6040d5936bba77cbed182926a5cf4a037ccf383e22c41dac21af1",
+      "run_native": "absent",
+      "scope": "Actual file/bootstrap material, original Runner protections and exact destination client config",
+      "shim_hits": 0,
+      "skipped": 0,
+      "tests": 6
+    }
+  ],
+  "kind": "offline-only",
+  "native_profile_vendor_schema_not_validated": true,
+  "producer_or_export_or_new_device_executed": false
+}

@@ -21,7 +21,9 @@
       "decision": "D1",
       "expected": "candidate-and-restart",
       "id": "dead_row",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/dead_row/",
+      "native_source_commit": "27cb52c4eafbaaa2dbc2ba2916b9604a8941a280",
+      "native_status": "passed-generated-delta-23-of-23",
       "notices": [
         "emqx.clear-rows"
       ],

@@ -14,9 +14,15 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 import focus_emqx_r4_artifact as artifact
 import focus_emqx_r4_fixtures as fx
+import focus_emqx_r4_profile as profile
 from woowbackup import ha_emqx as emqx
 
 HOME = Path('/home/appowner')
+
+
+def require_loaded_client(pod):
+    value=pod('image','inspect',artifact.CLIENT_REF,'--format','{{.Id}}').stdout.decode().strip().removeprefix('sha256:')
+    if value!=artifact.IMAGES['client'][7:]:raise ValueError('literal_pinned_client_config_mismatch')
 
 
 def render_unit(name, body):
@@ -40,6 +46,7 @@ def render_unit(name, body):
 def main():
     if os.getuid() != 1031 or Path.home() != HOME: raise ValueError('fresh_fixture_owner_required')
     context = json.loads((ROOT / 'context.json').read_text())
+    if context['package_files']!=profile.PACKAGE_FILES:raise ValueError('shared_package_profile_source_binding')
     record = artifact.verify_candidate(ROOT / 'candidate.tar', ROOT / 'candidate.json', case=context['case'],
         source_commit=context['artifact_source_commit'], data_sha=context['data_sha256'], manifest_sha=context['manifest_sha256'])['record']
     def run(*args, data=None, timeout=120, good=True):
@@ -58,7 +65,7 @@ def main():
         actual = pod('image', 'inspect', identity, '--format', '{{.Id}}').stdout.decode().strip().removeprefix('sha256:')
         if actual != identity[7:]: raise ValueError('loaded_config_mismatch')
     # Refuse if save/load did not preserve the literal reference used by the unchanged package. No pin alias shortcut.
-    pod('image', 'exists', artifact.CLIENT_REF)
+    require_loaded_client(pod)
     cfg = HOME / '.config/emqx'; units = HOME / '.config/containers/systemd'
     if cfg.exists() or units.exists(): raise ValueError('fresh_package_paths_required')
     cfg.mkdir(parents=True, mode=0o700); units.mkdir(parents=True, mode=0o700)
@@ -73,14 +80,8 @@ def main():
     fixture = HOME / 'r4-fixture'; fixture.mkdir(mode=0o755)
     for name, data in fx.files().items():
         path = fixture / name; path.write_bytes(data); path.chmod(0o644)
-    env = ('EMQX_LOG__CONSOLE__LEVEL=error\nWOOW_EMQX_BIND=127.0.0.1\nWOOW_EMQX_MQTT_USER=r4_target\n'
-           'WOOW_EMQX_NGROK=0\nWOOW_EMQX_NGROK_REMOTE_ADDR=\n' +
-           ''.join('WOOW_EMQX_PORT_' + key + '=' + str(value) + '\n' for key, value in
-                   [('MQTT',1883),('MQTTS',8883),('WS',8083),('WSS',8084),('DASHBOARD',18083)]))
-    (cfg / 'emqx.env').write_text(env); (cfg / 'emqx.env').chmod(0o600)
-    synthetic = {'woow-emqx-dashboard-password': b'r4-owned-target-admin', 'woow-emqx-node-cookie': b'r4-owned-package-cookie',
-                 'woow-emqx-mqtt-password': b'r4-owned-target-password',
-                 'woow-emqx-mqtt-bootstrap': fx.files()['target.csv']}
+    (cfg / 'emqx.env').write_text(profile.env_file()); (cfg / 'emqx.env').chmod(0o600)
+    synthetic = profile.secret_values()
     for name, value in synthetic.items(): pod('secret', 'create', name, '-', data=value)
     pod('volume', 'create', '--label', 'io.woowtech.r4.fixture=' + context['device'], 'woow_emqx_data')
     with (ROOT / 'candidate.tar').open('rb') as stream:
@@ -108,6 +109,8 @@ def main():
     runner = LiveRunner()
     def read(command): return runner.podman('exec', 'woow-emqx', *command, check=False)
     emqx.wait_live_ready(read, running=lambda: pod('container','inspect','--format','{{.State.Running}}','woow-emqx').stdout.strip()==b'true')
+    artifact.verify_profile_material(SimpleNamespace(exec=lambda _role,args,**kwargs: pod('exec','woow-emqx',*args,
+        timeout=kwargs.get('timeout',60),good=kwargs.get('check',True))))
     actual = emqx.readback_record(emqx.boot_form(read), emqx.table_receipts(read)); artifact.check_record(actual)
     if emqx.compare_readback(record, actual): raise ValueError('all_candidate_roots_and_admin_receipts_must_match')
     quadlet = (units / 'emqx.container').read_bytes()

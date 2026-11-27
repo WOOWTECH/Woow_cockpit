@@ -1,0 +1,86 @@
+{
+  "archive_hash_state": "not exported; exact bytes and transport hashes unknown until separately leased execution",
+  "client_literal_after_load_gate": "docker.io/library/eclipse-mosquitto:2.0.22@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c",
+  "client_repo_digest_metadata": "docker.io/library/eclipse-mosquitto@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c",
+  "combined_source_and_archive_mib": 512,
+  "digest_alias_or_image_operand_substitution_allowed": false,
+  "future_lease_required": true,
+  "images": {
+    "broker": {
+      "archive_filename": "broker.oci.tar",
+      "archive_manifest_digest": null,
+      "archive_sha256": null,
+      "cached_config": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+      "cached_manifest_to_capture": false,
+      "compressed_layer_digests": null,
+      "expected_cached_manifest": "sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937",
+      "save_argv": [
+        "image",
+        "save",
+        "--format",
+        "oci-archive",
+        "--output",
+        "/home/appowner/woowbk-r4-prepare-b6f4e120d93a/artifact/broker.oci.tar",
+        "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b"
+      ],
+      "source_reference": "sha256:3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b",
+      "uncompressed_diff_ids": null
+    },
+    "client": {
+      "archive_filename": "client.oci.tar",
+      "archive_manifest_digest": null,
+      "archive_sha256": null,
+      "cached_config": "sha256:93a0bdfcbd9b7a86b36127cb81f54e1afd2019f12f39033458df405a027c03e3",
+      "cached_manifest_to_capture": true,
+      "compressed_layer_digests": null,
+      "expected_cached_manifest": null,
+      "save_argv": [
+        "image",
+        "save",
+        "--format",
+        "oci-archive",
+        "--output",
+        "/home/appowner/woowbk-r4-prepare-b6f4e120d93a/artifact/client.oci.tar",
+        "docker.io/library/eclipse-mosquitto:2.0.22@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c"
+      ],
+      "source_reference": "docker.io/library/eclipse-mosquitto:2.0.22@sha256:212f89e1eaeb2c322d6441b64396e3346026674db8fa9c27beac293405c32b3c",
+      "uncompressed_diff_ids": null
+    },
+    "entrance": {
+      "archive_filename": "entrance.oci.tar",
+      "archive_manifest_digest": null,
+      "archive_sha256": null,
+      "cached_config": "sha256:47ce8258a10e28ce4b4498588c25ef77ae328f4c56cbe3e8d5dcf4f6d8019997",
+      "cached_manifest_to_capture": true,
+      "compressed_layer_digests": null,
+      "expected_cached_manifest": null,
+      "save_argv": [
+        "image",
+        "save",
+        "--format",
+        "oci-archive",
+        "--output",
+        "/home/appowner/woowbk-r4-prepare-b6f4e120d93a/artifact/entrance.oci.tar",
+        "sha256:47ce8258a10e28ce4b4498588c25ef77ae328f4c56cbe3e8d5dcf4f6d8019997"
+      ],
+      "source_reference": "sha256:47ce8258a10e28ce4b4498588c25ef77ae328f4c56cbe3e8d5dcf4f6d8019997",
+      "uncompressed_diff_ids": null
+    }
+  },
+  "kind": "cache-archive-hash-proposal-only",
+  "mutations": "private regular archive/provenance files only; no pull/load/tag/container/service/package operations",
+  "native_executed": false,
+  "owner_uid": 1019,
+  "retain_disk_gib": 13,
+  "source_device": "woowbk-dev-d",
+  "source_image_catalog_must_equal": true,
+  "verification": [
+    "cached exact config and linux/amd64",
+    "cached manifest digest and source RepoDigests captured before+after",
+    "OCI descriptor SHA256+size",
+    "pinned config SHA256",
+    "ordered compressed layer SHA256 and expanded diff_ids",
+    "whole archive SHA256 before transfer and after transfer",
+    "fresh load exact config and literal unchanged MQTT client reference"
+  ]
+}

@@ -24,17 +24,9 @@ MAX_STAGE = 512 * 1024**2
 HASH = re.compile(r'[0-9a-f]{64}\Z')
 TABLES = ('emqx_authn_mnesia', 'emqx_authn_scram_mnesia', 'emqx_acl', 'emqx_admin', 'emqx_app', 'emqx_psk',
           'emqx_banned_rules')
-PACKAGE_ENV = {'EMQX_NODE__NAME': 'emqx@127.0.0.1', 'ERL_AFLAGS': '+S 1:1',
-    'EMQX_DASHBOARD__DEFAULT_USERNAME': 'admin', 'EMQX_DASHBOARD__DEFAULT_PASSWORD': 'r4-owned-target-admin',
-    'EMQX_NODE__COOKIE': 'r4-owned-package-cookie',
-    'EMQX_DASHBOARD__LISTENERS__HTTP__BIND': '"0.0.0.0:18093"',
-    'EMQX_LISTENERS__WS__ENTRANCE__ENABLE': 'true', 'EMQX_LISTENERS__WS__ENTRANCE__BIND': '"127.0.0.1:8093"',
-    'EMQX_LISTENERS__WS__ENTRANCE__WEBSOCKET__PROXY_ADDRESS_HEADER': '"x-forwarded-for"',
-    'EMQX_LISTENERS__WS__ENTRANCE__WEBSOCKET__PROXY_PORT_HEADER': '"x-forwarded-port"',
-    'EMQX_LISTENERS__WS__DEFAULT__WEBSOCKET__PROXY_ADDRESS_HEADER': '""',
-    'EMQX_LISTENERS__WS__DEFAULT__WEBSOCKET__PROXY_PORT_HEADER': '""',
-    'EMQX_LISTENERS__TCP__NGROK__ENABLE': 'true', 'EMQX_LISTENERS__TCP__NGROK__BIND': '"127.0.0.1:1884"',
-    'EMQX_LISTENERS__TCP__NGROK__PROXY_PROTOCOL': 'true'}
+import focus_emqx_r4_profile as profile
+
+PACKAGE_ENV = dict(profile.ENV)
 
 
 def digest(stream, limit):
@@ -104,16 +96,18 @@ def verify_candidate(data_path, manifest_path, *, case, source_commit, data_sha,
     if (doc.get('kind') != 'owned-generated-emqx-candidate' or doc.get('version') != 1
             or doc.get('profile') != PROFILE or doc.get('case') != case or doc.get('source_commit') != source_commit
             or doc.get('image') != IMAGES['broker'] or doc.get('data_sha256') != data_sha
+            or doc.get('profile_sha256') != profile.receipt()['sha256']
             or doc.get('origin') != 'controlled-generated-only' or doc.get('restart_checked') is not True
             or doc.get('vendor_postcheck') is not True or doc.get('exact_configuration_and_tables') is not True):
         raise ValueError('candidate_provenance')
     check_record(doc['record'])
+    check_record(doc['target_record'])
     facts = verify_data_tar(data_path)
     if facts['sha256'] != data_sha: raise ValueError('candidate_lease_binding')
     return doc
 
 
-def export_candidate(tmp, destination, *, case, source_commit, record):
+def export_candidate(tmp, destination, *, case, source_commit, record, target_record):
     """Producer hook for a reviewed PACKAGE-SHAPED generated target, before TempObjects cleanup.
 
     No CLI accepts an arbitrary source volume. The caller must own the actual emqx-new candidate and supply its prior
@@ -141,6 +135,8 @@ def export_candidate(tmp, destination, *, case, source_commit, record):
                         postgres=None,data_dirs=[])
     messages=[];emqx.verify_restored(adapter,app,current,log=messages.append)
     if len(messages)!=1 or '核對一致' not in messages[0]:raise ValueError('vendor_postcheck_required')
+    verify_profile_material(tmp)
+    check_record(target_record)
     # Stop the actual owned candidate, not a copied expected configuration.
     tmp.stop('emqx-new', timeout=60)
     data = directory / 'candidate.tar'
@@ -149,9 +145,24 @@ def export_candidate(tmp, destination, *, case, source_commit, record):
     doc = {'kind': 'owned-generated-emqx-candidate', 'version': 1, 'profile': PROFILE, 'case': case,
            'source_commit': source_commit, 'image': IMAGES['broker'], 'origin': 'controlled-generated-only',
            'restart_checked': True, 'vendor_postcheck': True, 'exact_configuration_and_tables': True,
-           'record': current, 'data_sha256': facts['sha256']}
+           'record': current, 'target_record': target_record, 'profile_sha256':profile.receipt()['sha256'],
+           'data_sha256': facts['sha256']}
     (directory / 'candidate.json').write_text(json.dumps(doc, sort_keys=True) + '\n')
     return {'data_sha256': facts['sha256'], 'manifest_sha256': sha_file(directory / 'candidate.json', 256 * 1024)}
+
+
+def verify_profile_material(tmp):
+    """Actual fixed synthetic files in the candidate, never arbitrary caller-supplied paths."""
+    wanted=profile.material_hashes()
+    result=tmp.exec('emqx-new',['sha256sum',*wanted],timeout=60,max_output=8192,check=False)
+    if result.returncode:raise ValueError('actual_package_material_missing')
+    found={}
+    for line in result.stdout.decode().splitlines():
+        digest_value,path=line.split(None,1);found[path.lstrip('*')]=digest_value
+    if found!=wanted:raise ValueError('actual_package_material_hash_mismatch')
+    mode=tmp.exec('emqx-new',['stat','-c','%a:%u:%g','/opt/emqx/etc/woow-mqtt-bootstrap.csv'],
+                  timeout=60,max_output=1024,check=False)
+    if mode.returncode or mode.stdout.strip()!=b'400:1000:1000':raise ValueError('actual_bootstrap_metadata_mismatch')
 
 
 def verify_oci(path, identity):
@@ -201,4 +212,5 @@ def verify_oci(path, identity):
                 actual, size = digest(stream, 1024**3 - expanded); expanded += size
                 if 'sha256:' + actual != expected: raise ValueError('image_diffid')
         return {'config': identity, 'archive_sha256': sha_file(path, MAX_STAGE), 'expanded_bytes': expanded,
-                'manifest_digest': 'sha256:' + manifest_name.rsplit('/', 1)[1]}
+                'manifest_digest': 'sha256:' + manifest_name.rsplit('/', 1)[1],
+                'archive_bytes':path.stat().st_size,'layer_digests':[x['digest'] for x in layers],'diff_ids':diffids}

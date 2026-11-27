@@ -112,6 +112,7 @@ class ArtifactBoundaries(unittest.TestCase):
             data_sha=artifact.sha_file(data,artifact.MAX_DATA)
             doc={'kind':'owned-generated-emqx-candidate','version':1,'profile':artifact.PROFILE,'case':'plain',
                 'source_commit':COMMIT,'image':artifact.IMAGES['broker'],'data_sha256':data_sha,
+                'profile_sha256':artifact.profile.receipt()['sha256'],'target_record':record(),
                 'origin':'controlled-generated-only','restart_checked':True,'vendor_postcheck':True,
                 'exact_configuration_and_tables':True,'record':record()}
             def verify(value):
@@ -119,7 +120,7 @@ class ArtifactBoundaries(unittest.TestCase):
                 return artifact.verify_candidate(data,manifest,case='plain',source_commit=COMMIT,data_sha=data_sha,
                     manifest_sha=artifact.sha_file(manifest,256*1024))
             verify(doc)
-            for key,value in [('profile','broker-only'),('origin','real-backup'),('restart_checked',False),('vendor_postcheck',False)]:
+            for key,value in [('profile','broker-only'),('profile_sha256','0'*64),('origin','real-backup'),('restart_checked',False),('vendor_postcheck',False)]:
                 with self.subTest(key=key):self.assertRaises(ValueError,verify,dict(doc,**{key:value}))
             bad=copy.deepcopy(doc);bad['record']['tables']['emqx_admin'][0]=0;self.assertRaises(ValueError,verify,bad)
             data.write_bytes(b'changed');self.assertRaises((ValueError,tarfile.ReadError),verify,doc)
