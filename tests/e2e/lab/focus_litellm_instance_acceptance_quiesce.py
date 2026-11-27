@@ -148,8 +148,8 @@ def main(argv=None):
         raise ValueError('exact bounded quiescence lease required')
     if source.git('status','--porcelain') or os.path.lexists(args.output):raise ValueError('clean source and unique output required')
     source.resources(expires.timestamp(),True)
-    if (driver.git('/tmp/parity-focus-final-product-20261127','rev-parse','HEAD')!=driver.plan.FROZEN_PRODUCT
-            or driver.git('/tmp/parity-focus-final-product-20261127','status','--porcelain')):
+    if (driver.git(driver.plan.PRODUCT_DIR,'rev-parse','HEAD')!=driver.plan.FROZEN_PRODUCT
+            or driver.git(driver.plan.PRODUCT_DIR,'status','--porcelain')):
         raise ValueError('clean frozen source required')
     if args.phase=='pause':
         if os.path.lexists(args.journal) or r['install_intent'] or r['full_safety'] or r['pending'] or r['jobs']:

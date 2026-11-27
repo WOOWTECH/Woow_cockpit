@@ -529,7 +529,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase',choices=plan.PHASES,default='flow'); parser.add_argument('--execute',action='store_true')
-    parser.add_argument('--source',default='/tmp/parity-focus-final-product-20261127')
+    parser.add_argument('--source',default=plan.PRODUCT_DIR)
     parser.add_argument('--lease'); parser.add_argument('--receipt'); parser.add_argument('--output')
     args=parser.parse_args(argv)
     if not args.execute:

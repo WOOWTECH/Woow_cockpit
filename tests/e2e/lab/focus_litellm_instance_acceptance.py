@@ -11,7 +11,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 DEVICE = 'woowbk-dev-d'
-FROZEN_PRODUCT = '59a1b0f95132ea51c899f590eea7e3b02c5dba43'
+# The product under test from successor case b8 on: 59a1b0f9 plus ONE engine file (ha_instance_access.py: the PostgreSQL 17 table
+# privilege MAINTAIN, found by the real b7 run). dev-d was moved to it by the leased engine patch tool.
+FROZEN_PRODUCT = 'ce8c4cfbd8a1d7ff27233e3986a524408a6604f7'
+PRODUCT_DIR = '/tmp/parity-focus-ll-product-20261127'
+# What the retained derived image, its verification capture and case b7 were made with. The images-verify phase stays bound to it.
+HISTORIC_PRODUCT = '59a1b0f95132ea51c899f590eea7e3b02c5dba43'
+HISTORIC_PRODUCT_DIR = '/tmp/parity-focus-final-product-20261127'
 PHASES = ('images', 'images-recover', 'flow', 'recover')
 CASE = re.compile(r'woowbk_focus_litellm_[0-9a-f]{12}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
