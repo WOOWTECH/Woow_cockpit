@@ -1929,7 +1929,7 @@ def scenario_cleanup(ev, args):
         deleted = []
         for backup_id in STATE.get('created_backups') or []:
             if backup_id in present and backup_id not in BASELINE_IDS.values():
-                rc, reply = helper('delete', {'backup_id': backup_id, 'confirm': True})
+                rc, reply = helper('delete', {'backup_id': backup_id})  # delete takes only backup_id
                 if rc == 0:
                     deleted.append(backup_id)
                 else:
