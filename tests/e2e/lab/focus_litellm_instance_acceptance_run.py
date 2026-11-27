@@ -34,6 +34,18 @@ def git(path, *args):
     return subprocess.check_output(['git','-C',str(path),*args],text=True,timeout=30).strip()
 
 
+def snapshot_difference(current, original, *, limit=30):
+    """WHERE two case snapshots differ, by field name only: digests, names and ids are never saved."""
+    out = []
+    def walk(a, b, path):
+        if len(out) >= limit or a == b: return
+        if isinstance(a,dict) and isinstance(b,dict):
+            for key in sorted(set(a)|set(b),key=str): walk(a.get(key),b.get(key),path+'.'+str(key))
+        else: out.append(path)
+    walk(current,original,'')
+    return out
+
+
 def validate_lease(lease, phase, *, now, driver_commit, source_commit):
     if (lease.get('granted') is not True or lease.get('case') != 'litellm-instance-original'
             or lease.get('device') != plan.DEVICE or phase not in lease.get('phases',[])
@@ -418,6 +430,17 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         finally:
             self.recover()
 
+    def verify_recovered_snapshot(self):
+        """The restored catalog, roles and rows equal the original. Every snapshot writes its digest listings exclusively, so a
+        repeated recovery needs a tag no earlier one used. The original is re-stated with the volatile tables excluded (a snapshot
+        taken that way is unchanged); a lasting difference is saved by field NAME before the check fails."""
+        used=set(self.op('receipt').get('snapshots') or {})
+        tag=next(t for t in ('recovered','recovered_again','recovered_third','recovered_fourth') if t not in used)
+        recovered=self.op('snapshot',tag=tag); expected=self.op('snapshot_restate',tag='original')
+        if recovered!=expected:
+            self.r['recovery_snapshot_difference']=snapshot_difference(recovered,expected); self.save()
+        self.require('original_full_catalog_roles_rows',recovered==expected)
+
     def recover(self):
         self.recovering=True; self.settle()
         if self.r.get('hook_intent'):
@@ -426,7 +449,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             self.credentials()
             restored=self.job('restore-start',{'backup_id':self.r['full_safety'],'apps':['litellm'],'confirm':True},'recover-full')
             self.require('original_full_safety_restored',plan.success(restored,digest=True))
-            self.require('original_full_catalog_roles_rows',self.op('snapshot',tag='recovered')==self.r['original_db'])
+            self.verify_recovered_snapshot()
             self.app_assertions('own_state','instance-full-recovery')
             self.r['recovery_verified']=True; self.save()
         elif self.r.get('install_intent'):

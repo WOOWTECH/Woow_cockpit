@@ -26,6 +26,13 @@ UNITS = ('litellm-network.service','litellm-pgdata-volume.service','litellm-post
          'litellm-backup.timer','litellm-backup.service')
 SECRETS = ('litellm-database-url','litellm-master-key','litellm-postgres-password','litellm-salt-key','litellm-ui-password')
 TIMER = 'woowtech-cockpit-backup-schedule.timer'
+# Tables the LiteLLM proxy itself rewrites in the background (worker heartbeat, daily spend aggregates, cron/health/budget
+# bookkeeping). Real run on dev-d, restore of the fresh full safety: ONLY LiteLLM_DailyTeamSpend, LiteLLM_DailyUserSpend and
+# LiteLLM_ProxyWorkerHeartbeat differed from the snapshot taken before, so a digest of every table can never match a moment
+# later while the proxy runs. Case snapshots exclude them the way a catalog entry's exclude_tables does; the user's data
+# (Config, Credentials, models, keys, settings, SpendLogs, migrations) stays compared.
+VOLATILE_TABLES = ('public.LiteLLM_Daily*Spend', 'public.LiteLLM_ProxyWorkerHeartbeat', 'public.LiteLLM_CronJob',
+                   'public.LiteLLM_HealthCheckTable', 'public.LiteLLM_BudgetWindowSpend')
 RETAINED_IMAGE={'from_case':'woowbk_focus_litellm_a2c39e761b04',
     'derived_image':'af291cf14dba64dd3331179696d9bdfd70f5cacf0c92c53202d0998fe15ecaff',
     'verification_sha256':'0c5396f61187dc666c4a67162fd813facfb8571f1ef291bb40b74558a9c1bc1f',
@@ -301,6 +308,29 @@ def image_build(store, program):
     return {k:state[k] for k in ('verified','result','owned_images','unknown_images','iid','disk_before','disk_after','minimum_free','new_layers')}
 
 
+def restate(store, tag):
+    """The stored snapshot `tag` as if VOLATILE_TABLES had been excluded when it was taken, recomputed from its retained
+    per-database digest listings with the product's own strict reader. A snapshot already taken with the exclusion is unchanged."""
+    if not re.fullmatch(r'[a-z_]{1,40}',tag): raise ValueError('snapshot tag')
+    sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
+    from woowbackup import digests
+    result = json.loads(json.dumps(store.state['snapshots'][tag]))
+    for i,name in enumerate(result['database_names']):
+        listing = read_regular(store.path/(tag+'-'+str(i)+'.digest'),8*1024*1024)[0]
+        kept = []
+        for line in listing.splitlines(keepends=True):
+            fields = line.split()
+            if fields[:1] == [b'T']:
+                schema, table = (bytes.fromhex(x.decode()).decode('utf-8') for x in fields[2:4])
+                if digests.excluded_table(VOLATILE_TABLES,schema,table): continue
+            kept.append(line)
+        path = store.path/(tag+'-'+str(i)+'.stable.digest')
+        if path.exists(): path.unlink()
+        atomic(path,b''.join(kept))
+        result['databases'][name]['digest'] = digests.read_pg_detail(path,what='stable '+name)[1]
+    return result
+
+
 def snapshot(store, tag):
     if not re.fullmatch(r'[a-z_]{1,40}',tag): raise ValueError('snapshot tag')
     sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
@@ -314,7 +344,7 @@ def snapshot(store, tag):
     if not set(names) <= {'postgres','litellm',store.name+'_outside'}: raise ValueError('foreign database in owned cluster')
     result = {'database_names':names,'databases':{}}
     for i,name in enumerate(names):
-        spec = {'id':'focus','postgres':app.postgres[0]['id'],'databases':[name],'exclude_tables':[]}
+        spec = {'id':'focus','postgres':app.postgres[0]['id'],'databases':[name],'exclude_tables':list(VOLATILE_TABLES)}
         captured = adapter._capture_pg_digest(spec,store.path/(tag+'-'+str(i)+'.digest'),databases=[name],roles=True)
         access = sql(name,ha_instance_access.capture_sql('litellm'))
         comparable = ha_instance_access.comparable(access,access)
@@ -523,6 +553,7 @@ def dispatch(q):
             store.restore([CATALOG])
         return True
     if op == 'snapshot': return snapshot(store,q['tag'])
+    if op == 'snapshot_restate': return restate(store,q['tag'])
     if op == 'image_build': return image_build(store,base64.b64decode(q['program'],validate=True))
     if op == 'image_context_cleanup':
         state = store.state.get('image_build',{})
