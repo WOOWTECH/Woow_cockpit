@@ -76,12 +76,52 @@ def success(job, *, digest=False):
             and (not digest or (bool(checks) and all(c.get('match') is True for c in checks))))
 
 
+APP_DATABASE = 'litellm'
+
+
+def default_database_acl(owner):
+    """What a NULL datacl means in PostgreSQL, written out: PUBLIC may CONNECT and use TEMPORARY, the owner has everything."""
+    return {'=Tc/' + owner, owner + '=CTc/' + owner}
+
+
+def database_rows_equal(before, after):
+    """pg_database rows as the snapshot lists them: [name, owner, encoding, collate, ctype, template, allowconn, acl].
+
+    An import REPLACES the application database, and PostgreSQL then writes that database's default ACL out explicitly: dev-d b8
+    saw null before and ['=Tc/litellm','litellm=CTc/litellm'] after, the same privileges. That one column of that one row may
+    change in that one way; every other row, and every other column of that row, must be identical."""
+    try:
+        others_before = [r for r in before if r[0] != APP_DATABASE]
+        others_after = [r for r in after if r[0] != APP_DATABASE]
+        app_before = [r for r in before if r[0] == APP_DATABASE]
+        app_after = [r for r in after if r[0] == APP_DATABASE]
+        if others_before != others_after or len(app_before) != 1 or len(app_after) != 1: return False
+        x, y = app_before[0], app_after[0]
+        if x[:7] != y[:7]: return False
+        if x[7] == y[7]: return True
+        default = default_database_acl(x[1])
+        return all(acl is None or (isinstance(acl, list) and set(acl) == default) for acl in (x[7], y[7]))
+    except (TypeError, IndexError, KeyError):
+        return False
+
+
 def outsiders_equal(before, after):
     return (before.get('roles') == after.get('roles') and before.get('members') == after.get('members')
-            and before.get('settings') == after.get('settings') and before.get('metadata') == after.get('metadata')
+            and before.get('settings') == after.get('settings')
+            and database_rows_equal(before.get('metadata'), after.get('metadata'))
             and before.get('database_names') == after.get('database_names')
-            and {k:v for k,v in before['databases'].items() if k != 'litellm'} ==
-                {k:v for k,v in after['databases'].items() if k != 'litellm'})
+            and {k:v for k,v in before['databases'].items() if k != APP_DATABASE} ==
+                {k:v for k,v in after['databases'].items() if k != APP_DATABASE})
+
+
+def outsiders_difference(before, after):
+    """WHERE the outsiders check found a difference: field and database names only, never a digest or a value."""
+    names = [k for k in ('roles', 'members', 'settings', 'database_names') if before.get(k) != after.get(k)]
+    if not database_rows_equal(before.get('metadata'), after.get('metadata')): names.append('metadata')
+    for name in sorted(set(before.get('databases', {})) | set(after.get('databases', {}))):
+        if name != APP_DATABASE and before['databases'].get(name) != after['databases'].get(name):
+            names.append('databases.' + str(name))
+    return names
 
 
 def rollback_proven(job, *, hook, witness, before, after, full_safety, digest_log):

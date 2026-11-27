@@ -318,5 +318,82 @@ class ProgramBindings(unittest.TestCase):
                 self.assertEqual(removals,[owned] if phase=='still-owned' else [])
 
 
+class OutsidersCheckTests(unittest.TestCase):
+    """dev-d b8 (real): after the import ONLY the application database's ACL changed, from null to its default written out.
+    Everything outside the application database was identical, and the check must say so without going blind."""
+    DEFAULT = ['=Tc/litellm', 'litellm=CTc/litellm']
+
+    @classmethod
+    def setUpClass(cls):
+        global plan
+        plan = load('focus_litellm_instance_acceptance')
+
+    def snapshot(self, acl=None):
+        outside = 'woowbk_focus_litellm_012345abcdef_outside'
+        return {'database_names': ['litellm', 'postgres', outside], 'roles': 'r' * 32, 'settings': [], 'members': [],
+                'metadata': [['litellm', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, acl],
+                             ['postgres', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None],
+                             ['template0', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', True, False, ['=c/litellm', 'litellm=CTc/litellm']],
+                             ['template1', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', True, True, ['=c/litellm', 'litellm=CTc/litellm']],
+                             [outside, 'reader', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None]],
+                'databases': {'litellm': {'digest': 'a'}, 'postgres': {'digest': 'b'}, outside: {'digest': 'c'}}}
+
+    def test_the_real_b8_difference_is_not_a_failure(self):
+        before, after = self.snapshot(None), self.snapshot(self.DEFAULT)
+        after['databases']['litellm'] = {'digest': 'replaced by the import'}          # the replaced database changes by design
+        self.assertTrue(plan.outsiders_equal(before, after))
+        self.assertTrue(plan.outsiders_equal(after, before))
+        self.assertEqual(plan.outsiders_difference(before, after), [])
+
+    def test_everything_else_still_fails_and_is_named_without_values(self):
+        base = self.snapshot(None)
+        def changed(mutate):
+            value = copy.deepcopy(base); mutate(value); return value
+        outside = 'woowbk_focus_litellm_012345abcdef_outside'
+        cases = {
+            'roles': (lambda v: v.__setitem__('roles', 'x' * 32), ['roles']),
+            'members': (lambda v: v.__setitem__('members', [['a', 'b']]), ['members']),
+            'settings': (lambda v: v.__setitem__('settings', [['', 'r', ['x=1']]]), ['settings']),
+            'a database name': (lambda v: v.__setitem__('database_names', ['litellm', 'postgres']), ['database_names']),
+            'an outside database digest': (lambda v: v['databases'][outside].__setitem__('digest', 'changed'), ['databases.' + outside]),
+            'the postgres database digest': (lambda v: v['databases']['postgres'].__setitem__('digest', 'changed'), ['databases.postgres']),
+            'an outside database ACL': (lambda v: v['metadata'][4].__setitem__(7, ['=c/reader']), ['metadata']),
+            'an outside database owner': (lambda v: v['metadata'][4].__setitem__(1, 'other'), ['metadata']),
+            'a template ACL': (lambda v: v['metadata'][2].__setitem__(7, None), ['metadata']),
+            'the application database owner': (lambda v: v['metadata'][0].__setitem__(1, 'other'), ['metadata']),
+            'the application database collation': (lambda v: v['metadata'][0].__setitem__(3, 'C'), ['metadata']),
+            'the application database became a template': (lambda v: v['metadata'][0].__setitem__(5, True), ['metadata']),
+            'an extra database row': (lambda v: v['metadata'].append(['extra', 'litellm', 'UTF8', 'c', 'c', False, True, None]), ['metadata']),
+            'the application database row vanished': (lambda v: v['metadata'].pop(0), ['metadata']),
+        }
+        for label, (mutate, names) in cases.items():
+            with self.subTest(label):
+                other = changed(mutate)
+                self.assertFalse(plan.outsiders_equal(base, other))
+                self.assertFalse(plan.outsiders_equal(other, base))
+                self.assertEqual(plan.outsiders_difference(base, other), names)
+
+    def test_only_the_null_to_default_written_out_change_is_accepted_for_the_application_database(self):
+        for label, before, after, expected in (
+                ('null to default', None, self.DEFAULT, True), ('default to null', self.DEFAULT, None, True),
+                ('default in another order', self.DEFAULT, list(reversed(self.DEFAULT)), True),
+                ('unchanged custom ACL', ['=c/litellm', 'litellm=CTc/litellm'], ['=c/litellm', 'litellm=CTc/litellm'], True),
+                ('null to a narrower ACL', None, ['litellm=CTc/litellm'], False),
+                ('null to a wider ACL', None, ['=Tc/litellm', 'litellm=CTc/litellm', 'someone=c/litellm'], False),
+                ('default to a custom ACL', self.DEFAULT, ['=c/litellm', 'litellm=CTc/litellm'], False),
+                ('another owner in the default', None, ['=Tc/other', 'other=CTc/other'], False),
+                ('a string instead of a list', None, '=Tc/litellm', False)):
+            with self.subTest(label):
+                a, b = self.snapshot(before), self.snapshot(after)
+                self.assertEqual(plan.database_rows_equal(a['metadata'], b['metadata']), expected)
+
+    def test_malformed_snapshots_fail_closed_instead_of_raising(self):
+        good = self.snapshot(None)['metadata']
+        for bad in (None, [], [['litellm']], [['litellm', 'litellm', 'UTF8', 'c', 'c', False, True]], 5, {'litellm': 1}):
+            with self.subTest(repr(bad)[:30]):
+                self.assertFalse(plan.database_rows_equal(good, bad))
+                self.assertFalse(plan.database_rows_equal(bad, good))
+
+
 if __name__ == '__main__':
     unittest.main()

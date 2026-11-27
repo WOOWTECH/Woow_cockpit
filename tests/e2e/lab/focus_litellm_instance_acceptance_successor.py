@@ -30,7 +30,10 @@ import focus_litellm_instance_acceptance_source as source
 
 plan=images.plan
 LOCK='/tmp/woowbk-dev-d-mutation.lock'
-OWN_CHECKS={'all_jobs_terminal','original_device_durable_state','preexisting_backups_preserved','outer_isolation_returned'}
+# What every predecessor's final output must show. A recover-only pass also proves the outer isolation itself; a FLOW that failed and
+# then recovered inside the same run never reaches that check (it belongs to a successful end), but --capture proves the isolation
+# again before it reads anything, so a successor admitted from such a flow is no weaker.
+RECOVERY_CHECKS={'all_jobs_terminal','original_device_durable_state','preexisting_backups_preserved'}
 INTENTS=('catalog_intent','pg_tag_intent','hook_intent','timer_intent')
 
 
@@ -75,6 +78,13 @@ def capture(output,*,transport,case,lock=LOCK,clock=time.time):
     finally:os.close(fd)
 
 
+def recovered(output,checks):
+    """The predecessor's final output: a successful recover-only pass, or a flow that failed and whose own recovery completed."""
+    if output['complete'] is not True or output['recovery_verified'] is not True or not RECOVERY_CHECKS<=checks:return False
+    if output['phase']=='recover':return output['phase_succeeded'] is True and 'outer_isolation_returned' in checks
+    return output['phase']=='flow' and output['phase_succeeded'] is False and output.get('flow_verified') is False
+
+
 def prepare(*,prior_receipt,prior_receipt_sha,prior_output,prior_output_sha,live,live_sha,new_name,flow_receipt,pause_receipt):
     if any(os.path.lexists(p) for p in (flow_receipt,pause_receipt)) or flow_receipt==pause_receipt:
         raise ValueError('exclusive new receipt paths required')
@@ -86,8 +96,7 @@ def prepare(*,prior_receipt,prior_receipt_sha,prior_output,prior_output_sha,live
     if (prior['complete'] is not True or prior['recovery_verified'] is not True or prior['pending']
             or prior.get('pending_operation') or any(prior.get(k) for k in INTENTS)
             or prior['images_ready'] is not True or prior['owned_images']!=[]
-            or output['phase']!='recover' or output['phase_succeeded'] is not True or output['complete'] is not True
-            or output['recovery_verified'] is not True or not OWN_CHECKS<=checks
+            or not recovered(output,checks)
             or output['baseline_sha256']!=source.ops.digest(source.ops.canonical(before))):
         raise ValueError('predecessor recovery and cleanup not proven')
     if (now.get('device')!=plan.DEVICE or now.get('inventory_sha256')!=source.ops.digest(source.ops.canonical(now['inventory']))):

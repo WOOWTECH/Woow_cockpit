@@ -36,7 +36,7 @@ class Fixture:
                     'generated_credentials':{'OLD_CASE_TEST_ONLY':'never-copied'}}
         self.output={'phase':'recover','phase_succeeded':True,'complete':True,'recovery_verified':True,
                      'baseline_sha256':digest(self.before),
-                     'checks':[{'check':c,'ok':True} for c in sorted(s.OWN_CHECKS)]}
+                     'checks':[{'check':c,'ok':True} for c in sorted(s.RECOVERY_CHECKS|{'outer_isolation_returned'})]}
         self.live={'device':s.plan.DEVICE,'case':PRIOR,'at':1,'inventory':copy.deepcopy(self.before),
                    'inventory_sha256':digest(self.before),'backup_ids':['20260101T000000Z-aaaaaaaa'],'ha_upload_ids':['ha-old']}
 
@@ -75,6 +75,26 @@ class PrepareTests(unittest.TestCase):
         for p,b in originals.items():self.assertEqual(p.read_bytes(),b)        # the predecessor's files are never touched
         with self.assertRaisesRegex(ValueError,'exclusive'):s.prepare(**kwargs)  # never overwrites
 
+    def test_a_flow_that_failed_and_recovered_by_itself_is_an_accepted_predecessor(self):
+        # dev-d b8: the flow stopped at one check, its own recovery then completed (no outer-isolation check on that path)
+        self.f.output.update(phase='flow',phase_succeeded=False,flow_verified=False,
+                             checks=[{'check':c,'ok':True} for c in sorted(s.RECOVERY_CHECKS)])
+        kwargs=self.f.arguments(self.f.write())
+        self.assertEqual(s.prepare(**kwargs)['predecessor'],PRIOR)
+        for label,mutate in (('the flow succeeded',lambda o:o.update(phase_succeeded=True)),
+                             ('the flow was verified',lambda o:o.update(flow_verified=True)),
+                             ('the flow verification is unknown',lambda o:o.pop('flow_verified')),
+                             ('recovery incomplete',lambda o:o.update(complete=False)),
+                             ('recovery unverified',lambda o:o.update(recovery_verified=False)),
+                             ('a recovery check missing',lambda o:o.update(checks=o['checks'][1:])),
+                             ('a recovery check failed',lambda o:o['checks'][0].update(ok=False))):
+            with self.subTest(label),tempfile.TemporaryDirectory() as root:
+                f=Fixture(root);f.output.update(phase='flow',phase_succeeded=False,flow_verified=False,
+                                                checks=[{'check':c,'ok':True} for c in sorted(s.RECOVERY_CHECKS)]);mutate(f.output)
+                kw=f.arguments(f.write())
+                with self.assertRaises(ValueError):s.prepare(**kw)
+                self.assertFalse(os.path.lexists(kw['flow_receipt']))
+
     def test_every_unproven_predecessor_or_device_state_is_refused_before_anything_is_written(self):
         cases=[('not complete',lambda f:f.prior.update(complete=False)),
                ('recovery not verified',lambda f:f.prior.update(recovery_verified=False)),
@@ -84,7 +104,8 @@ class PrepareTests(unittest.TestCase):
                ('timer intent left',lambda f:f.prior.update(timer_intent=True)),
                ('owns an image',lambda f:f.prior.update(owned_images=['x'])),
                ('images not ready',lambda f:f.prior.update(images_ready=False)),
-               ('output not a recover',lambda f:f.output.update(phase='flow')),
+               ('output of an unknown phase',lambda f:f.output.update(phase='images')),
+               ('recover pass without the isolation proof',lambda f:f.output.update(checks=[c for c in f.output['checks'] if c['check']!='outer_isolation_returned'])),
                ('output failed',lambda f:f.output.update(phase_succeeded=False)),
                ('output incomplete',lambda f:f.output.update(complete=False)),
                ('output without recovery',lambda f:f.output.update(recovery_verified=False)),
