@@ -375,6 +375,8 @@ class World(HaWorld):
                 return [[name, value, 'invalid value' if name == self.refuse_setting and not reset else '']
                         for name, value in psql.auto_conf.items()]
         if role == 'n8n-pg':
+            if sql == ha_n8n.ADVANCE_SEQUENCES:   # the serial sequences moved after import:entities (none behind here)
+                return {'sequences': 0, 'advanced': 0}
             if 'pg_tables' in sql:
                 return list(self.n8n_tables)
             if sql.startswith('SELECT json_build_object('):
