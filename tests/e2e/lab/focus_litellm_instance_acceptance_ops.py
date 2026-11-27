@@ -313,13 +313,13 @@ def snapshot(store, tag):
         access = sql(name,ha_instance_access.capture_sql('litellm'))
         comparable = ha_instance_access.comparable(access,access)
         result['databases'][name] = {'digest':captured['digest'], 'access':digest(json.dumps(comparable,sort_keys=True).encode()),
-            'schema':sql(name,"SELECT md5(coalesce(string_agg(n.nspname||':'||c.relname||':'||a.attname||':'||"
-                "format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull,E'\\n' ORDER BY n.nspname,c.relname,a.attnum),'')) "
+            'schema':sql(name,"SELECT to_json(md5(coalesce(string_agg(n.nspname||':'||c.relname||':'||a.attname||':'||"
+                "format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull,E'\\n' ORDER BY n.nspname,c.relname,a.attnum),''))) "
                 "FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid JOIN pg_namespace n ON n.oid=c.relnamespace "
                 "WHERE a.attnum>0 AND NOT a.attisdropped AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname !~ '^pg_';")}
-    result['roles'] = sql('postgres',"SELECT md5(coalesce(string_agg(rolname||':'||rolsuper||':'||rolinherit||':'||rolcreaterole||':'||"
+    result['roles'] = sql('postgres',"SELECT to_json(md5(coalesce(string_agg(rolname||':'||rolsuper||':'||rolinherit||':'||rolcreaterole||':'||"
         "rolcreatedb||':'||rolcanlogin||':'||rolreplication||':'||rolbypassrls||':'||rolconnlimit||':'||"
-        "coalesce(rolvaliduntil::text,'')||':'||coalesce(rolpassword,''),E'\\n' ORDER BY rolname),'')) FROM pg_authid;")
+        "coalesce(rolvaliduntil::text,'')||':'||coalesce(rolpassword,''),E'\\n' ORDER BY rolname),''))) FROM pg_authid;")
     # rolconfig belongs to pg_db_role_setting, NOT pg_authid (real PG16/17).
     result['settings'] = sql('postgres',"SELECT coalesce(json_agg(json_build_array(coalesce(d.datname,''),coalesce(r.rolname,''),"
         "s.setconfig) ORDER BY s.setdatabase,s.setrole),'[]'::json) FROM pg_db_role_setting s "
