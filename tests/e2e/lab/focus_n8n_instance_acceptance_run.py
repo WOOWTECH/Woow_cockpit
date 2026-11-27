@@ -30,7 +30,9 @@ import focus_n8n_instance_acceptance_ops as ops
 PHASES = ('images','images-recover','safety','flow','recover')
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
-FROZEN_PRODUCT = 'd09f4fe8e06305aff6a1150f41d6de719e7b7f6a'
+# d09f4fe8 plus the one-file n8n probe fix 8e18f842 (the probe must not read its own process entry). The safety and recover
+# phases ran at d09f4fe8; the engine on dev-c is moved to this commit by focus_n8n_instance_acceptance_engine_patch.
+FROZEN_PRODUCT = '8e18f84222a3963ddbee37a43292b2a507bea2ea'
 IMAGE_ARCHIVES = {config:{'compressed_sha256':sha,'compressed_bytes':size}
                   for config,(sha,size) in plan.ARCHIVES.items()}
 BOUNDS = {'host_available_mib':1200,'host_reserve_gib':13,'host_write_budget_gib':8,
