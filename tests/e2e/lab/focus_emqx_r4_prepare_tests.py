@@ -183,6 +183,19 @@ class PreparationLeaseBoundaries(unittest.TestCase):
 
 
 class CacheExportBoundaries(unittest.TestCase):
+    def test_actual_cached_inspect_argv_uses_go_ID_and_only_reviewed_metadata(self):
+        template='{"id":{{json .ID}},"manifest":{{json .Digest}},"os":{{json .Os}},"arch":{{json .Architecture}},"size":{{.Size}},"repo_digests":{{json .RepoDigests}}}'
+        for role,identity in artifact.IMAGES.items():
+            doc={'id':identity,'manifest':'sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937',
+                 'os':'linux','arch':'amd64','size':11516017,'repo_digests':[images.CLIENT_REPO_DIGEST]}
+            pod=mock.Mock(return_value=json.dumps(doc).encode())
+            self.assertEqual(images.inspect_cached(pod,role),doc)
+            reference=artifact.CLIENT_REF if role=='client' else identity
+            pod.assert_called_once_with('image','inspect',reference,'--format',template)
+        pod=mock.Mock(side_effect=AssertionError('foreign image must not be inspected'))
+        self.assertRaisesRegex(ValueError,'only_reviewed_cached_images',images.inspect_cached,pod,'customer-image')
+        pod.assert_not_called()
+
     def test_only_three_cached_references_can_be_saved_no_pull_tag_or_container(self):
         for role in artifact.IMAGES:
             args=images.save_args(role,Path('/owned/artifact'))

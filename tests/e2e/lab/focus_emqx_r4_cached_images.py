@@ -35,6 +35,13 @@ def cached_record(raw,role):
     return doc
 
 
+def inspect_cached(pod,role):
+    if role not in REFS:raise ValueError('only_reviewed_cached_images')
+    # Podman's Go field is ID; the JSON response object's Id spelling is not a template field.
+    template='{"id":{{json .ID}},"manifest":{{json .Digest}},"os":{{json .Os}},"arch":{{json .Architecture}},"size":{{.Size}},"repo_digests":{{json .RepoDigests}}}'
+    return cached_record(pod('image','inspect',REFS[role],'--format',template),role)
+
+
 def main():
     resource.setrlimit(resource.RLIMIT_FSIZE,(artifact.MAX_STAGE,artifact.MAX_STAGE))
     def alarm(_s,_f):raise TimeoutError('cache_export_wall_budget')
@@ -50,11 +57,10 @@ def main():
     if pod('info','--format','{{.Host.Security.Rootless}}').strip()!=b'true':raise ValueError('rootless_required')
     def inventory():return sorted(pod('image','ls','--no-trunc','--format','{{.ID}} {{.Repository}}:{{.Tag}}').decode().splitlines())
     before=inventory();directory=ROOT/'artifact';directory.mkdir(mode=0o700)
-    template='{"id":{{json .Id}},"manifest":{{json .Digest}},"os":{{json .Os}},"arch":{{json .Architecture}},"size":{{.Size}},"repo_digests":{{json .RepoDigests}}}'
     source_bytes=sum(p.stat().st_size for p in ROOT.rglob('*') if p.is_file())
     records={};used=0
     for role in REFS:
-        cached=cached_record(pod('image','inspect',REFS[role],'--format',template),role)
+        cached=inspect_cached(pod,role)
         remaining=artifact.MAX_STAGE-used-source_bytes-256*1024
         if remaining<=0:raise ValueError('combined_source_image_archive_budget')
         if shutil.disk_usage(ROOT).free<13*1024**3+remaining:raise ValueError('fresh_archive_disk_floor')
@@ -64,7 +70,7 @@ def main():
         path=directory/(role+'.oci.tar');path.chmod(0o600);facts=artifact.verify_oci(path,artifact.IMAGES[role])
         used+=path.stat().st_size
         if used>artifact.MAX_STAGE:raise ValueError('combined_image_archive_budget')
-        if cached!=cached_record(pod('image','inspect',REFS[role],'--format',template),role):
+        if cached!=inspect_cached(pod,role):
             raise ValueError('source_image_metadata_changed')
         records[role]={'source_reference':REFS[role],'cached':cached,'archive':facts}
     if inventory()!=before:raise ValueError('cached_image_catalog_changed')

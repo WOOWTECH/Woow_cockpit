@@ -48,6 +48,22 @@
       "shim_hits": 0,
       "skipped": 0,
       "tests": 6
+    },
+    {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "log": "/tmp/parity-focus-20261127/emqx-r4-cache-ID-template.guardlog",
+      "log_sha256": "7744067f44e9cad66fd7e584c5a14d078089c7e689e15b847b14fa96b1f406b2",
+      "run_native": "absent",
+      "scope": "Actual cache inspect argv uses Go json .ID; exact approved references/metadata, unknown-role refusal, cached provenance and save boundaries",
+      "shim_hits": 0,
+      "skipped": 0,
+      "source_sha256": {
+        "tests/e2e/lab/focus_emqx_r4_cached_images.py": "99d0c15e21bda53b961988648d10721a6264aa93fb9149d962ed53f39dafa7db",
+        "tests/e2e/lab/focus_emqx_r4_prepare_tests.py": "1eaf560d76a403c218ede6f9b5126973732d66dbab657c895497f2133807c252"
+      },
+      "tests": 4
     }
   ],
   "kind": "offline-only",
