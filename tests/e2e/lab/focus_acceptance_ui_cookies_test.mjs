@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseSetCookie, cookieMetadata, observedValues, coverage, digest, provedPublicTombstone } from './focus_acceptance_ui_cookies.mjs';
+import { readFileSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { parseSetCookie, cookieMetadata, observedValues, coverage, digest, provedPublicTombstone,
+  readPrimarySourceProof, nativeCapabilityProgram } from './focus_acceptance_ui_cookies.mjs';
 const now = Date.parse('2026-11-27T00:00:00Z');
 const parse = header => parseSetCookie(header, now);
 const jar = (name, value) => ({ name, value });
@@ -118,4 +122,20 @@ test('actual362 policy rejects old335/337 WS or native package pins', () => {
     assert.equal(provedPublicTombstone(row,[],{...sourceProof(),source_version:version}),false);
     assert.equal(provedPublicTombstone(row,[],{...sourceProof(),native_package_version:version+'-1'}),false);
   }
+});
+test('future page reuses exact proven native program and independently verifies pinned source bytes', () => {
+  const source=readPrimarySourceProof();assert.equal(source.version,'362');
+  const probe=readFileSync(new URL('./focus_acceptance_ui_cookie_probe.mjs',import.meta.url),'utf8');
+  assert.equal(nativeCapabilityProgram,probe.match(/'(import hashlib,json,subprocess;.*?)'/)[1]);
+  const directory=mkdtempSync(join(tmpdir(),'focus-cookie-source-'));
+  try {
+    const path=join(directory,'source.json');
+    for (const version of ['335','337']) {
+      writeFileSync(path,JSON.stringify({...source,version}));
+      assert.throws(()=>readPrimarySourceProof(path),/source proof pin mismatch/);
+    }
+    const changed=structuredClone(source);changed.files[0].sha256='0'.repeat(64);
+    writeFileSync(path,JSON.stringify(changed));
+    assert.throws(()=>readPrimarySourceProof(path),/source proof bytes mismatch/);
+  } finally {rmSync(directory,{recursive:true});}
 });

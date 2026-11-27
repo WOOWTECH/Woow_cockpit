@@ -1,0 +1,37 @@
+--- a/r1_three_app_corrupt_full.py
++++ b/r1_three_app_corrupt_full.py
+@@ -76,13 +76,13 @@
+     while current and not monitor_stop.is_set() and len(seen) < 6:
+         try:
+             seen.add(current)
+-            unit = f'woowtech-backup-{current}.service'
++            unit = f'woowtech-backup-{first}.service'
+             proc = h.root('systemctl', 'show', unit, '--property=MemoryPeak', timeout=30)
+             value = proc.stdout.decode('ascii', 'replace').strip().removeprefix('MemoryPeak=')
+             if proc.returncode == 0 and value.isdigit():
+                 peak = int(value)
+                 memory_samples.append(peak)
+-                memory_by_job[current] = max(memory_by_job.get(current, 0), peak)
++                memory_by_job[first] = max(memory_by_job.get(first, 0), peak)
+             rc, reply = h.helper('job-status', {'job_id': current}, timeout=30)
+             if rc == 0 and isinstance(reply.get('job'), dict):
+                 job = reply['job']
+@@ -210,12 +210,14 @@
+             after_hermes.get('session_count', 0) >= 5
+             and 'woowbk-lab-baseline' not in after_hermes.get('sessions', {}))
+     require('Omnigent live data changed to the HA source', after_omni != before_omni)
+-    successful = {r['id'] for r in records[1:]}
+-    require('process memory was measured for each successful chain job',
+-            successful <= set(memory_by_job), f'{len(successful & set(memory_by_job))}/{len(successful)}')
++    require('single chain systemd unit memory was sampled',
++            bool(memory_samples) and first_job in memory_by_job)
++    require('single chain systemd unit peak stayed below1GiB',
++            bool(memory_samples) and 0 < max(memory_samples) < 1024**3)
+     ev.save('memory-peak.json', {'peak_bytes': max(memory_samples) if memory_samples else None,
+                                  'samples': len(memory_samples),
+-                                 'jobs_measured': len(memory_by_job)})
++                                 'chain_units_measured': len(memory_by_job),
++                                 'scope': 'first chain unit; separate app containers excluded'})
+ except Exception as error:
+     ev.check('full three-app import completed', False, f'{type(error).__name__}: {error}')
+ finally:

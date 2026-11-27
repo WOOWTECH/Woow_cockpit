@@ -1,7 +1,27 @@
 // Diagnostic metadata only. No value is exempted from scanning by this module.
 import { createHash } from 'node:crypto';
+import { readFileSync, lstatSync } from 'node:fs';
+import { join } from 'node:path';
 
 export const digest = value => createHash('sha256').update(value, 'utf8').digest('hex');
+export const nativeCapabilityProgram = 'import hashlib,json,subprocess; from pathlib import Path; p=Path("/usr/lib/cockpit/cockpit-ws"); assert p.is_file() and not p.is_symlink(); v=subprocess.run(["dpkg-query","-W","--showformat=${Version}","cockpit-ws"],capture_output=True,check=True,timeout=15).stdout.decode().strip(); print(json.dumps({"package_version":v,"binary_sha256":hashlib.sha256(p.read_bytes()).hexdigest()}))';
+
+export function readPrimarySourceProof(path = new URL('./focus_acceptance_ui_cookie_source.json', import.meta.url)) {
+  const source=JSON.parse(readFileSync(path,'utf8'));
+  const pins={'cockpitauth.c':'d3ad1a818ec7b7d2270f6c36f8364f96ffe34a42018800381a78ee68100b43e7',
+    'cockpithandlers.c':'7c6551f0a993da62ff1aecbd5382fc4087f9f6d327fe53055e3d0a931c0e9cca'};
+  if (source.version!=='362' || source.commit!=='ca0d360e3a858a7eb189edde15cf7b976018404b'
+      || source.files.length!==2 || new Set(source.files.map(s=>s.name)).size!==2) throw new Error('source proof pin mismatch');
+  for (const file of source.files) {
+    const cached=join(source.cache_directory,file.name);
+    if (file.sha256!==pins[file.name]
+        || file.url!==`https://raw.githubusercontent.com/cockpit-project/cockpit/${source.commit}/src/ws/${file.name}`
+        || !lstatSync(cached).isFile() || lstatSync(cached).isSymbolicLink()
+        || createHash('sha256').update(readFileSync(cached)).digest('hex')!==file.sha256)
+      throw new Error('source proof bytes mismatch');
+  }
+  return source;
+}
 const token = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const octets = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/;
 

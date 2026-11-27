@@ -1,0 +1,39 @@
+{
+  "source_commit": "fc84c88a3ca19c55b674046564edfb85cf99e0b6",
+  "device": "woowbk-dev-d",
+  "first_job": "j20261126T090424Z-3da3bc5b",
+  "jobs": [
+    {
+      "id": "j20261126T090424Z-3da3bc5b",
+      "type": "backup",
+      "state": "failed"
+    },
+    {
+      "id": "j20261126T090428Z-f4859c07",
+      "type": "backup",
+      "state": "succeeded"
+    },
+    {
+      "id": "j20261126T090516Z-91a0cc8c",
+      "type": "restore",
+      "state": "succeeded"
+    },
+    {
+      "id": "j20261126T090624Z-03ed8fba",
+      "type": "backup",
+      "state": "succeeded"
+    },
+    {
+      "id": "j20261126T090646Z-5c7afe0e",
+      "type": "restore",
+      "state": "succeeded"
+    }
+  ],
+  "chain_unit_events": 1008,
+  "child_units": 0,
+  "memory_peak_reported": "29.3M",
+  "memory_peak_estimated_bytes": 30723277,
+  "below_half_of_the_2GiB_unit_limit": true,
+  "scope": "systemd cgroup of the single chain process; separate app containers are outside it",
+  "commercial_acceptance": "not-complete"
+}

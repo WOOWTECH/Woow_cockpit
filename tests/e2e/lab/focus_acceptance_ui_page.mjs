@@ -5,6 +5,8 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
+import { parseSetCookie, digest, coverage, observedValues, provedPublicTombstone,
+  nativeCapabilityProgram, readPrimarySourceProof } from './focus_acceptance_ui_cookies.mjs';
 
 if (process.argv.slice(2).join(' ') !== '--run') {
   console.log('R8 page prepared: syntax only; requires reviewed controller and dev-d lease');
@@ -64,6 +66,7 @@ function observeReply(payload) {
   if (!channel) {
     try {
       const control = JSON.parse(chunk);
+      if (control.command === 'init' && /^\d+(?:\.\d+)*$/.test(control.system?.version || '')) versions.add(control.system.version);
       if (control.command === 'close') {
         channels.delete(control.channel);
         responseBuffers.delete(control.channel);
@@ -87,9 +90,9 @@ function observeReply(payload) {
 let browser;
 let context;
 let frame;
-const issued = new Set();
-const cookieObservations = [];
-let cookieObservationFailed = false;
+const cookieRows = [], cookieObservations = new Set(), versions = new Set();
+let cookieObservationErrors = 0, initialRoot = true;
+let initialJar = [], rootVerified = false, nativeCapability, primarySource;
 let finishing;
 let pageErrors = 0;
 let recording = false;
@@ -107,22 +110,14 @@ process.once('SIGTERM', async () => {
   try { await finishBrowser(); } finally { process.exit(124); }
 });
 try {
+  primarySource = readPrimarySourceProof();
   browser = await chromium.launch({ executablePath: config.chromium,
     args: ['--disable-background-networking', '--disable-component-update'] });
   context = await browser.newContext({ ignoreHTTPSErrors: true, locale: 'en-US',
     viewport: { width: 1440, height: 900 } });
   // Observe login/renewal Set-Cookie values as well as the final cookie jar.
   // No cookie/header is persisted; scan every observed value before teardown.
-  context.on('response', response => {
-    if (!response.url().startsWith(config.base + '/')) return;
-    cookieObservations.push(response.headerValues('set-cookie').then(headers => {
-      for (const header of headers) {
-        const first = header.split(';', 1)[0];
-        const value = first.slice(first.indexOf('=') + 1);
-        if (value) issued.add(value);
-      }
-    }).catch(() => { cookieObservationFailed = true; }));
-  });
+  context.on('response', observeCookies);
   const page = await context.newPage();
   page.setDefaultTimeout(30000);
   page.on('websocket', ws => {
@@ -132,6 +127,8 @@ try {
   page.on('pageerror', () => { if (recording) pageErrors++; });
   // Existing Cockpit password + administrative access, same as cockpit-login.mjs.
   await page.goto(config.base, { waitUntil: 'domcontentloaded' });
+  await drainCookies();
+  initialJar = await context.cookies(); initialRoot = false;
   await page.locator('#login-user-input').fill('devadmin');
   await page.locator('#login-password-input').fill(config.password);
   await page.locator('#login-button').click();
@@ -151,11 +148,15 @@ try {
   await iframe.waitFor({ state: 'attached' });
   frame = await (await iframe.elementHandle()).contentFrame();
   await frame.locator('[data-focus="list-upload"]').waitFor();
-  check('UI real administrative Cockpit bridge reaches this device', await frame.evaluate(async () => {
+  const capability = await frame.evaluate(async program => {
     const uid = await window.cockpit.spawn(['id', '-u'], { superuser: 'require', err: 'message' });
     const host = await window.cockpit.spawn(['hostname'], { err: 'message' });
-    return uid.trim() === '0' && host.trim() === 'woowbk-dev-d';
-  }));
+    const native = JSON.parse(await window.cockpit.spawn(['python3', '-B', '-I', '-c', program],
+      { superuser: 'require', err: 'ignore' }));
+    return { root: uid.trim() === '0' && host.trim() === 'woowbk-dev-d', native };
+  }, nativeCapabilityProgram);
+  rootVerified = capability.root === true; nativeCapability = capability.native;
+  check('UI real administrative Cockpit bridge reaches this device', rootVerified);
   recording = true;
   stage = 'upload';
   await frame.locator('[data-focus="list-upload"]').click();
@@ -216,46 +217,121 @@ try {
   await finishBrowser();
 }
 
+function observeCookies(response) {
+  const url = new URL(response.url());
+  if (url.origin !== config.base) return;
+  const rootGet = initialRoot && url.pathname === '/' && !url.search
+    && response.request().method() === 'GET' && response.status() === 200;
+  const work = response.headerValues('set-cookie').then(headers => {
+    for (const header of headers) {
+      const row = parseSetCookie(header);
+      const first = header.split(';', 1)[0];
+      row.legacyValue = first.slice(first.indexOf('=') + 1);
+      cookieRows.push({ ...row, rootGet });
+    }
+  }).catch(() => { cookieObservationErrors++; }).finally(() => cookieObservations.delete(work));
+  cookieObservations.add(work);
+}
+async function drainCookies() {
+  const deadline = Date.now() + 10000;
+  while (cookieObservations.size) {
+    if (Date.now() > deadline) throw new Error('cookie observation deadline');
+    await Promise.race([Promise.all([...cookieObservations]), new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('cookie observation deadline')), 10000); timer.unref();
+    })]);
+  }
+}
 async function finishBrowser() {
   if (finishing) return finishing;
   finishing = (async () => {
   recording = false;
-  // Capture and scan before closing even when a preceding assertion failed.
+  // Observe the entire import flow; retain metadata before scanning on success
+  // or failure. Raw headers/values/frames never leave memory or spawn stdin.
   try {
-    if (!context || !frame) throw new Error('authenticated frame unavailable');
+    if (!context || !frame || !rootVerified) throw new Error('authenticated frame unavailable');
     stage = 'issued-value-scan';
-    // Keep values in memory. Observe the jar even if one header callback failed;
-    // scan what was captured, then report incomplete coverage as a failed check.
-    const observed = await Promise.allSettled(cookieObservations);
-    for (const cookie of await context.cookies()) if (cookie.value) issued.add(cookie.value);
-    const values = [...issued];
-    if (!values.length) throw new Error('issued values unavailable');
+    await drainCookies();
+    const liveJar = await context.cookies();
+    const cov = coverage(cookieRows, initialJar, liveJar, cookieObservationErrors);
+    const sourceVersion = versions.size === 1 ? [...versions][0] : 'unknown';
+    const authObserved = liveJar.some(c => c.name === 'cockpit'
+      && cookieRows.some(r => r.name === c.name && r.value === c.value && !r.rootGet));
+    const proof = { source_version: sourceVersion, administrative_root_verified: rootVerified,
+      authenticated_cookie_observed: authObserved, primary_source_hashes_verified: Boolean(primarySource),
+      native_package_version: nativeCapability?.package_version, native_ws_binary_sha256: nativeCapability?.binary_sha256 };
+    const values = observedValues(cookieRows, liveJar, initialJar);
+    const publicValue = value => {
+      const rows = cookieRows.filter(r => r.value === value || r.legacyValue === value);
+      return rows.length > 0 && rows.every(r => r.value === value && provedPublicTombstone(r, liveJar, proof));
+    };
+    const metadata = cov.metadata.map((row, i) => ({ ...row,
+      classification: cookieRows[i] && publicValue(cookieRows[i].value)
+        ? 'proved-public-protocol-tombstone' : row.classification }));
+    const identityProof = { cookie_metadata: metadata, observations_complete: cov.observations_complete,
+      administrative_root_verified: rootVerified, source_version: sourceVersion,
+      native_cockpit_capability: nativeCapability, primary_source_commit: primarySource?.commit,
+      primary_sources: primarySource?.files.map(s => ({ url: s.url, sha256: s.sha256 })) };
+    writeFileSync(join(config.evidence, 'cookie-observations.json'), JSON.stringify(identityProof, null, 2) + '\n',
+      { mode: 0o600, flag: 'wx' });
+    issuedScanCounts = { ...identityProof, observed_values: values.length, scan_completed: false };
+    if (!values.length || values.some(value => !value)) throw new Error('issued values unavailable');
+    // Reuse the exact strict per-value scanner exercised by the two read-only
+    // probes. The controller separately scans all registered credentials.
+    const script = readFileSync(new URL('../../../snippets/focus-acceptance/r8-cookie-scan-rendered.py', import.meta.url), 'utf8');
     const report = await frame.evaluate(async ({ script, values, since }) => {
-      const request = window.cockpit.spawn(['python3', '-I', '-c', script], { superuser: 'require', err: 'message' });
-      request.input(JSON.stringify({ values, since }));
+      const request = window.cockpit.spawn(['python3', '-B', '-I', '-c', script], { superuser: 'require', err: 'ignore' });
+      request.input(JSON.stringify({ values, registered: [], since }));
       return JSON.parse(await request);
-    }, { script: config.cookie_scan, values, since: config.since });
-    // Cookies are ASCII HTTP values; cover raw and JSON string escaping in all
-    // current private case files, including screenshots. The HA tar is data.
-    const needles = values.flatMap(value => [Buffer.from(value), Buffer.from(JSON.stringify(value).slice(1, -1))]);
-    let hostFiles = 0, hostHits = 0;
+    }, { script, values, since: config.since });
+    const host = new Map(values.map(value => [digest(value), 0]));
+    let hostFiles = 0;
     for (const entry of readdirSync(config.evidence, { withFileTypes: true })) {
       if (!entry.isFile()) throw new Error('unexpected private evidence path');
       const path = join(config.evidence, entry.name);
-      if (path === config.fixture) continue;
+      if (path === config.fixture) continue;  // HA tar is original application data.
       const data = readFileSync(path); hostFiles++;
-      for (const needle of needles) if (data.includes(needle)) hostHits++;
+      for (const value of values) {
+        const hits = [...new Set([value, JSON.stringify(value).slice(1, -1)])]
+          .reduce((n, text) => n + (data.includes(Buffer.from(text)) ? 1 : 0), 0);
+        host.set(digest(value), host.get(digest(value)) + hits);
+      }
     }
-    const complete = !cookieObservationFailed && observed.every(x => x.status === 'fulfilled');
-    issuedScanCounts = { observed_values: values.length, device_files: report.scanned,
-      archive_index_sidecars: report.archive_index_sidecars_scanned,
-      regular_json_roots: report.regular_json_roots_scanned,
-      device_hits: report.hits, host_files: hostFiles, host_hits: hostHits, observations_complete: complete };
-    issuedScan = complete && report.hits === 0 && report.scanned > 0
-      && report.regular_json_roots_scanned === 2
-      && report.archive_index_sidecars_scanned > 0 && hostFiles > 0 && hostHits === 0;
+    await drainCookies();
+    const finalJar = await context.cookies();
+    const jarStable = finalJar.length === liveJar.length && finalJar.every(c => liveJar.some(x =>
+      x.name === c.name && x.value === c.value && x.domain === c.domain && x.path === c.path));
+    const finalValues = observedValues(cookieRows, finalJar, initialJar);
+    const noLateValues = finalValues.length === values.length && finalValues.every(v => values.includes(v));
+    const complete = cov.observations_complete && coverage(cookieRows, initialJar, finalJar, cookieObservationErrors).observations_complete
+      && jarStable && noLateValues;
+    const matches = values.map(value => {
+      const hash = digest(value);
+      if (!report.values[hash]) throw new Error('per-value result unavailable');
+      return { names: [...new Set([...cookieRows, ...initialJar, ...liveJar]
+        .filter(r => r.value === value || r.legacyValue === value).map(r => r.name))].sort(),
+        sha256: hash, length: Buffer.byteLength(value),
+        classification: publicValue(value) ? 'proved-public-protocol-tombstone' : 'credential-zero-hits-required',
+        device: report.values[hash], host_hits: host.get(hash) };
+    });
+    const credentials = matches.filter(v => v.classification === 'credential-zero-hits-required');
+    const publicMarkers = matches.filter(v => v.classification === 'proved-public-protocol-tombstone');
+    const credentialHits = credentials.reduce((n, v) => n + v.device.hits, 0);
+    const credentialHostHits = credentials.reduce((n, v) => n + v.host_hits, 0);
+    issuedScanCounts = { ...identityProof, observed_values: values.length, match_counts: matches,
+      device_files: report.scanned, archive_index_sidecars: report.archive_index_sidecars_scanned,
+      actual_archive_index_sidecars_expected: report.actual_archive_index_sidecars_expected,
+      regular_json_roots: report.regular_json_roots_scanned, device_hits: report.all_values_hits,
+      credential_device_hits: credentialHits, public_marker_device_hits: publicMarkers.reduce((n, v) => n + v.device.hits, 0),
+      host_files: hostFiles, host_hits: matches.reduce((n, v) => n + v.host_hits, 0), credential_host_hits: credentialHostHits,
+      observations_complete: complete, live_jar_stable_during_scan: jarStable, no_unscanned_late_values: noLateValues,
+      unscanned_late_cookie_metadata: coverage(cookieRows, initialJar, finalJar, cookieObservationErrors).metadata
+        .filter(c => !metadata.some(old => old.name === c.name && old.sha256 === c.sha256)), scan_completed: true };
+    issuedScan = complete && authObserved && credentials.length > 0 && credentialHits === 0 && credentialHostHits === 0
+      && report.scanned > 0 && report.regular_json_roots_scanned === 2
+      && report.archive_index_sidecars_scanned > 0
+      && report.archive_index_sidecars_scanned === report.actual_archive_index_sidecars_expected && hostFiles > 0;
     checks.push({ check: 'UI cookie observation completed without gaps', ok: complete });
-    check('UI issued Cockpit values absent from records journal and private evidence', issuedScan);
+    check('UI every issued credential absent from records journal and private evidence; proved public markers counted separately', issuedScan);
   } catch {
     failureKind ||= 'issued-value-scan-error';
     checks.push({ check: 'UI issued-value scan completed before close', ok: false });
