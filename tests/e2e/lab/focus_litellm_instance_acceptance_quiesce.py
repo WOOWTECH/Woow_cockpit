@@ -157,6 +157,7 @@ def main(argv=None):
         journal={'name':r['name'],'driver_commit':commit,'source_commit':driver.plan.FROZEN_PRODUCT,
                  'baseline_sha256':lease['baseline_sha256'],'state':{}}
     else:
+        if r.get('purpose')=='pause-admission-only':raise ValueError('resume requires the current flow receipt')
         journal=source.private_read(args.journal)
         if (journal['name']!=r['name'] or journal['baseline_sha256']!=lease['baseline_sha256']
                 or journal['driver_commit']!=commit or journal['source_commit']!=driver.plan.FROZEN_PRODUCT):

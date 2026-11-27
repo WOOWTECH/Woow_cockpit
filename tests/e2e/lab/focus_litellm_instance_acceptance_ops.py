@@ -26,6 +26,11 @@ UNITS = ('litellm-network.service','litellm-pgdata-volume.service','litellm-post
          'litellm-backup.timer','litellm-backup.service')
 SECRETS = ('litellm-database-url','litellm-master-key','litellm-postgres-password','litellm-salt-key','litellm-ui-password')
 TIMER = 'woowtech-cockpit-backup-schedule.timer'
+RETAINED_IMAGE={'from_case':'woowbk_focus_litellm_a2c39e761b04',
+    'derived_image':'af291cf14dba64dd3331179696d9bdfd70f5cacf0c92c53202d0998fe15ecaff',
+    'verification_sha256':'0c5396f61187dc666c4a67162fd813facfb8571f1ef291bb40b74558a9c1bc1f',
+    'cleanup_receipt_sha256':'a11bebbeabd09996174a8c9f88d6a269d2455aed2b522815056f488b296dd1cc',
+    'cleanup_output_sha256':'3e226b8d10466ad7c6987a366de1deb002cc2205bebaaa2c7b0288b7d0576793'}
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -483,8 +488,22 @@ def dispatch(q):
         unit = 'woowtech-backup-'+q['job_id']+'.service'
         return call(['systemctl','show',unit,'-P','ActiveState'],check=False).stdout.strip() in (b'inactive',b'failed')
     if op == 'init':
+        reuse=q.get('image_reuse');provenance=None
+        if reuse:
+            if (set(reuse)!={'from_case','derived_image','verification_sha256','cleanup_receipt_sha256','cleanup_output_sha256'}
+                    or any(reuse[k]!=v for k,v in RETAINED_IMAGE.items()) or name==reuse['from_case']
+                    or any(not re.fullmatch(r'[0-9a-f]{64}',reuse[k]) for k in ('cleanup_receipt_sha256','cleanup_output_sha256'))):
+                raise ValueError('unapproved retained-image reuse')
+            previous=Store(reuse['from_case']);build=previous.state.get('image_build',{})
+            if (previous.state.get('package_cleaned') is not True or build.get('verified') is not True
+                    or build.get('result',{}).get('terminal') is not True or build.get('result',{}).get('ok') is not True
+                    or build.get('iid')!=reuse['derived_image'] or build.get('owned_images')!=[reuse['derived_image']]):
+                raise ValueError('original root cleanup/build proof missing')
+            provenance=dict(reuse,root_prior_sha256=read_regular(previous.path/'state.json')[1]['sha256'])
         before = inventory(); store = Store(name,create=True); store.capture([CATALOG])
-        store.state['before'] = before; store.save(); return before
+        store.state['before'] = before
+        if provenance:store.state['image_reuse']=provenance
+        store.save(); return before
     store = Store(name)
     if op == 'receipt': return store.state
     if op == 'catalog_bytes':
@@ -552,6 +571,9 @@ def run_request(q):
         # cleanup. No request values, SQL data, argv or exception text are saved.
         report=failure_record(q.get('op','invalid'),exc)
         if not BASE.fullmatch(q.get('case','')):raise
+        # An exclusive-init refusal gives no ownership of a preexisting root
+        # namespace. Return the fixed facts for the host journal without writes.
+        if q.get('op')=='init':return 1,{'operation_error':report}
         store=Store(q['case'])
         atomic(store.path/('operation-error-'+str(time.time_ns())+'.json'),json.dumps(report).encode())
         return 1,{'operation_error':report}

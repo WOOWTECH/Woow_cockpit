@@ -163,7 +163,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             and not any(Path(x).name.startswith('litellm') for x in before['files'])
             and all(v['ActiveState']=='inactive' for v in before['units'].values()))
         self.r['before']=before; self.r['init_intent']=True; self.save()
-        self.require('stable_original_capture',unchanged(self.op('init'),before,images=True))
+        self.require('stable_original_capture',unchanged(self.op('init',image_reuse=self.r.get('image_reuse')),before,images=True))
         self.r['init_complete']=True; self.save()
 
     def frozen_engine(self):
