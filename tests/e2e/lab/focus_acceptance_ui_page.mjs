@@ -17,7 +17,10 @@ const config = JSON.parse(readFileSync(0, 'utf8'));
 if (!/^https:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(config.base)
     || !/^ha-[0-9a-f]{20}$/.test(config.ha_id)) throw new Error('invalid private transport configuration');
 // The apps to select and what to expect come from the controller; without them the R8 three-selected case.
+// `device` names the lab device whose Cockpit this is (focus_page_bridge.py); without it dev-d, exactly as before.
 const expect = pageExpectations(config);
+// The app ids the import request is read for: R8's three, and every app this run selects.
+const wireApps = new Set(['hermes', 'omnigent', 'emqx', ...expect.apps]);
 const { chromium } = await import(pathToFileURL(config.playwright).href);
 const checks = [];
 // Exact mode only: the check's confirmation keys and lines against the one request the page sent (keys, never values).
@@ -53,7 +56,7 @@ function observe(payload) {
     if (!Array.isArray(value.apps) || typeof value.request_id !== 'string') { wire.malformed++; return; }
     requests.add(value.request_id);
     wire.unique_import_requests = requests.size;
-    wire.import_apps = value.apps.filter(x => ['hermes', 'omnigent', 'emqx'].includes(x)).sort();
+    wire.import_apps = value.apps.filter(x => wireApps.has(x)).sort();
     wire.then_restore = value.then_restore === true;
     wire.confirm = value.confirm === true;
     wire.overwrite = value.overwrite === true;
@@ -163,13 +166,16 @@ try {
   await iframe.waitFor({ state: 'attached' });
   frame = await (await iframe.elementHandle()).contentFrame();
   await frame.locator('[data-focus="list-upload"]').waitFor();
-  const capability = await frame.evaluate(async program => {
+  // A config without `device` passes the program alone, as R8 and page-emqx always did (their Cockpit is dev-d's); a
+  // device's own run passes its name too. The same three spawns either way.
+  const capability = await frame.evaluate(async probe => {
+    const { program, device } = typeof probe === 'string' ? { program: probe, device: 'woowbk-dev-d' } : probe;
     const uid = await window.cockpit.spawn(['id', '-u'], { superuser: 'require', err: 'message' });
     const host = await window.cockpit.spawn(['hostname'], { err: 'message' });
     const native = JSON.parse(await window.cockpit.spawn(['python3', '-B', '-I', '-c', program],
       { superuser: 'require', err: 'ignore' }));
-    return { root: uid.trim() === '0' && host.trim() === 'woowbk-dev-d', native };
-  }, nativeCapabilityProgram);
+    return { root: uid.trim() === '0' && host.trim() === device, native };
+  }, config.device === undefined ? nativeCapabilityProgram : { program: nativeCapabilityProgram, device: expect.device });
   rootVerified = capability.root === true; nativeCapability = capability.native;
   check('UI real administrative Cockpit bridge reaches this device', rootVerified);
   recording = true;

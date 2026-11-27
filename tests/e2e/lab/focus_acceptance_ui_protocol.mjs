@@ -1,4 +1,5 @@
-// Offline helpers for the R8 page case (three selected, two importable) and the page-emqx case (EMQX only).
+// Offline helpers for the R8 page case (three selected, two importable), the page-emqx case (EMQX only) and the page
+// import bridge (focus_page_bridge.py: any lab device, any selection).
 export function issueKeyCount(check) {
   if (check?.schema !== 2 || !Array.isArray(check.apps)) throw new Error('check schema unavailable');
   const groups = [check.shared || [], ...check.apps.filter(app => app.importable === true).map(app => app.issues || [])];
@@ -42,6 +43,9 @@ export const R8_PAGE = Object.freeze({
     keys: 'UI import carries every listed confirmation key exactly once',
   }),
 });
+// The lab device whose Cockpit the page must be on (its hostname); a config without `device` is dev-d's, as before.
+export const DEFAULT_DEVICE = 'woowbk-dev-d';
+const DEVICE = /^woowbk-dev-[a-z]$/;
 const APP_ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const STAGE = /^[a-z0-9-]{1,40}$/;
 const CHECK_TEXT = /^[A-Za-z0-9 ,()/:'<>.=_-]{3,140}$/;   // the capture's fixed status vocabulary
@@ -55,7 +59,8 @@ export function pageExpectations(config) {
   if (textsGiven === null || typeof textsGiven !== 'object' || Array.isArray(textsGiven))
     throw new Error('invalid page expectations');
   const value = { apps: take('apps'), importable: take('importable'), blocked: take('blocked'), result_rows: take('result_rows'),
-    exact: take('exact'), select_stage: take('select_stage'), texts: { ...R8_PAGE.texts, ...textsGiven } };
+    exact: take('exact'), select_stage: take('select_stage'), texts: { ...R8_PAGE.texts, ...textsGiven },
+    device: source.device === undefined ? DEFAULT_DEVICE : source.device };
   const ids = list => Array.isArray(list) && list.every(id => typeof id === 'string' && APP_ID.test(id))
     && new Set(list).size === list.length;
   const statusOf = id => (value.importable.includes(id) ? 'imported' : 'excluded');
@@ -71,11 +76,12 @@ export function pageExpectations(config) {
       || new Set(value.result_rows.map(row => row[0])).size !== value.result_rows.length
       || typeof value.exact !== 'boolean' || typeof value.select_stage !== 'string' || !STAGE.test(value.select_stage)
       || Object.keys(value.texts).some(name => !Object.hasOwn(R8_PAGE.texts, name))
-      || Object.values(value.texts).some(text => typeof text !== 'string' || !CHECK_TEXT.test(text)))
+      || Object.values(value.texts).some(text => typeof text !== 'string' || !CHECK_TEXT.test(text))
+      || typeof value.device !== 'string' || !DEVICE.test(value.device))
     throw new Error('invalid page expectations');
   return { apps: [...value.apps], importable: [...value.importable], blocked: [...value.blocked],
     result_rows: value.result_rows.map(row => [...row]), exact: value.exact, select_stage: value.select_stage,
-    texts: { ...value.texts }, importApps: [...value.importable].sort() };
+    texts: { ...value.texts }, importApps: [...value.importable].sort(), device: value.device };
 }
 
 // The distinct confirmation keys of the one confirmation by group (`_shared`, then every importable app), as the page's
