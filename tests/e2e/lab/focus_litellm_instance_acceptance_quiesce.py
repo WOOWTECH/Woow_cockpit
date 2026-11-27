@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Separately leased pause/resume of one already failing lab Headscale unit."""
 import argparse
+import copy
 from datetime import datetime,timezone
 import fcntl
 import json
@@ -23,6 +24,11 @@ BOUNDS={'reserve_gib':13,'metadata_budget_mib':512,'host_available_mib':1200,
         'metadata_seconds':60,'transport_seconds':80,'outer_seconds':300}
 FIELDS=('Id','LoadState','ActiveState','SubState','Result','NRestarts','MainPID',
         'ExecMainCode','ExecMainStatus','UnitFileState','SourcePath','FragmentPath')
+# The failing unit restarts every few seconds and its OWN container exists only while one start attempt runs: the b9 pause looked
+# at the one moment .external_containers.headscale was present and stopped (nothing had been done). The admission therefore looks
+# again, up to this many times, never acting in between and keeping every failed look; a difference that does not go away still refuses.
+ADMISSION_TRIES=15
+ADMISSION_WAIT_SECONDS=2
 
 
 def failure(unit):
@@ -55,21 +61,52 @@ def exact_inventory(facts,receipt):
         raise ValueError('strict original inventory differs')
 
 
+def expected_inventory(receipt):
+    """What exact_inventory expects, spelled out: the verified original plus exactly the retained derived image and its tag."""
+    expected=copy.deepcopy(receipt['before'])
+    expected['images']=sorted(set(expected['images'])|{receipt['derived_image']})
+    expected['image_refs']=dict(expected['image_refs'],**{driver.plan.APP_TAG:receipt['derived_image']})
+    return expected
+
+
 class Protocol:
-    def __init__(self,receipt,journal,*,read,act,save,clock=time.monotonic,sleep=time.sleep):
+    def __init__(self,receipt,journal,*,read,act,save,clock=time.monotonic,sleep=time.sleep,
+                 tries=ADMISSION_TRIES,wait=ADMISSION_WAIT_SECONDS):
         self.r=receipt;self.j=journal;self.read=read;self.act=act;self.save=save
-        self.clock=clock;self.sleep=sleep
+        self.clock=clock;self.sleep=sleep;self.tries=tries;self.wait=wait
+
+    def admit(self):
+        """The first look that shows the known failed auto-restart on the exact original inventory. Nothing is done between looks."""
+        for attempt in range(1,self.tries+1):
+            facts=self.read(True)
+            if attempt==1:self.j['initial_observation']=facts;self.save()
+            try:
+                binding(facts,self.r['before']);exact_inventory(facts,self.r)
+                if not known_failure(facts['unit']):raise ValueError('unit is not the known failed auto-restart')
+                return facts
+            except ValueError as error:
+                # Names only: which condition failed, where the inventory differed and what the unit looked like.
+                self.j.setdefault('admission_attempts',[]).append({'attempt':attempt,'reason':str(error)[:80],
+                    'observed_utc':facts.get('observed_utc'),'inventory_difference':driver.snapshot_difference(
+                        facts.get('inventory'),expected_inventory(self.r),limit=12),
+                    'unit':{k:facts['unit'].get(k) for k in ('ActiveState','SubState','MainPID','Result')}})
+                self.save()
+                if attempt==self.tries:raise
+                self.sleep(self.wait)
 
     def pause(self):
         if self.j:raise ValueError('pause intent already exists; use resume')
-        facts=self.read(True);self.j['initial_observation']=facts;self.save()
-        binding(facts,self.r['before']);exact_inventory(facts,self.r)
-        if not known_failure(facts['unit']):raise ValueError('unit is not the known failed auto-restart')
+        facts=self.admit()
         self.j.update(original=facts,pending='pause',paused=False,resumed=False)
         self.save()  # full original metadata + durable obligation BEFORE stop
-        latest=self.read(False);self.j['before_stop_recheck']=latest;self.save()
-        binding(latest,self.r['before'],facts)
-        if latest['unit']!=facts['unit']:raise ValueError('unit changed before pause')
+        # The unit restarts every few seconds, so NRestarts and the moment in its restart cycle can change between two reads
+        # (b11: one restart between the admission and this recheck). What must not change is that it is the SAME known failure.
+        for attempt in range(1,self.tries+1):
+            latest=self.read(False);self.j['before_stop_recheck']=latest;self.save()
+            binding(latest,self.r['before'],facts)
+            if known_failure(latest['unit']) and failure(latest['unit'])==failure(facts['unit']):break
+            if attempt==self.tries:raise ValueError('unit changed before pause')
+            self.sleep(self.wait)
         self.act('stop')
         after=self.read(True);self.j['after_pause']=after;self.save() # retain failed samples too
         binding(after,self.r['before'],facts);exact_inventory(after,self.r)
@@ -148,8 +185,8 @@ def main(argv=None):
         raise ValueError('exact bounded quiescence lease required')
     if source.git('status','--porcelain') or os.path.lexists(args.output):raise ValueError('clean source and unique output required')
     source.resources(expires.timestamp(),True)
-    if (driver.git('/tmp/parity-focus-final-product-20261127','rev-parse','HEAD')!=driver.plan.FROZEN_PRODUCT
-            or driver.git('/tmp/parity-focus-final-product-20261127','status','--porcelain')):
+    if (driver.git(driver.plan.PRODUCT_DIR,'rev-parse','HEAD')!=driver.plan.FROZEN_PRODUCT
+            or driver.git(driver.plan.PRODUCT_DIR,'status','--porcelain')):
         raise ValueError('clean frozen source required')
     if args.phase=='pause':
         if os.path.lexists(args.journal) or r['install_intent'] or r['full_safety'] or r['pending'] or r['jobs']:
@@ -157,6 +194,7 @@ def main(argv=None):
         journal={'name':r['name'],'driver_commit':commit,'source_commit':driver.plan.FROZEN_PRODUCT,
                  'baseline_sha256':lease['baseline_sha256'],'state':{}}
     else:
+        if r.get('purpose')=='pause-admission-only':raise ValueError('resume requires the current flow receipt')
         journal=source.private_read(args.journal)
         if (journal['name']!=r['name'] or journal['baseline_sha256']!=lease['baseline_sha256']
                 or journal['driver_commit']!=commit or journal['source_commit']!=driver.plan.FROZEN_PRODUCT):

@@ -26,6 +26,22 @@ UNITS = ('litellm-network.service','litellm-pgdata-volume.service','litellm-post
          'litellm-backup.timer','litellm-backup.service')
 SECRETS = ('litellm-database-url','litellm-master-key','litellm-postgres-password','litellm-salt-key','litellm-ui-password')
 TIMER = 'woowtech-cockpit-backup-schedule.timer'
+# Tables the LiteLLM proxy itself rewrites in the background (worker heartbeat, daily spend aggregates, cron/health/budget
+# bookkeeping). Real run on dev-d, restore of the fresh full safety: ONLY LiteLLM_DailyTeamSpend, LiteLLM_DailyUserSpend and
+# LiteLLM_ProxyWorkerHeartbeat differed from the snapshot taken before, so a digest of every table can never match a moment
+# later while the proxy runs. Case snapshots exclude them the way a catalog entry's exclude_tables does; the user's data
+# (Config, Credentials, models, keys, settings, SpendLogs, migrations) stays compared.
+# woow_platform.chatgpt_accounts belongs to the Woow ChatGPT plugin of the package (image/plugin/woow_chatgpt.py, dd690aee): while the
+# app runs it refreshes each account's OAuth tokens in `auth` and `updated_at` (dev-d b10: the same 2 rows with new contents between
+# the snapshot before the forced failure and the safety the rollback returned to; the engine's own digest of the whole database
+# matched that safety exactly).
+VOLATILE_TABLES = ('public.LiteLLM_Daily*Spend', 'public.LiteLLM_ProxyWorkerHeartbeat', 'public.LiteLLM_CronJob',
+                   'public.LiteLLM_HealthCheckTable', 'public.LiteLLM_BudgetWindowSpend', 'woow_platform.chatgpt_accounts')
+RETAINED_IMAGE={'from_case':'woowbk_focus_litellm_a2c39e761b04',
+    'derived_image':'af291cf14dba64dd3331179696d9bdfd70f5cacf0c92c53202d0998fe15ecaff',
+    'verification_sha256':'0c5396f61187dc666c4a67162fd813facfb8571f1ef291bb40b74558a9c1bc1f',
+    'cleanup_receipt_sha256':'a11bebbeabd09996174a8c9f88d6a269d2455aed2b522815056f488b296dd1cc',
+    'cleanup_output_sha256':'3e226b8d10466ad7c6987a366de1deb002cc2205bebaaa2c7b0288b7d0576793'}
 def digest(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -296,6 +312,29 @@ def image_build(store, program):
     return {k:state[k] for k in ('verified','result','owned_images','unknown_images','iid','disk_before','disk_after','minimum_free','new_layers')}
 
 
+def restate(store, tag):
+    """The stored snapshot `tag` as if VOLATILE_TABLES had been excluded when it was taken, recomputed from its retained
+    per-database digest listings with the product's own strict reader. A snapshot already taken with the exclusion is unchanged."""
+    if not re.fullmatch(r'[a-z_]{1,40}',tag): raise ValueError('snapshot tag')
+    sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
+    from woowbackup import digests
+    result = json.loads(json.dumps(store.state['snapshots'][tag]))
+    for i,name in enumerate(result['database_names']):
+        listing = read_regular(store.path/(tag+'-'+str(i)+'.digest'),8*1024*1024)[0]
+        kept = []
+        for line in listing.splitlines(keepends=True):
+            fields = line.split()
+            if fields[:1] == [b'T']:
+                schema, table = (bytes.fromhex(x.decode()).decode('utf-8') for x in fields[2:4])
+                if digests.excluded_table(VOLATILE_TABLES,schema,table): continue
+            kept.append(line)
+        path = store.path/(tag+'-'+str(i)+'.stable.digest')
+        if path.exists(): path.unlink()
+        atomic(path,b''.join(kept))
+        result['databases'][name]['digest'] = digests.read_pg_detail(path,what='stable '+name)[1]
+    return result
+
+
 def snapshot(store, tag):
     if not re.fullmatch(r'[a-z_]{1,40}',tag): raise ValueError('snapshot tag')
     sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
@@ -309,7 +348,7 @@ def snapshot(store, tag):
     if not set(names) <= {'postgres','litellm',store.name+'_outside'}: raise ValueError('foreign database in owned cluster')
     result = {'database_names':names,'databases':{}}
     for i,name in enumerate(names):
-        spec = {'id':'focus','postgres':app.postgres[0]['id'],'databases':[name],'exclude_tables':[]}
+        spec = {'id':'focus','postgres':app.postgres[0]['id'],'databases':[name],'exclude_tables':list(VOLATILE_TABLES)}
         captured = adapter._capture_pg_digest(spec,store.path/(tag+'-'+str(i)+'.digest'),databases=[name],roles=True)
         access = sql(name,ha_instance_access.capture_sql('litellm'))
         comparable = ha_instance_access.comparable(access,access)
@@ -422,6 +461,9 @@ def cleanup_owned_package(store):
     before = store.state['before']; current = inventory()
     if current['active_jobs']: raise ValueError('active jobs prevent cleanup')
     if not store.state.get('install_intent'): return True
+    # Finished by an earlier pass whose later step stopped (b7: the delete request): the owned files are gone, so a second run
+    # must not read them again.
+    if store.state.get('package_cleaned'): return True
     expected = store.state.get('installed_files')
     if expected is None: raise ValueError('partial install requires explicit ownership reconciliation; retain receipt')
     # Replacements performed by successful engine jobs can change container,
@@ -483,8 +525,22 @@ def dispatch(q):
         unit = 'woowtech-backup-'+q['job_id']+'.service'
         return call(['systemctl','show',unit,'-P','ActiveState'],check=False).stdout.strip() in (b'inactive',b'failed')
     if op == 'init':
+        reuse=q.get('image_reuse');provenance=None
+        if reuse:
+            if (set(reuse)!={'from_case','derived_image','verification_sha256','cleanup_receipt_sha256','cleanup_output_sha256'}
+                    or any(reuse[k]!=v for k,v in RETAINED_IMAGE.items()) or name==reuse['from_case']
+                    or any(not re.fullmatch(r'[0-9a-f]{64}',reuse[k]) for k in ('cleanup_receipt_sha256','cleanup_output_sha256'))):
+                raise ValueError('unapproved retained-image reuse')
+            previous=Store(reuse['from_case']);build=previous.state.get('image_build',{})
+            if (previous.state.get('package_cleaned') is not True or build.get('verified') is not True
+                    or build.get('result',{}).get('terminal') is not True or build.get('result',{}).get('ok') is not True
+                    or build.get('iid')!=reuse['derived_image'] or build.get('owned_images')!=[reuse['derived_image']]):
+                raise ValueError('original root cleanup/build proof missing')
+            provenance=dict(reuse,root_prior_sha256=read_regular(previous.path/'state.json')[1]['sha256'])
         before = inventory(); store = Store(name,create=True); store.capture([CATALOG])
-        store.state['before'] = before; store.save(); return before
+        store.state['before'] = before
+        if provenance:store.state['image_reuse']=provenance
+        store.save(); return before
     store = Store(name)
     if op == 'receipt': return store.state
     if op == 'catalog_bytes':
@@ -504,6 +560,7 @@ def dispatch(q):
             store.restore([CATALOG])
         return True
     if op == 'snapshot': return snapshot(store,q['tag'])
+    if op == 'snapshot_restate': return restate(store,q['tag'])
     if op == 'image_build': return image_build(store,base64.b64decode(q['program'],validate=True))
     if op == 'image_context_cleanup':
         state = store.state.get('image_build',{})
@@ -552,6 +609,9 @@ def run_request(q):
         # cleanup. No request values, SQL data, argv or exception text are saved.
         report=failure_record(q.get('op','invalid'),exc)
         if not BASE.fullmatch(q.get('case','')):raise
+        # An exclusive-init refusal gives no ownership of a preexisting root
+        # namespace. Return the fixed facts for the host journal without writes.
+        if q.get('op')=='init':return 1,{'operation_error':report}
         store=Store(q['case'])
         atomic(store.path/('operation-error-'+str(time.time_ns())+'.json'),json.dumps(report).encode())
         return 1,{'operation_error':report}

@@ -86,7 +86,7 @@ def exclusive(path,value):
 def validate(lease,args,commit):
     if (lease.get('granted') is not True or lease.get('case')!='litellm-instance-images-verify'
             or lease.get('device')!=plan.DEVICE or lease.get('driver_commit')!=commit
-            or lease.get('source_commit')!=plan.FROZEN_PRODUCT or lease.get('phases')!=['images-verify']
+            or lease.get('source_commit')!=plan.HISTORIC_PRODUCT or lease.get('phases')!=['images-verify']
             or lease.get('method')!=METHOD
             or not plan.CASE.fullmatch(lease.get('name','')) or lease.get('bounds')!=BOUNDS
             or lease.get('derivation_sha256')!=plan.DERIVATION_SHA
@@ -111,8 +111,8 @@ def main(argv=None):
     commit=source.git('rev-parse','HEAD');lease=json.loads(common.read_regular(a.lease)[0]);validate(lease,a,commit)
     if source.git('status','--porcelain') or any(os.path.lexists(x) for x in (a.capture,a.output)):
         raise ValueError('clean committed driver and unique attempt paths required')
-    if (driver.git('/tmp/parity-focus-final-product-20261127','rev-parse','HEAD')!=plan.FROZEN_PRODUCT
-            or driver.git('/tmp/parity-focus-final-product-20261127','status','--porcelain')):
+    if (driver.git(plan.HISTORIC_PRODUCT_DIR,'rev-parse','HEAD')!=plan.HISTORIC_PRODUCT
+            or driver.git(plan.HISTORIC_PRODUCT_DIR,'status','--porcelain')):
         raise ValueError('clean frozen product source required')
     raw,meta=common.read_regular(a.receipt,8*1024**2);r=json.loads(raw)
     if (meta['uid']!=os.geteuid() or meta['mode']!=0o600 or r['name']!=lease['name']

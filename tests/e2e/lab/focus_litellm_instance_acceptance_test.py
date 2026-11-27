@@ -14,6 +14,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import urllib.error
 
 
 HERE = Path(__file__).resolve().parent
@@ -316,6 +317,207 @@ class ProgramBindings(unittest.TestCase):
                 else:m.remove_owned_containers({'litellm':owned})
                 self.assertEqual(state.get('hermes-agent'),original)
                 self.assertEqual(removals,[owned] if phase=='still-owned' else [])
+
+
+class OutsidersCheckTests(unittest.TestCase):
+    """dev-d b8 (real): after the import ONLY the application database's ACL changed, from null to its default written out.
+    Everything outside the application database was identical, and the check must say so without going blind."""
+    DEFAULT = ['=Tc/litellm', 'litellm=CTc/litellm']
+
+    @classmethod
+    def setUpClass(cls):
+        global plan
+        plan = load('focus_litellm_instance_acceptance')
+
+    def snapshot(self, acl=None):
+        outside = 'woowbk_focus_litellm_012345abcdef_outside'
+        return {'database_names': ['litellm', 'postgres', outside], 'roles': 'r' * 32, 'settings': [], 'members': [],
+                'metadata': [['litellm', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, acl],
+                             ['postgres', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None],
+                             ['template0', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', True, False, ['=c/litellm', 'litellm=CTc/litellm']],
+                             ['template1', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', True, True, ['=c/litellm', 'litellm=CTc/litellm']],
+                             [outside, 'reader', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None]],
+                'databases': {'litellm': {'digest': 'a'}, 'postgres': {'digest': 'b'}, outside: {'digest': 'c'}}}
+
+    def test_the_real_b8_difference_is_not_a_failure(self):
+        before, after = self.snapshot(None), self.snapshot(self.DEFAULT)
+        after['databases']['litellm'] = {'digest': 'replaced by the import'}          # the replaced database changes by design
+        self.assertTrue(plan.outsiders_equal(before, after))
+        self.assertTrue(plan.outsiders_equal(after, before))
+        self.assertEqual(plan.outsiders_difference(before, after), [])
+
+    def test_everything_else_still_fails_and_is_named_without_values(self):
+        base = self.snapshot(None)
+        def changed(mutate):
+            value = copy.deepcopy(base); mutate(value); return value
+        outside = 'woowbk_focus_litellm_012345abcdef_outside'
+        cases = {
+            'roles': (lambda v: v.__setitem__('roles', 'x' * 32), ['roles']),
+            'members': (lambda v: v.__setitem__('members', [['a', 'b']]), ['members']),
+            'settings': (lambda v: v.__setitem__('settings', [['', 'r', ['x=1']]]), ['settings']),
+            'a database name': (lambda v: v.__setitem__('database_names', ['litellm', 'postgres']), ['database_names']),
+            'an outside database digest': (lambda v: v['databases'][outside].__setitem__('digest', 'changed'), ['databases.' + outside]),
+            'the postgres database digest': (lambda v: v['databases']['postgres'].__setitem__('digest', 'changed'), ['databases.postgres']),
+            'an outside database ACL': (lambda v: v['metadata'][4].__setitem__(7, ['=c/reader']), ['metadata']),
+            'an outside database owner': (lambda v: v['metadata'][4].__setitem__(1, 'other'), ['metadata']),
+            'a template ACL': (lambda v: v['metadata'][2].__setitem__(7, None), ['metadata']),
+            'the application database owner': (lambda v: v['metadata'][0].__setitem__(1, 'other'), ['metadata']),
+            'the application database collation': (lambda v: v['metadata'][0].__setitem__(3, 'C'), ['metadata']),
+            'the application database became a template': (lambda v: v['metadata'][0].__setitem__(5, True), ['metadata']),
+            'an extra database row': (lambda v: v['metadata'].append(['extra', 'litellm', 'UTF8', 'c', 'c', False, True, None]), ['metadata']),
+            'the application database row vanished': (lambda v: v['metadata'].pop(0), ['metadata']),
+        }
+        for label, (mutate, names) in cases.items():
+            with self.subTest(label):
+                other = changed(mutate)
+                self.assertFalse(plan.outsiders_equal(base, other))
+                self.assertFalse(plan.outsiders_equal(other, base))
+                self.assertEqual(plan.outsiders_difference(base, other), names)
+
+    def test_only_the_null_to_default_written_out_change_is_accepted_for_the_application_database(self):
+        for label, before, after, expected in (
+                ('null to default', None, self.DEFAULT, True), ('default to null', self.DEFAULT, None, True),
+                ('default in another order', self.DEFAULT, list(reversed(self.DEFAULT)), True),
+                ('unchanged custom ACL', ['=c/litellm', 'litellm=CTc/litellm'], ['=c/litellm', 'litellm=CTc/litellm'], True),
+                ('null to a narrower ACL', None, ['litellm=CTc/litellm'], False),
+                ('null to a wider ACL', None, ['=Tc/litellm', 'litellm=CTc/litellm', 'someone=c/litellm'], False),
+                ('default to a custom ACL', self.DEFAULT, ['=c/litellm', 'litellm=CTc/litellm'], False),
+                ('another owner in the default', None, ['=Tc/other', 'other=CTc/other'], False),
+                ('a string instead of a list', None, '=Tc/litellm', False)):
+            with self.subTest(label):
+                a, b = self.snapshot(before), self.snapshot(after)
+                self.assertEqual(plan.database_rows_equal(a['metadata'], b['metadata']), expected)
+
+    def test_malformed_snapshots_fail_closed_instead_of_raising(self):
+        good = self.snapshot(None)['metadata']
+        for bad in (None, [], [['litellm']], [['litellm', 'litellm', 'UTF8', 'c', 'c', False, True]], 5, {'litellm': 1}):
+            with self.subTest(repr(bad)[:30]):
+                self.assertFalse(plan.database_rows_equal(good, bad))
+                self.assertFalse(plan.database_rows_equal(bad, good))
+
+
+class WitnessTests(unittest.TestCase):
+    """LiteLLM v1.104.0 answers a created credential with {"success": true, "message": ...} and no name (dev-d b9 failed on that):
+    the witness takes LiteLLM's success flag and then the row in LiteLLM_CredentialsTable as the proof."""
+    NAME = 'woowbk_focus_litellm_012345abcdef'
+
+    def run_witness(self, action, *, answer=None, http=None, stored=True):
+        plan = load('focus_litellm_instance_acceptance')
+        calls = []
+        def run(argv, **kw):
+            calls.append(argv[:3])
+            if argv[:3] == ['podman', 'secret', 'inspect']:
+                return SimpleNamespace(stdout=b'master-key-value\n', returncode=0)
+            assert argv[:4] == ['podman', 'exec', '-i', 'litellm-postgres'] and self.NAME in kw['input'].decode()
+            return SimpleNamespace(stdout=b'true\n' if stored else b'false\n', returncode=0)
+        requests = []
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self, n): return json.dumps(answer if answer is not None else {'success': True, 'message': 'Credential created successfully'}).encode()
+        def open_request(req, timeout):
+            requests.append(req)
+            if http: raise urllib.error.HTTPError(req.full_url, http, 'already exists', {}, io.BytesIO(b'{}'))
+            return Response()
+        out = io.StringIO()
+        with mock.patch('subprocess.run', side_effect=run), \
+                mock.patch('urllib.request.build_opener', return_value=SimpleNamespace(open=open_request)), \
+                mock.patch('sys.stdin', io.StringIO(json.dumps({'action': action, 'name': self.NAME, 'value': 'seed-secret'}))), \
+                redirect_stdout(out):
+            try:
+                exec(plan.API_WITNESS, {'__name__': 'witness'})
+            except SystemExit:
+                pass
+        self.assertNotIn('seed-secret', out.getvalue()); self.assertNotIn('master-key-value', out.getvalue())
+        return json.loads(out.getvalue()), calls, requests
+
+    def test_the_real_v1_104_answer_with_the_row_present_is_a_written_witness(self):
+        result, calls, requests = self.run_witness('create')
+        self.assertEqual(result, {'status': 200, 'success': True, 'found': True})
+        self.assertEqual(json.loads(requests[0].data)['credential_name'], self.NAME)
+        self.assertEqual(requests[0].headers['Authorization'], 'Bearer master-key-value')
+        self.assertIn(['podman', 'exec', '-i'], calls)                 # the row was looked up in LiteLLM's own table
+
+    def test_a_success_answer_without_the_row_or_an_error_is_not_a_witness(self):
+        self.assertEqual(self.run_witness('create', stored=False)[0], {'status': 200, 'success': True, 'found': False})
+        self.assertEqual(self.run_witness('create', answer={'detail': 'x'})[0]['success'], False)
+        self.assertEqual(self.run_witness('create', http=409)[0], {'status': 409, 'success': False, 'found': False})
+
+    def test_check_only_reads_the_table(self):
+        result, calls, requests = self.run_witness('check')
+        self.assertEqual(result, {'status': 200, 'found': True}); self.assertEqual(requests, [])
+        self.assertNotIn(['podman', 'secret', 'inspect'], calls)
+
+    def test_the_controller_needs_status_success_and_the_row_and_keeps_only_those_facts(self):
+        m = load('focus_litellm_instance_acceptance_run')
+        with tempfile.TemporaryDirectory() as root:
+            lease = {'name': self.NAME, 'expires_utc': '2026-11-27T04:00:00+00:00'}
+            c = m.Controller(SimpleNamespace(receipt=Path(root) / 'case.private.json'), lease, SimpleNamespace(drv=None))
+            c.run = SimpleNamespace(args=SimpleNamespace(secrets={'OWN_SEED_CREDENTIAL': 'seed-secret'}))
+            for action, answer, ok in (('create', {'status': 200, 'success': True, 'found': True}, True),
+                                       ('create', {'status': 200, 'success': False, 'found': True}, False),
+                                       ('create', {'status': 200, 'success': True, 'found': False}, False),
+                                       ('create', {'status': 409, 'success': False, 'found': False}, False),
+                                       ('check', {'status': 200, 'found': True}, True),
+                                       ('check', {'status': 200, 'found': False}, False),
+                                       ('create', 'not json', False)):
+                with self.subTest(action=action, answer=answer):
+                    c.h = SimpleNamespace(device_python=lambda program, request, **kw: answer)
+                    if ok:
+                        c.witness(action)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'later_app_api_witness_' + action):
+                            c.witness(action)
+                    kept = json.loads((Path(root) / 'case.private.json').read_text())['witness_' + action]
+                    self.assertNotIn('seed-secret', json.dumps(kept))
+
+
+class RollbackCheckTests(unittest.TestCase):
+    """dev-d b10 (real): the engine rolled the forced failure back and its own digest of the whole database matched the safety it
+    returned to; the case's check failed only on the application database's ACL written out (before) versus null (after)."""
+    DEFAULT = ['=Tc/litellm', 'litellm=CTc/litellm']
+
+    @classmethod
+    def setUpClass(cls):
+        global plan
+        plan = load('focus_litellm_instance_acceptance')
+
+    def snapshot(self, acl):
+        return {'database_names': ['litellm', 'postgres'], 'roles': 'r', 'settings': [], 'members': [],
+                'metadata': [['litellm', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, acl],
+                             ['postgres', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None]],
+                'databases': {'litellm': {'digest': 'a', 'access': 'b', 'schema': 'c'}, 'postgres': {'digest': 'd'}}}
+
+    def job(self, **changes):
+        return dict({'state': 'rolled-back', 'result': {'rolled_back': True, 'safety_backup_id': '20261127T085841Z-aaaaaaaa'}}, **changes)
+
+    def proven(self, before, after, **changes):
+        facts = dict(hook=True, witness=True, full_safety=True, digest_log=True)
+        facts.update(changes)
+        return plan.rollback_proven(self.job(), before=before, after=after, **facts)
+
+    def test_the_real_b10_rollback_is_proven(self):
+        self.assertTrue(self.proven(self.snapshot(self.DEFAULT), self.snapshot(None)))
+        self.assertTrue(plan.snapshots_equal(self.snapshot(None), self.snapshot(self.DEFAULT)))
+
+    def test_any_other_difference_or_missing_fact_still_fails(self):
+        base = self.snapshot(self.DEFAULT)
+        for label, mutate in (('the application data', lambda s: s['databases']['litellm'].__setitem__('digest', 'x')),
+                              ('the application access', lambda s: s['databases']['litellm'].__setitem__('access', 'x')),
+                              ('another database', lambda s: s['databases']['postgres'].__setitem__('digest', 'x')),
+                              ('roles', lambda s: s.__setitem__('roles', 'x')),
+                              ('a narrower application ACL', lambda s: s['metadata'][0].__setitem__(7, ['litellm=CTc/litellm'])),
+                              ('another database ACL', lambda s: s['metadata'][1].__setitem__(7, self.DEFAULT))):
+            with self.subTest(label):
+                after = copy.deepcopy(base); mutate(after)
+                self.assertFalse(plan.snapshots_equal(base, after)); self.assertFalse(self.proven(base, after))
+        for fact in ('hook', 'witness', 'full_safety', 'digest_log'):
+            with self.subTest(fact):self.assertFalse(self.proven(base, base, **{fact: False}))
+        self.assertFalse(plan.rollback_proven(self.job(state='failed'), before=base, after=base, hook=True, witness=True,
+                                              full_safety=True, digest_log=True))
+        for bad in (None, [], 'x'):
+            with self.subTest(bad=bad):self.assertFalse(plan.snapshots_equal(base, bad))
 
 
 if __name__ == '__main__':

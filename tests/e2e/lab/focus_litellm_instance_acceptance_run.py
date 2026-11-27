@@ -34,6 +34,28 @@ def git(path, *args):
     return subprocess.check_output(['git','-C',str(path),*args],text=True,timeout=30).strip()
 
 
+def delete_request(backup_id):
+    """Exactly what the engine's `delete` accepts: the CLI schema is {backup_id} and rejects any other field (a `confirm` here
+    stopped the b7 cleanup on dev-d with both case backups still present)."""
+    return {'backup_id': backup_id}
+
+
+def ha_delete_request(ha_backup_id):
+    return {'ha_backup_id': ha_backup_id, 'confirm': True}
+
+
+def snapshot_difference(current, original, *, limit=30):
+    """WHERE two case snapshots differ, by field name only: digests, names and ids are never saved."""
+    out = []
+    def walk(a, b, path):
+        if len(out) >= limit or a == b: return
+        if isinstance(a,dict) and isinstance(b,dict):
+            for key in sorted(set(a)|set(b),key=str): walk(a.get(key),b.get(key),path+'.'+str(key))
+        else: out.append(path)
+    walk(current,original,'')
+    return out
+
+
 def validate_lease(lease, phase, *, now, driver_commit, source_commit):
     if (lease.get('granted') is not True or lease.get('case') != 'litellm-instance-original'
             or lease.get('device') != plan.DEVICE or phase not in lease.get('phases',[])
@@ -163,7 +185,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             and not any(Path(x).name.startswith('litellm') for x in before['files'])
             and all(v['ActiveState']=='inactive' for v in before['units'].values()))
         self.r['before']=before; self.r['init_intent']=True; self.save()
-        self.require('stable_original_capture',unchanged(self.op('init'),before,images=True))
+        self.require('stable_original_capture',unchanged(self.op('init',image_reuse=self.r.get('image_reuse')),before,images=True))
         self.r['init_complete']=True; self.save()
 
     def frozen_engine(self):
@@ -353,7 +375,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
     def witness(self, action):
         request={'action':action,'name':self.name,'value':self.run.args.secrets['OWN_SEED_CREDENTIAL']}
         found=self.h.device_python(plan.API_WITNESS,request,as_owner=True,timeout=60)
-        self.require('later_app_api_witness_'+action,found.get('status')==200 and found.get('found') is True)
+        verdict={k:found.get(k) for k in ('status','success','found')} if isinstance(found,dict) else {'answer':'not-a-dict'}
+        self.r['witness_'+action]={k:v for k,v in verdict.items() if v is None or isinstance(v,(bool,int,str))};self.save()
+        self.require('later_app_api_witness_'+action,isinstance(found,dict) and found.get('status')==200 and found.get('found') is True
+                     and (action=='check' or found.get('success') is True))
 
     def flow(self):
         self.resources(); self.begin()
@@ -399,7 +424,9 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             imported=self.job('restore-start',{'backup_id':self.r['converted'],'apps':['litellm'],'confirm':True},'import')
             self.require('selective_instance_import',plan.success(imported))
             self.full_archive(imported['result']['safety_backup_id'])
-            self.require('live_later_outsiders_roles_passwords_preserved',plan.outsiders_equal(before,self.op('snapshot',tag='imported')))
+            after_import=self.op('snapshot',tag='imported'); preserved=plan.outsiders_equal(before,after_import)
+            if not preserved: self.r['outsiders_difference']=plan.outsiders_difference(before,after_import); self.save()
+            self.require('live_later_outsiders_roles_passwords_preserved',preserved)
             self.app_assertions('verify','instance-import')
             self.app_assertions('step_restart'); self.endpoint()
             self.witness('create')
@@ -411,6 +438,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             full_safety=self.full_archive(failed['result']['safety_backup_id'])
             log='\n'.join(str(x) for x in self.helper('job-status',{'job_id':failed['id']}).get('log',[]))
             digest_log='資料摘要 db-main 與備份時一致' in log and '未比對資料' not in log
+            if not plan.snapshots_equal(current,after):
+                self.r['rollback_snapshot_difference']=snapshot_difference(after,current); self.save()
+            self.r['rollback_facts']={'state':failed.get('state'),'rolled_back':(failed.get('result') or {}).get('rolled_back'),
+                'hook':consumed is True,'full_safety':bool(full_safety),'digest_log':digest_log}; self.save()
             self.require('automatic_full_current_safety_rollback',plan.rollback_proven(failed,hook=consumed,witness=True,
                 before=current,after=after,full_safety=bool(full_safety),digest_log=digest_log))
             self.app_assertions('verify','instance-automatic-rollback')
@@ -418,22 +449,47 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         finally:
             self.recover()
 
+    def verify_recovered_snapshot(self):
+        """The restored catalog, roles and rows equal the original. Every snapshot writes its digest listings exclusively, so a
+        repeated recovery needs a tag no earlier one used. The original is re-stated with the volatile tables excluded (a snapshot
+        taken that way is unchanged); a lasting difference is saved by field NAME before the check fails."""
+        used=set(self.op('receipt').get('snapshots') or {})
+        tag=next(t for t in ('recovered','recovered_again','recovered_third','recovered_fourth') if t not in used)
+        recovered=self.op('snapshot',tag=tag); expected=self.op('snapshot_restate',tag='original')
+        equal=plan.snapshots_equal(recovered,expected)
+        if not equal:
+            self.r['recovery_snapshot_difference']=snapshot_difference(recovered,expected); self.save()
+        self.require('original_full_catalog_roles_rows',equal)
+
     def recover(self):
         self.recovering=True; self.settle()
         if self.r.get('hook_intent'):
             self.op('hook',enable=False); self.r['hook_intent']=False; self.save()
-        if self.r.get('full_safety'):
+        repeated=bool(self.r.get('recovery_verified'))
+        if repeated:
+            # An earlier pass restored and verified the data and own state, then stopped in the cleanup below (b7: the delete
+            # request). The stack may already be removed, so nothing is restored or verified again; only the saved credential
+            # values are re-registered for the leak scan that guards the cleanup.
+            self.credentials()
+        elif self.r.get('full_safety'):
             self.credentials()
             restored=self.job('restore-start',{'backup_id':self.r['full_safety'],'apps':['litellm'],'confirm':True},'recover-full')
             self.require('original_full_safety_restored',plan.success(restored,digest=True))
-            self.require('original_full_catalog_roles_rows',self.op('snapshot',tag='recovered')==self.r['original_db'])
+            self.verify_recovered_snapshot()
             self.app_assertions('own_state','instance-full-recovery')
             self.r['recovery_verified']=True; self.save()
         elif self.r.get('install_intent'):
             self.require('no_app_mutation_before_verified_safety',not self.r.get('safety_verified') and not self.r.get('upload_intent'))
         self.require('all_jobs_terminal',not self.op('inventory')['active_jobs'])
-        if self.run:
+        if repeated:
+            # The leak scan reads the case's owned installer state, which the package cleanup of the verifying pass removed, so
+            # it cannot run again. That pass recorded leak_scan_passed; b7 predates the flag and may be accepted by an explicit
+            # lease field that points at the pass-1 output (saved80_step_leaks ok before any cleanup).
+            self.require('leak_scan_of_the_verifying_pass',
+                         self.r.get('leak_scan_passed') is True or self.lease.get('accept_prior_leak_scan') is True)
+        elif self.run:
             self.app_assertions('step_leaks')
+            self.r['leak_scan_passed']=True; self.save()
         # Copies survive every uncertainty. Cleanup runs only after successful
         # recovery and the saved credential scanner, never in a blind finally.
         self.op('cleanup_owned_package')
@@ -452,9 +508,9 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         listing=self.helper('list'); existing={x['id'] for x in listing['backups']}
         self.require('preexisting_backups_preserved',set(self.r.get('before_backups',[])) <= existing)
         for bid in self.r['created_backups']:
-            if bid in existing: self.helper('delete',{'backup_id':bid,'confirm':True})
+            if bid in existing: self.helper('delete',delete_request(bid))
         sid=self.r.get('store_id')
-        if sid and sid not in self.r.get('before_uploads',[]): self.helper('ha-delete',{'ha_backup_id':sid,'confirm':True})
+        if sid and sid not in self.r.get('before_uploads',[]): self.helper('ha-delete',ha_delete_request(sid))
         self.r['complete']=True; self.save()
 
     def images_recover(self):
@@ -483,7 +539,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
 def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--phase',choices=plan.PHASES,default='flow'); parser.add_argument('--execute',action='store_true')
-    parser.add_argument('--source',default='/tmp/parity-focus-final-product-20261127')
+    parser.add_argument('--source',default=plan.PRODUCT_DIR)
     parser.add_argument('--lease'); parser.add_argument('--receipt'); parser.add_argument('--output')
     args=parser.parse_args(argv)
     if not args.execute:
