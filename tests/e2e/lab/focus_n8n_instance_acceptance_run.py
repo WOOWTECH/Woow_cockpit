@@ -150,7 +150,8 @@ class Controller:
         if self.clock()+reserve>=self.deadline:raise TimeoutError('lease recovery reserve reached')
 
     def root_json(self,script,request=None,*,timeout=180):
-        p=self.h.root('python3','-I','-c',script,input=json.dumps(request or {}).encode(),timeout=timeout)
+        prelude="import sys;sys.dont_write_bytecode=True;sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-pycache'\n"
+        p=self.h.root('python3','-B','-I','-c',prelude+script,input=json.dumps(request or {}).encode(),timeout=timeout)
         if p.returncode:
             self.r['device_exit_code']=p.returncode
             try:

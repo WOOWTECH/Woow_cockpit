@@ -1,0 +1,19 @@
+{
+  "reference_commit": "9561769609929d0100eb9df4935fba79f61906aa",
+  "helper_path": "snippets/focus-instances/generated_pg_probe.py",
+  "helper_sha256": "00320e4f05952cf83b39d8fdc959fd681dee0a93d7d4428bde399588c3a00c5e",
+  "queries": {
+    "roles": "SELECT json_agg(json_build_array(rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,rolvaliduntil::text,coalesce(md5(rolpassword),'')) ORDER BY rolname) FROM pg_authid",
+    "settings": "SELECT coalesce(json_agg(json_build_array(r.rolname,d.datname,s.setconfig) ORDER BY r.rolname,d.datname),'[]'::json) FROM pg_db_role_setting s LEFT JOIN pg_roles r ON r.oid=s.setrole LEFT JOIN pg_database d ON d.oid=s.setdatabase"
+  },
+  "existing_real_pg_evidence": {
+    "path": "/tmp/parity-focus-20261127/instances-generated-pg-c-04.json",
+    "sha256": "46696db0714fa5ac3d907df309cba16a99cc9492af2cec05b30b5925476b276d",
+    "checks": 87,
+    "all_pass": true,
+    "image": "sha256:4278d7b1e3deb3193ddc803158f6532963f059fc25a2eefaee4b5a9e71741873"
+  },
+  "schema_evidence": "Both exact queries executed by snapshot on real pinned PG16 in completed c04; missing columns fail even with zero rows. This worker does not rerun PG.",
+  "global_semantics": "No WHERE or inner JOIN: setrole=0 and setdatabase=0 rows remain, each absent name represented by JSON null; all setconfig arrays included.",
+  "limitation": "Existing generated PG schema/execution evidence, not a new original n8n safety run."
+}

@@ -168,6 +168,8 @@ def may_clean(*, jobs_terminal, full_safety_restored, original_state, secret_sca
 # identities, returning only selected facts. It is prepared, never run here.
 MANIFEST_PROBE = r'''
 import json,re,sys
+sys.dont_write_bytecode=True
+sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-pycache'
 sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
 from woowbackup.cli import Services
 from woowbackup.paths import Paths
@@ -189,6 +191,8 @@ print(json.dumps({'scope':x.get('scope','database'),'ha_database':x.get('ha_data
 
 ENDPOINT_PROBE = r'''
 import json,sys
+sys.dont_write_bytecode=True
+sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-pycache'
 sys.path.insert(0,'/usr/local/lib/woowtech-cockpit-backup')
 from woowbackup.cli import Services
 from woowbackup.paths import Paths
