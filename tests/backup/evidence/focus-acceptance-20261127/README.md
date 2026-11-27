@@ -30,6 +30,19 @@ observer code and a new lease; no further full import was run for diagnosis.
 hashes. Probe result/receipt files are exact fixed-field copies; raw cookie values,
 headers, frames and matching text are absent. Catalog resultSHA is420b9d4fe582af93eef3aa37b958d6b71b57a0580e8775eda39c0478720490fb.
 
+Later code preparation reuses that362observer in the full real page.18targeted
+cookie tests passed; all4UI files are byte-equal between1ad and59 by offline Git
+comparison (`r8-ui-source-equality.json`). The exact stored CAT25/probe02 replay
+route passed30targeted Python checks and protects12retained case archives,
+accounting separately for4prior owned safety copies pruned by successful job
+events with pinned creation/deletion captures. Fresh state/inventory gates are
+still required after LL cleanup and before any new page. No new R8 page or
+device action was run, and the historical59/63FAIL remains unchanged.
+
+`r1-stored-memory-supplement.json` separately preserves the old real R1
+journal-derived29.3M first-unit memory supplement. The proposed two-assertion
+scratch-harness correction is offline only; historical70/72FAIL remains.
+
 
 ## Historical page attempt4 terminal state: cookie observation unresolved
 
