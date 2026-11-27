@@ -1,0 +1,74 @@
+{
+  "artifacts": {
+    "n8n-source2-attempt1.json": {
+      "bytes": 320,
+      "sha256": "28a12e71c58486b64d89156c62dac8c3a15b110b4fd0defedd4b1e2cf96830a5"
+    },
+    "n8n-source2-install-fixed-response.private.json": {
+      "bytes": 5909,
+      "sha256": "250d96041dd2cda2f9d76d73e26075564e54873d1fe5ec52a10c2ad7d57d5fd5"
+    },
+    "n8n-source2-recover-attempt1.json": {
+      "bytes": 328,
+      "sha256": "869dcd0328d700ddebacb89422105fe526b7c5ffbb82967fdb21541514caec87"
+    },
+    "n8n-source2-return-fixed-response.private.json": {
+      "bytes": 8630,
+      "sha256": "299f4e87441c4c9e5985f79176b77909fd9ca810a9c0b7e5b06e1e930f4c1ad9"
+    },
+    "n8n-source2-return-readonly-report.json": {
+      "bytes": 959,
+      "sha256": "b088a5b35e43217761496d16ab481fcc15d4b62f19e95d4b65dfb8f5aeeca328"
+    }
+  },
+  "driver_commit": "2b78460ac284ac46da47571f647f98605dd195e8",
+  "independent_readonly": {
+    "active_jobs_count": 0,
+    "complete": false,
+    "device_mutex_released": true,
+    "durable_equal": {
+      "active_jobs": true,
+      "catalog": true,
+      "files": true,
+      "images": true,
+      "protected": true,
+      "retention_sha256": true,
+      "running": true,
+      "timer": true,
+      "units": true,
+      "volumes": true
+    },
+    "entire_original_tree_exact": true,
+    "helper_bytes_attributes_exact": true,
+    "images_retained": true,
+    "inner_running_count": 0,
+    "native_locks_released": true,
+    "original_directories": 5,
+    "original_library_files": 73,
+    "private_source2_copies_exact": true,
+    "protected_archive_and_sidecar_files": 4,
+    "protected_baselines": 2,
+    "restored": true,
+    "schema": 1,
+    "source1_all_artifacts_unchanged": true,
+    "source1_helper_exact": true,
+    "source1_journal_sha256": "1efb3230fe3666dee1fb0cfc0789ef3bd1a44b829c2641e775bb6f2c27c9d9a5",
+    "source1_original_tree_exact": true,
+    "source2_journal_sha256": "0f98c76b312449fd99e9bbde0bd73c6194ae1dcaaa979e79c8ebfd9570863296"
+  },
+  "install": {
+    "all_source_hashes_exact": true,
+    "elapsed_seconds": 45.5,
+    "exit": 0,
+    "selected_files": 53
+  },
+  "original_service_acceptance": "pending",
+  "return": {
+    "elapsed_seconds": 39.2,
+    "exit": 0
+  },
+  "safety_or_flow_run": false,
+  "schema": 1,
+  "source1_failed_history_preserved": true,
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a"
+}
