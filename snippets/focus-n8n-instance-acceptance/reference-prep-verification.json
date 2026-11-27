@@ -6,13 +6,26 @@
     "n8n-reference-prep-final.log": "6b0f1510c9f2be7f088c83d90fd9c31314db6e56197929f97174c7e88735b603",
     "n8n-reference-prep-gate1.log": "8d89c60abcd8a0dd2a3207bb989b2b1d2eb5251f25ad013ec1aa06e7fa75e68a",
     "n8n-reference-prep-gate2.log": "af2815b3809023f45e46d28e832c1ad6a2f41f227ffacffe8cb132922273238b",
-    "n8n-reference-prep-readonly.json": "6908c5e83efbb8853754589a168ab6f97d0ac9683468c6351ef5cf807087e48e"
+    "n8n-reference-prep-readonly.json": "6908c5e83efbb8853754589a168ab6f97d0ac9683468c6351ef5cf807087e48e",
+    "n8n-reference-private-capture.log": "462405831cf62be8e86334d960896170cdf10536b54c5320a577b357ac39b07a"
   },
   "failures": 0,
   "native": "denied",
   "new_reference_tests": 7,
+  "private_capture_delta": {
+    "blocked": 0,
+    "coverage": "ALL raw inspection fields stay private root0700/file0600/O_EXCL; before+after rows retained before strict field mismatch; existing capture never overwritten",
+    "errors": 0,
+    "failures": 0,
+    "full_seven_not_repeated": true,
+    "native": "denied",
+    "shim_hits": 0,
+    "skipped": 0,
+    "tests": 1
+  },
   "runtime_reference_mutation": false,
   "safety3_failed_preserved": true,
+  "seven_test_source_commit": "7820caf1",
   "shim_hits": 0,
   "skipped": 0,
   "tests": 7

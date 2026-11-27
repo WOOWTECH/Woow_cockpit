@@ -25,6 +25,7 @@ QUADLET_REFS={
  **{name+'.container':list(EXPECTED)[0] for name in ('n8n','n8n-worker','n8n-webhook')},
  **{name+'.container':list(EXPECTED)[1] for name in ('n8n-runners','n8n-worker-runners')}}
 SOURCE_RECEIPT_SHA='99b20bc3053f2f10c3541ad2cd1a78b2e6482e68b28f72f04ee81fb3799523f2'
+CAPTURE=None  # scoped by References._snapshot; readonly inventory creates no files
 
 
 def canonical(value): return c.digest(json.dumps(value,sort_keys=True,separators=(',',':')).encode())
@@ -47,6 +48,7 @@ def cache():
     result={}
     for config in ids:
         p=c.owner('podman','image','inspect','sha256:'+config)
+        if CAPTURE is not None: CAPTURE(config,p.stdout)  # PRIVATE, before parse/comparison assertions
         if len(p.stdout)>2*1024**2: raise ValueError('fixed-reference-inspect-bound')
         rows=json.loads(p.stdout)
         if not isinstance(rows,list) or len(rows)!=1: raise ValueError('fixed-reference-inspect-format')
@@ -113,9 +115,31 @@ class References:
         if self.store.state and (self.store.state.get('kind')!='fixed-n8n-reference-v1' or
                 self.store.state.get('expected')!=EXPECTED): raise ValueError('fixed-reference-foreign-journal')
 
+    def capture_inspection(self,config,raw):
+        s=self.store.state;number=s.get('inspection_next',0)
+        if number>=128: raise ValueError('fixed-reference-private-capture-bound')
+        filename=f'inspection-{number:04d}.json'
+        record={'phase':s['inspection_phase'],'config':config,'file':filename,'sha256':c.digest(raw),
+                'bytes':len(raw),'truncated':len(raw)>2*1024**2,'complete':False}
+        s['inspection_next']=number+1;s.setdefault('inspections',[]).append(record);self.store.save()
+        fd=os.open(self.store.path/filename,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as f:
+            f.write(raw[:2*1024**2]);f.flush();os.fsync(f.fileno())
+        record['complete']=True;self.store.save()  # fsyncs parent after raw file publication
+
+    def _snapshot(self,phase):
+        global CAPTURE
+        self.store.state['inspection_phase']=phase;self.store.save()
+        previous=CAPTURE;CAPTURE=self.capture_inspection
+        try:return self.read(self.name)
+        finally:CAPTURE=previous
+
     def begin(self):
         if self.store.path.exists(): raise ValueError('fixed-reference-case-exists-reconcile-only')
-        before=self.read(self.name); planned={}
+        self.store=c.Store(self.name,parent=self.parent,create=True)
+        self.store.state={'kind':'fixed-n8n-reference-v1','expected':EXPECTED,'snapshot_complete':False,
+            'intents':{},'complete':False,'retain_for_case':True};self.store.save()
+        before=self._snapshot('before'); planned={}
         for ref,expected in EXPECTED.items():
             found=before['resolution'][ref]
             if found is None and ref in ALLOWED: planned[ref]=expected
@@ -124,9 +148,7 @@ class References:
             platform=before['cache'][expected]['platform']
             if platform[:2]!=['linux','amd64'] or platform[2] not in ('','v1'):
                 raise ValueError('fixed-reference-platform')
-        self.store=c.Store(self.name,parent=self.parent,create=True)
-        self.store.state={'kind':'fixed-n8n-reference-v1','expected':EXPECTED,
-            'before':before,'planned':planned,'intents':{},'complete':False,'retain_for_case':True}
+        self.store.state.update(before=before,planned=planned,snapshot_complete=True)
         self.store.save()  # entire before source/cache/catalog/backups BEFORE any tag intent/write
         return {'planned':planned,'before_sha256':canonical(before)}
 
@@ -153,21 +175,24 @@ class References:
 
     def bind(self,ref):
         s=self.store.state
+        if not s.get('snapshot_complete'): raise ValueError('fixed-reference-snapshot-incomplete')
         if ref not in s['planned'] or ref in s['intents']: raise ValueError('fixed-reference-bind-not-new')
-        self.validate(self.read(self.name))
+        self.validate(self._snapshot('before-bind'))
         if resolve(ref) is not None: raise ValueError('fixed-reference-not-absent')
         s['intents'][ref]={'config':s['planned'][ref],'absent_observed':True,'done':False};self.store.save()
         # Native locks + exclusive lease serialize authorized image writers.
         # No overwrite/delete fallback, pull/load, source/service/container action.
         p=c.owner('podman','tag','sha256:'+s['planned'][ref],ref,check=False)
         if p.returncode: raise ValueError('fixed-reference-tag-command')
-        applied=self.validate(self.read(self.name))
+        applied=self.validate(self._snapshot('after-bind'))
         if ref not in applied: raise ValueError('fixed-reference-tag-not-observed')
         s['intents'][ref]['done']=True;self.store.save()
         return {'bound_reference':ref,'config':s['planned'][ref]}
 
     def reconcile(self):
-        s=self.store.state;applied=self.validate(self.read(self.name))
+        s=self.store.state
+        if not s.get('snapshot_complete'): raise ValueError('fixed-reference-snapshot-incomplete')
+        applied=self.validate(self._snapshot('reconcile'))
         s['complete']=set(applied)==set(s['planned'])
         s['observed_applied']=sorted(applied);self.store.save()
         return {'complete':s['complete'],'retain_for_case':True,'applied':sorted(applied),

@@ -90,6 +90,18 @@ helper calls, SQL, package installs, catalog/timer/daemon/service actions. Both
 standalone phases preserve cold state. The two added refs are explicitly
 retained for this acceptance case; a later cleanup needs its own reviewed scope.
 
+## Private inspection evidence
+
+Before parsing or comparing EACH bounded image inspection, save its full raw
+JSON (including Config/ENV) ONLY under the separate root0700case, O_EXCL0600,
+fsync file+parent. Journal fixed phase/config/filename/byte-count/row-SHA before
+publication, retain every before/after row on failure. ALL non-alias fields can
+then be compared privately to identify a strict failure; no speculative waiver.
+At most128 files,2MiB each (oversize refuses with an explicitly marked bounded
+capture); unchanged8GiB DATA allowance covers this bound. Initial snapshot
+failure retains its diagnostic-only journal; binding requires snapshot_complete.
+No raw rows, ENV, argv or stderr appear in public captures or the public packet.
+
 ## Targeted evidence only
 
 `n8n-reference-prep-final.log`:7/7,0fail/error/skip/blocked/shim, native denied.
@@ -102,6 +114,12 @@ offline default covered. The first rendered-entry test caught missing namespace
 imports (5pass/1error); fixed and failed log retained. Six-method intermediate
 and seven-method final runs overlap;7distinct methods total, not13/19.
 No old5/34/nativePG87/image-load/source suite repeated.
+
+After parent review of7820caf1, the private-inspection delta ran ONLY one tiny
+boundary test:1PASS/0fail/error/skip/blocked/shim,native denied. It proves eight
+real private before/after row files survive a strict changed-field refusal,
+mode0700/0600 and matching hashes, and O_EXCL prevents overwrite. The prior7-test
+gate was not repeated;8distinct methods exist, never claimed as a new8-test run.
 
 ## Concrete commands — NOT GRANTED
 

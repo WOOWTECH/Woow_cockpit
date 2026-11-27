@@ -70,10 +70,40 @@ class ReferenceTests(unittest.TestCase):
         self.assertEqual(len([x for x in self.commands if x[:2]==('podman','tag')]),1)
         self.assertTrue(result['protected_state_exact']);self.assertTrue(self.obj.store.state['retain_for_case'])
 
-    def test_foreign_existing_reference_refuses_before_journal_or_mutation(self):
+    def test_foreign_existing_reference_refuses_before_tag_intent_or_mutation(self):
         self.live['resolution'][next(iter(refs.ALLOWED))]='f'*64
         with self.assertRaisesRegex(ValueError,'foreign'):self.obj.begin()
-        self.assertFalse(self.obj.store.path.exists());self.assertEqual(self.commands,[])
+        self.assertFalse(self.obj.store.state['snapshot_complete'])
+        self.assertEqual(self.obj.store.state['intents'],{});self.assertEqual(self.commands,[])
+
+    def test_private_full_inspection_is_exclusive_and_saved_before_strict_refusal(self):
+        marker=['synthetic-private-initial']
+        def owner(*args,**kwargs):
+            if args[:2]==('podman','images'):
+                return SimpleNamespace(stdout=('\n'.join(refs.EXPECTED.values())).encode(),returncode=0)
+            config=args[3].removeprefix('sha256:')
+            row={'Id':config,'Config':{'Env':marker},'RepoTags':[],
+                 'Os':'linux','Architecture':'amd64'}
+            return SimpleNamespace(stdout=json.dumps([row]).encode(),returncode=0)
+        def read(_):
+            result=copy.deepcopy(self.live);result['cache']=refs.cache();return result
+        self.obj.read=read
+        with patch.object(common,'owner',side_effect=owner):
+            self.obj.begin();marker[:]=['synthetic-private-changed']
+            with self.assertRaisesRegex(ValueError,'cache-fields-changed'):self.obj.reconcile()
+        records=self.obj.store.state['inspections'];self.assertEqual(len(records),8)
+        self.assertEqual({x['phase'] for x in records},{'before','reconcile'})
+        for record in records:
+            path=self.obj.store.path/record['file'];raw=path.read_bytes()
+            self.assertEqual(path.stat().st_mode&0o777,0o600)
+            self.assertEqual(common.digest(raw),record['sha256']);self.assertTrue(record['complete'])
+            self.assertIn(b'synthetic-private-',raw)
+        self.assertEqual(self.obj.store.path.stat().st_mode&0o777,0o700)
+        # Never overwrite a previous capture, even if its filename is reused.
+        before=(self.obj.store.path/records[0]['file']).read_bytes()
+        self.obj.store.state['inspection_next']=0
+        with self.assertRaises(FileExistsError):self.obj.capture_inspection('f'*64,b'foreign')
+        self.assertEqual((self.obj.store.path/records[0]['file']).read_bytes(),before)
 
     def test_interrupted_reply_is_reconciled_by_identity_without_repeating_tag(self):
         runner=list(refs.ALLOWED)[1];config=refs.ALLOWED[runner]
