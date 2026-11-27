@@ -37,7 +37,9 @@
       "decision": "D5/S2",
       "expected": "candidate-and-restart",
       "id": "noauth",
-      "native_status": "not-run",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/noauth/",
+      "native_source_commit": "27cb52c4eafbaaa2dbc2ba2916b9604a8941a280",
+      "native_status": "passed-generated-delta-24-of-24",
       "notices": [],
       "package_smoke_status": "not-run",
       "smoke": "requires-separate-owned-package-device"
@@ -151,12 +153,12 @@
     },
     {
       "id": "exact_package_per_case",
-      "status": "executor-prepared-provisioning-and-candidate-transfer-pending"
+      "status": "producer-and-provisioner-prepared-native-artifact-and-package-smoke-pending"
     },
     {
       "id": "actual_package_upgrade",
       "status": "not-executed-existing-H2-smoke-decision-evidence-preserved"
     }
   ],
-  "new_native_runs": 0
+  "new_native_runs": 3
 }
