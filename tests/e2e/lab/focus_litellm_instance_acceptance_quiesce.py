@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Separately leased pause/resume of one already failing lab Headscale unit."""
 import argparse
+import copy
 from datetime import datetime,timezone
 import fcntl
 import json
@@ -23,6 +24,11 @@ BOUNDS={'reserve_gib':13,'metadata_budget_mib':512,'host_available_mib':1200,
         'metadata_seconds':60,'transport_seconds':80,'outer_seconds':300}
 FIELDS=('Id','LoadState','ActiveState','SubState','Result','NRestarts','MainPID',
         'ExecMainCode','ExecMainStatus','UnitFileState','SourcePath','FragmentPath')
+# The failing unit restarts every few seconds and its OWN container exists only while one start attempt runs: the b9 pause looked
+# at the one moment .external_containers.headscale was present and stopped (nothing had been done). The admission therefore looks
+# again, up to this many times, never acting in between and keeping every failed look; a difference that does not go away still refuses.
+ADMISSION_TRIES=15
+ADMISSION_WAIT_SECONDS=2
 
 
 def failure(unit):
@@ -55,16 +61,42 @@ def exact_inventory(facts,receipt):
         raise ValueError('strict original inventory differs')
 
 
+def expected_inventory(receipt):
+    """What exact_inventory expects, spelled out: the verified original plus exactly the retained derived image and its tag."""
+    expected=copy.deepcopy(receipt['before'])
+    expected['images']=sorted(set(expected['images'])|{receipt['derived_image']})
+    expected['image_refs']=dict(expected['image_refs'],**{driver.plan.APP_TAG:receipt['derived_image']})
+    return expected
+
+
 class Protocol:
-    def __init__(self,receipt,journal,*,read,act,save,clock=time.monotonic,sleep=time.sleep):
+    def __init__(self,receipt,journal,*,read,act,save,clock=time.monotonic,sleep=time.sleep,
+                 tries=ADMISSION_TRIES,wait=ADMISSION_WAIT_SECONDS):
         self.r=receipt;self.j=journal;self.read=read;self.act=act;self.save=save
-        self.clock=clock;self.sleep=sleep
+        self.clock=clock;self.sleep=sleep;self.tries=tries;self.wait=wait
+
+    def admit(self):
+        """The first look that shows the known failed auto-restart on the exact original inventory. Nothing is done between looks."""
+        for attempt in range(1,self.tries+1):
+            facts=self.read(True)
+            if attempt==1:self.j['initial_observation']=facts;self.save()
+            try:
+                binding(facts,self.r['before']);exact_inventory(facts,self.r)
+                if not known_failure(facts['unit']):raise ValueError('unit is not the known failed auto-restart')
+                return facts
+            except ValueError as error:
+                # Names only: which condition failed, where the inventory differed and what the unit looked like.
+                self.j.setdefault('admission_attempts',[]).append({'attempt':attempt,'reason':str(error)[:80],
+                    'observed_utc':facts.get('observed_utc'),'inventory_difference':driver.snapshot_difference(
+                        facts.get('inventory'),expected_inventory(self.r),limit=12),
+                    'unit':{k:facts['unit'].get(k) for k in ('ActiveState','SubState','MainPID','Result')}})
+                self.save()
+                if attempt==self.tries:raise
+                self.sleep(self.wait)
 
     def pause(self):
         if self.j:raise ValueError('pause intent already exists; use resume')
-        facts=self.read(True);self.j['initial_observation']=facts;self.save()
-        binding(facts,self.r['before']);exact_inventory(facts,self.r)
-        if not known_failure(facts['unit']):raise ValueError('unit is not the known failed auto-restart')
+        facts=self.admit()
         self.j.update(original=facts,pending='pause',paused=False,resumed=False)
         self.save()  # full original metadata + durable obligation BEFORE stop
         latest=self.read(False);self.j['before_stop_recheck']=latest;self.save()

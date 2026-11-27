@@ -12,9 +12,9 @@ import focus_litellm_instance_acceptance_quiesce as m
 
 class Device:
     def __init__(self,root):
-        self.path=Path(root)/'intent.private.json';self.j={};self.actions=[];self.lose=None
+        self.path=Path(root)/'intent.private.json';self.j={};self.actions=[];self.lose=None;self.glitches=[];self.reads=0
         meta={'uid':1019,'gid':1019,'mode':0o644,'sha256':'a'*64}
-        before={'files':{m.QFILE:meta},'containers':{'original':'b'*64},'running':['original'],
+        before={'files':{m.QFILE:meta},'containers':{'original':'b'*64},'external_containers':{},'running':['original'],
                 'active_jobs':[],'images':['c'*64],'image_refs':{}}
         self.receipt={'before':before,'derived_image':'d'*64}
         inventory=deepcopy(before);inventory['images'].append('d'*64)
@@ -23,13 +23,17 @@ class Device:
             '42','0','1','1','generated',m.QFILE,'/run/user/1019/systemd/generator/headscale.service'))),
             'source':deepcopy(meta),'fragment':dict(meta,sha256='e'*64),'inventory':inventory}
 
-    def read(self,_full):return deepcopy(self.facts)
+    def read(self,_full):
+        facts=deepcopy(self.facts)
+        if self.glitches:self.glitches.pop(0)(facts)       # the next look catches the failing unit in a transient state
+        self.reads+=1
+        return facts
     def save(self):m.source.save(self.path,self.j)
     def restart_controller(self):
         self.j=json.loads(self.path.read_text())
         return self.controller()
     def controller(self):
-        return m.Protocol(self.receipt,self.j,read=self.read,act=self.act,save=self.save)
+        return m.Protocol(self.receipt,self.j,read=self.read,act=self.act,save=self.save,sleep=lambda seconds:None)
     def act(self,verb):
         # Check the actual durable file, not only the live in-memory dictionary.
         wal=json.loads(self.path.read_text());self.actions.append(verb)
@@ -78,6 +82,53 @@ class QuiescenceTests(unittest.TestCase):
             d=Device(root);d.controller().pause();d.facts['fragment']['sha256']='f'*64
             with self.assertRaisesRegex(ValueError,'foreign unit/config'):d.restart_controller().resume()
             self.assertEqual(d.actions,['stop']);self.assertEqual(d.j['pending'],'resume')
+
+    def test_the_failing_units_own_container_for_a_moment_does_not_stop_the_admission(self):
+        # dev-d b9: .external_containers.headscale existed at the one moment the pause looked; nothing had been done
+        def own_container(facts):facts['inventory']['external_containers']={'headscale':'9'*64}
+        with tempfile.TemporaryDirectory() as root:
+            d=Device(root);d.glitches=[own_container,own_container]
+            d.controller().pause()
+            self.assertTrue(d.j['paused']);self.assertEqual(d.actions,['stop']);self.assertEqual(d.reads,5)
+            self.assertEqual([a['attempt'] for a in d.j['admission_attempts']],[1,2])
+            for attempt in d.j['admission_attempts']:
+                self.assertEqual(attempt['inventory_difference'],['.external_containers.headscale'])
+                self.assertEqual(attempt['reason'],'strict original inventory differs')
+            self.assertEqual(d.j['original']['inventory']['external_containers'],{})             # the look that was used is a clean one
+            self.assertIn('headscale',d.j['initial_observation']['inventory']['external_containers'])  # the first look is still retained
+            saved=json.loads(d.path.read_text());self.assertEqual(len(saved['admission_attempts']),2)
+            self.assertNotIn('9'*64,json.dumps(saved['admission_attempts']))                  # names, never ids
+
+    def test_a_unit_caught_between_two_restarts_is_looked_at_again(self):
+        def starting(facts):facts['unit'].update(SubState='start',MainPID='77')
+        with tempfile.TemporaryDirectory() as root:
+            d=Device(root);d.glitches=[starting]
+            d.controller().pause()
+            self.assertTrue(d.j['paused']);self.assertEqual(len(d.j['admission_attempts']),1)
+            self.assertEqual(d.j['admission_attempts'][0]['reason'],'unit is not the known failed auto-restart')
+            self.assertEqual(d.j['admission_attempts'][0]['unit']['SubState'],'start')
+
+    def test_a_difference_that_never_goes_away_still_refuses_without_acting(self):
+        def own_container(facts):facts['inventory']['external_containers']={'headscale':'9'*64}
+        with tempfile.TemporaryDirectory() as root:
+            d=Device(root);d.glitches=[own_container]*m.ADMISSION_TRIES
+            with self.assertRaisesRegex(ValueError,'strict original inventory differs'):d.controller().pause()
+            self.assertEqual(d.actions,[]);self.assertEqual(d.reads,m.ADMISSION_TRIES)
+            self.assertEqual(len(d.j['admission_attempts']),m.ADMISSION_TRIES)
+            self.assertNotIn('paused',d.j);self.assertNotIn('original',d.j);self.assertNotIn('pending',d.j)
+            with self.assertRaisesRegex(ValueError,'pause intent already exists'):d.restart_controller().pause()  # a fresh journal is needed
+
+    def test_a_config_that_changed_meanwhile_is_never_admitted_even_when_the_unit_looks_right(self):
+        def foreign(facts):facts['source']['sha256']='f'*64
+        with tempfile.TemporaryDirectory() as root:
+            d=Device(root);d.glitches=[foreign]*m.ADMISSION_TRIES
+            with self.assertRaisesRegex(ValueError,'foreign unit/config'):d.controller().pause()
+            self.assertEqual(d.actions,[])
+
+    def test_the_admission_bounds_are_small_and_the_lease_bounds_did_not_change(self):
+        self.assertLessEqual(m.ADMISSION_TRIES*(m.ADMISSION_WAIT_SECONDS+5),120)             # well inside the 300 s outer limit
+        self.assertEqual(m.BOUNDS['outer_seconds'],300)
+        self.assertNotIn('admission',' '.join(m.BOUNDS))                                     # leases bind BOUNDS exactly: not extended
 
 
 if __name__=='__main__':unittest.main()
