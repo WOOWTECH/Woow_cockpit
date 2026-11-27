@@ -50,7 +50,7 @@ Only one original file is read from its existing host path:
 
 Size **4467947520**, SHA256
 `2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d`.
-Expected native HA ID **ha-2dcfc6769d6fed7dd5c37**.
+Expected native HA ID **ha-2dcfc6769d6fed7dd5c3**.
 
 ## Minimal workflow and observable failures
 
