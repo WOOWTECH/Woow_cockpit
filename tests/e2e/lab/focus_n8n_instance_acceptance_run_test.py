@@ -353,6 +353,18 @@ class RestoreTests(Fixture):
         with self.assertRaisesRegex(RuntimeError,'earlier job'):self.c.job('backup-start',{},'full-safety')
         self.assertIsNone(self.c.r.get('pending'))
 
+    def test_original_state_check_waits_for_a_late_settling_difference_and_names_a_lasting_one(self):
+        before=inventory();self.c.r['before']=before
+        states=[dict(before,running=['n8n-postgres']),dict(before,running=['n8n-postgres']),before]
+        self.c.op=lambda op,**kw:states.pop(0) if len(states)>1 else states[0]
+        self.c.require_original_state('state')                      # settles on the third read
+        self.assertEqual(len(states),1);self.assertNotIn('original_state_difference',self.c.r)
+        self.c.op=lambda op,**kw:dict(before,running=['a-private-looking-value'],files={'/etc/x':{'sha256':'f'*64}},active_jobs=['j1'])
+        with self.assertRaisesRegex(RuntimeError,'state'):self.c.require_original_state('state')
+        names=self.c.r['original_state_difference']
+        self.assertEqual(names,['files./etc/x','running','active_jobs'])
+        self.assertNotIn('a-private-looking-value',json.dumps(names))   # field names only, never values
+
     def test_unverified_private_copies_refuse_before_any_service_catalog_or_timer_action(self):
         order=self.safety_fixture(private_copies=False)
         self.c.job=lambda *a,**kw:self.fail('no backup job may start without the private copies')

@@ -105,11 +105,27 @@ def save_receipt(path, value):
         temp.unlink(missing_ok=True)
 
 
+FOUND_KEYS=('catalog','files','protected','units','timer','volumes','running','retention_sha256')
+
+
 def same_found(current, original, *, images=False):
     """Durable state, not transient container IDs. No untracked field omission."""
-    keys=('catalog','files','protected','units','timer','volumes','running','retention_sha256')
+    keys=FOUND_KEYS
     return (all(current.get(k)==original.get(k) for k in keys)
             and not current.get('active_jobs') and (not images or current['images']==original['images']))
+
+
+def difference_paths(current, original, *, limit=40):
+    """WHERE the durable state still differs, by field name only: never a value."""
+    out=[]
+    def walk(a,b,path):
+        if len(out)>=limit or a==b:return
+        if isinstance(a,dict) and isinstance(b,dict):
+            for key in sorted(set(a)|set(b),key=str):walk(a.get(key),b.get(key),path+'.'+str(key))
+        else:out.append(path)
+    for key in FOUND_KEYS:walk(current.get(key),original.get(key),key)
+    if current.get('active_jobs'):out.append('active_jobs')
+    return out
 
 
 def successful_restore(job):
@@ -205,6 +221,18 @@ class Controller:
         self.results.append({'check':label,'ok':bool(condition)})
         print(json.dumps({'stage':label,'ok':bool(condition)}),flush=True)
         if not condition:raise RuntimeError(label)
+
+    def require_original_state(self,label,*,wait=90):
+        """The durable state equals the original. Stopping services and returning a timer can settle a moment after their commands
+        return, so a short bounded wait is allowed; a lasting difference is recorded by field NAME before the check fails."""
+        end=min(self.deadline,self.clock()+wait)
+        while True:
+            found=self.op('inventory')
+            if same_found(found,self.r['before']):return self.require(label,True)
+            if self.clock()>=end:break
+            self.sleep(3)
+        self.r['original_state_difference']=difference_paths(found,self.r['before']);self.save()
+        self.require(label,False)
 
     def budget(self,*,reserve=0):
         if self.clock()+reserve>=self.deadline:raise TimeoutError('lease recovery reserve reached')
@@ -451,7 +479,7 @@ class Controller:
         finally:
             # Never race uncertain helper startup/active jobs. A failure retains copies.
             self.settle();self.stop_units();self.restore_catalog();self.restore_timer()
-            self.require('safety_stage_returns_original_services',same_found(self.op('inventory'),self.r['before']))
+            self.require_original_state('safety_stage_returns_original_services')
             self.op('preserved_safety_check')
 
     def require_image_references(self):
@@ -678,7 +706,7 @@ class Controller:
         # original bytes and metadata after the job has exited and apps stopped.
         self.op('restore_files');self.command('systemctl','--user','daemon-reload')
         self.restore_catalog();self.restore_timer()
-        self.require('original_durable_services_catalog_files',same_found(self.op('inventory'),self.r['before']))
+        self.require_original_state('original_durable_services_catalog_files')
         returned=self.op('preserved_safety_return',jobs=list(self.r['jobs']),full_safety=self.r.get('full_safety'),
                          baseline_restored=self.r.get('baseline_restored') is True)
         self.require('preserved_old_pairs_returned',returned.get('all_preexisting_files_exact') is True)
