@@ -1,9 +1,11 @@
-"""Replace a few NAMED installed engine files of dev-c by exact reviewed bytes, with a strict way back.
+"""Replace a few NAMED installed engine files of a lab device (dev-c or dev-d) by exact reviewed bytes, with a strict way back.
 
 Runs INSIDE the isolated lab device as root. Every file must currently be exactly its reviewed OLD version; private exact
 copies (bytes, owner, mode, mtime) are written by the existing Store BEFORE the first replacement; each NEW hash is recorded
 as allowed before its write; the native jobs and engine locks are held and no job may be active. Only *.py files of the fixed
 engine library and the fixed helper can be named. No installer, package, catalog, service, SQL or image action.
+
+The shared Store only accepts case names of the form woowbk_focus_n8n_<12 hex>; a patch case uses that form on any device.
 """
 import base64
 import json
@@ -14,7 +16,7 @@ import re
 import focus_n8n_instance_acceptance_ops as c
 import focus_n8n_instance_acceptance_safeties as safety
 
-PARENT = '/var/lib/woowtech-backup/focus-n8n-engine-patch'
+PARENT = '/var/lib/woowtech-backup/focus-engine-patch'
 LIB = Path('/usr/local/lib/woowtech-cockpit-backup/woowbackup')
 HELPER = Path('/usr/local/libexec/woowtech-cockpit-backup')
 JOBS = Path('/var/lib/woowtech-backup/jobs')
@@ -32,6 +34,14 @@ def target(rel):
     if not isinstance(rel, str) or not NAME.fullmatch(rel):
         raise ValueError('fixed-engine-patch-name')
     return LIB / rel
+
+
+def hashes():
+    """What ops.engine_hashes() reports and the controllers' frozen_engine() expects: every *.py of the library plus the helper."""
+    result = {str(p.relative_to(LIB)): c.read_regular(p, MAX_BYTES)[1]['sha256']
+              for p in LIB.rglob('*.py') if '__pycache__' not in p.parts}
+    result[HELPER_KEY] = c.read_regular(HELPER, MAX_BYTES)[1]['sha256']
+    return result
 
 
 def no_active_jobs():
@@ -122,4 +132,6 @@ def dispatch(q):
         return restore(q)
     if q.get('op') == 'engine-status':
         return status(q)
+    if q.get('op') == 'engine-hashes':
+        return hashes()
     raise ValueError('fixed-engine-patch-operation')
