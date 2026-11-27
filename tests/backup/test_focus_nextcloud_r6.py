@@ -62,6 +62,32 @@ class ResourceTests(unittest.TestCase):
                 plan.image_budget([bad])
 
 
+class ConvertRequestTests(unittest.TestCase):
+    def test_convert_request_passes_the_products_own_ha_convert_start_schema(self):
+        # fullshare03 (2026-11-27) also sent check_job_id, which only ha-import-start accepts: the helper refused it.
+        from woowbackup import cli, hastore
+        ha = 'ha-' + 'a' * 20
+        self.assertTrue(hastore.valid_id(ha))
+        for keys in ([], ['nextcloud.skipped-files:0123456789abcdef']):
+            with self.subTest(keys=keys):
+                request = flow.convert_request(ha, ['nextcloud'], False, 'HA-KEY', keys,
+                                               'b1-e2e-focus-r6-convert-1795785941965')
+                cli.validate('ha-convert-start', request)
+                self.assertEqual(request['acknowledged'], {'nextcloud': keys})
+
+    def test_a_stopped_case_records_the_redacted_reason(self):
+        class Secrets:
+            def redact(self, value):
+                return value.replace('private-key-text', '<HA_BACKUP_KEY>')
+        error = RuntimeError("ha-convert-start refused: {'code': 'invalid-request', "
+                             "'message': '請求含有不支援的欄位：check_job_id。'} private-key-text")
+        detail = flow.stop_detail(error, Secrets())
+        self.assertTrue(detail.startswith('RuntimeError: ha-convert-start refused'))
+        self.assertIn('不支援的欄位：check_job_id', detail)
+        self.assertNotIn('private-key-text', detail)
+        self.assertLessEqual(len(flow.stop_detail(RuntimeError('x' * 5000), Secrets())), 600)
+
+
 class ConfirmationTests(unittest.TestCase):
     def test_original_share_has_no_confirmation(self):
         self.assertEqual(plan.confirmation_keys(checked('fullshare'), 'fullshare'), [])
@@ -168,7 +194,9 @@ class ControllerTests(unittest.TestCase):
 class OfflineTests(unittest.TestCase):
     def test_default_entrypoints_do_not_access_devices_or_host_images(self):
         for module in (flow, recover):
+            # main() imports its lab siblings lazily, so the lab folder must be on sys.path when run alone too.
             with self.subTest(module=module.__name__), patch.object(sys, 'argv', ['driver']), \
+                    patch.object(sys, 'path', [str(HERE)] + sys.path), \
                     patch.object(subprocess, 'run', side_effect=AssertionError('no subprocess')), \
                     patch.object(subprocess, 'check_output', side_effect=AssertionError('no subprocess')), \
                     contextlib.redirect_stdout(io.StringIO()):

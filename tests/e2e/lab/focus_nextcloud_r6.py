@@ -90,6 +90,19 @@ def owned_command(command, request, state):
         raise ValueError('fixed-ha-delete-not-owned-by-this-case')
 
 
+def convert_request(ha, apps, test_mode, key, keys, request_id):
+    """The ha-convert-start request: only fields of the product's schema (cli.SPECS). The check job this conversion
+    follows stays in the case's own records; only ha-import-start takes a check_job_id (fullshare03 sent one and the
+    helper refused the whole request)."""
+    return {'ha_backup_id': ha, 'apps': list(apps), 'test_mode': test_mode, 'confirm': True,
+            'request_id': request_id, 'key': key, 'acknowledged': {'nextcloud': list(keys)}}
+
+
+def stop_detail(error, secrets):
+    """Why the case stopped, for the private run log: the exception class and its redacted text, bounded."""
+    return (type(error).__name__ + ': ' + secrets.redact(str(error)))[:600]
+
+
 def cleanup_after_refusal(run,args,lease,driver,ev,deadline,*,baseline_safe,baseline_exact):
     """Opt in to keeping a proven owned HA after refusal before any conversion request."""
     receipt=getattr(args,'retained_upload',None)
@@ -352,9 +365,7 @@ def run_locked(args, lease, commit, facts, inventory):
     r = Run(run_args, ev)
 
     def convert(ha, apps, test_mode, *, ev, key, tag):
-        request = {'ha_backup_id': ha, 'apps': apps, 'test_mode': test_mode, 'confirm': True,
-                   'request_id': d.request_id('focus-r6-convert'), 'key': key,
-                   'check_job_id': r.check_id, 'acknowledged': {'nextcloud': r.keys}}
+        request = convert_request(ha, apps, test_mode, key, r.keys, d.request_id('focus-r6-convert'))
         started = time.monotonic()
         reply = d.ok('ha-convert-start', request, ev=ev, timeout=300)
         return wait(reply['job_id'], ev=ev), time.monotonic() - started
@@ -390,7 +401,7 @@ def run_locked(args, lease, commit, facts, inventory):
             step()
         safe = r.restored_back
     except Exception as error:
-        ev.check('case stopped; recovery required', False, type(error).__name__)
+        ev.check('case stopped; recovery required', False, stop_detail(error, secrets))
     finally:
         try:
             stop.set(); watcher.join(timeout=40)
