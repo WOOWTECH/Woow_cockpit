@@ -34,6 +34,7 @@ VERSION_SHA='29ddb46f49384f63c69c2112c1e9b03c1ff2c4993904cc4723ff544fcb32ee92'
 PRIOR_SHA='cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1'
 HA_ID='ha-'+FIXTURE_SHA[:20]
 THROTTLE=64*1024**2
+DAY=86400  # storage.cleanup_uploads' max age: begin_upload deletes upload files older than this
 TRANSITIONS={'new':{'begin-requested'},'begin-requested':{'begun'},'begun':{'streaming'},
  'streaming':{'streamed'},'streamed':{'finish-requested'},'finish-requested':{'finished'},'finished':{'retained'}}
 
@@ -75,11 +76,12 @@ def retained_credit(receipt,proof):
     return min(FIXTURE_BYTES,proof['allocated_bytes'])
 
 
-def completed_uploads(root,deadline,uid=0):
+def completed_uploads(root,uid=0):
     """Native .done replay caches only; never admit unfinished/unknown entries.
 
-    Refuse a run that could cross native begin_upload's 24h cleanup boundary,
-    so every pre-existing cache must remain byte/metadata exact afterward.
+    Every cache is recorded in full (metadata, SHA-256, record). begin_upload's own
+    24h cleanup may delete the day-old ones; completed_uploads_preserved admits
+    exactly that removal and keeps every other cache byte/metadata exact.
     """
     rows=[];now=time.time()
     if not os.path.lexists(root):return rows
@@ -117,8 +119,7 @@ def completed_uploads(root,deadline,uid=0):
         datetime.datetime.strptime(record['at'],'%Y-%m-%dT%H:%M:%SZ')
         if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z',record['at']):
             raise ValueError('fixed-upload-cache-time-refused')
-        if s.st_mtime>now or deadline+300-s.st_mtime>=86400:
-            raise ValueError('fixed-upload-native-done-cleanup-boundary')
+        if s.st_mtime>now:raise ValueError('fixed-upload-cache-future-time-refused')
         rows.append({'name':p.name,'stat':list(stable(s)),'sha256':hashlib.sha256(raw).hexdigest(),'record':record})
     return rows
 
@@ -148,13 +149,30 @@ def no_upload_writers(root,proc=Path('/proc')):
 
 
 def completed_uploads_preserved(before,after,state):
+    """Prior caches stay exact except what begin_upload's own 24h cleanup removes; only our .done is new.
+
+    The cleanup's cutoff lies between begin_sent_at-DAY and begin_returned_at-DAY (one second of
+    slack for float mtimes): an answered begin removed every cache older than the lower bound, and
+    no cache younger than the upper bound may be gone. Without a sent begin nothing may be removed.
+    """
     old={r['name']:r for r in before};new={r['name']:r for r in after}
-    if any(new.get(name)!=row for name,row in old.items()):return False
+    sent,returned=state.get('begin_sent_at'),state.get('begin_returned_at')
+    for name,row in old.items():
+        mtime=row['stat'][7]/1e9
+        if name not in new:
+            if sent is None or returned is None or mtime>=returned-DAY+1:return False
+        elif new[name]!=row or (state.get('upload_id') and sent is not None and mtime<sent-DAY-1):return False
     extra=set(new)-set(old)
     if not extra:return state['phase']!='retained'
-    own=state.get('upload_id','')+'.done'
+    own=(state.get('upload_id') or '')+'.done'
     return (extra=={own} and state['phase'] in ('finish-requested','finished','retained')
             and new[own]['record'].get('ha_backup_id')==HA_ID)
+
+
+def native_cleanup_removed(before,after):
+    """The prior caches that are gone; completed_uploads_preserved decides whether that was allowed."""
+    names={r['name'] for r in after}
+    return sorted(r['name'] for r in before if r['name'] not in names)
 
 
 # Rendered into BOTH long-running device processes. No RPC-based watcher thread.
@@ -260,7 +278,7 @@ for p in entries:
  assert p.suffix in ('.tar','.json')
 stems={p.stem for p in entries}
 assert all((ha/(stem+'.tar')).is_file() and (ha/(stem+'.json')).is_file() for stem in stems)
-u=root/'uploads';done=completed_uploads(u,q['deadline']);writers=no_upload_writers(u)
+u=root/'uploads';done=completed_uploads(u);writers=no_upload_writers(u)
 print(json.dumps({'status':'passed','helper_sha256':q['helper_sha256'],'version_sha256':q['version_sha256'],
  'prior_source_exact':True,'isolated_no_bytecode_policy':True,'uploads':[r['name'] for r in done],
  'completed_uploads':done,'writer_census':writers,
@@ -406,8 +424,10 @@ def stream(state,begin,ev,deadline):
 def transfer(state,ev,deadline,rpc_call=rpc,stream_call=stream,verify_call=verify_retained):
     proof=None;writer=None;failure=None
     try:
-        advance(state,'begin-requested');ev.event(dict(state))
-        begin=rpc_call('upload-begin',{'filename':FIXTURE.name,'size':FIXTURE_BYTES},state,ev,deadline)
+        # The begin window bounds begin_upload's own 24h cache cleanup (completed_uploads_preserved).
+        advance(state,'begin-requested',begin_sent_at=time.time());ev.event(dict(state))
+        try:begin=rpc_call('upload-begin',{'filename':FIXTURE.name,'size':FIXTURE_BYTES},state,ev,deadline)
+        finally:state['begin_returned_at']=time.time()
         uid=validate_begin(begin);advance(state,'begun',upload_id=uid);ev.event(dict(state))
         advance(state,'streaming');ev.event(dict(state));writer=stream_call(state,begin,ev,deadline)
         advance(state,'streamed');ev.event(dict(state))
@@ -469,16 +489,18 @@ def run_attempt(lease,commit,deadline,ev):
                and after['root']['memory_max']==str(DEVICE_CAP) and wake.device(QUIESCENT,root=True)['active_jobs']==0)
     # Recheck complete prior engine/helper/cache without touching any source or policy.
     finalmeta=device_process(meta_program(),[],ev,'old-helper-final',json.dumps({'prior_sha256':PRIOR_SHA,'helper_sha256':HELPER_SHA,'version_sha256':VERSION_SHA,'ha_id':HA_ID,'deadline':deadline}).encode(),120)
-    caches_exact=completed_uploads_preserved(meta['completed_uploads'],finalmeta['completed_uploads'],state)
+    caches_ok=completed_uploads_preserved(meta['completed_uploads'],finalmeta['completed_uploads'],state)
     passed=(state['phase']=='retained' and preserved and finalmeta['prior_source_exact']
-            and caches_exact
+            and caches_ok
             and min(after['host_free_bytes'],after['root']['varlib_free_bytes'])>=RESERVE+MARGIN)
     record={'status':'passed' if passed else 'failed','phase':'upload-only','source_commit':commit,'pending':not passed,
      'upload_id':state.get('upload_id'),'ha_backup_id':state.get('ha_backup_id'),'expected_store_absent_before':True,
      'bytes':proof['bytes'] if proof else None,'sha256':proof['sha256'] if proof else None,
      'ha_file_identity':proof['identity'] if proof else None,'sidecar_sha256':proof['sidecar_sha256'] if proof else None,
      'allocated_bytes':proof['allocated_bytes'] if proof else 0,'cold_units_source_catalog_images_isolation_preserved':preserved,
-     'preexisting_done_caches_exact':caches_exact,'preexisting_done_cache_count':len(meta['completed_uploads']),
+     'preexisting_done_caches_exact_or_native_cleanup':caches_ok,'preexisting_done_cache_count':len(meta['completed_uploads']),
+     'native_cleanup_removed_caches':native_cleanup_removed(meta['completed_uploads'],finalmeta['completed_uploads']),
+     'begin_window':[state.get('begin_sent_at'),state.get('begin_returned_at')],
      'helper_sha256':HELPER_SHA,'initial_fullshare_stop_cause':'unknown-not-recorded','fixed_failure':failure,
      'app_starts':0,'jobs_started':0,'pulls':0,'reserve_bytes':RESERVE,'memory_cap_bytes':DEVICE_CAP,
      'private_event_count':ev.number,'private_receipt_dir':str(ev.path),'last_fsm_phase':state['phase']}

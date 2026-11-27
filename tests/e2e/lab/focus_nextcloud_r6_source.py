@@ -20,8 +20,9 @@ import sys
 import tarfile
 import time
 
-FROZEN = Path('/tmp/parity-focus-nextcloud-r6-product-20261127')
-PRODUCT_COMMIT = '6daaa15c046a4c083cdfb1aac44b5433e8f99f6f'
+# The integrated engine (PR #23 head): ha_nextcloud.py is byte-identical to the fix 6daaa15c
+FROZEN = Path('/tmp/parity-focus-nc-product-5168f1ec')
+PRODUCT_COMMIT = '5168f1ecf68e3a22b6909f3c516c4a41e77e3cc2'
 NC_SHA = 'bcc39687e4828c25c4f336f527e57cc7ca13429d35870bbed88abcee4d817d1c'
 MAX_FILE = 2 * 1024**2
 MAX_TOTAL = 16 * 1024**2

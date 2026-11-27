@@ -52,6 +52,12 @@ class FSMTests(unittest.TestCase):
         self.assertEqual(state['phase'],'retained');self.assertIsNone(result[-1])
         self.assertEqual(commands,['upload-begin','upload-finish'])
 
+    def test_begin_window_is_recorded_even_when_the_begin_reply_is_lost(self):
+        for fault in (None,'upload-begin'):
+            with self.subTest(fault=fault):
+                state,*_=self.invoke(fault)
+                self.assertLessEqual(state['begin_sent_at'],state['begin_returned_at'])
+
     def test_broken_pipe_offset_class_errno_persist_before_own_abort(self):
         state,events,commands,_=self.invoke('stream')
         failure=next(x for x in events.rows if x.get('exception_class')=='BrokenPipeError')
@@ -210,9 +216,9 @@ class CompletedCacheTests(unittest.TestCase):
         p=root/name;p.write_text(json.dumps(record or {'ha_backup_id':upload.HA_ID,'at':'1970-01-02T03:46:40Z'}))
         p.chmod(0o600);os.utime(p,(100000,100000));return p
 
-    def snapshot(self,root,deadline=103000):
-        with patch.object(upload.time,'time',return_value=101000):
-            return upload.completed_uploads(root,deadline,uid=os.getuid())
+    def snapshot(self,root,now=101000):
+        with patch.object(upload.time,'time',return_value=now):
+            return upload.completed_uploads(root,uid=os.getuid())
 
     def test_ten_native_done_caches_are_valid_and_do_not_change_bytes_or_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,7 +242,7 @@ class CompletedCacheTests(unittest.TestCase):
                 else:p.unlink();root.rmdir();root.symlink_to(Path(tmp)/'absent')
                 with self.assertRaises((OSError,ValueError)):self.snapshot(root)
 
-    def test_malformed_duplicate_keys_target_date_and_native_cleanup_boundary_refuse(self):
+    def test_malformed_duplicate_keys_target_date_and_future_time_refuse(self):
         for raw in ('{}','{"at":"1970-01-02T03:46:40Z","ha_backup_id":"bad"}',
                     '{"at":"1970-01-02T03:46:40Z","at":"1970-01-02T03:46:40Z","ha_backup_id":"'+upload.HA_ID+'"}',
                     '{"at":"not-time","ha_backup_id":"'+upload.HA_ID+'"}'):
@@ -245,7 +251,35 @@ class CompletedCacheTests(unittest.TestCase):
                 with self.assertRaises(ValueError):self.snapshot(root)
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);self.cache(root)
-            with self.assertRaisesRegex(ValueError,'native-done-cleanup-boundary'):self.snapshot(root,100000+86400-300)
+            with self.assertRaisesRegex(ValueError,'cache-future-time'):self.snapshot(root,99999)
+
+    def test_caches_a_day_old_are_admitted_for_the_native_cleanup(self):
+        # begin_upload's own 24h cleanup may delete them; completed_uploads_preserved accounts for exactly that.
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.cache(root)
+            self.assertEqual(len(self.snapshot(root,100000+3*upload.DAY)),1)
+
+    def test_native_24h_cleanup_at_begin_is_the_only_admitted_removal(self):
+        own='u1111111111111111';sent=100000+upload.DAY+50
+        state={'phase':'retained','upload_id':own,'begin_sent_at':sent,'begin_returned_at':sent+2}
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);names={}
+            for kind,mtime in (('old',100000),('band',100051),('young',100060)):
+                names[kind]=self.cache(root,'u%016x.done'%mtime).name;os.utime(root/names[kind],(mtime,mtime))
+            before=self.snapshot(root,sent+10)
+            self.cache(root,own+'.done');os.utime(root/(own+'.done'),(sent+10,sent+10))
+            full=self.snapshot(root,sent+11)
+            def without(rows,*kinds):return [r for r in rows if r['name'] not in {names[k] for k in kinds}]
+            self.assertTrue(upload.completed_uploads_preserved(before,without(full,'old'),state))
+            self.assertTrue(upload.completed_uploads_preserved(before,without(full,'old','band'),state))
+            self.assertEqual(upload.native_cleanup_removed(before,without(full,'old','band')),sorted([names['old'],names['band']]))
+            for rows,why in ((full,'a cache older than the cutoff survived the cleanup'),
+                             (without(full,'old','young'),'a cache younger than a day was removed')):
+                with self.subTest(why=why):self.assertFalse(upload.completed_uploads_preserved(before,rows,state))
+            unanswered={'phase':'begin-requested','upload_id':None,'begin_sent_at':sent,'begin_returned_at':sent+2}
+            self.assertTrue(upload.completed_uploads_preserved(before,before,unanswered))
+            self.assertTrue(upload.completed_uploads_preserved(before,without(before,'old'),unanswered))
+            self.assertFalse(upload.completed_uploads_preserved(before,without(before,'old'),{'phase':'new','upload_id':None}))
 
     def test_no_active_native_helper_or_fd_on_upload_id(self):
         with tempfile.TemporaryDirectory() as tmp:
