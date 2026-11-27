@@ -352,3 +352,22 @@ Offline targeted9/9 verifies defaults, fixed relay destination/user, original
 fixture protection and the four-job boundary. These are not real acceptance.
 Only the leased real page can prove Cockpit login, TLS/WebSocket transport,
 one-confirmation results and the independent application/baseline checks.
+
+## R1 rerun with the corrected same-unit expectation: 70/70 (2026-11-28, dev-d)
+
+The earlier R1 record stays 70/72: its harness expected every chain job to run in a systemd unit of its own, while the
+product runs the whole chain in the first job's unit. The HOLD-ed harness was replaced by the page harness's
+`--helper-three-selected` mode (saved as found from the Codex worktree, reviewed, given 8 offline tests) and run once
+under its own lease (driver `2d8fe242`, source `ce8c4cfb`, the engine installed on dev-d; every file R1 uses equals
+the PR #23 engine): 70/70 in about 500 s.
+
+- One import of the real B1 backup whose EMQX member is cut short by 64 bytes: EMQX is stopped at the check (the
+  intended broken member), Omnigent and Hermes are imported; five linked jobs (the failed EMQX conversion, then a
+  conversion and a restore for each app), each restore with its own safety backup, the HA data live afterwards.
+- All five jobs share the first job's unit (`woowtech-backup-j20261127T204813Z-b9c68626.service`); the unit was sampled
+  84 times through the whole chain, peak 182.9 MiB.
+- The protected HA record that PAGE5 kept was not owned by this run and stays; the lab baselines were restored; the
+  registered-token scan had 0 hits over 19 archive sidecars; PAGE5's guard and evidence are byte-unchanged.
+
+Files: `r1-helper-20261128-checks.txt` (the 70 fixed check lines) and `r1-helper-20261128-summary.json`. The private
+run is `~/.woowbk-lab/evidence/focus-acceptance-r1-helper/20261128T044707/`.

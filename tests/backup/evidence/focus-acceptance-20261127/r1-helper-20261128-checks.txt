@@ -1,0 +1,72 @@
+scan: exact reviewed rendered program parity: PASS
+source: both reviewed checkouts clean: PASS
+fixture: original recorded full encrypted HA hash matches: PASS
+resources: device headroom at least1900MiB: PASS
+resources: host available memory at least1200MiB: PASS
+resources: host keeps13GiB plus bounded phase writes: PASS
+source: installed helper and every module equal frozen source: PASS
+source: installed actual page equals frozen source: PASS
+before: no active backup job: PASS
+before: app services already active and all eight selected image configs present: PASS
+before: selected health timer enabled active and bound to its nonpersistent probe: PASS
+before: schedule inactive or failed: PASS
+replay: original catalog units images and timer still match independent receipt: PASS
+replay: every old archive remains a protected existing backup: PASS
+replay: old HA record retained at exact derived SHA: PASS
+before: exact original emqx marker baseline: PASS
+replay: exact recovered original emqx markers still match: PASS
+before: exact original omnigent marker baseline: PASS
+replay: exact recovered original omnigent markers still match: PASS
+before: exact original hermes marker baseline: PASS
+replay: exact recovered original hermes markers still match: PASS
+before: encrypted hermes baseline opens: PASS
+before: hermes original baseline restore preflight ready: PASS
+before: encrypted omnigent baseline opens: PASS
+catalog: only missing Omnigent can be added: PASS
+catalog: trusted carried entry matches appowner: PASS
+catalog: carried entry preview valid: PASS
+before: omnigent original baseline restore preflight ready: PASS
+upload: ownership is new or exact protected retained record: PASS
+resources: device headroom at least1900MiB: PASS
+resources: host available memory at least1200MiB: PASS
+resources: host keeps13GiB plus bounded phase writes: PASS
+helper: exact derived real HA uploaded: PASS
+helper: current exact three-app check and no unreviewed confirmation: PASS
+helper: failed EMQX followed by both linked successful pairs: PASS
+helper: five actual linked jobs with isolated EMQX failure: PASS
+helper: native actual job metadata shares the first unit: PASS
+helper: first unit sampled through terminal chain below1GiB: PASS
+helper: distinct safety backups and both actual HA live data: PASS
+recovery: no active job before baseline restore: PASS
+resources: device headroom at least1900MiB: PASS
+resources: host available memory at least1200MiB: PASS
+resources: host keeps13GiB plus bounded phase writes: PASS
+recovery: original baseline has no unreviewed confirmation: PASS
+recovery: original hermes restore succeeded: PASS
+recovery: exact original hermes markers returned: PASS
+resources: device headroom at least1900MiB: PASS
+resources: host available memory at least1200MiB: PASS
+resources: host keeps13GiB plus bounded phase writes: PASS
+recovery: original baseline has no unreviewed confirmation: PASS
+recovery: original omnigent restore succeeded: PASS
+recovery: exact original omnigent markers returned: PASS
+recovery: excluded EMQX unchanged: PASS
+recovery: original app unit states and image configs returned: PASS
+recovery: original full HA fixture hash retained: PASS
+leaks: registered and observed values absent from records journal and text evidence: PASS
+helper: actual chain memory metadata baseline and registered-token scan before deletion: PASS
+helper: terminal page guard and evidence remain byte unchanged: PASS
+recovery: backup inventory contains no untracked new archive: PASS
+catalog: only own new entry changed: PASS
+catalog: remove matches own installed entry: PASS
+recovery: original catalog hashes returned: PASS
+no throwaway container, volume or network left: PASS
+no staging folder and no key file left: PASS
+cleanup: original backups retained except proved prior test safety pruning: PASS
+cleanup: original HA inventory retained: PASS
+cleanup: protected old HA remains at exact derived SHA: PASS
+recovery: original schedule state returned: PASS
+after: networknone and zero published ports preserved: PASS
+helper: terminal page guard and evidence unchanged after recovery: PASS
+R1 helper: 70/70 PASS
+exit=0
