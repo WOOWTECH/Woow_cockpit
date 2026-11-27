@@ -1,0 +1,53 @@
+{
+  "automatic_return_run": false,
+  "captures": {
+    "n8n-reinstall-attempt1.json": {
+      "bytes": 422,
+      "sha256": "a07a3ec8859ca766347077ef3e35c71ad06b9d3575eb45bc6d9886d975ca65db"
+    },
+    "n8n-reinstall-install-fixed-response.private.json": {
+      "bytes": 6678,
+      "sha256": "6744be62470a6f6bf69ceca8997daecaa49a83fa27b8abd9c30c5a010af8386d"
+    },
+    "n8n-reinstall-readonly-report.json": {
+      "bytes": 929,
+      "sha256": "ae58560c4c7a5b8f1c659c0388eee698d561122a566bdb9eadfffdca4b0ec304"
+    }
+  },
+  "d09_retained": true,
+  "driver_commit": "6a0adcd7002ce792346a6854858041289cdbcca0",
+  "elapsed_seconds": 84.8,
+  "exit": 0,
+  "independent_readonly": {
+    "active_jobs_count": 0,
+    "all_private_copies_exact": true,
+    "all_selected_hashes_exact": true,
+    "all_source1_source2_artifacts_unchanged": true,
+    "device_mutex_released": true,
+    "durable_equal": {
+      "active_jobs": true,
+      "catalog": true,
+      "files": true,
+      "images": true,
+      "protected": true,
+      "retention_sha256": true,
+      "running": true,
+      "timer": true,
+      "units": true,
+      "volumes": true
+    },
+    "native_locks_released": true,
+    "protected_baselines": 2,
+    "protected_files": 4,
+    "running_container_count": 0,
+    "selected_files": 53,
+    "source1_journal_sha256": "1efb3230fe3666dee1fb0cfc0789ef3bd1a44b829c2641e775bb6f2c27c9d9a5",
+    "source2_return_journal_sha256": "0f98c76b312449fd99e9bbde0bd73c6194ae1dcaaa979e79c8ebfd9570863296",
+    "source_fullflow_journal_sha256": "99b20bc3053f2f10c3541ad2cd1a78b2e6482e68b28f72f04ee81fb3799523f2",
+    "source_installed": true,
+    "source_restored": false
+  },
+  "safety_or_flow_run": false,
+  "schema": 1,
+  "source_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a"
+}
