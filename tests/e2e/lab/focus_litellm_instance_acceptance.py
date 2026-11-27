@@ -16,6 +16,7 @@ PHASES = ('images', 'images-recover', 'flow', 'recover')
 CASE = re.compile(r'woowbk_focus_litellm_[0-9a-f]{12}\Z')
 BACKUP = re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
+SHA256 = re.compile(r'[0-9a-f]{64}\Z')
 APP_BASE = '0c71bec8f80e3445267e9bc08495d3782b5c80c8fb7ca18261f07abad00ce312'
 PG = '094ecc9ca4ea66931822a93f1d814e059deda57f355d9416fa72f85170871cb7'
 APP_TAG = 'localhost/woow-litellm:1.104.0-0.3.16'
@@ -27,6 +28,9 @@ SECRETS = ('litellm-database-url','litellm-master-key','litellm-postgres-passwor
            'litellm-salt-key','litellm-ui-password')
 QFILES = ('litellm.network','litellm-pgdata.volume','litellm-postgres.container','litellm.container')
 PACKAGE_REV = 'dd690ae'
+PACKAGE_COMMIT = 'dd690aee2b9032cf3db0695af714a8248a0ccb0a'
+DERIVATION_SHA = 'b15f9c4d19b95f51e85e8ec5b6ca1e52b63e064298b8bc3b0b9eb80c912a555a'
+SAVED_DRIVER_SHA = 'f9455650d20189cef7d083ed967bb8b485190fbff44a378b152bcd28f69f8cf3'
 MIN_FREE = 13 * 1024**3
 PEAK = 8 * 1024**3
 
