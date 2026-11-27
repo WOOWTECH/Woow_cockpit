@@ -26,7 +26,7 @@ from types import SimpleNamespace
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from focus_nextcloud_r6_inventory import collect, ORIGINALS, FIXTURE, FIXTURE_SHA
-from focus_nextcloud_r6_plan import (BASELINE, CASES, DEVICE_CAP, MARGIN, MIB, RESERVE,
+from focus_nextcloud_r6_plan import (BASELINE, CASES, DEVICE_CAP, FIXTURE_BYTES, MARGIN, MIB, RESERVE,
                                       acceptance_budget, confirmation_keys, lease_check, verified_credit_budget)
 
 REPO = HERE.parents[2]
@@ -46,12 +46,14 @@ def baseline_verify():
     return p.returncode == 0
 
 
-def load_flow():
+def load_flow(receipt=None):
+    """A fresh nextcloud_flow (and b1 driver) whose receipt is `receipt` (default: this R6 case's own)."""
     spec = importlib.util.spec_from_file_location('focus_r6_original_flow', HERE / 'nextcloud_flow.py')
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     mod.FLOOR = mod.WATCH_FLOOR = RESERVE
-    mod.drv.state_path = lambda: RECEIPT
+    path = RECEIPT if receipt is None else receipt
+    mod.drv.state_path = lambda: path
     return mod
 
 
@@ -190,13 +192,19 @@ def execute(args):
         return case.run(args, lease, commit, facts, sys.modules[__name__])
 
 
-def run_locked(args, lease, commit, facts, inventory):
+def run_locked(args, lease, commit, facts, inventory, variant=None):
+    """The R6 case body. `variant` (None = the full share) is another case of this lane on the same machinery
+    (focus_nextcloud_r6_s5b.Variant): its receipt and evidence area, secrets registered before any evidence, a Run
+    subclass with its own steps, its convert request (schema fields only), its upload size and scope fields. The
+    request recording, job waits, watchdog, recovery, rollback, cleanup and leak gates below stay the same."""
     import focus_nextcloud_r6_case as control
-    nc = load_flow()
+    nc = load_flow(variant.receipt if variant else None)
     nc.tree_hashes = lambda: args.product_hashes
     d = nc.drv
     secrets = d.Secrets(nc.SECRET_FILES, nc.MARKERS)
-    ev = nc.Ev(secrets, area='focus-nextcloud-r6')
+    if variant:
+        variant.prepare(secrets)
+    ev = nc.Ev(secrets, area=variant.area if variant else 'focus-nextcloud-r6')
     d.STATE.clear()  # Only the NEW R6 receipt; legacy nextcloud_flow.json is untouched.
     d.STATE.update(pending=True, source_commit=commit, case=args.case, created_backups=[],
                    jobs={}, original_baseline_id=BASELINE, upload_id=None, ha_backup_id=None)
@@ -305,7 +313,8 @@ def run_locked(args, lease, commit, facts, inventory):
             require('before: fresh live directory sizes available',
                     all(isinstance(sizes.get(k), int) for k in ('html', 'postgres', 'data')))
             bound = acceptance_budget(sizes['html'], sizes['postgres'],
-                                      max(sizes['data'], 234187031), 1024**3, 1024**3)
+                                      max(sizes['data'], 234187031), 1024**3, 1024**3,
+                                      uploaded=variant.uploaded_bytes if variant else FIXTURE_BYTES)
             bound=verified_credit_budget(bound,getattr(args,'retained_credit_bytes',0))
             ev.save('fresh-budget.json', bound)
             self.budget('fullshare admission', bound['additional_peak_bytes'])
@@ -396,10 +405,15 @@ def run_locked(args, lease, commit, facts, inventory):
             require('recovery: all rollback checks passed', all(x['ok'] for x in ev.results[first:]))
             self.restored_back = True
 
+    if variant:
+        Run = variant.run_class(Run, SimpleNamespace(d=d, nc=nc, ev=ev, secrets=secrets, require=require, wait=wait,
+                                                     lease=lease, commit=commit, args=args, expires=expires,
+                                                     control=control))
     r = Run(run_args, ev)
 
     def convert(ha, apps, test_mode, *, ev, key, tag):
-        request = convert_request(ha, apps, test_mode, key, r.keys, d.request_id('focus-r6-convert'))
+        build = variant.convert_request if variant else convert_request
+        request = build(ha, apps, test_mode, key, r.keys, d.request_id('focus-r6-convert'))
         started = time.monotonic()
         reply = d.ok('ha-convert-start', request, ev=ev, timeout=300)
         return wait(reply['job_id'], ev=ev), time.monotonic() - started
@@ -427,9 +441,10 @@ def run_locked(args, lease, commit, facts, inventory):
     watcher = threading.Thread(target=watchdog, daemon=True)
     watcher.start()
     safe = False
+    steps = variant.steps(r) if variant else (r.setup, r.before_state, r.upload, r.check, r.import_real,
+                                              lambda: r.verify('import'), r.restart, r.rollback, r.after_state)
     try:
-        for step in (r.setup, r.before_state, r.upload, r.check, r.import_real,
-                     lambda: r.verify('import'), r.restart, r.rollback, r.after_state):
+        for step in steps:
             r.budget('next acceptance step')
             step()
         safe = r.restored_back
@@ -483,7 +498,8 @@ def run_locked(args, lease, commit, facts, inventory):
             safe = False; d.STATE['pending'] = True; d.save_state()
     ev.save('scope.json', {'source_commit': commit, 'product_commit': control.source.PRODUCT_COMMIT, 'case': args.case, 'baseline_safe': safe,
                           'original_fixture_reused': True, 'image_pulls': 0,
-                          'device_memory_cap_bytes': DEVICE_CAP, 'reserve_bytes': RESERVE, 'sampled_resources': metrics})
+                          'device_memory_cap_bytes': DEVICE_CAP, 'reserve_bytes': RESERVE, 'sampled_resources': metrics,
+                          **(variant.scope(r) if variant else {})})
     return 0 if ev.finish() and safe else 1
 
 
