@@ -177,8 +177,8 @@ def run(args, lease, commit, facts, flow):
             # Return native stack to cold even on failure. Keep current source if jobs/data recovery uncertain.
             stop_result=cold.stop(before['owner']['units']['nextcloud-office.service'],office_claim)
             save('cold-stop-result.json',stop_result)
-            cold=collect()
-            if any(x.get('ActiveState')!='inactive' for x in cold['owner']['units'].values()):
+            cold_state=collect()
+            if any(x.get('ActiveState')!='inactive' for x in cold_state['owner']['units'].values()):
                 raise RuntimeError('fixed-r6-cold-return-failed')
             wake.device(wake.unit_program(),{'action':'revert','snapshot':snapshot});reload_units()
             reverted=wake.device(wake.unit_program(),{'action':'snapshot'})==snapshot

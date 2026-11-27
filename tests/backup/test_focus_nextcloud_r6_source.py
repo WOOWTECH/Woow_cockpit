@@ -240,6 +240,67 @@ class NativeMutationLockTests(unittest.TestCase):
 
 
 class GuardTests(unittest.TestCase):
+    def test_actual_orchestrator_claims_stops_and_returns_units_and_source(self):
+        events=[];nonce='abcdef0123456789';rows=manifest(payload())
+        before={'isolation':{'running':True,'network':'none','ports':{},'memory_limit':case.DEVICE_CAP},
+                'root':{'memory_max':str(case.DEVICE_CAP),'memory_current':0,'varlib_free_bytes':30*case.GIB,
+                        'catalog_sha256':'a'*64,'installed_hashes':{'cli.py':'b'*64}},
+                'host_memory_available_mib':3000,'host_free_bytes':30*case.GIB,
+                'owner':{'units':{n:{'ActiveState':'inactive','UnitFileState':'generated'} for n in flow.INACTIVE_UNITS},
+                         'quadlets':{'prior':'exact'},'images':[
+                             {'ref':r,'present':True,'identity':{'id':v,'architecture':'amd64','os':'linux'}}
+                             for r,v in case.ORIGINALS.items()]}}
+        snapshot={'rows':[{'name':n} for n in case.wake.FILES]}
+        claim={'ActiveState':'active','MainPID':'123','InvocationID':'a'*32}
+        lease={'lane':'nextcloud-r6','device':'woowbk-dev-e','source_commit':'c'*40,'phases':['fullshare'],
+               'product_commit':source.PRODUCT_COMMIT,'product_manifest_sha256':source.manifest_hash(rows),
+               'source_policy':case.SOURCE_POLICY,'pin_refresh_policy':case.PIN_POLICY,'recovery_grace_seconds':1800,
+               'reserve_bytes':case.RESERVE,'memory_cap_bytes':case.DEVICE_CAP,
+               'not_before_utc':'2026-01-01T00:00:00Z','expires_utc':'2099-01-01T00:00:00Z'}
+        def device(body,request=None,**kwargs):
+            if body==case.QUIESCENT:return {'active_jobs':0}
+            if body==case.wake.BASELINE_HASH:return [{'sha256':'d'*64}]
+            if body=='unit-program':
+                action=request['action'];events.append(action)
+                return snapshot if action=='snapshot' else {'status':action}
+            if body==case.wake.CONTROL:events.append('start');return {'status':'started'}
+            if body==case.cold.CLAIM:events.append('claim');return claim
+            if body==case.cold.STOP:
+                self.assertEqual(request,{'prior':before['owner']['units']['nextcloud-office.service'],'claimed':claim})
+                events.append('stop');return {'status':'stopped'}
+            self.fail('unexpected device boundary')
+        def transact(action,actual_nonce,*args):
+            self.assertEqual(actual_nonce,nonce);self.assertNotEqual(actual_nonce,'24d1dc3d14bfc94e')
+            events.append('source-'+action);return {'status':'restored' if action=='restore' else 'installed'}
+        with tempfile.TemporaryDirectory() as tmp,contextlib.ExitStack() as stack:
+            home=Path(tmp);receipt=home/'flow-receipt.json'
+            def run_flow(*args):events.append('flow');receipt.write_text('{"pending":false}');return 0
+            fakeflow=types.SimpleNamespace(RECEIPT=receipt,baseline_verify=lambda:True,run_locked=run_flow)
+            stack.enter_context(patch.object(Path,'home',return_value=home))
+            stack.enter_context(patch.object(case,'collect',side_effect=lambda:copy.deepcopy(before)))
+            stack.enter_context(patch.object(case.source,'frozen_manifest',return_value=({},rows)))
+            source_call=stack.enter_context(patch.object(case.source,'transact',side_effect=transact))
+            stack.enter_context(patch.object(case.secrets,'token_hex',return_value=nonce))
+            stack.enter_context(patch.object(case.wake,'unit_program',return_value='unit-program'))
+            wake_call=stack.enter_context(patch.object(case.wake,'device',side_effect=device))
+            stop_device=stack.enter_context(patch.object(case.cold,'device',side_effect=device))
+            stop_call=stack.enter_context(patch.object(case.cold,'stop',wraps=case.cold.stop))
+            stack.enter_context(patch.object(case,'reload_units',side_effect=lambda:events.append('reload')))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            args=types.SimpleNamespace(product_source=home,retained_upload_receipt=None)
+            self.assertEqual(case.run(args,lease,'c'*40,{},fakeflow),0)
+            wake_call.assert_any_call(case.cold.CLAIM)
+            stop_call.assert_called_once_with(before['owner']['units']['nextcloud-office.service'],claim)
+            stop_device.assert_called_once_with(case.cold.STOP,{'prior':before['owner']['units']['nextcloud-office.service'],
+                                                               'claimed':claim},timeout=240)
+            self.assertEqual([c.args[0] for c in source_call.call_args_list],['install','restore'])
+            self.assertEqual(events,['snapshot','source-install','pin','reload','start','claim','flow','stop',
+                                     'revert','reload','snapshot','source-restore'])
+            result=json.loads(next(home.glob('.woowbk-lab/evidence/focus-nextcloud-r6-control/*/fixed-result.json')).read_text())
+            self.assertTrue(all(result[k] for k in ('data_baseline_safe','prior_quadlets_exact',
+                            'prior_engine_helper_version_exact','units_images_catalog_baseline_archive_isolation_preserved')))
+            self.assertEqual(result['source_transaction_nonce'],nonce)
+
     def test_owner_writable_parents_refuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             p=Path(tmp);p.chmod(0o777)
