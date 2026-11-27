@@ -375,7 +375,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
     def witness(self, action):
         request={'action':action,'name':self.name,'value':self.run.args.secrets['OWN_SEED_CREDENTIAL']}
         found=self.h.device_python(plan.API_WITNESS,request,as_owner=True,timeout=60)
-        self.require('later_app_api_witness_'+action,found.get('status')==200 and found.get('found') is True)
+        verdict={k:found.get(k) for k in ('status','success','found')} if isinstance(found,dict) else {'answer':'not-a-dict'}
+        self.r['witness_'+action]={k:v for k,v in verdict.items() if v is None or isinstance(v,(bool,int,str))};self.save()
+        self.require('later_app_api_witness_'+action,isinstance(found,dict) and found.get('status')==200 and found.get('found') is True
+                     and (action=='check' or found.get('success') is True))
 
     def flow(self):
         self.resources(); self.begin()

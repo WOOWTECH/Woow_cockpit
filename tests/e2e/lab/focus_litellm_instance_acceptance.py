@@ -169,11 +169,13 @@ import json,re,subprocess,sys,urllib.request,urllib.error
 q=json.load(sys.stdin)
 assert q['action'] in ('create','check')
 assert re.fullmatch(r'woowbk_focus_litellm_[0-9a-f]{12}',q['name'])
-if q['action']=='check':
+def stored():
  statement="SELECT to_json(count(*)=1) FROM public.\"LiteLLM_CredentialsTable\" WHERE credential_name='"+q['name']+"';"
  p=subprocess.run(['podman','exec','-i','litellm-postgres','psql','-X','-w','-Atq','-v','ON_ERROR_STOP=1',
   '-U','litellm','-d','litellm','-f','-'],input=statement.encode(),capture_output=True,check=True,timeout=30)
- print(json.dumps({'status':200,'found':json.loads(p.stdout) is True}));sys.exit(0)
+ return json.loads(p.stdout) is True
+if q['action']=='check':
+ print(json.dumps({'status':200,'found':stored()}));sys.exit(0)
 master=subprocess.run(['podman','secret','inspect','--showsecret','--format','{{.SecretData}}',
  'litellm-master-key'],capture_output=True,check=True,timeout=30).stdout.decode().strip()
 opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -183,7 +185,9 @@ req=urllib.request.Request('http://127.0.0.1:4000/credentials',method='POST',dat
 try:
  with opener.open(req,timeout=30) as r:
   b=r.read(1024*1024+1);assert len(b)<=1024*1024
-  found=json.loads(b)
-  print(json.dumps({'status':r.status,'found':q['name'] in json.dumps(found)}))
-except urllib.error.HTTPError as e:print(json.dumps({'status':e.code,'found':False}))
+  answer=json.loads(b)
+  # LiteLLM v1.104.0 (credential_endpoints/endpoints.py) answers {"success": true, "message": "Credential created successfully"}
+  # and never echoes the name (dev-d b9 failed on exactly that): the row in its own table is the proof that the write happened.
+  print(json.dumps({'status':r.status,'success':isinstance(answer,dict) and answer.get('success') is True,'found':stored()}))
+except urllib.error.HTTPError as e:print(json.dumps({'status':e.code,'success':False,'found':False}))
 '''

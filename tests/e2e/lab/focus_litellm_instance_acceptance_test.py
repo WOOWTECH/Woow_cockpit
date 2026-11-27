@@ -14,6 +14,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import urllib.error
 
 
 HERE = Path(__file__).resolve().parent
@@ -393,6 +394,83 @@ class OutsidersCheckTests(unittest.TestCase):
             with self.subTest(repr(bad)[:30]):
                 self.assertFalse(plan.database_rows_equal(good, bad))
                 self.assertFalse(plan.database_rows_equal(bad, good))
+
+
+class WitnessTests(unittest.TestCase):
+    """LiteLLM v1.104.0 answers a created credential with {"success": true, "message": ...} and no name (dev-d b9 failed on that):
+    the witness takes LiteLLM's success flag and then the row in LiteLLM_CredentialsTable as the proof."""
+    NAME = 'woowbk_focus_litellm_012345abcdef'
+
+    def run_witness(self, action, *, answer=None, http=None, stored=True):
+        plan = load('focus_litellm_instance_acceptance')
+        calls = []
+        def run(argv, **kw):
+            calls.append(argv[:3])
+            if argv[:3] == ['podman', 'secret', 'inspect']:
+                return SimpleNamespace(stdout=b'master-key-value\n', returncode=0)
+            assert argv[:4] == ['podman', 'exec', '-i', 'litellm-postgres'] and self.NAME in kw['input'].decode()
+            return SimpleNamespace(stdout=b'true\n' if stored else b'false\n', returncode=0)
+        requests = []
+        class Response:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self, n): return json.dumps(answer if answer is not None else {'success': True, 'message': 'Credential created successfully'}).encode()
+        def open_request(req, timeout):
+            requests.append(req)
+            if http: raise urllib.error.HTTPError(req.full_url, http, 'already exists', {}, io.BytesIO(b'{}'))
+            return Response()
+        out = io.StringIO()
+        with mock.patch('subprocess.run', side_effect=run), \
+                mock.patch('urllib.request.build_opener', return_value=SimpleNamespace(open=open_request)), \
+                mock.patch('sys.stdin', io.StringIO(json.dumps({'action': action, 'name': self.NAME, 'value': 'seed-secret'}))), \
+                redirect_stdout(out):
+            try:
+                exec(plan.API_WITNESS, {'__name__': 'witness'})
+            except SystemExit:
+                pass
+        self.assertNotIn('seed-secret', out.getvalue()); self.assertNotIn('master-key-value', out.getvalue())
+        return json.loads(out.getvalue()), calls, requests
+
+    def test_the_real_v1_104_answer_with_the_row_present_is_a_written_witness(self):
+        result, calls, requests = self.run_witness('create')
+        self.assertEqual(result, {'status': 200, 'success': True, 'found': True})
+        self.assertEqual(json.loads(requests[0].data)['credential_name'], self.NAME)
+        self.assertEqual(requests[0].headers['Authorization'], 'Bearer master-key-value')
+        self.assertIn(['podman', 'exec', '-i'], calls)                 # the row was looked up in LiteLLM's own table
+
+    def test_a_success_answer_without_the_row_or_an_error_is_not_a_witness(self):
+        self.assertEqual(self.run_witness('create', stored=False)[0], {'status': 200, 'success': True, 'found': False})
+        self.assertEqual(self.run_witness('create', answer={'detail': 'x'})[0]['success'], False)
+        self.assertEqual(self.run_witness('create', http=409)[0], {'status': 409, 'success': False, 'found': False})
+
+    def test_check_only_reads_the_table(self):
+        result, calls, requests = self.run_witness('check')
+        self.assertEqual(result, {'status': 200, 'found': True}); self.assertEqual(requests, [])
+        self.assertNotIn(['podman', 'secret', 'inspect'], calls)
+
+    def test_the_controller_needs_status_success_and_the_row_and_keeps_only_those_facts(self):
+        m = load('focus_litellm_instance_acceptance_run')
+        with tempfile.TemporaryDirectory() as root:
+            lease = {'name': self.NAME, 'expires_utc': '2026-11-27T04:00:00+00:00'}
+            c = m.Controller(SimpleNamespace(receipt=Path(root) / 'case.private.json'), lease, SimpleNamespace(drv=None))
+            c.run = SimpleNamespace(args=SimpleNamespace(secrets={'OWN_SEED_CREDENTIAL': 'seed-secret'}))
+            for action, answer, ok in (('create', {'status': 200, 'success': True, 'found': True}, True),
+                                       ('create', {'status': 200, 'success': False, 'found': True}, False),
+                                       ('create', {'status': 200, 'success': True, 'found': False}, False),
+                                       ('create', {'status': 409, 'success': False, 'found': False}, False),
+                                       ('check', {'status': 200, 'found': True}, True),
+                                       ('check', {'status': 200, 'found': False}, False),
+                                       ('create', 'not json', False)):
+                with self.subTest(action=action, answer=answer):
+                    c.h = SimpleNamespace(device_python=lambda program, request, **kw: answer)
+                    if ok:
+                        c.witness(action)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'later_app_api_witness_' + action):
+                            c.witness(action)
+                    kept = json.loads((Path(root) / 'case.private.json').read_text())['witness_' + action]
+                    self.assertNotIn('seed-secret', json.dumps(kept))
 
 
 if __name__ == '__main__':
