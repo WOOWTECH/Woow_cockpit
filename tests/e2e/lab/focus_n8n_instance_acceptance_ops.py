@@ -15,8 +15,12 @@ import subprocess
 import sys
 import tempfile
 
-sys.dont_write_bytecode = True
-sys.pycache_prefix = '/nonexistent/woowbk-focus-n8n-pycache'
+if __name__ == '__main__':
+    # Only when this file IS the device program: the host controller and the tests import it as a library, and an import must
+    # not change their process (a later py_compile in the same test run was sent to /nonexistent). Every device program the
+    # controller sends starts with the same two settings in its own prelude (root_json).
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = '/nonexistent/woowbk-focus-n8n-pycache'
 
 APP = '/home/appowner'
 CATALOG = '/etc/woowtech-cockpit/backup/apps/n8n.json'

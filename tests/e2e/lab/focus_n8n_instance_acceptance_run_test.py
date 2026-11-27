@@ -664,4 +664,21 @@ class SecretKeepTests(Fixture):
         self.assertEqual(seen['recover_request_id'],NAME+'-recover-a11')
 
 
+class ImportHygieneTests(unittest.TestCase):
+    def test_importing_the_device_operations_does_not_change_the_hosts_bytecode_settings(self):
+        # final integration tip: a later py_compile in the same test process was sent to /nonexistent by this import
+        code=("import sys;sys.path.insert(0,%r);before=(sys.pycache_prefix,sys.dont_write_bytecode);"
+              "import focus_n8n_instance_acceptance_ops;print(before==(sys.pycache_prefix,sys.dont_write_bytecode))")%str(Path(run.__file__).parent)
+        p=subprocess.run([sys.executable,'-I','-c',code],capture_output=True,timeout=60)
+        self.assertEqual((p.returncode,p.stdout.strip()),(0,b'True'),p.stderr[-300:])
+
+    def test_as_the_device_program_it_still_turns_bytecode_off_first(self):
+        text=(Path(run.__file__).parent/'focus_n8n_instance_acceptance_ops.py').read_text()
+        guarded=text.index("if __name__ == '__main__':")
+        self.assertLess(guarded,text.index("sys.pycache_prefix = '/nonexistent/woowbk-focus-n8n-pycache'"))
+        self.assertLess(text.index("sys.pycache_prefix = '/nonexistent/woowbk-focus-n8n-pycache'"),text.index('APP = '))
+        prelude=''.join(c for c in run.Controller.root_json.__code__.co_consts if isinstance(c,str))   # every device program's own start
+        self.assertIn("sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-pycache'",prelude)
+
+
 if __name__=='__main__':unittest.main()
