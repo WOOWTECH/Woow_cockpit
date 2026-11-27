@@ -20,9 +20,9 @@ import sys
 import tarfile
 import time
 
-FROZEN = Path('/tmp/parity-focus-final-gate2-20261127')
-PRODUCT_COMMIT = 'd09f4fe8e06305aff6a1150f41d6de719e7b7f6a'
-NC_SHA = 'b888cbff8a47e01791b277916394e90b13b3ddc673c2d893368ddf3c06cbcf56'
+FROZEN = Path('/tmp/parity-focus-nextcloud-r6-product-20261127')
+PRODUCT_COMMIT = '6daaa15c046a4c083cdfb1aac44b5433e8f99f6f'
+NC_SHA = 'bcc39687e4828c25c4f336f527e57cc7ca13429d35870bbed88abcee4d817d1c'
 MAX_FILE = 2 * 1024**2
 MAX_TOTAL = 16 * 1024**2
 FLOOR = 13 * 1024**3 + 512 * 1024**2
