@@ -75,6 +75,88 @@ def retained_credit(receipt,proof):
     return min(FIXTURE_BYTES,proof['allocated_bytes'])
 
 
+def completed_uploads(root,deadline,uid=0):
+    """Native .done replay caches only; never admit unfinished/unknown entries.
+
+    Refuse a run that could cross native begin_upload's 24h cleanup boundary,
+    so every pre-existing cache must remain byte/metadata exact afterward.
+    """
+    rows=[];now=time.time()
+    if not os.path.lexists(root):return rows
+    parent=root.lstat()
+    if not stat.S_ISDIR(parent.st_mode) or parent.st_uid!=uid or parent.st_mode&0o022:
+        raise ValueError('fixed-upload-cache-directory-refused')
+    paths=sorted(root.iterdir())
+    if len(paths)>2000:raise ValueError('fixed-upload-cache-count-refused')
+    stable=lambda s:(s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_nlink,s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+    for p in paths:
+        if not re.fullmatch(r'u[0-9a-f]{16}\.done',p.name):
+            raise ValueError('fixed-upload-unfinished-or-unknown-entry')
+        fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC|os.O_NOATIME)
+        with os.fdopen(fd,'rb') as f:
+            s=os.fstat(f.fileno())
+            if not stat.S_ISREG(s.st_mode) or s.st_uid!=uid or s.st_gid!=uid or s.st_nlink!=1 or stat.S_IMODE(s.st_mode)!=0o600 or not 0<s.st_size<=4096:
+                raise ValueError('fixed-upload-cache-file-refused')
+            raw=f.read(4097)
+            if stable(os.fstat(f.fileno()))!=stable(s) or stable(p.lstat())!=stable(s):
+                raise ValueError('fixed-upload-cache-changed-during-read')
+        if len(raw)!=s.st_size:raise ValueError('fixed-upload-cache-size-refused')
+        def unique(pairs):
+            result={}
+            for key,value in pairs:
+                if key in result:raise ValueError('fixed-upload-cache-duplicate-key')
+                result[key]=value
+            return result
+        record=json.loads(raw,object_pairs_hook=unique)
+        if not isinstance(record,dict) or set(record) not in ({'at','backup_id'},{'at','ha_backup_id'}):
+            raise ValueError('fixed-upload-cache-record-refused')
+        key='ha_backup_id' if 'ha_backup_id' in record else 'backup_id'
+        pattern=r'ha-[0-9a-f]{20}' if key=='ha_backup_id' else r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}'
+        if not isinstance(record[key],str) or not re.fullmatch(pattern,record[key]) or not isinstance(record['at'],str):
+            raise ValueError('fixed-upload-cache-target-refused')
+        datetime.datetime.strptime(record['at'],'%Y-%m-%dT%H:%M:%SZ')
+        if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z',record['at']):
+            raise ValueError('fixed-upload-cache-time-refused')
+        if s.st_mtime>now or deadline+300-s.st_mtime>=86400:
+            raise ValueError('fixed-upload-native-done-cleanup-boundary')
+        rows.append({'name':p.name,'stat':list(stable(s)),'sha256':hashlib.sha256(raw).hexdigest(),'record':record})
+    return rows
+
+
+def no_upload_writers(root,proc=Path('/proc')):
+    """Bounded read-only process/fd census; fail closed on incomplete access."""
+    count=0;fds=0
+    for p in proc.iterdir():
+        if not p.name.isdigit():continue
+        count+=1
+        if count>1024:raise ValueError('fixed-upload-process-census-bound')
+        try:
+            with (p/'cmdline').open('rb') as f:cmd=f.read(65537)
+            if len(cmd)>65536:raise ValueError('fixed-upload-process-command-bound')
+            args=cmd.split(b'\0')
+            if b'/usr/local/libexec/woowtech-cockpit-backup' in args:
+                raise ValueError('fixed-upload-native-helper-active')
+            for fd in (p/'fd').iterdir():
+                fds+=1
+                if fds>32768:raise ValueError('fixed-upload-fd-census-bound')
+                try:target=os.readlink(fd)
+                except FileNotFoundError:continue
+                if target.startswith(str(root)+'/'):
+                    raise ValueError('fixed-upload-existing-file-open')
+        except (FileNotFoundError,ProcessLookupError):continue
+    return {'processes_scanned':count,'fds_scanned':fds,'active_upload_writers':0}
+
+
+def completed_uploads_preserved(before,after,state):
+    old={r['name']:r for r in before};new={r['name']:r for r in after}
+    if any(new.get(name)!=row for name,row in old.items()):return False
+    extra=set(new)-set(old)
+    if not extra:return state['phase']!='retained'
+    own=state.get('upload_id','')+'.done'
+    return (extra=={own} and state['phase'] in ('finish-requested','finished','retained')
+            and new[own]['record'].get('ha_backup_id')==HA_ID)
+
+
 # Rendered into BOTH long-running device processes. No RPC-based watcher thread.
 WATCH=r'''
 metrics={'minimum_free_bytes':None,'peak_memory_current_bytes':0};stage='watch';offset=0;watch_failure=None
@@ -178,9 +260,10 @@ for p in entries:
  assert p.suffix in ('.tar','.json')
 stems={p.stem for p in entries}
 assert all((ha/(stem+'.tar')).is_file() and (ha/(stem+'.json')).is_file() for stem in stems)
-u=root/'uploads';uploads=sorted(p.name for p in u.iterdir()) if u.exists() else []
+u=root/'uploads';done=completed_uploads(u,q['deadline']);writers=no_upload_writers(u)
 print(json.dumps({'status':'passed','helper_sha256':q['helper_sha256'],'version_sha256':q['version_sha256'],
- 'prior_source_exact':True,'isolated_no_bytecode_policy':True,'uploads':uploads,
+ 'prior_source_exact':True,'isolated_no_bytecode_policy':True,'uploads':[r['name'] for r in done],
+ 'completed_uploads':done,'writer_census':writers,
  'expected_store_absent':not any(p.name.startswith(q['ha_id']+'.') for p in entries)}))
 '''
 VERIFY=r'''
@@ -213,9 +296,10 @@ except BaseException as error:
 
 
 def meta_program():
-    return ('import hashlib,json,os,stat,sys\nfrom pathlib import Path\nMAX_FILE='+str(source.MAX_FILE)+
+    return ('import datetime,hashlib,json,os,re,stat,sys,time\nfrom pathlib import Path\nMAX_FILE='+str(source.MAX_FILE)+
             '\nMAX_TOTAL='+str(source.MAX_TOTAL)+'\n'+inspect.getsource(source.digest)+'\n'+
-            inspect.getsource(source.manifest_hash)+'\n'+inspect.getsource(source.tree_snapshot)+'\n'+META)
+            inspect.getsource(source.manifest_hash)+'\n'+inspect.getsource(source.tree_snapshot)+'\n'+
+            inspect.getsource(completed_uploads)+'\n'+inspect.getsource(no_upload_writers)+'\n'+META)
 
 
 class Evidence:
@@ -302,10 +386,18 @@ def stream(state,begin,ev,deadline):
         except BaseException as error:
             ev.event(diagnostic(error,'host-stream',offset));raise
         finally:
-            p.stdin.close();p.wait(timeout=120);state['writer_reaped']=True
-            ev.event({'stage':'writer-reaped-before-cleanup','chunk_offset':offset,'transport_returncode':p.returncode,
-                      'stderr_sha256':source.digest(ev.path/'writer.stderr.private')})
-    reply=json.loads((ev.path/'writer.stdout.private').read_text());ev.save('writer-diagnostic.private.json',reply)
+            try:p.stdin.close()
+            finally:
+                p.wait(timeout=120);state['writer_reaped']=True
+                ev.event({'stage':'writer-reaped-before-cleanup','chunk_offset':offset,'transport_returncode':p.returncode,
+                          'stderr_sha256':source.digest(ev.path/'writer.stderr.private')})
+                with (ev.path/'writer.stdout.private').open('rb') as f:raw=f.read(65537)
+                try:
+                    if len(raw)>65536:raise ValueError('fixed-upload-writer-diagnostic-bound')
+                    reply=json.loads(raw)
+                except (ValueError,UnicodeError):
+                    reply={'status':'unreadable','fixed_failure':'fixed-upload-writer-diagnostic-invalid','raw_sha256':hashlib.sha256(raw).hexdigest()}
+                ev.save('writer-diagnostic.private.json',reply)
     if p.returncode or reply.get('status')!='passed':raise RuntimeError('fixed-upload-writer-failed')
     if reply['bytes']!=offset or reply['sha256']!=FIXTURE_SHA:raise ValueError('fixed-upload-writer-proof-mismatch')
     return reply
@@ -364,8 +456,8 @@ def run_attempt(lease,commit,deadline,ev):
     before=collect();admission(before)
     if min(before['host_free_bytes'],before['root']['varlib_free_bytes'])<RESERVE+FIXTURE_BYTES+MARGIN:
         raise ValueError('fixed-upload-fresh-peak-refused')
-    meta=device_process(meta_program(),[],ev,'old-helper-preflight',json.dumps({'prior_sha256':PRIOR_SHA,'helper_sha256':HELPER_SHA,'version_sha256':VERSION_SHA,'ha_id':HA_ID}).encode(),120)
-    if meta['uploads'] or not meta['expected_store_absent'] or wake.device(QUIESCENT,root=True)['active_jobs']:
+    meta=device_process(meta_program(),[],ev,'old-helper-preflight',json.dumps({'prior_sha256':PRIOR_SHA,'helper_sha256':HELPER_SHA,'version_sha256':VERSION_SHA,'ha_id':HA_ID,'deadline':deadline}).encode(),120)
+    if not meta['expected_store_absent'] or wake.device(QUIESCENT,root=True)['active_jobs']:
         raise ValueError('fixed-upload-foreign-upload-store-or-writer')
     ev.save('before.private.json',before);ev.save('old-helper-policy-binding.json',meta)
     state={'phase':'new','upload_id':None,'writer_reaped':True};proof=None;writer=None;failure=None
@@ -376,14 +468,17 @@ def run_attempt(lease,commit,deadline,ev):
                and after['root']['installed_hashes']==before['root']['installed_hashes']
                and after['root']['memory_max']==str(DEVICE_CAP) and wake.device(QUIESCENT,root=True)['active_jobs']==0)
     # Recheck complete prior engine/helper/cache without touching any source or policy.
-    finalmeta=device_process(meta_program(),[],ev,'old-helper-final',json.dumps({'prior_sha256':PRIOR_SHA,'helper_sha256':HELPER_SHA,'version_sha256':VERSION_SHA,'ha_id':HA_ID}).encode(),120)
+    finalmeta=device_process(meta_program(),[],ev,'old-helper-final',json.dumps({'prior_sha256':PRIOR_SHA,'helper_sha256':HELPER_SHA,'version_sha256':VERSION_SHA,'ha_id':HA_ID,'deadline':deadline}).encode(),120)
+    caches_exact=completed_uploads_preserved(meta['completed_uploads'],finalmeta['completed_uploads'],state)
     passed=(state['phase']=='retained' and preserved and finalmeta['prior_source_exact']
+            and caches_exact
             and min(after['host_free_bytes'],after['root']['varlib_free_bytes'])>=RESERVE+MARGIN)
     record={'status':'passed' if passed else 'failed','phase':'upload-only','source_commit':commit,'pending':not passed,
      'upload_id':state.get('upload_id'),'ha_backup_id':state.get('ha_backup_id'),'expected_store_absent_before':True,
      'bytes':proof['bytes'] if proof else None,'sha256':proof['sha256'] if proof else None,
      'ha_file_identity':proof['identity'] if proof else None,'sidecar_sha256':proof['sidecar_sha256'] if proof else None,
      'allocated_bytes':proof['allocated_bytes'] if proof else 0,'cold_units_source_catalog_images_isolation_preserved':preserved,
+     'preexisting_done_caches_exact':caches_exact,'preexisting_done_cache_count':len(meta['completed_uploads']),
      'helper_sha256':HELPER_SHA,'initial_fullshare_stop_cause':'unknown-not-recorded','fixed_failure':failure,
      'app_starts':0,'jobs_started':0,'pulls':0,'reserve_bytes':RESERVE,'memory_cap_bytes':DEVICE_CAP,
      'private_event_count':ev.number,'private_receipt_dir':str(ev.path),'last_fsm_phase':state['phase']}

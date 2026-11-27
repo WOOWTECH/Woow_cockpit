@@ -1,7 +1,10 @@
 # R6 cold UPLOAD ONLY: bounded minimal repro for parent review
 
-CODE PREPARATION ONLY. Original failed fullshare upload cause stays **unknown**;
-this controller has not run on dev-e. No new runtime lease exists. Parent can grant
+Original failed fullshare upload cause stays **unknown**. The reviewed507b attempt
+at09:06 stopped before upload-begin because the initial harness required an empty
+upload directory. Read-only inventory proved all ten entries are native `.done`
+completion caches. The corrected controller awaits a new parent-reviewed lease,
+**after LL image recovery succeeds and releases its disk reservation**. Parent can grant
 **55 minutes upload-only +5 minutes only for own abort/reaping** using the inert
 lease template. Exact source commit must match the reviewed checkout; one use of
 that exact lease is claimed with an exclusive immutable host marker before begin.
@@ -41,8 +44,14 @@ allocation bound: **4467947520 +536870912 bytes**, requiring
 This is above the existing17GiB cold gate. One device upload is renamed into the
 HA store; no second4.47GB file is created. Metadata/log margin512MiB is conservative.
 
-Require upload directory empty and all existing HA store files paired/root-owned
-regular files. Expected HA record must be **absent before begin**, preventing a
+Allow only bounded, root-owned0600/single-link regular `<uID>.done` files with
+valid native completion records; refuse `.part`, `.json`, links, unknown names,
+malformed records and active native helpers/open upload FDs. Snapshot each cache's
+bytes and full stable metadata privately; require exact preservation afterward,
+with only this attempt's bound completion record added after finish. Refuse a
+lease crossing any existing cache's native24h cleanup boundary, including300s
+grace. No blanket deletion or age exemption. Existing HA store files must remain
+paired/root-owned regular files. Expected HA record must be **absent before begin**, preventing a
 native deduplicating upload from granting ownership of someone else's record.
 Only one original file is read from its existing host path:
 
@@ -123,9 +132,15 @@ calls the cold-return reset path because it never starts an app.
 
 ## Verification
 
-New FSM/provenance/diagnostic/watch/cold tests **18/18**; single final neighbor run
-**57/57**,0fail/error/skip. Injected partial EPIPE retains errno32 and exact offset
+Original preparation:18focused and57neighbors passed. The corrected upload module
+passes **25/25**,0fail/error/skip; no repeated neighbor run. Two focused regressions
+first reproduced the empty-directory rejection and skipped writer parsing on
+host EPIPE. The writer diagnostic is now parsed and saved in its reaping finally
+block before own abort, including failed stream paths. Injected partial EPIPE retains errno32 and exact offset
 before abort; lost replies and live writers retain uncertain objects; tampered
 receipt/inode/sidecar rejects adoption; actual rendered watcher distinguishes
 expiry/reserve/memory from a probe errno; all device programs compile. No broad
-suite or real upload runtime was run. The initial failure remains unknown.
+suite or actual transfer was run for this correction. The complete corrected
+metadata program also passed read-only on E under its mutex: exact old source,
+ten valid caches, expected HA store absent,9processes/152FDs,0writers. See
+[cache review](upload-done-cache-REVIEW.md). The initial failure remains unknown.

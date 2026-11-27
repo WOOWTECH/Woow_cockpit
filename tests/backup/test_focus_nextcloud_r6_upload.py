@@ -4,6 +4,7 @@ import copy
 import errno
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -124,6 +125,40 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class DiagnosticTests(unittest.TestCase):
+    def test_actual_writer_epipe_diagnostic_is_read_before_abort(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ev=upload.Evidence(Path(tmp)/'attempt');fixture=Path(tmp)/'fixture';fixture.write_bytes(b'ab')
+            packet={'status':'failed','stage':'stream','chunk_offset':0,'watch_failure':{'reason':'fixed-upload-reserve'}}
+            class Process:
+                returncode=None
+                def __init__(self,*args,**kwargs):
+                    r,w=os.pipe();os.close(r);self.stdin=os.fdopen(w,'wb',buffering=0)
+                    self.out=kwargs['stdout'];self.err=kwargs['stderr']
+                def poll(self):return None
+                def wait(self,**kwargs):
+                    self.returncode=2;self.out.write(json.dumps(packet).encode());self.out.flush()
+                    self.err.write(b'private writer traceback');self.err.flush();return 2
+            def rpc(command,*args):
+                if command=='upload-begin':return BEGIN
+                self.assertEqual(command,'upload-abort')
+                self.assertEqual(json.loads((ev.path/'writer-diagnostic.private.json').read_text()),packet)
+                return {'ok':True}
+            state={'phase':'new','upload_id':None,'writer_reaped':True}
+            with patch.object(upload,'FIXTURE',fixture),patch.object(upload,'FIXTURE_BYTES',2),patch.object(upload.subprocess,'Popen',Process):
+                result=upload.transfer(state,ev,9999999999,rpc_call=rpc)
+            self.assertEqual(result[-1],'fixed-upload-case-stopped')
+            self.assertTrue(any(json.loads(p.read_text()).get('stage')=='own-upload-aborted' for p in ev.path.glob('*event.private.json')))
+
+    def test_done_caches_reach_transfer_instead_of_blanket_empty_directory_gate(self):
+        class ReachedTransfer(Exception):pass
+        meta={'uploads':[UID+'.done'],'completed_uploads':[],'expected_store_absent':True}
+        before={'host_free_bytes':100*1024**3,'root':{'varlib_free_bytes':100*1024**3}}
+        with patch.object(upload,'collect',return_value=before),patch.object(upload,'admission'),\
+                patch.object(upload,'device_process',return_value=meta),patch.object(upload.wake,'device',return_value={'active_jobs':0}),\
+                patch.object(upload,'transfer',side_effect=ReachedTransfer),patch.object(upload.Evidence,'save'):
+            ev=object.__new__(upload.Evidence)
+            with self.assertRaises(ReachedTransfer):upload.run_attempt({},'source',9999999999,ev)
+
     def test_transport_nonzero_keeps_raw_rpc_watch_reason_and_stderr_before_raising(self):
         with tempfile.TemporaryDirectory() as tmp:
             ev=upload.Evidence(Path(tmp)/'attempt')
@@ -168,6 +203,76 @@ class DiagnosticTests(unittest.TestCase):
         with patch.object(sys,'argv',['driver']),patch.object(upload.subprocess,'run',side_effect=AssertionError),\
                 patch.object(upload.subprocess,'check_output',side_effect=AssertionError),contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(upload.main(),0)
+
+
+class CompletedCacheTests(unittest.TestCase):
+    def cache(self,root,name=UID+'.done',record=None):
+        p=root/name;p.write_text(json.dumps(record or {'ha_backup_id':upload.HA_ID,'at':'1970-01-02T03:46:40Z'}))
+        p.chmod(0o600);os.utime(p,(100000,100000));return p
+
+    def snapshot(self,root,deadline=103000):
+        with patch.object(upload.time,'time',return_value=101000):
+            return upload.completed_uploads(root,deadline,uid=os.getuid())
+
+    def test_ten_native_done_caches_are_valid_and_do_not_change_bytes_or_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            for i in range(10):self.cache(root,'u%016x.done'%i)
+            before=self.snapshot(root);self.assertEqual(len(before),10)
+            self.assertEqual(self.snapshot(root),before)
+            self.assertEqual(sorted(p.name for p in root.iterdir()),[r['name'] for r in before])
+
+    def test_unfinished_unknown_symlink_hardlink_mode_owner_and_oversize_refuse(self):
+        for kind in ('part','json','lock','unknown','symlink','hardlink','mode','owner','oversize','dangling-root'):
+            with self.subTest(kind=kind),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp)/'uploads';root.mkdir(mode=0o700);p=self.cache(root)
+                if kind in ('part','json','lock'):p.rename(root/(UID+'.'+kind))
+                elif kind=='unknown':p.rename(root/'other.done')
+                elif kind=='symlink':p.unlink();p.symlink_to('/etc/passwd')
+                elif kind=='hardlink':os.link(p,Path(tmp)/'second')
+                elif kind=='mode':p.chmod(0o644)
+                elif kind=='owner':root.chmod(0o777)
+                elif kind=='oversize':p.write_bytes(b'x'*4097)
+                else:p.unlink();root.rmdir();root.symlink_to(Path(tmp)/'absent')
+                with self.assertRaises((OSError,ValueError)):self.snapshot(root)
+
+    def test_malformed_duplicate_keys_target_date_and_native_cleanup_boundary_refuse(self):
+        for raw in ('{}','{"at":"1970-01-02T03:46:40Z","ha_backup_id":"bad"}',
+                    '{"at":"1970-01-02T03:46:40Z","at":"1970-01-02T03:46:40Z","ha_backup_id":"'+upload.HA_ID+'"}',
+                    '{"at":"not-time","ha_backup_id":"'+upload.HA_ID+'"}'):
+            with self.subTest(raw=raw),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);p=self.cache(root);p.write_text(raw);os.utime(p,(100000,100000))
+                with self.assertRaises(ValueError):self.snapshot(root)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.cache(root)
+            with self.assertRaisesRegex(ValueError,'native-done-cleanup-boundary'):self.snapshot(root,100000+86400-300)
+
+    def test_no_active_native_helper_or_fd_on_upload_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'uploads';root.mkdir();proc=Path(tmp)/'proc';proc.mkdir()
+            p=proc/'123';p.mkdir();(p/'fd').mkdir();(p/'cmdline').write_bytes(b'python3\0-I\0')
+            self.assertEqual(upload.no_upload_writers(root,proc)['active_upload_writers'],0)
+            (p/'cmdline').write_bytes(b'python3\0/usr/local/libexec/woowtech-cockpit-backup\0upload-finish\0')
+            with self.assertRaisesRegex(ValueError,'native-helper-active'):upload.no_upload_writers(root,proc)
+            (p/'cmdline').write_bytes(b'python3\0-I\0');(p/'fd'/'4').symlink_to(root/(UID+'.done'))
+            with self.assertRaisesRegex(ValueError,'existing-file-open'):upload.no_upload_writers(root,proc)
+
+    def test_prior_caches_must_stay_exact_only_own_finish_addition_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);self.cache(root);before=self.snapshot(root)
+            other='u1111111111111111';self.cache(root,other+'.done');after=self.snapshot(root)
+            state={'phase':'retained','upload_id':other}
+            self.assertTrue(upload.completed_uploads_preserved(before,after,state))
+            self.assertFalse(upload.completed_uploads_preserved(before,before,state))
+            for change in ('hash','metadata','missing','foreign','wrong-target','unfinished'):
+                new=copy.deepcopy(after);s=state.copy()
+                if change=='hash':new[0]['sha256']='f'*64
+                elif change=='metadata':new[0]['stat'][-1]+=1
+                elif change=='missing':new=new[1:]
+                elif change=='foreign':s['upload_id']='u2222222222222222'
+                elif change=='wrong-target':new[1]['record']['ha_backup_id']='ha-'+'f'*20
+                else:s['phase']='streaming'
+                with self.subTest(change=change):self.assertFalse(upload.completed_uploads_preserved(before,new,s))
 
 
 class ColdStopTests(unittest.TestCase):
