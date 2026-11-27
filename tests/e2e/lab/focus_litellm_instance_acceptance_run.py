@@ -240,21 +240,36 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
 
     def credentials(self):
         if self.run: return
+        # Redirect the saved driver's state before any reader/decoder runs.
+        self.h.state_path=lambda:Path(self.args.receipt).with_suffix('.saved80-private.json')
         args=argparse.Namespace(secrets=self.h.Secrets(
             [self.h.SECRET_DIR/'b1-creds.env',self.h.SECRET_DIR/'ha-import-creds.env'],
             self.h.SECRET_DIR/'dev-d-markers.json'))
         ev=self.saved.Ev(args.secrets,area='focus-litellm-instance-acceptance')
-        self.run=self.saved.Run(args,ev); self.run.load_secrets()
-        # Saved module state is redirected to this case's private namespace.
-        self.h.state_path=lambda:Path(self.args.receipt).with_suffix('.saved80-private.json')
-        if self.r.get('before_probe'): self.run.before=self.r['before_probe']
-        if self.r.get('generated_credentials'):
-            for name,value in self.r['generated_credentials'].items(): args.secrets.register(name,value)
-            self.run.own_key=self.r['generated_credentials']['OWN_LITELLM_KEY']
+        run=self.saved.Run(args,ev)
+        if self.r.get('before_probe'): run.before=self.r['before_probe']
+        own=('OWN_LITELLM_KEY','OWN_SEED_CREDENTIAL','WRONG_SALT')
+        if 'generated_credentials' in self.r:
+            persisted=self.r['generated_credentials']
+            if (not isinstance(persisted,dict) or not set(own)<=set(persisted)
+                    or not set(persisted)<=set(own)|{'OWN_INSTANCE_OUTSIDE_PASSWORD'}):
+                raise ValueError('incomplete persisted case credentials')
+            # The real reader refuses replacement of a registered value. Restore
+            # these first and initialize HA inputs without generating new ones.
+            for name,value in persisted.items(): args.secrets.register(name,value)
+            if any(not args.secrets.values.get(n) for n in ('HA_BACKUP_KEY','LITELLM_TEST_VKEY')):
+                raise ValueError('required harness credential missing')
+            files=self.saved.ha_secret_files(args.secrets['HA_BACKUP_KEY'])
+            for name,value in files.items(): args.secrets.register('HA_LITELLM_'+name.upper(),value)
+            run.ha_salt_sha=hashlib.sha256(files['salt_key'].encode()).hexdigest()
+            run.own_key=args.secrets['OWN_LITELLM_KEY']
+            ev.check('secrets: persisted case values and HA inputs registered for recovery',True,
+                     {'ha_files':sorted(files),'persisted_names':sorted(persisted)})
         else:
-            # Persist only in the private 0600 receipt, never a public result.
-            self.r['generated_credentials']={name:args.secrets[name] for name in
-                ('OWN_LITELLM_KEY','OWN_SEED_CREDENTIAL','WRONG_SALT')}; self.save()
+            run.load_secrets()
+            self.r['generated_credentials']={name:args.secrets[name] for name in own}
+            self.save()
+        self.run=run
 
     def app_assertions(self, method, *args):
         count=len(self.run.ev.results); getattr(self.run,method)(*args)
