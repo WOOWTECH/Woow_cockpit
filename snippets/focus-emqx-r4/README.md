@@ -1,6 +1,6 @@
-# EMQX R4: all eleven generated deltas proven; package smoke, upgrade, H1 and ARM pending
+# EMQX R4: all eleven generated deltas and H1 proven; package smoke, upgrade and ARM pending
 
-**2026-11-28:** the remaining eight generated cases passed on dev-d (admin_public 24/24, changed_acl 31/31, psk 26/26, http_dummy 29/29, file_dummy 27/27, jq_constant 27/27, env_dummy 27/27, lost_auth_setting 15/15 as an expected refusal); http_dummy needed two driver fixes (`a968fe4f`, `c1f03cf0`). Details: `tests/backup/evidence/focus-emqx-r4-20261127/generated-20261128-README.md`. The text below is the earlier state.
+**2026-11-28:** the remaining eight generated cases passed on dev-d (admin_public 24/24, changed_acl 31/31, psk 26/26, http_dummy 29/29, file_dummy 27/27, jq_constant 27/27, env_dummy 27/27, lost_auth_setting 15/15 as an expected refusal); http_dummy needed two driver fixes (`a968fe4f`, `c1f03cf0`). Details: `tests/backup/evidence/focus-emqx-r4-20261127/generated-20261128-README.md`. H1 (this device's environment wins) passed 28/28 as the new case `env_wins_h1` (`cf05b399`). The text below is the earlier state.
 
 
 Base: `a154751429ab5cfeb1dad75860b11946b2eaef01`. Assigned new files only. Plain and dead-row generated deltas each ran23/23PASS; noauth ran24/24PASS, all from frozen27cb52c4. Evidence lives under `tests/backup/evidence/focus-emqx-r4-20261127/` (plain coordinator-promoted; own dead_row/noauth case directories). All three leases released with independent zero owned resources/payloads. No installer, upgrader or new package smoke ran. No product/package/shared registry file was changed. E44's branch remains clean. The package draft remains local and unpushed.

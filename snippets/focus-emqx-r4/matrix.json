@@ -154,13 +154,28 @@
       "notices": [],
       "package_smoke_status": "not-applicable-refusal",
       "smoke": "requires-separate-owned-package-device"
+    },
+    {
+      "confirms": [],
+      "decision": "H1",
+      "expected": "candidate-and-restart",
+      "id": "env_wins_h1",
+      "native_result": "tests/backup/evidence/focus-emqx-r4-20261127/env_wins_h1/",
+      "native_source_commit": "cf05b3998110126298754bd75dbaea4154f574db",
+      "native_status": "passed-generated-delta-28-of-28",
+      "notices": [
+        "emqx.env-wins"
+      ],
+      "package_smoke_status": "not-run",
+      "smoke": "requires-separate-owned-package-device"
     }
   ],
   "explicit_remaining_gaps": [
     {
+      "evidence": "tests/backup/evidence/focus-emqx-r4-20261127/env_wins_h1/",
       "id": "device_env_precedence_H1",
       "policy": "device environment wins",
-      "status": "required-native-acceptance-pending-separate-case"
+      "status": "passed-native-case-env_wins_h1"
     },
     {
       "id": "ha_addon_env_vars",
@@ -176,5 +191,5 @@
       "status": "not-executed-existing-H2-smoke-decision-evidence-preserved"
     }
   ],
-  "new_native_runs": 11
+  "new_native_runs": 12
 }

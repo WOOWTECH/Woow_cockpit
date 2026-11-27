@@ -46,6 +46,36 @@
       "tempobjects_empty": true,
       "unrelated_container_churn": false
     },
+    "env_wins_h1": {
+      "checks_passed": 28,
+      "checks_total": 28,
+      "durable_images_volumes_unchanged": true,
+      "job_id": "j20261127T172948Z-907d82e6",
+      "login_codes": [
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-ha"
+        },
+        {
+          "codes": [
+            0
+          ],
+          "role": "emqx-new"
+        }
+      ],
+      "native": "03",
+      "observed": {
+        "h1_no_match_after_import": "allow",
+        "h1_restart_settings_difference": [
+          "設定（authorization）"
+        ]
+      },
+      "source_commit": "cf05b3998110126298754bd75dbaea4154f574db",
+      "tempobjects_empty": true,
+      "unrelated_container_churn": false
+    },
     "file_dummy": {
       "checks_passed": 27,
       "checks_total": 27,
@@ -155,6 +185,8 @@
   "device": "woowbk-dev-d",
   "device_mutex_free_at_check": true,
   "failed_attempt_work_folders_removed": {
+    "env_wins_h1 native01": "/home/appowner/woowbk-r4-ywmmt8xa",
+    "env_wins_h1 native02": "/home/appowner/woowbk-r4-xtz0djsr",
     "http_dummy native01 (j20261127T161750Z-4a01c64e)": "/home/appowner/woowbk-r4-gvogwurt",
     "http_dummy native02 (j20261127T162338Z-360747f9)": "/home/appowner/woowbk-r4-wavfxeje"
   },

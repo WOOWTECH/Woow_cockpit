@@ -32,13 +32,35 @@ catalog access, no installed-source access and no package smoke (by design).
   needs a few seconds to reach a dummy that starts after the broker, then logins pass. A real deployment's auth
   server is up before the broker.
 
+## H1: this device's environment wins — a new twelfth case, 28/28 (`cf05b399`)
+
+H1 (owner, 2026-11-25): this device's EMQX environment variables win over HA's settings; a notice says so, nothing
+stops. `env_wins_h1` hands the generated device to the engine as the product's own `Target`, read from a Quadlet file
+(host paths as `%h/...`, the only form the product accepts), so the candidate gets this device's environment exactly
+as the product reads it.
+
+- HA's broker and this device's config file both say `authorization.no_match = allow`; only this device's
+  `EMQX_AUTHORIZATION__NO_MATCH=deny` makes its broker deny (both checked).
+- The product's notice `emqx.env-wins` appears and names only the variable, never its value.
+- Right after the import HA's `allow` is in effect (recorded, not judged): the import applies HA's settings to the
+  running broker, and the environment takes over at the next start, exactly as the notice says. After the restart the
+  effective value is `deny`; HA's `allow` stays in the candidate's `cluster.hocon` both times.
+- The restart changes only the authorization setting (`["設定（authorization）"]`), no table; the product's own restore
+  check (`verify_restored`, E-90) logs one reminder naming it and does not fail; a wrong admin receipt still fails.
+- native01 and native02 failed on the test's own expectations (the environment judged before the next start; the
+  restart compared stricter than the product's E-90 rule), fixed in `20a8b84f` and `cf05b399`; no product change.
+
+Observation for the owner (wording, not a defect): after such a restore the product's reminder gives "usually this
+EMQX's settings changed after the conversion, or a different CPU count" as the likely reason; for a device with these
+variables the reason is the variables the import notice already named.
+
 ## Files
 
 Per case `<case>/nativeNN.json` is the fixed original result (no credentials, environment, inspect output or private
 logs). `generated-20261128-cleanup.json` records the independent scan afterwards (no job-owned container, volume or
-network; the two failed-attempt work folders removed by literal path; the earlier lane's failed export payload left
+network; the four failed-attempt work folders, two of http_dummy and two of env_wins_h1, removed by literal path; the earlier lane's failed export payload left
 untouched for its own cleanup lease) and every case's job id, checks and login codes.
 
 Scope: controlled generated internal candidate, restart and postcheck deltas only. Not proven here: the exact package
-per case and its smoke, the real upgrade, the H1 device-environment check (no driver yet) and ARM.
+per case and its smoke, the real upgrade and ARM.
 `commercial_acceptance`: `not-complete`.
