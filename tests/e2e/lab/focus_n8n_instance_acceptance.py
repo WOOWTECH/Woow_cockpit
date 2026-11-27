@@ -205,8 +205,11 @@ print(json.dumps({'main':main,'database':endpoint['database'],'user':endpoint['u
 
 API_ACTION_PROBE = r'''
 # Prepared device-side only. Inputs use the existing private stdin reader.
-import http.cookiejar,json,re,sys,time,urllib.request
-out={'login':False,'credential_visible':False,'manual_action':False}
+# The verdict is the three booleans; every other key is a stage name, a count, an HTTP status, an exception CLASS name or an
+# allow-listed word, so a failing run says WHERE it stopped without any payload, cookie, password or credential content.
+import http.cookiejar,json,re,sys,time,urllib.error,urllib.request
+STATUS=('new','running','waiting','success','error','canceled','crashed','unknown')
+out={'login':False,'credential_visible':False,'manual_action':False,'stage':'start'}
 try:
  q=json.loads(sys.stdin.read(8193)); assert set(q)=={'email','password'}
  jar=http.cookiejar.CookieJar()
@@ -219,30 +222,49 @@ try:
   with client.open(req,timeout=20) as r:
    b=r.read(4*1024*1024+1); assert r.status==200 and len(b)<=4*1024*1024
    return json.loads(b)
+ out['stage']='login'
  call('POST','/rest/login',{'emailOrLdapLoginId':q['email'],'password':q['password']})
  out['login']=True
+ out['stage']='credentials'
  creds=call('GET','/rest/credentials').get('data',[])
  assert isinstance(creds,list)
- out['credential_visible']=sum(c.get('name')=='HA probe header' for c in creds)==1
+ out['credential_total']=len(creds)
+ out['credential_matches']=sum(c.get('name')=='HA probe header' for c in creds)
+ out['credential_visible']=out['credential_matches']==1
+ out['stage']='workflows'
  rows=call('GET','/rest/workflows').get('data',[]); assert isinstance(rows,list)
- selected=[w for w in rows if w.get('name')=='WOOW 匯入測試 - 手動']; assert len(selected)==1
+ out['workflow_total']=len(rows)
+ selected=[w for w in rows if w.get('name')=='WOOW 匯入測試 - 手動']
+ out['workflow_matches']=len(selected); assert len(selected)==1
  wid=selected[0]['id']; assert isinstance(wid,str) and re.fullmatch(r'[A-Za-z0-9_-]{1,128}',wid)
+ out['stage']='workflow'
  workflow=call('GET','/rest/workflows/'+wid)['data']
- nodes=workflow['nodes']; assert len(nodes)==2
+ nodes=workflow['nodes']
+ out['node_types']=sorted(t if isinstance(t,str) and re.fullmatch(r'[A-Za-z0-9_.@-]{1,80}',t) else 'other' for t in (n.get('type') for n in nodes))[:10]
+ assert len(nodes)==2
  assert sorted(n['type'] for n in nodes)==['n8n-nodes-base.manualTrigger','n8n-nodes-base.set']
  trigger=next(n for n in nodes if n['type']=='n8n-nodes-base.manualTrigger')['name']
  assert isinstance(trigger,str) and 0<len(trigger)<100
+ out['stage']='run'
  response=call('POST','/rest/workflows/'+wid+'/run',{'triggerToStartFrom':{'name':trigger}})
  eid=response['data']['executionId']; assert re.fullmatch(r'[0-9]{1,20}',str(eid))
- for _ in range(30):
+ out['stage']='execution'
+ for poll in range(1,31):
   execution=call('GET','/rest/executions/'+str(eid))['data']
-  if execution.get('status')=='success' and execution.get('finished') is True:
+  status=execution.get('status')
+  out['polls']=poll
+  out['execution_status']=status if status in STATUS else 'other'
+  out['execution_finished']=execution.get('finished') if isinstance(execution.get('finished'),bool) else None
+  # n8n 2.43.6 marks `finished` deprecated (read from its source); the run's status is what counts.
+  if status=='success':
    out['manual_action']=str(execution.get('workflowId'))==wid
    break
-  if execution.get('status') in ('error','canceled','crashed'): break
+  if status in ('error','canceled','crashed'): break
   time.sleep(2)
-except Exception:
- pass
+except urllib.error.HTTPError as error:
+ out['error']='HTTPError'; out['http']=error.code
+except Exception as error:
+ out['error']=type(error).__name__
 # No execution payload, cookie, password, credential content or raw error leaves.
 print(json.dumps(out))
 '''

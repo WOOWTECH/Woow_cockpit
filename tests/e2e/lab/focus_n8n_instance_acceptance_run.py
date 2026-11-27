@@ -137,6 +137,31 @@ def successful_restore(job):
             and all(x.get('match') is True for x in checks))
 
 
+PROBE_KINDS={'login':'bool','credential_visible':'bool','manual_action':'bool','execution_finished':'bool-or-null',
+             'credential_total':'count','credential_matches':'count','workflow_total':'count','workflow_matches':'count',
+             'polls':'count','http':'count','stage':'word','execution_status':'word','error':'word','node_types':'words'}
+PROBE_FACTS=tuple(PROBE_KINDS)
+PROBE_WORD=re.compile(r'[A-Za-z0-9_.@-]{1,80}\Z')
+
+
+def safe_probe_report(found):
+    """What the receipt may keep of the owner API probe's answer: only the fixed fact names, each only in its own plain form
+    (boolean, small count, identifier-like word such as a stage, class, status or node type name). Never a free-form string,
+    a value of the wrong kind or anything nested."""
+    if not isinstance(found,dict):return {'answer':'not-a-dict'}
+    out={}
+    for key,kind in PROBE_KINDS.items():
+        if key not in found:continue
+        value=found[key]
+        if kind=='bool' and isinstance(value,bool):out[key]=value
+        elif kind=='bool-or-null' and (value is None or isinstance(value,bool)):out[key]=value
+        elif kind=='count' and isinstance(value,int) and not isinstance(value,bool) and 0<=value<=100000:out[key]=value
+        elif kind=='word' and isinstance(value,str) and PROBE_WORD.fullmatch(value):out[key]=value
+        elif (kind=='words' and isinstance(value,list) and len(value)<=10
+              and all(isinstance(x,str) and PROBE_WORD.fullmatch(x) for x in value)):out[key]=list(value)
+    return out
+
+
 def recording_api_program(program, path):
     """Keep EVERY cookie issuance, including overwritten values and exceptions."""
     if program.count('http.cookiejar.CookieJar()') != 1: raise ValueError('fixed API cookie constructor')
@@ -538,7 +563,10 @@ class Controller:
     def api(self):
         s=self.credentials()
         found=self.private_api(plan.API_ACTION_PROBE)
-        self.require('real_owner_api_credential_action',found=={'login':True,'credential_visible':True,'manual_action':True})
+        # dev-c FLOW3 stopped here and the receipt could not say which of the three steps: keep where the probe stopped.
+        self.r['api_probe']=safe_probe_report(found);self.save()
+        self.require('real_owner_api_credential_action',isinstance(found,dict) and
+                     all(found.get(k) is True for k in ('login','credential_visible','manual_action')))
         target='/tmp/'+self.name+'-creds.json'
         self.command('podman','exec','n8n','test','!','-e',target)
         decrypted=self.root_json(self.h.CREDENTIAL_PROBE.replace('/tmp/woowbk-creds.json',target),

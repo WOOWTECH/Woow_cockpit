@@ -506,4 +506,59 @@ class MismatchTests(Fixture):
         self.assertEqual(seen,[NAME+'-mismatch',NAME+'-mismatch-a3'])
 
 
+class ProbeReportTests(Fixture):
+    def test_only_fixed_fact_names_with_plain_values_reach_the_receipt(self):
+        found={'login':True,'credential_visible':False,'manual_action':False,'stage':'run','error':'HTTPError','http':400,
+               'credential_total':3,'credential_matches':1,'workflow_total':3,'workflow_matches':1,'polls':2,
+               'execution_status':'error','execution_finished':None,
+               'node_types':['n8n-nodes-base.manualTrigger','n8n-nodes-base.set'],
+               'password':'do-not-keep','cookie':'do-not-keep','message':'free text does not belong here'}
+        report=run.safe_probe_report(found)
+        self.assertEqual(set(report),set(run.PROBE_FACTS))
+        self.assertIsNone(report['execution_finished'])
+        self.assertNotIn('password',report);self.assertNotIn('do-not-keep',json.dumps(report))
+
+    def test_free_form_nested_or_oversized_values_are_dropped(self):
+        found={'stage':'a free sentence with spaces','error':{'nested':'x'},'http':10**9,'polls':-1,'execution_status':['a'],
+               'node_types':['fine','has a space'],'workflow_total':3.5,'credential_total':'3','login':'yes'}
+        self.assertEqual(run.safe_probe_report(found),{})
+        self.assertEqual(run.safe_probe_report({'node_types':['x']*11}),{})
+        self.assertEqual(run.safe_probe_report({'stage':'中文'}),{})
+
+    def test_a_missing_or_foreign_answer_is_recorded_as_such(self):
+        for value in (None,[],'text',5):self.assertEqual(run.safe_probe_report(value),{'answer':'not-a-dict'})
+        self.assertEqual(run.safe_probe_report({}),{})
+
+    def api_fixture(self,found):
+        self.c.credentials=lambda:{'N8N_CREDENTIAL_VALUE':'x'}
+        self.c.private_api=lambda program:found
+        self.c.h=SimpleNamespace(CREDENTIAL_PROBE='/tmp/woowbk-creds.json',CREDENTIAL='HA probe header')
+        self.c.command=lambda *a,**k:b''
+        self.c.root_json=lambda *a,**k:{'found':True,'match':True}
+        self.c.sql=lambda *a,**k:True
+
+    def test_api_keeps_where_the_probe_stopped_before_it_judges(self):
+        found={'login':True,'credential_visible':True,'manual_action':False,'stage':'execution','execution_status':'error',
+               'cookie':'do-not-keep'}
+        self.api_fixture(found)
+        with self.assertRaisesRegex(RuntimeError,'real_owner_api_credential_action'):self.c.api()
+        self.assertEqual(self.c.r['api_probe'],{'login':True,'credential_visible':True,'manual_action':False,
+                                                 'stage':'execution','execution_status':'error'})
+        saved=json.loads((self.path/'receipt.json').read_text())
+        self.assertNotIn('do-not-keep',json.dumps(saved));self.assertEqual(saved['api_probe']['stage'],'execution')
+
+    def test_the_verdict_needs_exactly_three_true_booleans(self):
+        good={'login':True,'credential_visible':True,'manual_action':True,'stage':'execution'}
+        self.api_fixture(good);self.c.api()                                  # passes through every later check with fakes
+        for key in ('login','credential_visible','manual_action'):
+            for value in (False,None,1,'true',0):
+                with self.subTest(key=key,value=value):
+                    self.api_fixture(dict(good,**{key:value}))
+                    with self.assertRaisesRegex(RuntimeError,'real_owner_api_credential_action'):self.c.api()
+        for answer in (None,{},[],'text'):
+            with self.subTest(answer=answer):
+                self.api_fixture(answer)
+                with self.assertRaises(RuntimeError):self.c.api()
+
+
 if __name__=='__main__':unittest.main()

@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import urllib.error
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -166,23 +167,33 @@ class SafetyTests(unittest.TestCase):
 
 
 class ApiProbeTests(unittest.TestCase):
-    def execute(self, extra_node=False):
+    VERDICT = ('login', 'credential_visible', 'manual_action')
+
+    def execute(self, extra_node=False, fail=None, executions=None, credentials=None):
+        """`fail` = (path, HTTP status or exception) for the fake vendor API; `executions` = the answers of GET /rest/executions."""
         requests = []
+        answers = list(executions or [{'workflowId':'fixture123','finished':True,'status':'success'}])
         def open_request(request, timeout):
             requests.append(request)
             path = request.full_url.removeprefix('http://127.0.0.1:15678')
+            if fail and path == fail[0]:
+                if isinstance(fail[1], int):
+                    raise urllib.error.HTTPError(request.full_url, fail[1], 'private message that must never leave', {}, None)
+                raise fail[1]
             nodes = [{'name':'Start','type':'n8n-nodes-base.manualTrigger'},
                      {'name':'Set','type':'n8n-nodes-base.set'}]
             if extra_node:
                 nodes.append({'name':'External','type':'n8n-nodes-base.httpRequest'})
             value = {
                 '/rest/login': {'data':{}},
-                '/rest/credentials': {'data':[{'name':'HA probe header','private':'do-not-publish'}]},
+                '/rest/credentials': {'data':credentials if credentials is not None else [{'name':'HA probe header','private':'do-not-publish'}]},
                 '/rest/workflows': {'data':[{'name':'WOOW 匯入測試 - 手動','id':'fixture123'}]},
                 '/rest/workflows/fixture123': {'data':{'nodes':nodes}},
                 '/rest/workflows/fixture123/run': {'data':{'executionId':'1234'}},
-                '/rest/executions/1234': {'data':{'workflowId':'fixture123','finished':True,'status':'success'}},
+                '/rest/executions/1234': {'data':None},
             }[path]
+            if path == '/rest/executions/1234':
+                value = {'data': answers.pop(0) if len(answers) > 1 else answers[0]}
             class Response:
                 status = 200
                 def __enter__(self): return self
@@ -193,21 +204,85 @@ class ApiProbeTests(unittest.TestCase):
         stdout = io.StringIO()
         with patch('urllib.request.build_opener', return_value=client), \
                 patch('sys.stdin', io.StringIO('{"email":"fixture@example.invalid","password":"do-not-publish"}')), \
-                redirect_stdout(stdout):
+                patch('time.sleep'), redirect_stdout(stdout):
             exec(case.API_ACTION_PROBE, {})
-        self.assertNotIn('do-not-publish', stdout.getvalue())
+        for secret in ('do-not-publish', 'private message', 'fixture@example.invalid'):
+            self.assertNotIn(secret, stdout.getvalue())
         return json.loads(stdout.getvalue()), requests
 
     def test_fixed_safe_manual_workflow_uses_vendor_payload_and_only_reports_verdicts(self):
         result, requests = self.execute()
-        self.assertEqual(result, dict(login=True, credential_visible=True, manual_action=True))
+        self.assertEqual({k: result[k] for k in self.VERDICT}, dict(login=True, credential_visible=True, manual_action=True))
+        self.assertEqual((result['stage'], result['execution_status'], result['credential_matches'], result['workflow_matches']),
+                         ('execution', 'success', 1, 1))
+        self.assertEqual(result['node_types'], ['n8n-nodes-base.manualTrigger', 'n8n-nodes-base.set'])
         action = next(r for r in requests if r.full_url.endswith('/run'))
-        self.assertEqual(json.loads(action.data), {'triggerToStartFrom':{'name':'Start'}})
+        self.assertEqual(json.loads(action.data), {'triggerToStartFrom':{'name':'Start'}})   # n8n 2.43.6: nothing else is read
+
+    def test_the_deprecated_finished_flag_does_not_decide_success(self):
+        for finished in (True, False, None, 'yes'):
+            with self.subTest(finished=finished):
+                answer = {'workflowId':'fixture123','status':'success'}
+                if finished is not None: answer['finished'] = finished
+                result, _ = self.execute(executions=[answer])
+                self.assertTrue(result['manual_action'])
+                self.assertIn(result['execution_finished'], (True, False, None))   # only a real boolean is ever reported
+
+    def test_a_run_that_is_not_a_success_or_belongs_to_another_workflow_is_not_a_manual_action(self):
+        for label, answers, status in (('error', [{'workflowId':'fixture123','status':'error'}], 'error'),
+                                       ('crashed', [{'workflowId':'fixture123','status':'crashed'}], 'crashed'),
+                                       ('another workflow', [{'workflowId':'other','status':'success'}], 'success'),
+                                       ('never finishes', [{'workflowId':'fixture123','status':'running'}], 'running'),
+                                       ('unknown word', [{'workflowId':'fixture123','status':'secret status text'}], 'other')):
+            with self.subTest(label):
+                result, _ = self.execute(executions=answers)
+                self.assertFalse(result['manual_action'])
+                self.assertEqual(result['execution_status'], status)
+        result, _ = self.execute(executions=[{'workflowId':'fixture123','status':'running'}, {'workflowId':'fixture123','status':'success'}])
+        self.assertTrue(result['manual_action'])
+        self.assertEqual(result['polls'], 2)
+
+    def test_where_the_probe_stopped_is_reported_without_any_message_text(self):
+        for path, failure, stage, error, http in (
+                ('/rest/login', 401, 'login', 'HTTPError', 401),
+                ('/rest/credentials', 500, 'credentials', 'HTTPError', 500),
+                ('/rest/workflows', 403, 'workflows', 'HTTPError', 403),
+                ('/rest/workflows/fixture123', 404, 'workflow', 'HTTPError', 404),
+                ('/rest/workflows/fixture123/run', 400, 'run', 'HTTPError', 400),
+                ('/rest/executions/1234', 500, 'execution', 'HTTPError', 500),
+                ('/rest/workflows', TimeoutError('slow secret'), 'workflows', 'TimeoutError', None)):
+            with self.subTest(path=path):
+                result, _ = self.execute(fail=(path, failure))
+                self.assertEqual((result['stage'], result['error'], result.get('http')), (stage, error, http))
+                self.assertFalse(result['manual_action'])
+        login, _ = self.execute(fail=('/rest/login', 401))
+        self.assertFalse(login['login'])
+        later, _ = self.execute(fail=('/rest/workflows/fixture123/run', 400))
+        self.assertTrue(later['login']);self.assertTrue(later['credential_visible'])
+
+    def test_credential_counts_decide_visibility_and_are_reported(self):
+        for label, credentials, matches, visible in (('none', [], 0, False), ('one', [{'name':'HA probe header'}], 1, True),
+                                                     ('two', [{'name':'HA probe header'}, {'name':'HA probe header'}], 2, False),
+                                                     ('other only', [{'name':'something else'}], 0, False)):
+            with self.subTest(label):
+                result, _ = self.execute(credentials=credentials)
+                self.assertEqual((result['credential_matches'], result['credential_visible'], result['credential_total']),
+                                 (matches, visible, len(credentials)))
+
+    def test_every_key_the_probe_can_print_is_one_the_controller_is_willing_to_keep(self):
+        import focus_n8n_instance_acceptance_run as run
+        seen = set()
+        for kwargs in ({}, {'extra_node':True}, {'fail':('/rest/login', 401)}, {'fail':('/rest/workflows/fixture123/run', 400)},
+                       {'executions':[{'workflowId':'fixture123','status':'error'}]}):
+            result, _ = self.execute(**kwargs)
+            seen |= set(result)
+        self.assertLessEqual(seen, set(run.PROBE_FACTS))
 
     def test_unexpected_workflow_node_never_starts_an_action(self):
         result, requests = self.execute(extra_node=True)
         self.assertFalse(result['manual_action'])
         self.assertFalse(any(r.full_url.endswith('/run') for r in requests))
+        self.assertEqual(result['node_types'], ['n8n-nodes-base.httpRequest', 'n8n-nodes-base.manualTrigger', 'n8n-nodes-base.set'])
 
 
 class PacketTests(unittest.TestCase):
