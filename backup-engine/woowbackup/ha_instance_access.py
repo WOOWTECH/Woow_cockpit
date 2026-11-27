@@ -9,9 +9,14 @@ import shlex
 import urllib.parse
 
 SCHEMAS = {'n8n': ('public',), 'litellm': ('public', 'woow_platform')}
+# MAINTAIN: PostgreSQL 17 added this table privilege and it is part of the owner's DEFAULT ACL (acldefault), so every table of
+# a PG17 database carries it (real LiteLLM on PG 17.11, dev-d: DELETE, INSERT, MAINTAIN, REFERENCES, SELECT, TRIGGER, TRUNCATE,
+# UPDATE). Without it every PG17 capture was refused as "unsupported". The plan is captured from the target's OWN live database
+# and replayed on the same server, so it only holds MAINTAIN where that server can grant it (a PG16 capture never contains it).
+# Tables only: sequences, schemas, databases and columns have no such privilege.
 PRIVILEGES = {'database': {'CONNECT', 'CREATE', 'TEMPORARY'}, 'schema': {'USAGE', 'CREATE'},
-              'r': {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'},
-              'p': {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'},
+              'r': {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'},
+              'p': {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER', 'MAINTAIN'},
               'S': {'SELECT', 'UPDATE', 'USAGE'}, 'column': {'SELECT', 'INSERT', 'UPDATE', 'REFERENCES'}}
 CONTROL_NAME = re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]{0,62}\Z')
 PASSWORD_KEYS = {'POSTGRES_PASSWORD', 'DB_POSTGRESDB_PASSWORD', 'DATABASE_PASSWORD', 'LITELLM_DATABASE_PASSWORD'}

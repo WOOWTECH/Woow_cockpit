@@ -196,6 +196,32 @@ class AccessPlanTests(unittest.TestCase):
             plan = access_plan('db_owner', table_owner='table_owner', app_role='app_login', extension=True)
             self.assertIs(access.validate(plan, app_id), plan)
 
+    def test_pg17_maintain_is_a_valid_table_privilege_and_only_there(self):
+        # Real LiteLLM on PostgreSQL 17.11 (dev-d): the owner's default table ACL holds MAINTAIN and the old whitelist refused
+        # it, so no PG17 database could ever be converted ("permission information incomplete or unsupported").
+        default_acl = 'DELETE,INSERT,MAINTAIN,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE'
+        for app_id in ('n8n', 'litellm'):
+            plan = access_plan('db_owner', table_owner='table_owner')
+            plan['relations'][0][-1] = [['table_owner', p, False] for p in default_acl.split(',')]
+            plan['relations'].append(['public', 'events', 'p', 'table_owner', [['table_owner', 'MAINTAIN', False]]])
+            self.assertIs(access.validate(plan, app_id), plan)
+            script = access.restore_sql(plan, plan, 'notes')
+            self.assertIn('GRANT MAINTAIN ON TABLE "public"."marker" TO "table_owner";', script)
+            self.assertIn('GRANT MAINTAIN ON TABLE "public"."events" TO "table_owner";', script)
+        plan = access_plan('db_owner', table_owner='table_owner')
+        for place in ('sequence', 'schema', 'database', 'column'):
+            bad = copy.deepcopy(plan)
+            if place == 'sequence':
+                bad['relations'].append(['public', 'marker_id_seq', 'S', 'table_owner', [['table_owner', 'MAINTAIN', False]]])
+            elif place == 'schema':
+                bad['schemas'][0][-1].append(['app', 'MAINTAIN', False])
+            elif place == 'database':
+                bad['database'][1].append(['app', 'MAINTAIN', False])
+            else:
+                bad['columns'][0][-1].append(['app', 'MAINTAIN', False])
+            with self.subTest(place=place), self.assertRaises(ValueError):
+                access.validate(bad, 'litellm')
+
     def test_malformed_program_or_omitted_schema_facts_are_rejected(self):
         plan = access_plan('db_owner', table_owner='table_owner')
         mutations = [lambda p: p.update(programs=['arbitrary SQL']),
