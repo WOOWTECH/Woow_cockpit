@@ -75,5 +75,23 @@ class CredentialResumeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):c.credentials()
             self.assertIsNone(c.run);self.assertEqual(Path(args.receipt).read_bytes(),before)
 
+    def test_absent_persisted_credentials_refuse_fresh_recovery_without_generation(self):
+        for by_phase in (True,False):
+            with self.subTest(by_phase=by_phase),tempfile.TemporaryDirectory() as root:
+                saved=m.load_saved();secret,args,lease=self.make(root,saved)
+                args.phase='recover' if by_phase else 'flow'
+                first=m.Controller(args,lease,saved);first.save()
+                # A fresh recovery process must treat a missing entire field
+                # as lost state, even though a first flow may generate it.
+                c=m.Controller(args,lease,saved);c.recovering=not by_phase
+                before=Path(args.receipt).read_bytes()
+                with patch.object(saved.drv,'SECRET_DIR',secret),patch.object(saved,'Ev',Evidence),\
+                     patch.object(saved.Run,'load_secrets',side_effect=AssertionError('recovery must not generate')),\
+                     patch.object(saved,'ha_secret_files',side_effect=AssertionError('missing state must not decode')):
+                    with self.assertRaisesRegex(ValueError,'missing persisted case credentials'):c.credentials()
+                self.assertIsNone(c.run)
+                self.assertEqual(Path(args.receipt).read_bytes(),before)
+                self.assertNotIn('generated_credentials',c.r)
+
 
 if __name__=='__main__':unittest.main()

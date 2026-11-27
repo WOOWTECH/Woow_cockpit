@@ -29,6 +29,11 @@ case values, then uses the same original HA decoder to initialize HA inputs
 without generating replacement own values. It restores own_key, HA salt hash
 and before_probe. The live run object is assigned only after successful complete
 initialization. Missing/unknown persisted names refuse without overwrite.
+Recovery now also refuses an entirely absent generated_credentials field before
+constructing/loading readers. This applies to both an explicit recover phase and
+the in-process recovery flag. One targeted regression (two entry boundaries)
+failed against b692 by attempting generation, then passed with the refusal;
+no decoding, generation, receipt overwrite or device call occurs.
 
 The two-controller regression uses the REAL saved80 Secrets and Run classes,
 temporary harness inputs and a stub only for external encrypted-archive decoding
