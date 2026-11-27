@@ -1,0 +1,82 @@
+{
+  "scope": "actual-r8-attempt4-terminal",
+  "driver_commit": "14ebdf8e8b81ed21cdcd67c61338cdafffbcc62f",
+  "product_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "summary": {
+    "source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+    "driver_commit": "14ebdf8e8b81ed21cdcd67c61338cdafffbcc62f",
+    "passed": 59,
+    "failed": 4,
+    "baseline_restored": true,
+    "recovery_verified": false,
+    "commercial_acceptance": "not-complete"
+  },
+  "browser_completed": true,
+  "cookie_observation": {
+    "observed_values": 2,
+    "device_files": 648,
+    "archive_index_sidecars": 17,
+    "regular_json_roots": 2,
+    "device_hits": 8,
+    "host_files": 11,
+    "host_hits": 0,
+    "observations_complete": true
+  },
+  "cookie_scan_passed": false,
+  "cookie_raw_values_retained": false,
+  "one_general_acknowledgement": 1,
+  "import_clicks": 1,
+  "baseline_restored": true,
+  "inflight": null,
+  "recovery_verified": false,
+  "own_archives_retained": 6,
+  "prior_case_safety_pruning": [
+    {
+      "id": "20261126T225357Z-193816e7",
+      "type": "safety",
+      "events": [
+        {
+          "file": "job-j20261127T002848Z-4e68c8e4.json",
+          "sha256": "40e07c08c419e4c7e780e493d5731803465c08aa29744e21060aba2807e310e3",
+          "job_id": "j20261127T002848Z-4e68c8e4"
+        }
+      ]
+    },
+    {
+      "id": "20261126T225552Z-2e6d3671",
+      "type": "safety",
+      "events": [
+        {
+          "file": "job-j20261127T002653Z-89390b89.json",
+          "sha256": "1be02156144bd39115d3f56da55d920835a579c46657e0f88032dc87fd469106",
+          "job_id": "j20261127T002653Z-89390b89"
+        }
+      ]
+    },
+    {
+      "id": "20261126T234230Z-11508663",
+      "type": "safety",
+      "events": [
+        {
+          "file": "job-j20261127T003437Z-8b92dfb8.json",
+          "sha256": "a774990271660b69c413efdc4d3f03e2e24fb20dfd7522c201807c25045df29a",
+          "job_id": "j20261127T003437Z-8b92dfb8"
+        }
+      ]
+    },
+    {
+      "id": "20261126T234446Z-20a51c66",
+      "type": "safety",
+      "events": [
+        {
+          "file": "job-j20261127T003248Z-5c5a8cc3.json",
+          "sha256": "634505e5ecfd88c43ce6f37250941c77094a4c4501786717a52c40e395ad3062",
+          "job_id": "j20261127T003248Z-5c5a8cc3"
+        }
+      ]
+    }
+  ],
+  "device_mutex_independently_free": true,
+  "cookie_match_cause": "not-yet-proved; separate read-only observer diagnosis required",
+  "commercial_acceptance": "not-complete"
+}

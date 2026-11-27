@@ -1,5 +1,23 @@
 # Focused real acceptance, 2026-11-27
 
+## Actual page attempt4: functional flow passes; cookie observation unresolved
+
+`r8-attempt4.json` records driver `14ebdf8e`, frozen product `1adf4df2`, exit1
+in757.7 seconds: **59/63 FAIL**. The real page completed one acknowledgement,
+one click and the two-app import; four jobs shared one unit and each restore
+had a safety backup. Actual imported markers, both original baseline restores,
+unit/image/timer/isolation recovery and the registered-credential static scan
+passed. Normal pruning of prior own test safety copies was proved by actual job
+events. Six new case archives and the own catalog entry remain for diagnosis.
+
+Cookie observation completed and captured two values. Its actual scan covered
+648 records, 17 sidecars and both JSON roots, but reported **8 device hits**,
+zero host hits. Values remained in browser memory and were not retained; the
+test remains failed. The cause is not yet proved. A separate bounded read-only
+observer must classify HTTP expiry/live-cookie semantics and locate matches
+without publishing cookie values; this cannot retroactively turn the old run
+into a privacy pass. `r8-attempt4-terminal-facts.json` retains the fixed facts.
+
 ## Later recovery correction: normal safety retention
 
 The coordinator's actual `cde697b8` recovery-only run stopped after 9 passing
