@@ -169,7 +169,7 @@ class CaptureTests(unittest.TestCase):
         t=self.transport(inventory={'containers':{'a':'1'}});out=self.root/'live.private.json'
         got=s.capture(out,transport=t,case=NEW,lock=str(self.lock),clock=lambda:1234.9)
         value=json.loads(out.read_text())
-        self.assertEqual(value,{'device':s.plan.DEVICE,'case':NEW,'at':1234,'inventory':{'containers':{'a':'1'}},
+        self.assertEqual(value,{'device':s.plan.DEVICE,'case':NEW,'at':1234,'inventory':{'containers':{'a':'1'}},'looks':1,
             'inventory_sha256':digest({'containers':{'a':'1'}}),'backup_ids':['b1','b2'],'ha_upload_ids':['u1']})
         self.assertEqual(out.stat().st_mode&0o777,0o600);self.assertEqual(got,s.source.ops.digest(out.read_bytes()))
         self.assertEqual(t.DEVICE,s.plan.DEVICE)
@@ -179,6 +179,23 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual([c for c in t.calls if isinstance(c,tuple) and not isinstance(c[0],tuple)],[('list',None)])  # the only helper request
         self.assertEqual(t.calls[0],'isolated')                                                                       # before anything else
         with self.assertRaisesRegex(ValueError,'unique'):s.capture(out,transport=t,case=NEW,lock=str(self.lock))
+
+    def test_with_an_expected_baseline_the_capture_looks_again_past_the_failing_units_own_container(self):
+        base={'containers':{'a':'1'}};flapping={'containers':{'a':'1','headscale':'9'}}
+        answers=[flapping,flapping,base]
+        t=self.transport();calls=t.calls
+        def root(*argv,input=None,timeout=0):
+            calls.append((argv,json.loads(input)))
+            return SimpleNamespace(returncode=0,stdout=json.dumps(answers.pop(0) if len(answers)>1 else answers[0]).encode(),stderr=b'')
+        t.root=root;slept=[]
+        out=self.root/'live.private.json'
+        s.capture(out,transport=t,case=NEW,lock=str(self.lock),expect=digest(base),sleep=slept.append)
+        value=json.loads(out.read_text())
+        self.assertEqual((value['inventory'],value['looks'],slept),(base,3,[2,2]))
+        # a difference that never goes away: the last look is kept (and --prepare names it), after exactly `tries` looks
+        t2=self.transport(inventory=flapping);out2=self.root/'live2.private.json'
+        s.capture(out2,transport=t2,case=NEW,lock=str(self.lock),expect=digest(base),tries=4,sleep=lambda n:None)
+        self.assertEqual((json.loads(out2.read_text())['looks'],len([c for c in t2.calls if isinstance(c,tuple) and c[0][:1]==('python3',)])),(4,4))
 
     def test_failures_write_nothing_and_a_busy_device_lock_refuses(self):
         out=self.root/'live.private.json'

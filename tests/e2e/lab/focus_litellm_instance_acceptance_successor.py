@@ -57,20 +57,26 @@ def ops_source():
         HERE/'focus_litellm_instance_acceptance_ops.py').read_text()
 
 
-def capture(output,*,transport,case,lock=LOCK,clock=time.time):
-    """Read-only: returns the digest of the private capture file."""
+def capture(output,*,transport,case,lock=LOCK,clock=time.time,expect=None,tries=15,wait=2,sleep=time.sleep):
+    """Read-only: returns the digest of the private capture file. `expect`: the predecessor's verified baseline digest. The
+    already failing Headscale unit restarts every few seconds and its own container exists only while one attempt runs (b11's
+    first capture caught .containers.headscale); with `expect` the capture looks again, up to `tries` times, and keeps the first
+    look that equals it, else the last one, which --prepare then refuses by naming the difference."""
     if os.path.lexists(output):raise ValueError('a unique capture path is required')
     fd=os.open(lock,os.O_RDWR|os.O_NOFOLLOW)
     try:
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         transport.DEVICE=plan.DEVICE;transport.require_isolated_device()
-        p=transport.root('python3','-B','-I','-c',ops_source(),
-                         input=json.dumps({'op':'inventory','case':case}).encode(),timeout=180)
-        if p.returncode:raise RuntimeError('fixed inventory operation failed; raw output withheld')
-        inventory=json.loads(p.stdout)
+        for look in range(1,(tries if expect else 1)+1):
+            p=transport.root('python3','-B','-I','-c',ops_source(),
+                             input=json.dumps({'op':'inventory','case':case}).encode(),timeout=180)
+            if p.returncode:raise RuntimeError('fixed inventory operation failed; raw output withheld')
+            inventory=json.loads(p.stdout)
+            if expect is None or source.ops.digest(source.ops.canonical(inventory))==expect:break
+            if look<tries:sleep(wait)
         rc,listing=transport.helper('list',None,timeout=180)
         if rc or listing.get('ok') is not True:raise RuntimeError('fixed list request refused')
-        value={'device':plan.DEVICE,'case':case,'at':int(clock()),'inventory':inventory,
+        value={'device':plan.DEVICE,'case':case,'at':int(clock()),'inventory':inventory,'looks':look,
                'inventory_sha256':source.ops.digest(source.ops.canonical(inventory)),
                'backup_ids':sorted(x['id'] for x in listing.get('backups',[])),
                'ha_upload_ids':sorted(x['id'] for x in listing.get('ha_backups',[]))}
@@ -128,7 +134,7 @@ def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--capture',action='store_true');p.add_argument('--prepare',action='store_true')
     for field in ('output','prior-receipt','prior-output','live','flow-receipt','pause-receipt'):p.add_argument('--'+field,type=Path)
-    for field in ('prior-receipt-sha','prior-output-sha','live-sha','new-name','case'):p.add_argument('--'+field)
+    for field in ('prior-receipt-sha','prior-output-sha','live-sha','new-name','case','expect-baseline'):p.add_argument('--'+field)
     a=p.parse_args(argv)
     if a.capture==a.prepare:
         print(json.dumps({'writes':False,'steps':['--capture (device, read-only)','--prepare (host only)']}));return 0
@@ -136,7 +142,7 @@ def main(argv=None):
     if a.capture:
         if not (a.output and a.case):p.error('--capture needs --output and --case')
         import ha_import_e2e as transport
-        print(json.dumps({'capture_sha256':capture(a.output,transport=transport,case=a.case)}));return 0
+        print(json.dumps({'capture_sha256':capture(a.output,transport=transport,case=a.case,expect=a.expect_baseline)}));return 0
     needed=(a.prior_receipt,a.prior_receipt_sha,a.prior_output,a.prior_output_sha,a.live,a.live_sha,a.new_name,a.flow_receipt,a.pause_receipt)
     if not all(needed):p.error('--prepare needs every pin, path and the new name')
     print(json.dumps(prepare(prior_receipt=a.prior_receipt,prior_receipt_sha=a.prior_receipt_sha,prior_output=a.prior_output,
