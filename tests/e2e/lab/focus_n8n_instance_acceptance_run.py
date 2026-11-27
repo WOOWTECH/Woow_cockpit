@@ -116,6 +116,57 @@ def successful_restore(job):
             and all(x.get('match') is True for x in checks))
 
 
+def recording_api_program(program, path):
+    """Keep EVERY cookie issuance, including overwritten values and exceptions."""
+    if program.count('http.cookiejar.CookieJar()') != 1: raise ValueError('fixed API cookie constructor')
+    program = program.replace('http.cookiejar.CookieJar()', 'RecordedJar()')
+    # Reuse our bounded reader and durable private writer; their module main is
+    # disabled. API code is a fixed driver constant, never an archive program.
+    prefix = "__name__='fixed_api_cookie_recording'\n"+(HERE/'focus_n8n_instance_acceptance_ops.py').read_text()
+    body = '''
+import http.cookiejar
+issued=set()
+class RecordedJar(http.cookiejar.CookieJar):
+ def set_cookie(self,cookie,*args,**kwargs):
+  issued.add(cookie.value)
+  return super().set_cookie(cookie,*args,**kwargs)
+try:
+ exec(compile(PROGRAM,'<fixed vendor API probe>','exec'))
+finally:
+ p=Path(COOKIE_PATH); parent=p.parent.lstat()
+ if p.parent.is_symlink() or parent.st_uid!=os.geteuid() or stat.S_IMODE(parent.st_mode)!=0o700:
+  raise RuntimeError('fixed cookie directory unsafe')
+ old=[]
+ if os.path.lexists(p):
+  raw,meta=read_regular(p)
+  if meta['uid']!=os.geteuid() or meta['mode']!=0o600:raise RuntimeError('fixed cookie file unsafe')
+  old=json.loads(raw)
+ if not isinstance(old,list):raise RuntimeError('fixed cookie journal invalid')
+ values=sorted(set(old)|issued)
+ if len(values)>100 or not all(isinstance(v,str) and v and len(v)<=16384 for v in values):
+  raise RuntimeError('fixed cookie journal bound')
+ atomic(p,json.dumps(values).encode())
+'''.replace('PROGRAM', repr(program)).replace('COOKIE_PATH', repr(str(path)))
+    return prefix+'\n'+body
+
+
+def scan_input_prefix(path, since, attempted, ops_source):
+    body = '''
+import io
+values=json.load(sys.stdin); p=Path(COOKIE_PATH)
+if ATTEMPTED:
+ raw,meta=read_regular(p)
+ if meta['uid']!=os.geteuid() or meta['mode']!=0o600:raise RuntimeError('fixed cookie file unsafe')
+ issued=json.loads(raw)
+else:
+ if os.path.lexists(p):raise RuntimeError('fixed cookie file without intent')
+ issued=[]
+sys.stdin=io.StringIO(json.dumps({'values':values+issued,'since':SINCE}))
+__name__='__main__'
+'''.replace('COOKIE_PATH', repr(str(path))).replace('ATTEMPTED', repr(bool(attempted))).replace('SINCE', repr(since))
+    return "__name__='fixed_scan_input'\n"+ops_source+'\n'+body
+
+
 class Controller:
     def __init__(self,args,lease,transport,*,clock=time.time,sleep=time.sleep):
         self.args=args;self.lease=lease;self.h=transport;self.clock=clock;self.sleep=sleep
@@ -415,22 +466,12 @@ class Controller:
         return self.secrets
 
     def private_api(self,program):
-        self.r['cookie_intent']=True;self.save()
+        self.r['cookie_intent']=True;self.r['cookie_probes']=self.r.get('cookie_probes',0)+1;self.save()
         # Issued cookies stay in the root0700 recovery directory, and join the
         # existing encoded-needle scan before any case copies can be deleted.
         path='/var/lib/woowtech-backup/focus-n8n-instance/'+self.name+'/issued.json'
-        suffix='\n'+('''
-import os
-from pathlib import Path
-p=Path(PATH)
-old=json.loads(p.read_text()) if p.exists() else []
-values=sorted(set(old+[c.value for c in jar]))
-assert len(values)<=100 and all(isinstance(v,str) and len(v)<8192 for v in values)
-fd=os.open(p,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
-with os.fdopen(fd,'w') as f:json.dump(values,f)
-'''.replace('PATH',repr(path)))
         s=self.credentials()
-        result=self.root_json(program+suffix,{'email':self.h.OWNER_EMAIL,'password':s['N8N_OWNER_PW']})
+        result=self.root_json(recording_api_program(program,path),{'email':self.h.OWNER_EMAIL,'password':s['N8N_OWNER_PW']})
         self.r['cookie_intent']=False;self.save()
         return result
 
@@ -615,11 +656,13 @@ with os.fdopen(fd,'w') as f:json.dump(values,f)
         values=[s[x] for x in ('HA_BACKUP_KEY','N8N_OWNER_PW','N8N_CREDENTIAL_VALUE')]
         self.require('all_issued_cookies_registered',not self.r.get('cookie_intent'))
         path='/var/lib/woowtech-backup/focus-n8n-instance/'+self.name+'/issued.json'
-        prefix=("import io,json,sys\nfrom pathlib import Path\np=Path("+repr(path)+")\n"
-                "values=json.load(sys.stdin)+(json.loads(p.read_text()) if p.exists() else [])\n"
-                "sys.stdin=io.StringIO(json.dumps(values))\n")
-        report=self.root_json(prefix+self.h.LEAK_SCAN,values,timeout=180)
-        self.require('registered_secret_scan_zero',not report['hits'] and report['scanned']>0)
+        prefix=scan_input_prefix(path,self.r['started'],self.r.get('cookie_probes',0)>0,self.ops_source)
+        scanner=(HERE/'focus_n8n_instance_acceptance_scan.py').read_text()
+        report=self.root_json(prefix+scanner,values,timeout=180)
+        self.require('registered_secret_scan_zero',report['hits']==0 and report['scanned']>0 and
+                     report['regular_json_roots_scanned']==2 and report['archive_index_sidecars_scanned']>0 and
+                     report['archive_index_sidecars_scanned']==report['actual_archive_index_sidecars_expected'])
+        self.r['secret_scan_report']=report;self.save()
         self.r['secret_scan']=True;self.save()
 
     def cleanup_owned(self):
