@@ -455,7 +455,8 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.recovering=True; self.settle()
         if self.r.get('hook_intent'):
             self.op('hook',enable=False); self.r['hook_intent']=False; self.save()
-        if self.r.get('recovery_verified'):
+        repeated=bool(self.r.get('recovery_verified'))
+        if repeated:
             # An earlier pass restored and verified the data and own state, then stopped in the cleanup below (b7: the delete
             # request). The stack may already be removed, so nothing is restored or verified again; only the saved credential
             # values are re-registered for the leak scan that guards the cleanup.
@@ -470,8 +471,15 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         elif self.r.get('install_intent'):
             self.require('no_app_mutation_before_verified_safety',not self.r.get('safety_verified') and not self.r.get('upload_intent'))
         self.require('all_jobs_terminal',not self.op('inventory')['active_jobs'])
-        if self.run:
+        if repeated:
+            # The leak scan reads the case's owned installer state, which the package cleanup of the verifying pass removed, so
+            # it cannot run again. That pass recorded leak_scan_passed; b7 predates the flag and may be accepted by an explicit
+            # lease field that points at the pass-1 output (saved80_step_leaks ok before any cleanup).
+            self.require('leak_scan_of_the_verifying_pass',
+                         self.r.get('leak_scan_passed') is True or self.lease.get('accept_prior_leak_scan') is True)
+        elif self.run:
             self.app_assertions('step_leaks')
+            self.r['leak_scan_passed']=True; self.save()
         # Copies survive every uncertainty. Cleanup runs only after successful
         # recovery and the saved credential scanner, never in a blind finally.
         self.op('cleanup_owned_package')

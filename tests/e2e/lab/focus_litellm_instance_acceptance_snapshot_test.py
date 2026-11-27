@@ -159,9 +159,17 @@ class SnapshotTests(unittest.TestCase):
                 self.assertTrue(cli.validate(command,request))      # every request the cleanup sends is valid for the engine
                 return {}
             c.helper=helper
+            # The leak scan of the verifying pass cannot run again (its scan roots are gone): without its recorded flag, or the
+            # lease's explicit acceptance, the repeated recovery stops BEFORE any cleanup.
+            with self.assertRaisesRegex(RuntimeError,'leak_scan_of_the_verifying_pass'):c.recover()
+            self.assertNotIn('delete',calls);self.assertNotIn('cleanup_owned_package',calls)
+            c.lease=dict(c.lease,accept_prior_leak_scan=True);calls.clear()
             c.recover()
             self.assertEqual(calls.count('delete'),2);self.assertEqual(calls.count('ha-delete'),1)
             self.assertNotIn('snapshot',calls);self.assertTrue(c.r['complete'])
+            c.r.update(complete=False,leak_scan_passed=True);c.lease={k:v for k,v in c.lease.items() if k!='accept_prior_leak_scan'}
+            calls.clear();c.recover()                  # a pass that recorded its own scan needs no lease field
+            self.assertEqual(calls.count('delete'),2)
 
     def test_failed_operation_is_retained_on_device_and_host_before_cleanup(self):
         for denied in (False,True):
