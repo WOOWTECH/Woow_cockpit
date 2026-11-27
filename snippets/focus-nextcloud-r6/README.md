@@ -6,6 +6,17 @@ on driver bugs, now fixed (`282bfba1`: a field the convert request may not carry
 probe stopped the run). Details and evidence: [fullshare05-RESULT.md](fullshare05-RESULT.md). The sections below
 are the earlier history, oldest first.
 
+**2026-11-28: S5-A (the server-side-encryption source) built and verified on dev-e.** The builder (`focus_nextcloud_r6_s5.py`,
+run at `4163367c` = `c46f9a31` here) started a throwaway Nextcloud 35.0.1 + PostgreSQL 16 + Redis inside dev-e from
+the original images, enabled server-side encryption with Nextcloud's own commands (master key; every step checked
+against an occ help contract taken from the v35.0.1 source), wrote one plain file before and files after enabling
+it, proved ciphertext, the native header, master key and one share key per file on disk, re-read everything after a
+restart, and packed an HA-shaped test backup (`generated-s5-source.tar`, 127,600,640 bytes, kept inside dev-e; it is
+generated, not a HAOS export). dev-e's own Nextcloud was exactly unchanged; the throwaway source was removed, the
+fixture and the S5-B inputs kept. Result: `tests/backup/evidence/focus-nextcloud-r6-20261127/s5a-source-fixture-20261128-result.json`.
+The import acceptance (S5-B) is still to come. The builder's review also found a product defect, fixed in `50a29370`:
+the importer accepted only 'yes' for core/encryption_enabled, while Nextcloud 35 stores '1'.
+
 Read-only inventory and original image identity checks are complete. **No image
 bytes copied, no device mutation, no pulls.** This worktree starts at main
 `3e3e9315`. OD-23's final separate handoff commit is `081278f1`; its worktree,
