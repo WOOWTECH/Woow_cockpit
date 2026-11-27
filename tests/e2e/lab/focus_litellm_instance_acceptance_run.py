@@ -239,6 +239,8 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.require('catalog_installed_exactly',self.op('inventory')['catalogs']['litellm.json']==encoded['sha256'])
 
     def credentials(self):
+        if (self.recovering or getattr(self.args,'phase',None)=='recover') and 'generated_credentials' not in self.r:
+            raise ValueError('missing persisted case credentials')
         if self.run: return
         # Redirect the saved driver's state before any reader/decoder runs.
         self.h.state_path=lambda:Path(self.args.receipt).with_suffix('.saved80-private.json')
