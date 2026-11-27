@@ -227,3 +227,12 @@ source-only deployment, protected prior engine/helper/VERSION, original4.47GB
 fullshare fixture in place, and full data/source/unit rollback. No deployment or
 fullshare execution has occurred. Preparation result and every frozen source
 file hash are retained under the lane's public evidence directory.
+
+## Actual full-share attempt01 and recovery
+
+[fullshare-attempt-01-RESULT.md](fullshare-attempt-01-RESULT.md): original fullshare
+stopped during upload; cause unrecorded, no check/conversion/app restore occurred.
+Known Office failed flag blocked cold return before either revert. Parent-approved
+recovery using unchanged d7 primitives passed exact original source/unit return;
+all fixed failed/recovery evidence and SHA bindings retained. Dev-e/heavy released.
+Fullshare/S5/skipped acceptance remains pending; no retry is authorized.

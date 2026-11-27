@@ -1,0 +1,8 @@
+{
+  "status": "restored",
+  "manifest_sha256": "966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79",
+  "prior_sha256": "cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1",
+  "transaction_leaf": "/usr/local/lib/.focus-nextcloud-r6-24d1dc3d14bfc94e",
+  "helper_transaction_leaf": "/usr/local/libexec/.focus-nextcloud-r6-24d1dc3d14bfc94e",
+  "prior_copies_or_restored_originals_retained": true
+}

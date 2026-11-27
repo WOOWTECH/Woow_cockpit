@@ -1,0 +1,22 @@
+{
+  "status": "passed",
+  "phase": "authorized-recovery-only",
+  "failed_source_commit": "d7db60cc284138658e93604dd41dafb7fc7d036f",
+  "source_transaction_nonce": "24d1dc3d14bfc94e",
+  "product_manifest_sha256": "966472487e9f53b1d39263ae4f7dfb86ac948a5b6aa8667ff1183fee40f38d79",
+  "prior_sha256": "cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1",
+  "only_known_office_flag_reset": true,
+  "five_quadlets_exact": true,
+  "prior_library_helper_version_exact": true,
+  "all_original_states_hashes_images_cap_isolation_exact": true,
+  "old_failed_receipt_preserved": true,
+  "fullshare_acceptance_passed": false,
+  "initial_upload_stop_cause": "unknown-not-recorded",
+  "app_starts": 0,
+  "uploads": 0,
+  "data_restores": 0,
+  "pulls": 0,
+  "fixed_failure": null,
+  "wrapper_sha256": "d290824e9c15254c886ba5a39185e8e7cafeddc132f93a112b94d5a518c44fd3",
+  "private_receipt_dir": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-recovery-authorized/20261127T084206"
+}
