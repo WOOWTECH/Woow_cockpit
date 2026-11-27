@@ -16,6 +16,9 @@ import focus_emqx_r4_artifact as artifact
 
 REFS={role:(artifact.CLIENT_REF if role=='client' else identity) for role,identity in artifact.IMAGES.items()}
 CLIENT_REPO_DIGEST='docker.io/library/eclipse-mosquitto@'+artifact.CLIENT_REF.split('@')[1]
+STAGE='startup'
+ROLE=None
+POD_ERROR=None
 
 
 def save_args(role,directory):
@@ -43,37 +46,53 @@ def inspect_cached(pod,role):
 
 
 def main():
+    global STAGE,ROLE,POD_ERROR
     resource.setrlimit(resource.RLIMIT_FSIZE,(artifact.MAX_STAGE,artifact.MAX_STAGE))
     def alarm(_s,_f):raise TimeoutError('cache_export_wall_budget')
     signal.signal(signal.SIGALRM,alarm);signal.alarm(840)
+    STAGE='owner_guard'
     if os.getuid()!=1019 or ROOT.parent!=Path.home() or Path.home()!=Path('/home/appowner'):
         raise ValueError('existing_isolated_device_owner_required')
+    STAGE='headroom_guard'
     if int(Path('/sys/fs/cgroup/memory.max').read_text())-int(Path('/sys/fs/cgroup/memory.current').read_text())<1900*1024**2:
         raise ValueError('fresh_device_headroom_required')
     def pod(*args,timeout=60):
+        global POD_ERROR
         result=subprocess.run(['podman',*args],capture_output=True,timeout=timeout)
-        if result.returncode or len(result.stdout)+len(result.stderr)>1024**2:raise ValueError('bounded_cached_image_operation_failed')
+        if result.returncode or len(result.stdout)+len(result.stderr)>1024**2:
+            POD_ERROR={'returncode':result.returncode,'stderr':result.stderr[:2048].decode(errors='replace')}
+            raise ValueError('bounded_cached_image_operation_failed')
         return result.stdout
+    STAGE='rootless_guard'
     if pod('info','--format','{{.Host.Security.Rootless}}').strip()!=b'true':raise ValueError('rootless_required')
     def inventory():return sorted(pod('image','ls','--no-trunc','--format','{{.ID}} {{.Repository}}:{{.Tag}}').decode().splitlines())
+    STAGE='inventory_before'
     before=inventory();directory=ROOT/'artifact';directory.mkdir(mode=0o700)
+    STAGE='source_budget'
     source_bytes=sum(p.stat().st_size for p in ROOT.rglob('*') if p.is_file())
     records={};used=0
     for role in REFS:
+        ROLE=role;STAGE='inspect_before'
         cached=inspect_cached(pod,role)
+        STAGE='archive_budget'
         remaining=artifact.MAX_STAGE-used-source_bytes-256*1024
         if remaining<=0:raise ValueError('combined_source_image_archive_budget')
         if shutil.disk_usage(ROOT).free<13*1024**3+remaining:raise ValueError('fresh_archive_disk_floor')
         resource.setrlimit(resource.RLIMIT_FSIZE,(remaining,artifact.MAX_STAGE))
+        STAGE='save'
         pod(*save_args(role,directory),timeout=240)
         resource.setrlimit(resource.RLIMIT_FSIZE,(artifact.MAX_STAGE,artifact.MAX_STAGE))
+        STAGE='archive_validate'
         path=directory/(role+'.oci.tar');path.chmod(0o600);facts=artifact.verify_oci(path,artifact.IMAGES[role])
         used+=path.stat().st_size
         if used>artifact.MAX_STAGE:raise ValueError('combined_image_archive_budget')
+        STAGE='inspect_after'
         if cached!=inspect_cached(pod,role):
             raise ValueError('source_image_metadata_changed')
         records[role]={'source_reference':REFS[role],'cached':cached,'archive':facts}
+    ROLE=None;STAGE='inventory_after'
     if inventory()!=before:raise ValueError('cached_image_catalog_changed')
+    STAGE='provenance'
     provenance={'kind':'emqx-r4-cached-image-archives','version':1,'source_device':'woowbk-dev-d',
         'source_commit':json.loads((ROOT/'context.json').read_text())['source_commit'],
         'images':records,'bytes':used,'pull_load_tag_or_container_operations':False,
@@ -84,7 +103,26 @@ def main():
         'provenance_sha256':artifact.sha_file(receipt,256*1024),'bytes':used,'container_or_device_mutation':False}
 
 
+def failed_result(error):
+    """Future failures retain bounded private diagnostics; stdout has fixed stage/type only."""
+    private={'stage':STAGE,'role':ROLE,'type':type(error).__name__,'message':str(error)[:1024],
+             'pod_error':POD_ERROR}
+    saved=False
+    try:
+        body=(json.dumps(private,ensure_ascii=False,sort_keys=True)+'\n').encode()
+        if len(body)>16384:raise ValueError('private_diagnostic_budget')
+        fd=os.open(ROOT/'cache-error.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(body)
+        saved=True
+    except (OSError,ValueError):pass
+    return {'ok':False,'reason':type(error).__name__,'stage':STAGE,'role':ROLE,'private_diagnostic_saved':saved}
+
+
+def execute():
+    try:return main()
+    except Exception as error:return failed_result(error)
+
+
 if __name__=='__main__':
-    try:result=main()
-    except Exception as error:result={'ok':False,'reason':type(error).__name__}
+    result=execute()
     print(json.dumps(result,sort_keys=True));raise SystemExit(0 if result['ok'] else 1)

@@ -182,6 +182,33 @@ class PreparationLeaseBoundaries(unittest.TestCase):
                 run.assert_not_called();self.assertEqual(json.loads(result.read_text()),original)
 
 
+class CacheDiagnosticBoundaries(unittest.TestCase):
+    def test_actual_owner_guard_keeps_private_message_and_public_stage_without_any_command(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(images,'ROOT',Path(folder)),mock.patch.object(images,'ROLE',None),\
+                 mock.patch.object(images,'POD_ERROR',None),mock.patch('os.getuid',return_value=0),\
+                 mock.patch.object(images.resource,'setrlimit'),mock.patch.object(images.signal,'signal'),\
+                 mock.patch.object(images.signal,'alarm'),mock.patch('subprocess.run') as run:
+                public=images.execute();private=Path(folder)/'cache-error.json'
+                record=json.loads(private.read_bytes())
+                self.assertEqual(public['stage'],'owner_guard');self.assertEqual(public['reason'],'ValueError')
+                self.assertTrue(public['private_diagnostic_saved']);self.assertNotIn('message',public)
+                self.assertEqual(record['message'],'existing_isolated_device_owner_required')
+                self.assertEqual(private.stat().st_mode & 0o777,0o600);run.assert_not_called()
+
+    def test_private_error_is_bounded_and_never_overwrites_original_diagnostic(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with mock.patch.object(images,'ROOT',Path(folder)),mock.patch.object(images,'STAGE','archive_validate'),\
+                 mock.patch.object(images,'ROLE','broker'),mock.patch.object(images,'POD_ERROR',{'returncode':2,'stderr':'fixed synthetic stderr'}):
+                public=images.failed_result(ValueError('synthetic '+('x'*4096)))
+                private=Path(folder)/'cache-error.json';original=private.read_bytes();record=json.loads(original)
+                self.assertLessEqual(len(original),16384);self.assertLessEqual(len(record['message']),1024)
+                self.assertEqual(record['pod_error']['returncode'],2)
+                self.assertNotIn('stderr',json.dumps(public));self.assertTrue(public['private_diagnostic_saved'])
+                self.assertFalse(images.failed_result(ValueError('later'))['private_diagnostic_saved'])
+                self.assertEqual(private.read_bytes(),original)
+
+
 class CacheExportBoundaries(unittest.TestCase):
     def test_actual_cached_inspect_argv_uses_go_ID_and_only_reviewed_metadata(self):
         template='{"id":{{json .ID}},"manifest":{{json .Digest}},"os":{{json .Os}},"arch":{{json .Architecture}},"size":{{.Size}},"repo_digests":{{json .RepoDigests}}}'
