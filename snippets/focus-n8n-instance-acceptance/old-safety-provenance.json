@@ -1,0 +1,150 @@
+{
+  "decision": "preserve both pairs byte-for-byte; no ownership adoption or permanent cleanup",
+  "fixed_old_pairs": [
+    {
+      "apps": [
+        "odoo",
+        "n8n"
+      ],
+      "archive_bytes": 12103680,
+      "creation_job": {
+        "all_health_ok": true,
+        "historical_saved_job_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/final-verify-arm-20261124-r2/20261124T225708/job-j20261124T152156Z-e4de80fe.json",
+        "historical_saved_job_sha256": "4a5c45890f8912d5b784f1f0af20afad1df93470b2a0b54f48ca402f94345760",
+        "id": "j20261124T152156Z-e4de80fe",
+        "result_safety_backup_id": "20261124T152230Z-5f41c20c",
+        "rolled_back": false,
+        "source_backup_id": "20261124T152150Z-698a61f8",
+        "state": "succeeded",
+        "type": "restore"
+      },
+      "old_id": "20261124T152230Z-5f41c20c",
+      "ownership": "not_owned_by_current_case",
+      "sidecar_sha256": "1f09e9894b14283c325d29da0faf422515f50ac3b51019ad50bb518612603ae9"
+    },
+    {
+      "apps": [
+        "n8n"
+      ],
+      "archive_bytes": 1372160,
+      "creation_job": {
+        "all_health_ok": true,
+        "historical_saved_job_path": "/home/woowtechopenclaw/.woowbk-lab/evidence/final-verify-arm-20261124-r2/20261124T225708/job-j20261124T153112Z-8b869b35.json",
+        "historical_saved_job_sha256": "08aa95cb096e75b90c766fc93d95f403d9495dcc288e59416e61f25e53ac93a0",
+        "id": "j20261124T153112Z-8b869b35",
+        "result_safety_backup_id": "20261124T153132Z-ee42afe1",
+        "rolled_back": false,
+        "source_backup_id": "20261118T095520Z-33eb7474",
+        "state": "succeeded",
+        "type": "restore"
+      },
+      "old_id": "20261124T153132Z-ee42afe1",
+      "ownership": "not_owned_by_current_case",
+      "sidecar_sha256": "2641a0157c7e872323956dddea39c957373207b14ccd2d4bd837beeecfc0d122"
+    }
+  ],
+  "historical_completed_tests": [
+    {
+      "baseline_cleanup_checks": [
+        {
+          "check": "baseline: odoo restored from 20261118T095247Z-388c9bd7",
+          "ok": true
+        },
+        {
+          "check": "baseline: n8n restored from 20261118T095520Z-33eb7474",
+          "ok": true
+        },
+        {
+          "check": "baseline: no imported data left (no custom module, no test partner, no workflow)",
+          "ok": true
+        },
+        {
+          "check": "baseline: the lab data is back (prodlike_baseline.py markers in Odoo and n8n)",
+          "ok": true
+        },
+        {
+          "check": "baseline: health 200 everywhere",
+          "ok": true
+        },
+        {
+          "check": "baseline: odoo restored from 20261118T095247Z-388c9bd7",
+          "ok": true
+        },
+        {
+          "check": "baseline: n8n restored from 20261118T095520Z-33eb7474",
+          "ok": true
+        },
+        {
+          "check": "baseline: no imported data left (no custom module, no test partner, no workflow)",
+          "ok": true
+        },
+        {
+          "check": "baseline: the lab data is back (prodlike_baseline.py markers in Odoo and n8n)",
+          "ok": true
+        },
+        {
+          "check": "baseline: health 200 everywhere",
+          "ok": true
+        }
+      ],
+      "failed": 0,
+      "passed": 133,
+      "path": "/home/woowtechopenclaw/.woowbk-lab/evidence/final-verify-arm-20261124-r2/20261124T225708/results.json",
+      "sha256": "a9ade90271e823ccdc1bab4f7306d2c37718271c4f55390cd88ee9a2f509d442"
+    },
+    {
+      "baseline_cleanup_checks": [
+        {
+          "check": "before: baseline marker and no imported workflow",
+          "ok": true
+        },
+        {
+          "check": "baseline backup can restore n8n on this engine",
+          "ok": true
+        },
+        {
+          "check": "cleanup: baseline restore succeeds",
+          "ok": true
+        },
+        {
+          "check": "cleanup: baseline marker and no imported workflow",
+          "ok": true
+        },
+        {
+          "check": "cleanup: both n8n health endpoints answer 200",
+          "ok": true
+        },
+        {
+          "check": "cleanup: test-created backup deleted",
+          "ok": true
+        },
+        {
+          "check": "cleanup: test-created backup deleted",
+          "ok": true
+        },
+        {
+          "check": "cleanup: test-created backup deleted",
+          "ok": true
+        },
+        {
+          "check": "cleanup: uploaded HA copy deleted",
+          "ok": true
+        }
+      ],
+      "failed": 0,
+      "passed": 34,
+      "path": "/home/woowtechopenclaw/.woowbk-lab/evidence/n8n-parity-full/20261126T131042/results.json",
+      "sha256": "b79e7ee58be5e5047f02954fb27fcad802df88d6930676bba3384c7de87a062f"
+    }
+  ],
+  "later_n8n34_public": {
+    "baseline_restored": true,
+    "failed": 0,
+    "passed": 34,
+    "path": "/tmp/claude-1000/-home-woowtechopenclaw/a15a4de1-3ce4-4692-84a2-243bd175349a/scratchpad/parity-real/runs/n8n-x86-attempt1-20261126.json",
+    "sha256": "2a613314c4bb03b77cfb198486915aa02b84d1ba928ea0b0c30111dba79d14b4"
+  },
+  "native_reads_after_code_only_instruction": false,
+  "original_four_manual_files_and_fixture_always_protected": true,
+  "schema": 1
+}

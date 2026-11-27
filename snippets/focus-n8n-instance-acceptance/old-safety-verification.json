@@ -1,0 +1,24 @@
+{
+  "blocked": 0,
+  "capture_direct_parses": {
+    "cases": [
+      "digit_in_fixed_stage_accepted",
+      "free_text_value_refused",
+      "stage_length41_refused",
+      "stage_punctuation_refused"
+    ],
+    "passed": 4
+  },
+  "distinct_methods": 3,
+  "errors": 0,
+  "failures": 0,
+  "in_memory_operations_payload_compile_load": true,
+  "native": "denied",
+  "native_since_code_only_instruction": false,
+  "schema": 1,
+  "shim_hits": 0,
+  "skips": 0,
+  "superseded_first_gate": "mixed-app expected-list ordering mismatch, preserved; corrected both sides sorted",
+  "test_log": "/tmp/parity-focus-20261127/n8n-old-safety-preservation-final-cas.log",
+  "test_log_sha256": "fcab44ddf1a5820fc0a559b0236652da4578f105c27d0f20d57824d546907c8b"
+}

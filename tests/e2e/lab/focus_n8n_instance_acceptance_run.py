@@ -187,7 +187,11 @@ class Controller:
         if self.r['name']!=self.name or self.r.get('device')!=plan.DEVICE:
             raise ValueError('receipt belongs to another case')
         self.results=[];self.recovering=False
-        self.ops_source=(HERE/'focus_n8n_instance_acceptance_ops.py').read_text()
+        # Fixed small preservation helper, loaded from memory, never deployed.
+        protected=(HERE/'focus_n8n_instance_acceptance_safeties.py').read_text()
+        prelude=("import sys,types\n_m=types.ModuleType('focus_n8n_instance_acceptance_safeties');"
+                 "sys.modules[_m.__name__]=_m\nexec(compile("+repr(protected)+",'<fixed safety preservation>','exec'),_m.__dict__)\n")
+        self.ops_source=prelude+(HERE/'focus_n8n_instance_acceptance_ops.py').read_text()
         self.secrets=None
 
     def save(self):save_receipt(self.path,self.r)
@@ -338,6 +342,7 @@ class Controller:
     def job(self,command,request,tag):
         if self.r.get('pending'):raise RuntimeError('previous job unresolved')
         self.budget(reserve=0 if self.recovering else 600)
+        if command=='restore-start':self.op('preserved_safety_copies')
         request=dict(request,request_id=self.name+'-'+tag)
         self.r['pending']={'command':command,'request_id':request['request_id'],'tag':tag}
         self.save()  # never store request keys/passwords in the receipt
@@ -401,13 +406,15 @@ class Controller:
         self.resources();self.acquire_original();self.frozen_engine()
         self.require('no_previous_safety',not self.r['full_safety'])
         self.require('all_exact_images',set(plan.IMAGE_IDS.values())<=set(self.op('inventory')['images']))
+        protected=self.op('preserved_safety_prepare')
+        self.r['preserved_old_safeties']=protected;self.save()
+        self.require('old_pairs_private_copy_verified',protected.get('private_copy_verified') is True and protected.get('private_files')==4)
         listing=self.helper('list');self.r['before_backups']=[x['id'] for x in listing['backups']]
         self.r['before_uploads']=[x['id'] for x in listing.get('ha_backups',[])];self.save()
         self.require('no_manual_retention_deletion',self.r['before']['retention_keep'] is None)
-        # Standard restore housekeeping prunes old safety copies. This case has
-        # no permission to prune an earlier lane's copies; refuse BEFORE writes.
-        self.require('no_preexisting_n8n_safety_to_prune',not any(x.get('type')=='safety' and
-                     any(a.get('id')=='n8n' for a in x.get('apps',[])) for x in listing['backups']))
+        old={x['id'] for x in listing['backups'] if x.get('type')=='safety' and
+             any(a.get('id')=='n8n' for a in x.get('apps',[]))}
+        self.require('only_exact_preserved_old_safeties',old==set(protected['protected_old_ids']))
         try:
             self.pause_timer();self.scope_instance();self.start_units(['n8n-postgres.service'])
             self.pg_ready();self.r['original_db']=self.op('snapshot',tag='original')
@@ -428,6 +435,7 @@ class Controller:
             # Never race uncertain helper startup/active jobs. A failure retains copies.
             self.settle();self.stop_units();self.restore_catalog();self.restore_timer()
             self.require('safety_stage_returns_original_services',same_found(self.op('inventory'),self.r['before']))
+            self.op('preserved_safety_check')
 
     def sql(self,database,query,*,json_result=True):
         if database not in ('n8n','postgres',self.name,self.name+'_outside'):
@@ -503,6 +511,7 @@ class Controller:
         self.require('fresh_full_safety_required',self.r.get('safety_verified') is True and bool(self.r.get('full_safety')))
         self.require('case_not_already_mutated',not self.r.get('fixture_intent'))
         self.acquire_original()
+        self.op('preserved_safety_check')
         # Revalidate the safety source before every destructive case, not merely
         # because a previous process wrote a receipt flag.
         safety=self.archive_probe(self.r['full_safety'])
@@ -646,6 +655,10 @@ class Controller:
         self.op('restore_files');self.command('systemctl','--user','daemon-reload')
         self.restore_catalog();self.restore_timer()
         self.require('original_durable_services_catalog_files',same_found(self.op('inventory'),self.r['before']))
+        returned=self.op('preserved_safety_return',jobs=list(self.r['jobs']),full_safety=self.r.get('full_safety'),
+                         baseline_restored=self.r.get('baseline_restored') is True)
+        self.require('preserved_old_pairs_returned',returned.get('all_preexisting_files_exact') is True)
+        self.r['preserved_old_safeties_return']=returned;self.save()
         self.r['recovery_verified']=True;self.save()
         if self.r.get('upload_intent'):
             self.scan_secrets()
@@ -678,6 +691,7 @@ class Controller:
             if self.r['ha_id'] in listed:self.helper('ha-delete',{'ha_backup_id':self.r['ha_id'],'confirm':True})
         if self.lease['image_policy']=='remove-own-after-case':self.images_recover()
         self.require('protected_baselines_untouched',self.op('inventory')['protected']==self.r['before']['protected'])
+        self.op('preserved_safety_check')
         self.op('cleanup_store',verified=True);self.r['complete']=True;self.save()
 
 
