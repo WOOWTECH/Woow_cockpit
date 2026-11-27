@@ -26,9 +26,46 @@ SOURCE=Path('/tmp/parity-focus-r8-source-20261127')
 PIN='1adf4df2b548bff1626e21d1d84e677f9622e4bc'
 PUBLIC=REPO/'tests/backup/evidence/focus-acceptance-20261127/r8-independent-recovery.json'
 
+# Exact own-case safety copies removed by successful attempt3 baseline restores.
+# Creation and pruning receipts are immutable actual job-status captures. This
+# does not permit unexplained absence, missing manual backups or baseline loss.
+PRUNED_CASE_SAFETIES={
+    '20261126T225103Z-3036ed2b': {
+        'app':'hermes',
+        'created':'job-j20261126T225019Z-32fde71d.json',
+        'created_sha256':'1b1f15f6a337b95b6d88721bd5faff554a3231bb6b01c658d27c8c76ed932f62',
+        'pruned':'job-j20261126T234651Z-2379a24c.json',
+        'pruned_sha256':'eca5ddc01107dba0d22ed94a1b77f6fbaddeac6d9c934f0201422def3778aa16'},
+    '20261126T224900Z-4f1206af': {
+        'app':'omnigent',
+        'created':'job-j20261126T224835Z-f3258b86.json',
+        'created_sha256':'d5ec822ea4a6d79273fb603f70b4ccbf2865cd6503ce8d7bac5104497e4a5796',
+        'pruned':'job-j20261126T234854Z-9b4447d4.json',
+        'pruned_sha256':'e5473259936c7ee3220c14674a426247764cd31157c50b2b3298b33f21fa126e'}}
+
 
 def digest(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def prove_case_safety_pruning(older_case, case, missing):
+    if not set(missing)<=set(PRUNED_CASE_SAFETIES):
+        raise ValueError('unexplained prior archive absence')
+    proof=[]
+    for bid in sorted(missing):
+        expected=PRUNED_CASE_SAFETIES[bid]
+        created=older_case/expected['created'];pruned=case/expected['pruned']
+        if created.is_symlink() or pruned.is_symlink() or digest(created)!=expected['created_sha256'] or digest(pruned)!=expected['pruned_sha256']:
+            raise ValueError('safety creation/pruning evidence changed')
+        first=json.loads(created.read_text())['job'];last=json.loads(pruned.read_text())
+        if (first.get('state')!='succeeded' or first.get('type')!='restore'
+                or first.get('params',{}).get('apps')!=[expected['app']]
+                or first.get('result',{}).get('safety_backup_id')!=bid
+                or last['job'].get('state')!='succeeded' or last['job'].get('type')!='restore'
+                or not any(isinstance(line,str) and line.endswith('已刪除較舊的還原前備份 '+bid) for line in last.get('log',[]))):
+            raise ValueError('successful own-case safety pruning not proved')
+        proof.append(dict(expected,id=bid,event='successful-older-safety-prune'))
+    return proof
 
 
 def run(attempt=1, expected_guard_sha=None):
@@ -140,8 +177,14 @@ print(json.dumps(out))''',{'sources':sources})
         listing=ok('list');by_id={x['id']:x for x in listing.get('backups',[])}
         retained=set(old['created_backups']);check('recovery only: all six old case archives retained',len(retained)==6 and retained<=set(by_id))
         older_retained=set(old.get('protected_existing_backups',[]))
+        pruning_proof=[]
         if attempt==3:
-            check('recovery only: all six older protected archives retained',len(older_retained)==6 and older_retained<=set(by_id) and not older_retained&retained)
+            missing=older_retained-set(by_id)
+            pruning_proof=prove_case_safety_pruning(older_case,case,missing)
+            check('recovery only: older case archives present or exact successful safety pruning proved',
+                  len(older_retained)==6 and not older_retained&retained and
+                  missing=={x['id'] for x in pruning_proof})
+            older_retained-=missing
         uploaded={x['id']:x for x in listing.get('ha_backups',[])}
         check('recovery only: old HA upload retained with original derived hash',old['ha_id'] in uploaded and uploaded[old['ha_id']].get('sha256')==old['derived_fixture_sha256'])
         check('recovery only: old derived host copy retained',(case/'full-ha-corrupt-emqx.tar').is_file() and ui.sha(case/'full-ha-corrupt-emqx.tar')==old['derived_fixture_sha256'])
@@ -190,7 +233,9 @@ print(json.dumps(out))''',{'sources':sources})
                'scan_covers_requests_pending_exports':True,'cookie_coverage_of_old_attempt':False,
                'guard_override_performed':False,'commercial_acceptance':'not-complete'}
         facts.update(purpose_attempt=attempt,older_protected_archives_retained=len(older_retained),
-                     total_case_archives_retained=len(retained|older_retained),cookie_values_recovered=False)
+                     total_case_archives_retained=len(retained|older_retained),cookie_values_recovered=False,
+                     retained_case_archive_ids=sorted(retained|older_retained),
+                     old_case_safety_pruning=pruning_proof)
         if attempt==3:
             facts.update(rendered_scan_sha256=hashlib.sha256(scan.encode()).hexdigest(),
                          actual_archive_index_sidecars_expected=expected_sidecars,

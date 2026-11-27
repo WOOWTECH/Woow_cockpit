@@ -258,8 +258,15 @@ def verified_recovery(guard, proof, expected_sha, evidence_root=LAB/'evidence'):
             or facts.get('old_receipt_sha256') != sha(case/'recovery.json')
             or facts.get('old_summary_sha256') != sha(case/'summary.json')):
         raise ValueError('independent data recovery facts do not match protected case')
+    declared=set(old['created_backups'])|set(old.get('protected_existing_backups',[]))
+    retained=set(facts.get('retained_case_archive_ids',declared))
+    pruned={p['id'] for p in facts.get('old_case_safety_pruning',[])}
+    if (not set(old['created_backups'])<=retained or retained&pruned or retained|pruned!=declared
+            or pruned-{'20261126T225103Z-3036ed2b','20261126T224900Z-4f1206af'}):
+        raise ValueError('retained/pruned prior test archive accounting invalid')
     return old, {'path': str(proof), 'sha256': expected_sha,
-                 'old_guard_sha256': facts['old_guard_sha256'], 'acceptance_passed': False}
+                 'old_guard_sha256': facts['old_guard_sha256'], 'acceptance_passed': False,
+                 'retained_case_archive_ids':sorted(retained)}
 
 
 def ha_record_owned(records, ha_id, digest, previous=None):
@@ -274,6 +281,31 @@ def ha_record_owned(records, ha_id, digest, previous=None):
             or matches[0].get('sha256') != digest):
         raise ValueError('existing HA record lacks exact recovered ownership proof')
     return False
+
+
+def case_safety_prunes(before, after, owned_prior, captured_jobs):
+    """Explain only prior OWN test safety copies pruned by actual successful jobs.
+
+    No missing manual backup, original lab baseline, unknown archive or failed
+    deletion is accepted. Product retention itself is neither changed nor pinned.
+    """
+    missing=set(before)-set(after)
+    if any(bid not in set(owned_prior) or before[bid].get('type')!='safety'
+           or bid in BASELINES.values() for bid in missing):
+        raise ValueError('unexplained original backup loss')
+    proof=[]
+    for bid in sorted(missing):
+        matches=[]
+        for name,raw in captured_jobs.items():
+            doc=json.loads(raw);job=doc.get('job',{})
+            if (job.get('state')=='succeeded' and job.get('type')=='restore'
+                    and any(isinstance(line,str) and line.endswith('已刪除較舊的還原前備份 '+bid)
+                            for line in doc.get('log',[]))):
+                matches.append({'file':name,'sha256':hashlib.sha256(raw).hexdigest(),'job_id':job['id']})
+        if not matches:
+            raise ValueError('actual successful safety pruning event missing')
+        proof.append({'id':bid,'type':'safety','events':matches})
+    return proof
 
 def run(source, recovery_proof=None, recovery_proof_sha256=None):
     sys.path.insert(0, str(HERE))
@@ -342,7 +374,7 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
     recovery_deadline = None
     if provenance:
         receipt['previous_independent_recovery'] = provenance
-        receipt['protected_existing_backups'] = sorted(set(previous['created_backups']) | set(previous.get('protected_existing_backups',[])))
+        receipt['protected_existing_backups'] = provenance['retained_case_archive_ids']
         # Preserve the pointer bytes in the NEW private case before any approved
         # new state can replace it. Old case files remain byte-identical.
         with (ev.dir/'previous-guard.json').open('xb') as handle:
@@ -529,6 +561,7 @@ print(json.dumps(out))''',{'sources':sources})
                        source_commit=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip())
         listing=ok('list')
         before_backups={x['id'] for x in listing.get('backups',[])}
+        before_backup_rows={x['id']:x for x in listing.get('backups',[])}
         before_uploads={x['id'] for x in listing.get('ha_backups',[])}
         if previous:
             require('replay: every old archive remains a protected existing backup',set(receipt['protected_existing_backups']) <= before_backups)
@@ -665,6 +698,12 @@ print(json.dumps(out))''',{'sources':sources})
                 'hermes-api-server-key','hermes-webhook-secret','hermes-dashboard-session-secret','hermes-dashboard-password',
                 'hermes-postgres-password','woow-emqx-dashboard-password','woow-emqx-node-cookie','woow-emqx-mqtt-password']})
             ev.save('leaks.json',report)
+            after={x['id'] for x in ok('list').get('backups',[])}
+            pruning=case_safety_prunes(before_backup_rows,after,receipt.get('protected_existing_backups',[]),
+                                      {p.name:p.read_bytes() for p in ev.dir.glob('job-*.json')})
+            receipt['prior_case_safety_pruning']=pruning;save()
+            expected_prior=before_backups-{p['id'] for p in pruning}
+            sidecars=root_json('from pathlib import Path; import json; print(json.dumps(len(list(Path("/var/lib/woowtech-backup/archives").rglob("*.json")))))')
             # The encrypted child archive contains secrets by design. Scan all
             # other artifacts, including the browser's fixed-field result.
             host_hits=0
@@ -675,10 +714,10 @@ print(json.dumps(out))''',{'sources':sources})
             require('leaks: registered and observed values absent from records journal and text evidence',
                     report['hits']==0 and report['scanned']>0 and host_hits==0
                     and report['regular_json_roots_scanned']==2
-                    and report['archive_index_sidecars_scanned'] >= len(before_backups)+len(receipt['created_backups']))
+                    and report['archive_index_sidecars_scanned'] == sidecars
+                    and sidecars >= len(after))
             browser_file=ev.dir/'browser.json'
             require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)
-            after={x['id'] for x in ok('list').get('backups',[])}
             require('recovery: backup inventory contains no untracked new archive', before_backups is not None and after-before_backups==set(receipt['created_backups']))
             safe=True
             receipt['phase']='owned-cleanup'; save()
@@ -695,7 +734,8 @@ print(json.dumps(out))''',{'sources':sources})
                 ok('ha-delete',{'ha_backup_id':receipt['ha_id'],'confirm':True})
             derived.unlink(missing_ok=True)
             h.scenario_cleanup(ev,None)
-            require('cleanup: original backup inventory retained',{x['id'] for x in ok('list').get('backups',[])}==before_backups)
+            require('cleanup: original backups retained except proved prior test safety pruning',
+                    {x['id'] for x in ok('list').get('backups',[])}==expected_prior)
             retained_uploads=ok('list').get('ha_backups',[])
             require('cleanup: original HA inventory retained',{x['id'] for x in retained_uploads}==before_uploads)
             if previous:

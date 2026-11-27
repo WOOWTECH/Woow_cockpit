@@ -315,5 +315,48 @@ class ActualScanRootTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):ui.scan_paths(str(root))
 
 
+class PriorTestSafetyRetentionTests(unittest.TestCase):
+    def captures(self, bid='test-safety', state='succeeded', line=None):
+        return {'job-real.json':json.dumps({'job':{'id':'real-job','state':state,'type':'restore'},
+            'log':[line if line is not None else 'timestamp 已刪除較舊的還原前備份 '+bid]}).encode()}
+
+    def test_successful_product_pruning_of_known_prior_test_safety_is_accounted(self):
+        rows={'test-safety':{'type':'safety'},'original':{'type':'manual'}}
+        proof=ui.case_safety_prunes(rows,{'original'},{'test-safety'},self.captures())
+        self.assertEqual([x['id'] for x in proof],['test-safety'])
+        self.assertEqual(proof[0]['events'][0]['job_id'],'real-job')
+        self.assertEqual(proof[0]['events'][0]['sha256'],hashlib.sha256(self.captures()['job-real.json']).hexdigest())
+        self.assertEqual(ui.case_safety_prunes(rows,set(rows),{'test-safety'},{}),[])
+
+    def test_manual_baseline_and_foreign_safety_loss_never_pass(self):
+        for rows,owned in (({'test-safety':{'type':'manual'}},{'test-safety'}),
+                           ({'test-safety':{'type':'safety'}},set()),
+                           ({ui.BASELINES['hermes']:{'type':'safety'}},{ui.BASELINES['hermes']})):
+            with self.subTest(rows=rows),self.assertRaises(ValueError):
+                ui.case_safety_prunes(rows,set(),owned,self.captures())
+
+    def test_missing_failed_and_warning_only_pruning_events_refuse(self):
+        rows={'test-safety':{'type':'safety'}}
+        for captures in ({},self.captures(state='failed'),self.captures(line='警告：無法刪除較舊的還原前備份 test-safety')):
+            with self.subTest(captures=captures),self.assertRaises(ValueError):
+                ui.case_safety_prunes(rows,set(),set(rows),captures)
+
+    def test_historical_absence_requires_exact_creation_and_pruning_file_hashes(self):
+        recovery=module('retention_recovery','focus_acceptance_ui_recovery.py')
+        with tempfile.TemporaryDirectory() as directory:
+            older=Path(directory)/'older';older.mkdir();case=Path(directory)/'case';case.mkdir()
+            bid='test-safety'
+            first={'job':{'type':'restore','state':'succeeded','params':{'apps':['hermes']},'result':{'safety_backup_id':bid}}}
+            (older/'created.json').write_text(json.dumps(first))
+            (case/'pruned.json').write_bytes(self.captures()['job-real.json'])
+            entry={'app':'hermes','created':'created.json','created_sha256':recovery.digest(older/'created.json'),
+                   'pruned':'pruned.json','pruned_sha256':recovery.digest(case/'pruned.json')}
+            with patch.object(recovery,'PRUNED_CASE_SAFETIES',{bid:entry}):
+                self.assertEqual(recovery.prove_case_safety_pruning(older,case,{bid})[0]['id'],bid)
+                with self.assertRaises(ValueError):recovery.prove_case_safety_pruning(older,case,{'unknown'})
+                (case/'pruned.json').write_text('{}')
+                with self.assertRaises(ValueError):recovery.prove_case_safety_pruning(older,case,{bid})
+
+
 if __name__ == '__main__':
     unittest.main()

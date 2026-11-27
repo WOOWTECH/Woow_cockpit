@@ -1,5 +1,29 @@
 # Focused real acceptance, 2026-11-27
 
+## Later recovery correction: normal safety retention
+
+The coordinator's actual `cde697b8` recovery-only run stopped after 9 passing
+checks, exit1/9.2 seconds, before its scanner or catalog mutation. Its fixed
+capture is `r8-attempt3-recovery-capture.json`. The assertion that all six older
+test archives remained was false: two OLD OWN test safety backups had already
+been removed by the product's normal three-safety-per-app retention during the
+successful attempt3 baseline restores. The original baseline data had returned.
+
+`r8-attempt3-older-safety-pruning.json` binds their creation receipts and exact
+successful deletion messages in the retained restore-job captures. Four older
+test archives and all six current-case archives are present: **10**, not 12.
+The system journal did not provide these messages; the proof is from the actual
+job logs. Missing manual, baseline or unknown archives remain a failure. No
+archive is recreated, retention rule changed, or failed capture rewritten.
+
+The corrected controller accounts only for known prior OWN safety archives with
+an actual successful pruning event, and scans every sidecar actually present.
+The historical exception is additionally bound to the exact two creation and
+pruning file hashes. Thirty guarded offline boundaries passed after this
+correction, including unknown/manual/baseline loss, failed deletion events and
+changed proof files. A new recovery run is still required. Old cookie coverage
+remains absent, and the original R8 attempt remains **57/60 FAIL**.
+
 The independent DESIGN G4 R3 D10 case passed **71/71** on real source
 `5209c402b846ab00ae4453c5e4ca80447ed75030`, exit0 in314.6seconds.
 `d10-attempt2.json` is the fixed-status capture; the failed first attempt remains
