@@ -1,0 +1,30 @@
+{
+  "additional_upload_peak_bytes": 5004818432,
+  "apps_started": 0,
+  "chunk_resource_rpc_count": 0,
+  "errors": 0,
+  "failures": 0,
+  "files": {
+    "tests/backup/test_focus_nextcloud_r6_upload.py": "bccc857b248555443785c8f305ecfe113542bb213a59e988075d434522eed2a4",
+    "tests/e2e/lab/focus_nextcloud_r6.py": "8ec3ff47bf8f993c04bd0a2d61cc2f52413643f43ad7c7f7f3fff162a491a15c",
+    "tests/e2e/lab/focus_nextcloud_r6_case.py": "359137cf0803fc1cb93a01c1f9c3b83270ecd3c6ec0735de21c84b03e76c75d4",
+    "tests/e2e/lab/focus_nextcloud_r6_cold.py": "385a9c9dc8bffbe8748b3ead696737b60e6868aac08fd22f99224b7ac0f29a26",
+    "tests/e2e/lab/focus_nextcloud_r6_plan.py": "b9c65b2f0a7c82a91c79054033dac1a43d457531767efa2a1dfe4245a860ec2b",
+    "tests/e2e/lab/focus_nextcloud_r6_upload.py": "654676a7a97a0126988272f9a376fc9bdb4a0f90c49a1c591a4f90803d6bea94"
+  },
+  "final_neighbor_tests": 57,
+  "focused_tests": 18,
+  "helper_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+  "host_checkpoint_bytes": 67108864,
+  "host_checkpoint_seconds": 15,
+  "memory_cap_bytes": 3221225472,
+  "minimum_start_free_bytes": 18963462144,
+  "original_failure_cause": "unknown-not-recorded",
+  "post_neighbor_changes": "final free-space and trusted-directory/placeholder mode assertions; all rendered programs recompiled",
+  "product_changes": false,
+  "reserve_bytes": 13958643712,
+  "skipped": 0,
+  "status": "offline-preparation-only",
+  "upload_executed": false,
+  "version_sha256": "29ddb46f49384f63c69c2112c1e9b03c1ff2c4993904cc4723ff544fcb32ee92"
+}

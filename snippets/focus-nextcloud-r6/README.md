@@ -236,3 +236,13 @@ Known Office failed flag blocked cold return before either revert. Parent-approv
 recovery using unchanged d7 primitives passed exact original source/unit return;
 all fixed failed/recovery evidence and SHA bindings retained. Dev-e/heavy released.
 Fullshare/S5/skipped acceptance remains pending; no retry is authorized.
+
+## Next cold upload-only proposal
+
+[upload-only-PROPOSAL.md](upload-only-PROPOSAL.md) and inert
+[lease-upload-only.template.json](lease-upload-only.template.json): isolate only
+begin/bounded SHA stream/finish/own abort with complete private error diagnostics,
+apps cold and exact restored old helper. One verified owned HA store can be
+retained and lease-bound for later fullshare reuse; no duplicate transfer or
+unverified disk credit. Current fullshare/cold-return code has the narrow owned
+Office post-STOP exit137 gate. No new runtime lease/execution yet.

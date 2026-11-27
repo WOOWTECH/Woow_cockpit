@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import time
 
+import focus_nextcloud_r6_cold as cold
 import focus_nextcloud_r6_source as source
 import focus_nextcloud_r6_wake as wake
 from focus_nextcloud_r6_inventory import collect, ORIGINALS, LP, DEVICE
@@ -120,6 +121,17 @@ def run(args, lease, commit, facts, flow):
     if lease.get('product_manifest_sha256')!=source.manifest_hash(manifest):
         raise ValueError('fixed-r6-frozen-manifest-lease-required')
     before=collect();admission(before)
+    retained_path=getattr(args,'retained_upload_receipt',None)
+    args.retained_upload=None;args.retained_credit_bytes=0
+    if retained_path is not None:
+        import focus_nextcloud_r6_upload as upload
+        expected=lease.get('retained_upload_receipt_sha256')
+        if not expected:raise ValueError('fixed-retained-upload-lease-binding-required')
+        trace=upload.Evidence(Path.home()/'.woowbk-lab/evidence/focus-nextcloud-r6-retained-check'/time.strftime('%Y%m%dT%H%M%S'))
+        end=datetime.datetime.fromisoformat(lease['expires_utc'].replace('Z','+00:00')).timestamp()
+        args.retained_upload,args.retained_proof,args.retained_credit_bytes=upload.adopt_receipt(retained_path,expected,end,trace)
+    elif lease.get('retained_upload_receipt_sha256'):
+        raise ValueError('fixed-retained-upload-receipt-required')
     if wake.device(QUIESCENT,root=True)['active_jobs']:
         raise ValueError('fixed-r6-existing-job-writer-refused')
     expires=datetime.datetime.fromisoformat(lease['expires_utc'].replace('Z','+00:00')).timestamp()
@@ -137,7 +149,7 @@ def run(args, lease, commit, facts, flow):
     save('baseline-hashes.json',baseline);save('product-manifest.json',manifest)
     nonce=secrets.token_hex(8);save('source-transaction.json',{'nonce':nonce,'product_commit':source.PRODUCT_COMMIT})
     installed=False;attempted=False;rc=1;reverted=False;preserved=False;data_safe=True;source_return=False
-    failure=None;phase='source-staging';case_entered=False
+    failure=None;phase='source-staging';case_entered=False;office_claim=None
     try:
         attempted=True
         deployed=source.transact('install',nonce,paths,manifest,expires)
@@ -147,6 +159,7 @@ def run(args, lease, commit, facts, flow):
         phase='native-wake';wake.device(wake.unit_program(),{'action':'pin','snapshot':snapshot});reload_units()
         started=wake.device(wake.CONTROL,{'action':'start','expires_epoch':expires},timeout=1200)
         save('wake-result.json',started)
+        office_claim=wake.device(cold.CLAIM);save('owned-office-invocation.json',office_claim)
         if not flow.baseline_verify(): raise RuntimeError('fixed-r6-baseline-before-import-failed')
         phase='current-fullshare';case_entered=True;data_safe=False
         rc=flow.run_locked(args,lease,commit,facts,before)
@@ -162,7 +175,8 @@ def run(args, lease, commit, facts, flow):
             if wake.device(QUIESCENT,root=True)['active_jobs']:
                 raise RuntimeError('fixed-r6-job-writer-not-quiescent-retain-code-and-copies')
             # Return native stack to cold even on failure. Keep current source if jobs/data recovery uncertain.
-            wake.device(wake.CONTROL,{'action':'stop'},timeout=240)
+            stop_result=cold.stop(before['owner']['units']['nextcloud-office.service'],office_claim)
+            save('cold-stop-result.json',stop_result)
             cold=collect()
             if any(x.get('ActiveState')!='inactive' for x in cold['owner']['units'].values()):
                 raise RuntimeError('fixed-r6-cold-return-failed')

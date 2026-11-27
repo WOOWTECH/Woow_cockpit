@@ -1,0 +1,15 @@
+{
+  "lane": "nextcloud-r6",
+  "device": "woowbk-dev-e",
+  "source_commit": "REPLACE_WITH_EXACT_REVIEWED_UPLOAD_ONLY_COMMIT",
+  "phases": ["upload-only"],
+  "helper_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+  "prior_source_sha256": "cb23acdb178c1614b0cbc24b5d294a0652959ac36c2c0a651ff44917da8c02e1",
+  "retain_finished_store": true,
+  "cleanup_grace_seconds": 300,
+  "host_source_operations": [],
+  "not_before_utc": "1970-01-01T00:00:00Z",
+  "expires_utc": "1970-01-01T00:00:01Z",
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472
+}

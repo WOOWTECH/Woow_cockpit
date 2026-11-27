@@ -65,6 +65,18 @@ def acceptance_budget(html, pg, data, converted, safety, *, uploaded=FIXTURE_BYT
             'reserve_bytes': RESERVE, 'extra_original_fixture_copy_bytes': 0}
 
 
+def verified_credit_budget(bound,credit):
+    # Caller obtains credit ONLY from fresh retained_credit(receipt,current-file-proof).
+    if 'verified_owned_ha_credit_bytes' in bound or type(credit) is not int or not 0<=credit<=FIXTURE_BYTES:
+        raise ValueError('fixed-owned-ha-credit-refused')
+    out=dict(bound)
+    out['uncredited_additional_peak_bytes']=bound['additional_peak_bytes']
+    out['verified_owned_ha_credit_bytes']=credit
+    out['additional_peak_bytes']=max(0,bound['additional_peak_bytes']-credit)
+    out['minimum_after_wake_free_bytes']=RESERVE+out['additional_peak_bytes']
+    return out
+
+
 def confirmation_keys(job, case):
     """Only the reviewed issue IDs may be acknowledged, using their actual bound keys."""
     if case not in CASES or job.get('state') != 'succeeded':

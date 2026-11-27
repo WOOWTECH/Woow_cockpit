@@ -27,7 +27,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from focus_nextcloud_r6_inventory import collect, ORIGINALS, FIXTURE, FIXTURE_SHA
 from focus_nextcloud_r6_plan import (BASELINE, CASES, DEVICE_CAP, MARGIN, MIB, RESERVE,
-                                      acceptance_budget, confirmation_keys, lease_check)
+                                      acceptance_budget, confirmation_keys, lease_check, verified_credit_budget)
 
 REPO = HERE.parents[2]
 LAB = Path.home() / '.woowbk-lab'
@@ -222,10 +222,17 @@ def run_locked(args, lease, commit, facts, inventory):
                     all(isinstance(sizes.get(k), int) for k in ('html', 'postgres', 'data')))
             bound = acceptance_budget(sizes['html'], sizes['postgres'],
                                       max(sizes['data'], 234187031), 1024**3, 1024**3)
+            bound=verified_credit_budget(bound,getattr(args,'retained_credit_bytes',0))
             ev.save('fresh-budget.json', bound)
             self.budget('fullshare admission', bound['additional_peak_bytes'])
 
         def upload(self):
+            retained=getattr(args,'retained_upload',None)
+            if retained is not None:
+                self.created_store=retained['ha_backup_id']
+                d.STATE.update(ha_backup_id=self.created_store,upload_id=None,retained_upload_receipt_sha256=lease['retained_upload_receipt_sha256'])
+                d.save_state();require('upload: verified owned retained store reused without transfer',True)
+                return
             self.budget('upload', nc.FIXTURE.stat().st_size + 3 * 1024**3)
             require('upload: original fixture exact size retained', nc.FIXTURE.stat().st_size == 4467947520)
             begin = d.ok('upload-begin', {'filename': nc.FIXTURE.name, 'size': nc.FIXTURE.stat().st_size}, ev=ev)
@@ -403,6 +410,7 @@ def main():
     p.add_argument('--lease', type=Path)
     p.add_argument('--facts', type=Path, default=FACTS)
     from focus_nextcloud_r6_source import FROZEN
+    p.add_argument('--retained-upload-receipt',type=Path)
     p.add_argument('--product-source', type=Path, default=FROZEN)
     p.add_argument('--case', choices=tuple(CASES), default='fullshare')
     args = p.parse_args()
