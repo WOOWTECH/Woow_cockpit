@@ -1,0 +1,37 @@
+{
+ "kind": "guarded-integration-regression",
+ "source_commit": "4eb41e29ca6cc55249a524a25f07bc5d7f2fe7e5",
+ "suite": "tests/backup",
+ "flags": [
+  "--b1",
+  "--ha118",
+  "--discover"
+ ],
+ "tests": 3644,
+ "failures": 0,
+ "errors": 0,
+ "skipped": 2,
+ "elapsed_seconds": 629,
+ "blocked": [],
+ "shim_hits": [],
+ "run_native": "absent",
+ "raw_guardlog": "/tmp/parity-focus-20261127/final-4eb41e29-backup.guardlog",
+ "raw_guardlog_bytes": 632420,
+ "raw_guardlog_sha256": "be424ce4e85cd6cf9363dc42d527a715fd48d221f6eee72e06d4335d5f052e3f",
+ "contains": {
+  "product_fixes": [
+   "0ea74a46 (n8n probe ignores its own process entry, = 8e18f842)",
+   "7115bbaa (n8n sequences advanced after import:entities, = bfe7b914)",
+   "aaadebc9 (PostgreSQL 17 MAINTAIN table privilege, = ce8c4cfb)",
+   "7063a60f (test fake answers the sequence advance, = 55886404)"
+  ],
+  "controllers": [
+   "focus/n8n-instance-flow-20261127",
+   "focus/litellm-instance-acceptance-20261127"
+  ]
+ },
+ "previous_run_same_day": "the first run at 6ba198dd: 3644 tests, 1 failure + 1 error, both test_ha_flows N8nConversionTests whose fake PostgreSQL did not answer the new sequence statement; fixed by 7063a60f",
+ "later_commits": "dacbc5ab adds only three tests/e2e/lab files (import hygiene); the 18 n8n and LiteLLM lab modules pass together: 241 tests",
+ "original_service_acceptance": "N8-01: n8n-instance-flow-attempt7.json (85 checks, runtime_acceptance true); L-03: litellm-instance-fullflow-07.json (68 checks, flow_verified true)",
+ "commercial_acceptance": "not-complete"
+}

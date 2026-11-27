@@ -19,3 +19,22 @@ Central integration: final six-line empty-handover receipt fix at `72ca217b` was
 The frozen `d09f4fe8` rerun completed **3568 tests, zero failures/errors, two skips** in 868 seconds, with no blocked calls or shim hits. `integration-d09f4fe8.json` binds the original guard log by its full hash. The source checker also passed for 52 engine sources and existing asset/catalog/unit checks. This is integration evidence, not original-service acceptance; the subsequently identified standard LiteLLM companion-environment reader correction is outside this run.
 
 The bounded LiteLLM companion-environment correction at `59a1b0f9` passed **145/145** guarded access/LiteLLM regressions in 20 seconds, including the compiled production probe and conflicting-input/local-backend refusals. No calls were blocked and no shim/native calls occurred. The 52-source checker passed again. `integration-litellm-59a1b0f9.json` records this delta gate separately from the preceding full suite.
+
+## Real whole-instance acceptance of N8-01 and L-03 (2026-11-27 evening)
+
+Both remaining first-wave rows passed their complete original-application whole-instance flows on isolated lab devices:
+
+* **N8-01**, n8n 2.43.6 on dev-c, flow attempt 7: 85 checks, `runtime_acceptance: true`, 1,360 s
+  ([n8n-instance-flow-attempt7.json](n8n-instance-flow-attempt7.json), stage names only). Product commits under test: d09f4fe8 plus
+  `8e18f842` (the n8n connection probe ignores its own process entry) and `bfe7b914` (PostgreSQL sequences advanced after n8n's own
+  `import:entities`, which advances only IDENTITY columns: every new execution collided with an imported id).
+* **L-03**, LiteLLM on dev-d with PostgreSQL 17, successor case b11: 68 checks, phase succeeded, flow and recovery verified, outer
+  isolation returned ([litellm-instance-fullflow-07.json](litellm-instance-fullflow-07.json)). Product under test: 59a1b0f9 plus `ce8c4cfb`
+  (the PostgreSQL 17 table privilege `MAINTAIN` in the instance access whitelist).
+
+Each app's engine code on the final integration tip is byte for byte the code that ran on its device; the only differences are other apps'
+modules. The final tip `4eb41e29` passed the guarded `tests/backup` suite: 3,644 tests, zero failures/errors, two skips, no blocked calls or
+shim hits ([integration-4eb41e29.json](integration-4eb41e29.json)); `dacbc5ab` afterwards changes three lab files only, and the 18 n8n and
+LiteLLM lab modules pass together (241). Both devices were returned to their exact original state after every attempt (backups, uploads,
+containers, catalogs, services, timer; the paused failing Headscale unit resumed). Private receipts, leases and journals stay on the host
+in /tmp/parity-focus-20261127 and ~/.woowbk-lab/run. This is row acceptance, not the ten-service commercial acceptance.

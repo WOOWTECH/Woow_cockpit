@@ -1,0 +1,29 @@
+{
+ "lane": "LITELLM",
+ "rows": {
+  "L-03": {
+   "status": "done",
+   "tests": [
+    "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_n21_what_the_entry_cannot_be_filled_with_stops_only_this_app",
+    "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_n21b_other_volumes_and_folders_go_along_as_they_are",
+    "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_n21c_a_cold_entry_is_filled_with_the_new_cluster_itself",
+    "tests/backup/test_ha_litellm.py::SingleProtectionTests.test_the_instance_maintenance_database_is_not_the_litellm_database",
+    "tests/backup/test_ha_litellm.py::ConvertTests.test_instance_conversion_keeps_salt_schema_guards_and_all_live_databases",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_later_outside_writes_databases_owners_and_passwords_are_preserved",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_flow_failure_restores_the_current_full_safety_instance_and_checks_its_digest",
+    "tests/backup/test_archive.py::HaInstanceMarkerTests.test_valid_markers_and_older_instances_are_accepted",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_ordinary_owner_installed_untrusted_extension_and_separate_app_access",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_table_or_sequence_with_unknown_access_refuses_before_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_new_ha_column_keeps_table_wide_app_access_and_ambiguous_column_only_policy_refuses",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_same_name_ordinary_partitioned_kind_change_fails_instead_of_skipping_access_checks",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_running_app_database_changed_refuses_before_stop_or_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_unapplied_env_file_database_change_refuses_before_stop_or_drop",
+    "tests/backup/test_adapter_ha_instance.py::HaInstanceTests.test_preflight_uses_actual_temp_constructor_and_finishes_endpoint_cleanup",
+    "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_litellm_stopped_proxy_dependencies_and_partial_failure_cancel_are_scoped",
+    "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_actual_litellm_probe_reads_process_url_and_refuses_config_overrides",
+    "tests/backup/test_ha_instance_access.py::AccessPlanTests.test_pg17_maintain_is_a_valid_table_privilege_and_only_there"
+   ],
+   "note": "整個執行個體轉換與匯入已在實機（dev-d，PostgreSQL 17）完整驗收：68 項檢查全過（轉換、真實匯入、其他資料庫與角色密碼保留、匯入後 11 項與重啟後 12 項應用驗證、寫入見證、故意失敗自動回滾、原狀回復、機密掃描）。實測找出並修好產品錯誤：PostgreSQL 17 的 MAINTAIN 權限。證據 tests/backup/evidence/focus-instances-20261127/litellm-instance-fullflow-07.json。"
+  }
+ }
+}
