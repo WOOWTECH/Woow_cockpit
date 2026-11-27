@@ -186,6 +186,11 @@ ACL_ROW = ('ok=emqx_authz_mnesia:store_rules({username,<<"r4_source">>},'
 
 def case_assertions(tmp, case_id):
     """Only fixed owned inputs; no general file/env reader or caller-supplied evaluation expression."""
+    if case_id == 'env_wins_h1':
+        # HA's value arrived in the file, and this device's environment still decides (after the import and the restart).
+        check('h1_effective_no_match_is_this_devices_env', no_match(tmp, 'emqx-new') == fx.H1_ENV['EMQX_AUTHORIZATION__NO_MATCH'])
+        conf = tmp.exec('emqx-new', ['cat', '/opt/emqx/data/configs/cluster.hocon']).stdout
+        check('h1_config_file_holds_has_value', re.findall(rb'no_match\s*[=:]\s*"?(allow|deny)', conf) == [b'allow'])
     if case_id == 'changed_acl':
         result = tmp.exec('emqx-new', ['cat', '/opt/emqx/data/authz/acl.conf']).stdout
         check('owned_source_acl_bytes_replace_target', result == fx.SOURCE_ACL)
@@ -262,6 +267,34 @@ def login_code(tmp, role, case_id, *args, **kwargs):
     return codes[-1]
 
 
+NO_MATCH_EXPR = 'io:format("WOOWNM:~s:END",[emqx:get_config([authorization,no_match])]).'
+
+
+def no_match(tmp, role):
+    """The broker's effective authorization.no_match: what decides, whatever the files say (H1)."""
+    match = re.search(r'WOOWNM:(allow|deny):END', emqx.evaluate(tmp, role, NO_MATCH_EXPR))
+    if not match: raise RuntimeError('no_match_unreadable')
+    return match[1]
+
+
+def device_target(tmp, mounts, env):
+    """H1: this generated device as the product's own Target, read from a Quadlet file the way the product reads the
+    live one, so the candidate gets this device's EMQX_* environment and the env-wins notice is the product's own."""
+    lines = ['[Container]', 'Image=' + fx.IMAGE, 'ContainerName=' + tmp.name('emqx-ha'),
+             'Volume=' + tmp.name('device') + ':' + emqx.DATA_TARGET,
+             'Volume=' + tmp.name('device-log') + ':' + emqx.LOG_TARGET]
+    home = tmp.runner.home.rstrip('/') + '/'
+    for source, target, option in mounts:   # the product accepts host paths only as %h/... (its own home)
+        if not source.startswith(home): raise ValueError('h1_mount_outside_home')
+        lines.append('Volume=%h/' + source[len(home):] + ':' + target + ':' + option)
+    lines += ['Environment=' + key + '=' + value for key, value in sorted(env.items()) if key.startswith('EMQX_')]
+    body = ('\n'.join(lines) + '\n').encode()
+    app = SimpleNamespace(id='emqx', volumes=[{'name': tmp.name('device')}, {'name': tmp.name('device-log')}],
+                          postgres=None, data_dirs=[])
+    work = SimpleNamespace(quadlets=lambda _app: {'emqx.container': body}, runner=lambda _app: tmp.runner)
+    return emqx.Target(work, app)
+
+
 def read_source(tmp):
     readings = {'counts': emqx.parse_counts(emqx.evaluate(tmp, 'emqx-ha', emqx.COUNT_EXPR)),
         'authn': emqx.parse_authn(emqx.evaluate(tmp, 'emqx-ha', emqx.AUTHN_EXPR)),
@@ -335,6 +368,8 @@ def main(case_id):
            'EMQX_PLUGINS__INSTALL_DIR': '/opt/emqx/plugins', 'WOOW_R4_DUMMY': fx.DUMMY_ENV}
     source_env = dict(env, EMQX_DASHBOARD__DEFAULT_PASSWORD='public' if case_id == 'admin_public' else fx.DUMMY_PASSWORD)
     target_env = dict(env, EMQX_DASHBOARD__DEFAULT_PASSWORD='r4-owned-target-admin')
+    if case_id == 'env_wins_h1':
+        target_env.update(fx.H1_ENV)
     with tempctr.TempObjects(runner, JOB, memory='768m', pids=256, cpus='0.5') as tmp:
         ids = tmp.user_ids('ids', fx.IMAGE, 'emqx')
         seed(tmp, 'source', fx.config(case_id), fx.SOURCE_ACL, ids)
@@ -348,6 +383,8 @@ def main(case_id):
             check('source_or_target_ticker_paused', emqx.quiesce_system_ticker(tmp, 'emqx-ha') is not None)
         STAGE = 'generated_source'
         boot('source', 'source-log', source_env)
+        if case_id == 'env_wins_h1':
+            check('h1_ha_broker_allows_unmatched_topics', no_match(tmp, 'emqx-ha') == 'allow')
         if case_id == 'changed_acl':
             check('seed_nonempty_acl_through_vendor_management_api',
                   'WOOWACL:seeded:END' in emqx.evaluate(tmp, 'emqx-ha', ACL_ROW))
@@ -372,9 +409,13 @@ def main(case_id):
         STAGE = 'generated_target_and_candidate'
         seed(tmp, 'device', fx.config(case_id, target=True), fx.TARGET_ACL, ids)
         tmp.volume('device-log'); boot('device', 'device-log', target_env)
-        target = SimpleNamespace(container=tmp.name('emqx-ha'), data_volume=tmp.name('device'),
-            log_volume=tmp.name('device-log'), image=fx.IMAGE, env=target_env, files=mounts, secrets=[], publish=[],
-            other_publish=[], tunnels=[])
+        if case_id == 'env_wins_h1':
+            check('h1_device_environment_makes_it_deny', no_match(tmp, 'emqx-ha') == 'deny')
+            target = device_target(tmp, mounts, target_env)
+        else:
+            target = SimpleNamespace(container=tmp.name('emqx-ha'), data_volume=tmp.name('device'),
+                log_volume=tmp.name('device-log'), image=fx.IMAGE, env=target_env, files=mounts, secrets=[], publish=[],
+                other_publish=[], tunnels=[])
         original = emqx.boot_form(exec_read(tmp, 'emqx-ha'))
         notes = {}
         try:
@@ -392,6 +433,8 @@ def main(case_id):
             found = {x.id: x for x in sink.found}
             for name in case.confirms: check('confirm_' + name, name in found and found[name].level == 'confirm')
             for name in case.notices: check('notice_' + name, name in found and found[name].level == 'notice')
+            if case_id == 'env_wins_h1':   # names only, never a value
+                check('h1_notice_names_only_the_variable', found['emqx.env-wins'].names == tuple(fx.H1_ENV))
             security = emqx.security_items(fx.config(case_id))
             for kind, issue in [('file_secret', 'emqx.file-secret'), ('jq_rule', 'emqx.jq-rule'),
                                 ('external_authn', 'emqx.external-authn'), ('external_authz', 'emqx.external-authz')]:

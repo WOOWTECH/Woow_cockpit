@@ -51,8 +51,17 @@ def runtime_constants(*names):
 class GeneratedInputsTests(unittest.TestCase):
     def test_exact_missing_matrix_preserves_d0_instead_of_rerunning_it(self):
         self.assertEqual(set(fx.BY_ID), {'plain', 'dead_row', 'noauth', 'http_dummy', 'file_dummy', 'jq_constant',
-                         'env_dummy', 'admin_public', 'changed_acl', 'psk', 'lost_auth_setting'})
+                         'env_dummy', 'admin_public', 'changed_acl', 'psk', 'lost_auth_setting', 'env_wins_h1'})
         self.assertNotIn('D0', {x.decision for x in fx.CASES})
+
+    def test_h1_only_this_devices_environment_says_deny(self):
+        # H1: this device's EMQX_* settings win over HA's after the next start; a notice says so, nothing stops.
+        case = fx.BY_ID['env_wins_h1']
+        self.assertEqual((case.decision, case.notices, case.confirms), ('H1', ('emqx.env-wins',), ()))
+        self.assertEqual(fx.H1_ENV, {'EMQX_AUTHORIZATION__NO_MATCH': 'deny'})
+        for target in (False, True):   # both config files say allow: only the device environment makes it deny
+            self.assertEqual(fx.config('env_wins_h1', target=target)['authorization']['no_match'], 'allow')
+        self.assertEqual(fx.config('plain')['authorization']['no_match'], 'deny')
 
     def test_input_factories_are_fresh_and_accept_no_credentials_or_paths(self):
         first = fx.config('plain'); first['authentication'].clear()
@@ -199,6 +208,29 @@ class DriverBoundaryTests(unittest.TestCase):
         code, probes = login('http_dummy', [5] * 20, range(0, 1000, step))
         self.assertEqual(code, 5)
         self.assertLessEqual(len(probes[0]['codes']), 6)
+
+    def test_h1_device_is_read_by_the_products_own_target(self):
+        # The other cases hand the engine a plain object; H1 needs the product's Target, which reads the Quadlet file,
+        # gives the candidate this device's environment and names its access settings for the env-wins notice.
+        sys.path.insert(0, str(ROOT / 'backup-engine'))
+        try:
+            from woowbackup import ha_emqx
+        finally:
+            sys.path.remove(str(ROOT / 'backup-engine'))
+        names = {'emqx-ha': 'woowbk-offline-r4-emqx-ha', 'device': 'woowbk-offline-r4-device',
+                 'device-log': 'woowbk-offline-r4-device-log'}
+        tmp = SimpleNamespace(name=names.__getitem__, runner=SimpleNamespace(home='/home/appowner'))
+        mounts = [('/home/appowner/woowbk-r4-offline/fixture', '/fixture', 'ro')]
+        env = {'EMQX_NODE__NAME': fx.NODE, 'EMQX_AUTHORIZATION__NO_MATCH': 'deny', 'ERL_AFLAGS': '+S 1:1'}
+        scope = runtime_parts('device_target', emqx=ha_emqx, SimpleNamespace=SimpleNamespace)
+        target = scope['device_target'](tmp, mounts, env)
+        self.assertIsInstance(target, ha_emqx.Target)
+        self.assertEqual((target.container, target.data_volume, target.log_volume, target.image, target.files),
+                         (names['emqx-ha'], names['device'], names['device-log'], fx.IMAGE, mounts))
+        candidate_env, env_files = target.candidate_env()
+        self.assertEqual((candidate_env, env_files, target.access_env),
+                         ({'EMQX_NODE__NAME': fx.NODE, 'EMQX_AUTHORIZATION__NO_MATCH': 'deny'}, [],
+                          ['EMQX_AUTHORIZATION__NO_MATCH']))
 
     def test_http_dummy_serves_each_connection_in_its_own_process(self):
         # EMQX keeps a pool of idle HTTP connections open; a dummy that waits on one connection at a time leaves the

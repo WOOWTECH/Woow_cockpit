@@ -9,6 +9,8 @@ NODE = 'emqx@127.0.0.1'
 SOURCE_ACL = (b'{allow, {username, "r4_source"}, all, ["r4/#"]}.\n'
               b'{allow, {username, "r4_target"}, all, ["woow/#"]}.\n{deny, all}.\n')
 TARGET_ACL = b'{allow, {username, "r4_target"}, all, ["target/#"]}.\n{deny, all}.\n'
+# H1: the device's own EMQX_* setting; both config files say allow, so only this makes the broker deny.
+H1_ENV = {'EMQX_AUTHORIZATION__NO_MATCH': 'deny'}
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ CASES = (
     Case('changed_acl', 'D3', notices=('emqx.acl-replaced',)),
     Case('psk', 'E-43/R4', confirms=('emqx.device-psk',)),
     Case('lost_auth_setting', 'E-67/D0', expected='incompatible-before-packaging'),
+    Case('env_wins_h1', 'H1', notices=('emqx.env-wins',)),
 )
 BY_ID = {case.id: case for case in CASES}
 
@@ -49,6 +52,8 @@ def config(case_id, *, target=False):
             'authorization': {'no_match': 'deny', 'deny_action': 'ignore', 'sources': [
                 {'type': 'file', 'enable': True, 'path': 'data/authz/acl.conf'}]},
             'plugins': {'states': []}, 'log': {'console': {'level': 'error'}}}
+    if case_id == 'env_wins_h1':
+        root['authorization']['no_match'] = 'allow'
     if target:
         # Built-in source is absent in HA; candidate must disable before removing it without erasing HA ACL rows.
         root['authorization']['sources'].insert(0, {'type': 'built_in_database', 'enable': True})
