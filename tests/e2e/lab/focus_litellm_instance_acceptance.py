@@ -114,6 +114,15 @@ def outsiders_equal(before, after):
                 {k:v for k,v in after['databases'].items() if k != APP_DATABASE})
 
 
+def snapshots_equal(a, b):
+    """Two case snapshots are equal, except that the application database's ACL may be null in one and the same default written out
+    in the other (database_rows_equal): restoring that database rewrites it (dev-d b10: written out before the forced failure, null
+    after the automatic rollback; b8: null before, written out after the import)."""
+    if not isinstance(a, dict) or not isinstance(b, dict): return False
+    return (all(a.get(k) == b.get(k) for k in set(a) | set(b) if k != 'metadata')
+            and (a.get('metadata') == b.get('metadata') or database_rows_equal(a.get('metadata'), b.get('metadata'))))
+
+
 def outsiders_difference(before, after):
     """WHERE the outsiders check found a difference: field and database names only, never a digest or a value."""
     names = [k for k in ('roles', 'members', 'settings', 'database_names') if before.get(k) != after.get(k)]
@@ -128,7 +137,7 @@ def rollback_proven(job, *, hook, witness, before, after, full_safety, digest_lo
     r = job.get('result') or {}
     return (job.get('state') == 'rolled-back' and r.get('rolled_back') is True
             and bool(r.get('safety_backup_id')) and hook is True and witness is True
-            and full_safety is True and digest_log is True and before == after)
+            and full_safety is True and digest_log is True and snapshots_equal(before, after))
 
 
 MANIFEST_PROBE = r'''

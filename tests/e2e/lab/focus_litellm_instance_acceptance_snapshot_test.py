@@ -85,7 +85,9 @@ class SnapshotTests(unittest.TestCase):
         for pattern in ('public.LiteLLM_Config','public.LiteLLM_SpendLogs','public.LiteLLM_VerificationToken','public.LiteLLM_CredentialsTable',
                         'public.LiteLLM_ProxyModelTable','public.settings','public._prisma_migrations'):
             self.assertFalse(digests.excluded_table(ops.VOLATILE_TABLES,*pattern.split('.',1)),pattern)
-        for pattern in ('public.LiteLLM_DailyTeamSpend','public.LiteLLM_DailyUserSpend','public.LiteLLM_ProxyWorkerHeartbeat'):
+        self.assertFalse(digests.excluded_table(ops.VOLATILE_TABLES,'woow_platform','accounts'))       # only the token table of that schema
+        for pattern in ('public.LiteLLM_DailyTeamSpend','public.LiteLLM_DailyUserSpend','public.LiteLLM_ProxyWorkerHeartbeat',
+                        'woow_platform.chatgpt_accounts'):
             self.assertTrue(digests.excluded_table(ops.VOLATILE_TABLES,*pattern.split('.',1)),pattern)
 
     def test_recovery_compares_the_restated_original_with_a_fresh_tag_and_names_a_lasting_difference(self):

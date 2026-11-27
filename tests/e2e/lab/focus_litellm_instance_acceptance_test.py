@@ -473,5 +473,52 @@ class WitnessTests(unittest.TestCase):
                     self.assertNotIn('seed-secret', json.dumps(kept))
 
 
+class RollbackCheckTests(unittest.TestCase):
+    """dev-d b10 (real): the engine rolled the forced failure back and its own digest of the whole database matched the safety it
+    returned to; the case's check failed only on the application database's ACL written out (before) versus null (after)."""
+    DEFAULT = ['=Tc/litellm', 'litellm=CTc/litellm']
+
+    @classmethod
+    def setUpClass(cls):
+        global plan
+        plan = load('focus_litellm_instance_acceptance')
+
+    def snapshot(self, acl):
+        return {'database_names': ['litellm', 'postgres'], 'roles': 'r', 'settings': [], 'members': [],
+                'metadata': [['litellm', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, acl],
+                             ['postgres', 'litellm', 'UTF8', 'en_US.utf8', 'en_US.utf8', False, True, None]],
+                'databases': {'litellm': {'digest': 'a', 'access': 'b', 'schema': 'c'}, 'postgres': {'digest': 'd'}}}
+
+    def job(self, **changes):
+        return dict({'state': 'rolled-back', 'result': {'rolled_back': True, 'safety_backup_id': '20261127T085841Z-aaaaaaaa'}}, **changes)
+
+    def proven(self, before, after, **changes):
+        facts = dict(hook=True, witness=True, full_safety=True, digest_log=True)
+        facts.update(changes)
+        return plan.rollback_proven(self.job(), before=before, after=after, **facts)
+
+    def test_the_real_b10_rollback_is_proven(self):
+        self.assertTrue(self.proven(self.snapshot(self.DEFAULT), self.snapshot(None)))
+        self.assertTrue(plan.snapshots_equal(self.snapshot(None), self.snapshot(self.DEFAULT)))
+
+    def test_any_other_difference_or_missing_fact_still_fails(self):
+        base = self.snapshot(self.DEFAULT)
+        for label, mutate in (('the application data', lambda s: s['databases']['litellm'].__setitem__('digest', 'x')),
+                              ('the application access', lambda s: s['databases']['litellm'].__setitem__('access', 'x')),
+                              ('another database', lambda s: s['databases']['postgres'].__setitem__('digest', 'x')),
+                              ('roles', lambda s: s.__setitem__('roles', 'x')),
+                              ('a narrower application ACL', lambda s: s['metadata'][0].__setitem__(7, ['litellm=CTc/litellm'])),
+                              ('another database ACL', lambda s: s['metadata'][1].__setitem__(7, self.DEFAULT))):
+            with self.subTest(label):
+                after = copy.deepcopy(base); mutate(after)
+                self.assertFalse(plan.snapshots_equal(base, after)); self.assertFalse(self.proven(base, after))
+        for fact in ('hook', 'witness', 'full_safety', 'digest_log'):
+            with self.subTest(fact):self.assertFalse(self.proven(base, base, **{fact: False}))
+        self.assertFalse(plan.rollback_proven(self.job(state='failed'), before=base, after=base, hook=True, witness=True,
+                                              full_safety=True, digest_log=True))
+        for bad in (None, [], 'x'):
+            with self.subTest(bad=bad):self.assertFalse(plan.snapshots_equal(base, bad))
+
+
 if __name__ == '__main__':
     unittest.main()

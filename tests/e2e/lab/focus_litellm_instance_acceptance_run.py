@@ -438,6 +438,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             full_safety=self.full_archive(failed['result']['safety_backup_id'])
             log='\n'.join(str(x) for x in self.helper('job-status',{'job_id':failed['id']}).get('log',[]))
             digest_log='資料摘要 db-main 與備份時一致' in log and '未比對資料' not in log
+            if not plan.snapshots_equal(current,after):
+                self.r['rollback_snapshot_difference']=snapshot_difference(after,current); self.save()
+            self.r['rollback_facts']={'state':failed.get('state'),'rolled_back':(failed.get('result') or {}).get('rolled_back'),
+                'hook':consumed is True,'full_safety':bool(full_safety),'digest_log':digest_log}; self.save()
             self.require('automatic_full_current_safety_rollback',plan.rollback_proven(failed,hook=consumed,witness=True,
                 before=current,after=after,full_safety=bool(full_safety),digest_log=digest_log))
             self.app_assertions('verify','instance-automatic-rollback')
@@ -452,9 +456,10 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         used=set(self.op('receipt').get('snapshots') or {})
         tag=next(t for t in ('recovered','recovered_again','recovered_third','recovered_fourth') if t not in used)
         recovered=self.op('snapshot',tag=tag); expected=self.op('snapshot_restate',tag='original')
-        if recovered!=expected:
+        equal=plan.snapshots_equal(recovered,expected)
+        if not equal:
             self.r['recovery_snapshot_difference']=snapshot_difference(recovered,expected); self.save()
-        self.require('original_full_catalog_roles_rows',recovered==expected)
+        self.require('original_full_catalog_roles_rows',equal)
 
     def recover(self):
         self.recovering=True; self.settle()

@@ -31,8 +31,12 @@ TIMER = 'woowtech-cockpit-backup-schedule.timer'
 # LiteLLM_ProxyWorkerHeartbeat differed from the snapshot taken before, so a digest of every table can never match a moment
 # later while the proxy runs. Case snapshots exclude them the way a catalog entry's exclude_tables does; the user's data
 # (Config, Credentials, models, keys, settings, SpendLogs, migrations) stays compared.
+# woow_platform.chatgpt_accounts belongs to the Woow ChatGPT plugin of the package (image/plugin/woow_chatgpt.py, dd690aee): while the
+# app runs it refreshes each account's OAuth tokens in `auth` and `updated_at` (dev-d b10: the same 2 rows with new contents between
+# the snapshot before the forced failure and the safety the rollback returned to; the engine's own digest of the whole database
+# matched that safety exactly).
 VOLATILE_TABLES = ('public.LiteLLM_Daily*Spend', 'public.LiteLLM_ProxyWorkerHeartbeat', 'public.LiteLLM_CronJob',
-                   'public.LiteLLM_HealthCheckTable', 'public.LiteLLM_BudgetWindowSpend')
+                   'public.LiteLLM_HealthCheckTable', 'public.LiteLLM_BudgetWindowSpend', 'woow_platform.chatgpt_accounts')
 RETAINED_IMAGE={'from_case':'woowbk_focus_litellm_a2c39e761b04',
     'derived_image':'af291cf14dba64dd3331179696d9bdfd70f5cacf0c92c53202d0998fe15ecaff',
     'verification_sha256':'0c5396f61187dc666c4a67162fd813facfb8571f1ef291bb40b74558a9c1bc1f',
