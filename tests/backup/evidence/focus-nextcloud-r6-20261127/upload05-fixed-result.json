@@ -1,0 +1,38 @@
+{
+  "status": "passed",
+  "phase": "upload-only",
+  "source_commit": "550478ae15f4f61945c6bfa699c05d2b88a230b8",
+  "pending": false,
+  "upload_id": "u75f40f53186f658b",
+  "ha_backup_id": "ha-2dcfc6769d6fed7dd5c3",
+  "expected_store_absent_before": true,
+  "bytes": 4467947520,
+  "sha256": "2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d",
+  "ha_file_identity": {
+    "dev": 66306,
+    "ino": 8913413
+  },
+  "sidecar_sha256": "34994c88e06a22d13e67af97ea6daf1376ccac411704b8deaaa076f0e057b123",
+  "allocated_bytes": 4467947520,
+  "cold_units_source_catalog_images_isolation_preserved": true,
+  "preexisting_done_caches_exact_or_native_cleanup": true,
+  "preexisting_done_cache_count": 6,
+  "native_cleanup_removed_caches": [
+    "u045b1d2737f4f369.done"
+  ],
+  "begin_window": [
+    1795789830.1238682,
+    1795789831.9147995
+  ],
+  "helper_sha256": "539c32a6a0c7689797f2d571f2ea56a038a79a647955df42f4cfb97a6bc03678",
+  "initial_fullshare_stop_cause": "unknown-not-recorded",
+  "fixed_failure": null,
+  "app_starts": 0,
+  "jobs_started": 0,
+  "pulls": 0,
+  "reserve_bytes": 13958643712,
+  "memory_cap_bytes": 3221225472,
+  "private_event_count": 79,
+  "private_receipt_dir": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-upload-only/20261127T223027",
+  "last_fsm_phase": "retained"
+}

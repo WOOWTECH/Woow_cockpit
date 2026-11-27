@@ -1,0 +1,93 @@
+{
+ "pending": false,
+ "source_commit": "550478ae15f4f61945c6bfa699c05d2b88a230b8",
+ "case": "fullshare",
+ "created_backups": [
+  "20261127T144050Z-0011af1e",
+  "20261127T144525Z-f6486411",
+  "20261127T145338Z-684a1a6b",
+  "20261127T150021Z-50b86e17"
+ ],
+ "jobs": {
+  "j20261127T143438Z-00b00448": {
+   "state": "succeeded"
+  },
+  "j20261127T143644Z-a2777e56": {
+   "state": "succeeded"
+  },
+  "j20261127T144211Z-c8e87109": {
+   "state": "succeeded"
+  },
+  "j20261127T144938Z-ada48f85": {
+   "state": "rolled-back"
+  },
+  "j20261127T145700Z-01dbb9b0": {
+   "state": "succeeded"
+  }
+ },
+ "original_baseline_id": "20261123T132013Z-34811d90",
+ "upload_id": null,
+ "ha_backup_id": "ha-2dcfc6769d6fed7dd5c3",
+ "retained_upload_receipt_sha256": "68fc3f3ea36c6b8ae1d01eac94699b9723d101e688ca066b88f2a53cebadf091",
+ "requests": {
+  "b1-e2e-check-1795790076996": {
+   "command": "ha-check-start",
+   "reply_job_id": "j20261127T143438Z-00b00448"
+  },
+  "b1-e2e-focus-r6-convert-1795790203870": {
+   "command": "ha-convert-start",
+   "reply_job_id": "j20261127T143644Z-a2777e56"
+  },
+  "b1-e2e-nc-share-restore-1795790523894": {
+   "command": "restore-start",
+   "reply_job_id": "j20261127T144211Z-c8e87109"
+  },
+  "b1-e2e-nc-share-restore-inject-1795790969956": {
+   "command": "restore-start",
+   "reply_job_id": "j20261127T144938Z-ada48f85"
+  },
+  "b1-e2e-nc-share-rollback-1795791419575": {
+   "command": "restore-start",
+   "reply_job_id": "j20261127T145700Z-01dbb9b0"
+  }
+ },
+ "timings": [
+  {
+   "kind": "check",
+   "upload": "fullshare",
+   "app": "nextcloud",
+   "wall_s": 126.5,
+   "state": "succeeded",
+   "job_id": "j20261127T143438Z-00b00448",
+   "downtime_s": null,
+   "evidence": "20261127T223330"
+  },
+  {
+   "kind": "convert",
+   "upload": "share",
+   "app": "nextcloud",
+   "wall_s": 309.5,
+   "state": "succeeded",
+   "job_id": "j20261127T143644Z-a2777e56",
+   "downtime_s": null,
+   "evidence": "20261127T223330"
+  },
+  {
+   "kind": "restore",
+   "upload": "share",
+   "app": "nextcloud",
+   "wall_s": 267.5,
+   "state": "succeeded",
+   "job_id": "j20261127T144211Z-c8e87109",
+   "downtime_s": null,
+   "evidence": "20261127T223330"
+  }
+ ],
+ "runs": [
+  {
+   "evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6/20261127T223330",
+   "passed": 118,
+   "failed": []
+  }
+ ]
+}

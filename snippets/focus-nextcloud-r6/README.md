@@ -1,5 +1,11 @@
 # R6 preparation, 2026-11-27
 
+**Latest (2026-11-27 23:05 Asia/Taipei): the full share on the current source PASSED 118/118** (fullshare05,
+driver `550478ae`, engine of draft PR #23 `5168f1ec`, dev-e returned exactly). Two earlier attempts that day failed
+on driver bugs, now fixed (`282bfba1`: a field the convert request may not carry; `550478ae`: one failed resource
+probe stopped the run). Details and evidence: [fullshare05-RESULT.md](fullshare05-RESULT.md). The sections below
+are the earlier history, oldest first.
+
 Read-only inventory and original image identity checks are complete. **No image
 bytes copied, no device mutation, no pulls.** This worktree starts at main
 `3e3e9315`. OD-23's final separate handoff commit is `081278f1`; its worktree,
