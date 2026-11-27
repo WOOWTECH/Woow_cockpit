@@ -95,8 +95,8 @@ class Controller:
         p=(self.h.root if root else self.h.owner)(*args,input=input,timeout=timeout)
         if p.returncode:
             path=self.path.with_name(self.path.name+'.private-error-'+str(time.time_ns()))
-            ops.atomic(path,p.stdout+b'\nSTDERR\n'+getattr(p,'stderr',b''))
-            raise RuntimeError('fixed operation failed; private diagnostic retained')
+            ops.atomic(path,p.stdout[:32768]+b'\nSTDERR\n'+getattr(p,'stderr',b'')[:16384])
+            raise subprocess.CalledProcessError(p.returncode,['fixed-case-command'],output=p.stdout,stderr=getattr(p,'stderr',b''))
         return p.stdout
 
     def root_json(self,script,request=None,timeout=180):
@@ -104,7 +104,21 @@ class Controller:
             input=json.dumps(request or {}).encode(),timeout=timeout))
 
     def op(self,operation,*,_timeout=180,**kwargs):
-        return self.root_json(self.ops_source,dict(kwargs,op=operation,case=self.name),timeout=_timeout)
+        self.r['pending_operation']={'operation':operation,'started_ns':time.time_ns()};self.save()
+        try:
+            value=self.root_json(self.ops_source,dict(kwargs,op=operation,case=self.name),timeout=_timeout)
+        except Exception as exc:
+            report=ops.failure_record(operation,exc)
+            raw=getattr(exc,'output',None)
+            if isinstance(raw,bytes) and len(raw)<=32768:
+                try:report['device_error']=json.loads(raw)['operation_error']
+                except (ValueError,KeyError,TypeError):pass
+            path=self.path.with_name(self.path.name+'.operation-error-'+str(time.time_ns()))
+            data=json.dumps(report).encode();ops.atomic(path,data)
+            self.r.setdefault('operation_failures',[]).append({'operation':operation,'file':path.name,'sha256':ops.digest(data)})
+            self.r['pending_operation']=None;self.save()
+            raise
+        self.r['pending_operation']=None;self.save();return value
 
     def helper(self,command,request=None,timeout=180):
         rc,value=self.h.helper(command,request,timeout=timeout)

@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 BASE = re.compile(r'woowbk_focus_litellm_[0-9a-f]{12}\Z')
 OWNER = '/usr/local/bin/woowbk-owner'
@@ -32,7 +33,7 @@ def digest(data):
 def call(argv, *, data=None, timeout=60, check=True):
     p = subprocess.run(argv, input=data, capture_output=True, timeout=timeout)
     if check and p.returncode:
-        raise RuntimeError('fixed device command failed')
+        raise subprocess.CalledProcessError(p.returncode,['fixed-device-command'],stderr=p.stderr)
     return p
 
 
@@ -534,6 +535,28 @@ def dispatch(q):
     raise ValueError('unknown fixed operation')
 
 
+def failure_record(operation,exc):
+    stderr=getattr(exc,'stderr',None) or b''
+    if isinstance(stderr,str):stderr=stderr.encode('utf-8','replace')
+    return {'operation':operation if re.fullmatch(r'[a-z_]{1,32}',operation) else 'invalid',
+            'class':type(exc).__name__[:80],'errno':getattr(exc,'errno',None),
+            'returncode':getattr(exc,'returncode',None),'stderr_bytes':len(stderr),
+            'stderr_b64':base64.b64encode(stderr[:16384]).decode(),'stderr_truncated':len(stderr)>16384,
+            'json_position':getattr(exc,'pos',None)}
+
+
+def run_request(q):
+    try:return 0,dispatch(q)
+    except Exception as exc:
+        # This case-owned private journal survives a lost reply and package
+        # cleanup. No request values, SQL data, argv or exception text are saved.
+        report=failure_record(q.get('op','invalid'),exc)
+        if not BASE.fullmatch(q.get('case','')):raise
+        store=Store(q['case'])
+        atomic(store.path/('operation-error-'+str(time.time_ns())+'.json'),json.dumps(report).encode())
+        return 1,{'operation_error':report}
+
+
 if __name__ == '__main__':
-    print(json.dumps(dispatch(json.load(sys.stdin))))
+    code,value=run_request(json.load(sys.stdin));print(json.dumps(value));sys.exit(code)
 
