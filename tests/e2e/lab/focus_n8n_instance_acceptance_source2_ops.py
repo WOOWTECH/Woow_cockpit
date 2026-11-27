@@ -10,8 +10,9 @@ from pathlib import Path
 import re
 import sys
 
-sys.dont_write_bytecode=True
-sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-source2-pycache'
+if __name__=='__main__':   # only as the device program: importing it on the host must not change the host process
+    sys.dont_write_bytecode=True
+    sys.pycache_prefix='/nonexistent/woowbk-focus-n8n-source2-pycache'
 import focus_n8n_instance_acceptance_ops as common
 import focus_n8n_instance_acceptance_source_ops as base
 
