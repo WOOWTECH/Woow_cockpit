@@ -13,7 +13,8 @@ import focus_n8n_instance_acceptance_ops as c
 import focus_n8n_instance_acceptance_source_ops as source
 import focus_n8n_instance_acceptance_safeties as safety
 
-PARENT='/var/lib/woowtech-backup/focus-n8n-image-references'
+# Attempt2 journal root. The attempt1 root (.../focus-n8n-image-references) holds the failed first run and stays untouched.
+PARENT='/var/lib/woowtech-backup/focus-n8n-image-references-2'
 EXPECTED={
  'docker.io/n8nio/n8n:2.43.6':'c8d7cd6bf08e1837180b767d77903889e0f3f022accda90579f5e99ca2a2bdfb',
  'docker.io/n8nio/runners:2.43.6':'28c5a510d7624e5ce079d2204e4d8421bc96ced83ebc2e1717d6ee33a0ccc1bb',
@@ -60,8 +61,13 @@ def cache():
             if not isinstance(values,list) or len(values)>256 or not all(isinstance(x,str) and 0<len(x)<=512 for x in values):
                 raise ValueError('fixed-reference-alias-bound')
             return sorted(set(values))
-        result[config]={'stable_fields_sha256':canonical({k:v for k,v in row.items() if k not in ('RepoTags','NamesHistory')}),
-            'tags':names('RepoTags'),'history':names('NamesHistory'),
+        # RepoDigests is DERIVED from names: real Podman (observed on dev-c, attempt1) adds exactly repo@Digest for a new
+        # alias and changes no other field. It is therefore compared separately (validate), never inside the stable hash;
+        # Digest itself stays strict.
+        result[config]={'stable_fields_sha256':canonical({k:v for k,v in row.items()
+                                                          if k not in ('RepoTags','NamesHistory','RepoDigests')}),
+            'tags':names('RepoTags'),'history':names('NamesHistory'),'digests':names('RepoDigests'),
+            'digest':str(row.get('Digest') or ''),
             'platform':[row.get('Os') or row.get('OS'),row.get('Architecture'),row.get('Variant') or '']}
     return result
 
@@ -163,7 +169,7 @@ class References:
             elif actual!=before['resolution'][ref]: raise ValueError('fixed-reference-foreign-ref')
         for config,old in before['cache'].items():
             current=now['cache'][config]
-            if any(current[k]!=old[k] for k in ('stable_fields_sha256','platform')):
+            if any(current[k]!=old[k] for k in ('stable_fields_sha256','platform','digest')):
                 raise ValueError('fixed-reference-cache-fields-changed')
             additions={ref for ref in applied if s['planned'][ref]==config}
             if set(current['tags'])!=set(old['tags'])|additions:
@@ -171,6 +177,10 @@ class References:
             # Podman records added aliases in NamesHistory on versions which expose it.
             if not set(old['history'])<=set(current['history']) or set(current['history'])-set(old['history'])-additions:
                 raise ValueError('fixed-reference-unapproved-history-delta')
+            # The only RepoDigests change an added alias may cause is repo@Digest of the UNCHANGED Digest.
+            derived={ref.rsplit(':',1)[0]+'@'+current['digest'] for ref in additions if current['digest']}
+            if set(current['digests'])!=set(old['digests'])|derived:
+                raise ValueError('fixed-reference-unapproved-digest-delta')
         return applied
 
     def bind(self,ref):

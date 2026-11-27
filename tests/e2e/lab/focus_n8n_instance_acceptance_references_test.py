@@ -30,11 +30,13 @@ class ReferenceTests(unittest.TestCase):
             'source':{'all_files':'original','qualified_receipt':'unchanged'},'backups':{'all_originals':'exact'},
             'quadlet_refs':dict(refs.EXPECTED),'resolution':dict(refs.EXPECTED),
             'cache':{x:{'platform':['linux','amd64',''],'stable_fields_sha256':'fixed-'+x,
-                        'tags':[],'history':[]} for x in refs.EXPECTED.values()}}
+                        'tags':[],'history':[],'digests':[],'digest':'sha256:d'+x[:8]} for x in refs.EXPECTED.values()}}
         for ref in refs.ALLOWED:self.live['resolution'][ref]=None
         for ref,config in self.live['resolution'].items():
-            if config:self.live['cache'][config]['tags']=[ref]
-        self.commands=[];self.lose_reply=False
+            if config:
+                self.live['cache'][config]['tags']=[ref]
+                self.live['cache'][config]['digests']=[ref.rsplit(':',1)[0]+'@'+self.live['cache'][config]['digest']]
+        self.commands=[];self.lose_reply=False;self.after_tag=None
         self.obj=refs.References(NAME,parent=self.parent,read=lambda _:copy.deepcopy(self.live))
         self.addCleanup(patch.stopall)
         patch.object(common,'owner',side_effect=self.owner).start()
@@ -57,6 +59,9 @@ class ReferenceTests(unittest.TestCase):
             self.live['resolution'][ref]=config
             self.live['cache'][config]['tags'].append(ref)
             self.live['cache'][config]['history'].append(ref)
+            # Real Podman (dev-c attempt1): the new alias also yields repo@Digest in RepoDigests, nothing else.
+            self.live['cache'][config]['digests'].append(ref.rsplit(':',1)[0]+'@'+self.live['cache'][config]['digest'])
+            if self.after_tag:self.after_tag(config)
             if self.lose_reply: raise subprocess.TimeoutExpired('fixed tag fixture',1)
             return SimpleNamespace(returncode=0,stdout=b'')
         raise AssertionError('unknown or unsafe command at local fixture boundary')
@@ -131,6 +136,66 @@ class ReferenceTests(unittest.TestCase):
                     else:image['tags'].append('docker.io/foreign/alias:1')
                 with self.assertRaises(ValueError):obj.bind(next(iter(refs.ALLOWED)))
                 self.assertEqual(self.commands,[]);self.live=original
+
+    def test_real_podman_tag_changes_only_names_and_repodigests_and_is_accepted(self):
+        # dev-c attempt1 raw inspection: after one tag only RepoTags, RepoDigests and NamesHistory differ; Digest is unchanged.
+        runner=list(refs.ALLOWED)[1];runner_config=refs.ALLOWED[runner]
+        self.live['resolution'][runner]=runner_config;self.live['cache'][runner_config]['tags']=[runner]
+        start=self.obj.begin()
+        for ref in start['planned']:self.obj.bind(ref)
+        main=next(iter(refs.ALLOWED));row=self.live['cache'][refs.ALLOWED[main]]
+        self.assertEqual(row['digests'],[main.rsplit(':',1)[0]+'@'+row['digest']])
+        self.assertTrue(self.obj.reconcile()['complete'])
+        self.assertEqual(len([x for x in self.commands if x[:2]==('podman','tag')]),1)
+
+    def test_actual_cache_reader_accepts_the_real_podman_tag_delta(self):
+        # Runs the REAL refs.cache() hash over inspect rows shaped like dev-c attempt1 (before: RepoTags [] RepoDigests []
+        # NamesHistory None; after one tag: one tag, repo@Digest, one history name; every other field identical).
+        rows={config:{'Id':config,'Digest':'sha256:d'+config[:8],'Os':'linux','Architecture':'amd64',
+                      'Config':{'Env':['synthetic']},'RepoTags':[],'RepoDigests':[],'NamesHistory':None}
+              for config in refs.EXPECTED.values()}
+        for ref,config in refs.EXPECTED.items():
+            if ref not in refs.ALLOWED:
+                rows[config]['RepoTags']=[ref];rows[config]['RepoDigests']=[ref.rsplit(':',1)[0]+'@'+rows[config]['Digest']]
+        def named(ref):return next((c for c,r in rows.items() if ref in r['RepoTags']),None)
+        def owner(*args,**kwargs):
+            if args[:2]==('podman','images'):return SimpleNamespace(stdout='\n'.join(rows).encode(),returncode=0)
+            if args[:3]==('podman','image','exists'):return SimpleNamespace(returncode=0 if named(args[3]) else 1,stdout=b'')
+            if args[:3]==('podman','image','inspect') and args[4:]==('--format','{{.ID}}'):
+                return SimpleNamespace(returncode=0 if named(args[3]) else 125,stdout=(named(args[3]) or '').encode())
+            if args[:3]==('podman','image','inspect'):
+                return SimpleNamespace(stdout=json.dumps([rows[args[3].removeprefix('sha256:')]]).encode(),returncode=0)
+            if args[:2]==('podman','tag'):
+                config=args[2].removeprefix('sha256:');ref=args[3];row=rows[config];self.commands.append(args)
+                row['RepoTags'].append(ref);row['RepoDigests'].append(ref.rsplit(':',1)[0]+'@'+row['Digest'])
+                row['NamesHistory']=(row['NamesHistory'] or [])+[ref]
+                return SimpleNamespace(returncode=0,stdout=b'')
+            raise AssertionError('unknown command at fixture boundary')
+        def read(_):
+            result=copy.deepcopy(self.live);result['resolution']={ref:named(ref) for ref in refs.EXPECTED}
+            result['cache']=refs.cache();return result
+        self.obj.read=read
+        with patch.object(common,'owner',side_effect=owner):
+            start=self.obj.begin();self.assertEqual(set(start['planned']),set(refs.ALLOWED))
+            for ref in start['planned']:self.obj.bind(ref)
+            self.assertTrue(self.obj.reconcile()['complete'])
+        self.assertEqual(len(self.commands),2)
+
+    def test_any_other_change_around_the_tag_is_still_refused_without_repeating_it(self):
+        original=copy.deepcopy(self.live)
+        for kind in ('foreign_repodigest','changed_digest','changed_stable_field'):
+            with self.subTest(kind=kind):
+                self.live=copy.deepcopy(original);self.commands=[]
+                self.obj=refs.References(NAME,parent=self.root/kind,read=lambda _:copy.deepcopy(self.live))
+                def hook(config,kind=kind):
+                    row=self.live['cache'][config]
+                    if kind=='foreign_repodigest':row['digests'].append('docker.io/foreign/image@sha256:'+'a'*64)
+                    elif kind=='changed_digest':row['digest']='sha256:'+'b'*64
+                    else:row['stable_fields_sha256']='foreign'
+                self.after_tag=hook;self.obj.begin();ref=next(iter(refs.ALLOWED))
+                with self.assertRaisesRegex(ValueError,'digest-delta|fields-changed'):self.obj.bind(ref)
+                self.assertEqual(len([x for x in self.commands if x[:2]==('podman','tag')]),1)
+                self.assertFalse(self.obj.store.state['intents'][ref]['done'])
 
     def test_actual_safety_calls_canonical_reference_before_copy_or_service_sql(self):
         for kind in ('main_missing','main_foreign','runner_missing','all_correct'):
