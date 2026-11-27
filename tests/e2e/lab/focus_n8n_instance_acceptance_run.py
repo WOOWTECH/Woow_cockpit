@@ -81,6 +81,9 @@ def validate_lease(lease, phase, *, now, driver_commit, source_commit):
         raise ValueError('lease expired or exceeds bounded window')
     if lease.get('image_policy') not in ('retain-for-case','remove-own-after-case'):
         raise ValueError('explicit image recovery policy required')
+    attempt = lease.get('attempt', 1)
+    if not isinstance(attempt, int) or isinstance(attempt, bool) or not 1 <= attempt <= 99:
+        raise ValueError('lease attempt must be an integer from 1 to 99')
     return expires
 
 
@@ -339,14 +342,25 @@ class Controller:
         self.r['last_job_id']=jid;self.r['pending']=None;self.save()
         return job
 
+    def request_id(self,tag):
+        # The engine deduplicates request ids for 24 h and answers a repeated id with the EARLIER job: SAFETY4 was handed the
+        # failed SAFETY3 job that way and never started a backup. Attempt 1 keeps the historical id; every retry of the same
+        # tag needs a new lease attempt number.
+        attempt=self.lease.get('attempt',1)
+        return self.name+'-'+tag+('' if attempt==1 else '-a%d'%attempt)
+
     def job(self,command,request,tag):
         if self.r.get('pending'):raise RuntimeError('previous job unresolved')
         self.budget(reserve=0 if self.recovering else 600)
         if command=='restore-start':self.op('preserved_safety_copies')
-        request=dict(request,request_id=self.name+'-'+tag)
+        request=dict(request,request_id=self.request_id(tag))
         self.r['pending']={'command':command,'request_id':request['request_id'],'tag':tag}
         self.save()  # never store request keys/passwords in the receipt
         response=self.helper(command,request)
+        if response['job_id'] in self.r.get('jobs',{}):
+            # The engine replayed a job this receipt already settled: nothing new is in flight, so nothing stays pending.
+            self.r['pending']=None;self.save()
+            raise RuntimeError('engine answered a new request with an earlier job; use a new lease attempt number')
         self.r['pending']['job_id']=response['job_id'];self.save()
         return self.settle()
 

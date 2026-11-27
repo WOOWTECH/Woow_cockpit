@@ -52,6 +52,15 @@ class Fixture(unittest.TestCase):
 
 
 class LeaseTests(unittest.TestCase):
+    def test_lease_attempt_must_be_a_small_positive_integer(self):
+        valid=lease()
+        for value in (0,100,-1,'2',True,2.5):
+            with self.subTest(attempt=value),self.assertRaises(ValueError):
+                run.validate_lease(dict(valid,attempt=value),'flow',now=1000,driver_commit='a'*40,
+                                   source_commit=run.FROZEN_PRODUCT)
+        self.assertEqual(run.validate_lease(dict(valid,attempt=2),'flow',now=1000,driver_commit='a'*40,
+                                            source_commit=run.FROZEN_PRODUCT),2000)
+
     def test_exact_product_driver_phase_expiration_and_image_policy_are_required(self):
         valid=lease()
         self.assertEqual(run.validate_lease(valid,'flow',now=1000,driver_commit='a'*40,
@@ -327,6 +336,22 @@ class RestoreTests(Fixture):
         with self.assertRaises(TimeoutError):self.c.safety()
         self.assertEqual(order[-3:],['stop-all','catalog-back','timer-back'])
         self.assertFalse(self.c.r['safety_verified'])
+
+    def test_retry_uses_a_new_request_id_and_an_engine_replay_of_an_old_job_is_refused(self):
+        seen=[];reply={'job_id':'j20261127T000000Z-0000000a'}
+        self.c.helper=lambda command,request=None:(seen.append(request['request_id']),dict(reply))[1]
+        def settle():
+            self.c.r['pending']=None;return {'state':'succeeded'}
+        self.c.settle=settle
+        self.c.job('backup-start',{},'full-safety')
+        self.c.lease=dict(self.c.lease,attempt=2);reply['job_id']='j20261127T000000Z-0000000b'
+        self.c.job('backup-start',{},'full-safety')
+        self.assertEqual(seen,[NAME+'-full-safety',NAME+'-full-safety-a2'])
+        # SAFETY4 on dev-c: the engine answered the repeated id with the failed SAFETY3 job; that must be refused.
+        self.c.r['jobs']={'j20261127T000000Z-0000000c':{'state':'failed','type':'backup'}}
+        reply['job_id']='j20261127T000000Z-0000000c'
+        with self.assertRaisesRegex(RuntimeError,'earlier job'):self.c.job('backup-start',{},'full-safety')
+        self.assertIsNone(self.c.r.get('pending'))
 
     def test_unverified_private_copies_refuse_before_any_service_catalog_or_timer_action(self):
         order=self.safety_fixture(private_copies=False)
