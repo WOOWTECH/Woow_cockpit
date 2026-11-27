@@ -1,0 +1,113 @@
+{
+  "actual_inner_class": "ValueError",
+  "attempt": "n8n-safety-attempt2",
+  "diagnostic_origin": "c-mutex bounded readonly call to original current(); no operate/prepare replay",
+  "driver_commit": "cbbc68f74756330304ff4dfc09f6a9182d96c6bc",
+  "elapsed_seconds": 4.4,
+  "errno": null,
+  "evidence_sha256": {
+    "n8n-preservation-payload-before-fix.log": "b259e79716cf2b918c860bedf1e633f6b33844305b8a0b240d28377006edc921",
+    "n8n-preservation-payload-final.log": "2f552a2e4e9e79d67679be94ae3f19ff60b1b390618d4d9727e311920b724e64",
+    "n8n-preservation-payload-fixed.log": "47f8106443f4914b65d824fed00fc01adbb19e4d5ca6c75e108f3b7724b65519",
+    "n8n-safety-attempt2-failed-receipt.private.json": "ed22968adc9adeda0f8172fddae88a5937355666da1a670fe764399202f8103f",
+    "n8n-safety-attempt2-fixed-diagnosis.private.json": "471ca043b1453f829f0bfac66e272b7d9b0e88dc708d89fad1a13b300c94dbfe",
+    "n8n-safety-attempt2.json": "bfab8ee4af4fd9c6ea629663ad4dddc02f65b04c7aad0259229dc78d150485e0",
+    "n8n-safety-attempt2.private.log": "77974bf85044cc18dad582bb64fdcd098b58244e38682e09a18cbff8aa80334f"
+  },
+  "exit": 1,
+  "fixed_cause": "preserved inventory bound",
+  "fixed_operation": "preserved_safety_prepare",
+  "inventory": {
+    "bytes": 566460445,
+    "failed_aggregate_limit_bytes": 134217728,
+    "files": 124,
+    "maximum_file_bytes": 12564480
+  },
+  "job_submitted": false,
+  "local_regression": {
+    "after_fix": {
+      "blocked": 0,
+      "errors": 0,
+      "failures": 0,
+      "native": "denied",
+      "shim_hits": 0,
+      "skipped": 0,
+      "tests": 5
+    },
+    "before_fix": {
+      "errors": 0,
+      "failure": "preserved inventory bound through full rendered payload",
+      "failures": 1,
+      "tests": 2
+    },
+    "distinct_new_payload_tests": 2,
+    "fake_boundary": [
+      "root identity",
+      "absolute filesystem roots",
+      "pinned expected fixture bindings",
+      "readonly command replies"
+    ],
+    "not_proof_of": "native SAFETY or original vendor full flow",
+    "previous_file_tests": 3,
+    "real_executed": [
+      "Controller.ops_source rendering",
+      "in-memory helper module load",
+      "__main__ JSON input/output",
+      "dispatch",
+      "native flock lifecycle on fixture lockfiles",
+      "inventory",
+      "streamed hashing",
+      "Store capture and verify",
+      "failure journal"
+    ]
+  },
+  "native_retry_or_recovery": false,
+  "outer_error_class": "RuntimeError",
+  "private_copies_created": false,
+  "private_copy_directory_exists": false,
+  "product_commit": "d09f4fe8e06305aff6a1150f41d6de719e7b7f6a",
+  "readonly_verification": {
+    "active_jobs_count": 0,
+    "device_mutex_released": true,
+    "fixed_pair_binding": [
+      {
+        "apps_match": true,
+        "archive_bytes_match": true,
+        "archive_sha_matches_pinned_index": true,
+        "archive_time_match": true,
+        "id": "20261124T152230Z-5f41c20c",
+        "index_sha_match": true,
+        "index_time_match": true,
+        "mode_owner_match": true,
+        "type_is_safety": true
+      },
+      {
+        "apps_match": true,
+        "archive_bytes_match": true,
+        "archive_sha_matches_pinned_index": true,
+        "archive_time_match": true,
+        "id": "20261124T153132Z-ee42afe1",
+        "index_sha_match": true,
+        "index_time_match": true,
+        "mode_owner_match": true,
+        "type_is_safety": true
+      }
+    ],
+    "native_durable_equal": {
+      "active_jobs": true,
+      "catalog": true,
+      "files": true,
+      "images": true,
+      "protected": true,
+      "retention_sha256": true,
+      "running": true,
+      "timer": true,
+      "units": true,
+      "volumes": true
+    },
+    "running_count": 0
+  },
+  "saved_root_failure_record": null,
+  "saved_root_state_keys": [],
+  "timer_catalog_pg_mutation_started": false
+}

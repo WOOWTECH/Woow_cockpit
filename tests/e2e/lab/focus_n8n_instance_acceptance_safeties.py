@@ -6,6 +6,7 @@ proof and original-data/cold return. No retention/config/index editing.
 """
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,6 +27,10 @@ KNOWN = {
 }
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 JOBS = Path('/var/lib/woowtech-backup/jobs')
+# Actual SAFETY2 readonly inventory:124 files/566,460,445bytes, max12,564,480.
+# This is a READ budget, not additional disk allocation or a data-floor waiver.
+INVENTORY_BYTES = 1024**3
+FILE_BYTES = 64*1024**2
 
 
 @contextmanager
@@ -55,9 +60,25 @@ class PreservedSafeties:
         out={}; total=0
         for p in sorted(self.archives.iterdir()):
             if not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\.(?:tar|woowbackup|json)',p.name): continue
-            data,meta=self.c.read_regular(p,64*1024**2); total+=len(data)
-            if total>128*1024**2 or len(out)>=1024: raise ValueError('preserved inventory bound')
-            out[str(p)]=dict(meta,bytes=len(data))
+            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
+            try:
+                before=os.fstat(fd); total+=before.st_size
+                if not stat.S_ISREG(before.st_mode) or before.st_nlink!=1 or before.st_size>FILE_BYTES:
+                    raise ValueError('unsafe or unbounded case file')
+                if total>INVENTORY_BYTES or len(out)>=1024: raise ValueError('preserved inventory bound')
+                h=hashlib.sha256(); count=0
+                while chunk:=os.read(fd,1024**2):
+                    count+=len(chunk)
+                    if count>before.st_size: raise ValueError('preserved file changed during read')
+                    h.update(chunk)
+                def signature(s):
+                    return (s.st_dev,s.st_ino,s.st_mode,s.st_nlink,s.st_uid,s.st_gid,
+                            s.st_size,s.st_mtime_ns,s.st_ctime_ns)
+                if count!=before.st_size or signature(before)!=signature(os.fstat(fd)) or signature(before)!=signature(p.lstat()):
+                    raise ValueError('preserved file changed during read')
+                out[str(p)]={'sha256':h.hexdigest(),'mode':stat.S_IMODE(before.st_mode),
+                    'uid':before.st_uid,'gid':before.st_gid,'mtime_ns':before.st_mtime_ns,'bytes':count}
+            finally: os.close(fd)
         return out
 
     def verify(self, *, originals=True):
