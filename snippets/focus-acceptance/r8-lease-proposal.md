@@ -1,6 +1,10 @@
 # R8 proposed bounded real Cockpit case — review before dev-d lease
 
 Current status: original driver/transport reviewed and dev-d lease granted.
+Newest: attempt3 is terminal57/60 FAIL with data baselines verified. Scanner fix
+and exact recovery-only proposal are in `r8-attempt3-recovery-proposal.md`.
+Earlier proposal commands below are historical and must not be replayed or
+overwrite their evidence paths.
 Actual attempt1 remains50/53 FAIL; independent recovery-only action has passed.
 Reviewed attempt2 stopped at fresh-originals preflight,13/15, before any browser,
 upload/import or guard replacement. The new scope/phase diff below awaits review.

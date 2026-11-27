@@ -1,0 +1,50 @@
+{
+  "scope": "r8-attempt3-fixed-terminal-facts",
+  "source_commit": "1adf4df2b548bff1626e21d1d84e677f9622e4bc",
+  "driver_commit": "f0f61598c27d4e38cfeca5c4fd23b687dfbc5c9e",
+  "passed": 57,
+  "failed": 3,
+  "exit": 1,
+  "elapsed_seconds": 734.8,
+  "browser_completed": true,
+  "browser_functional_checks_passed": 12,
+  "browser_cookie_checks_failed": 1,
+  "page_errors": 0,
+  "acknowledgement_ticks": 1,
+  "import_clicks": 1,
+  "wire": {
+    "check_starts": 1,
+    "import_starts": 1,
+    "unique_import_requests": 1,
+    "separate_restore_starts": 0,
+    "import_apps": [
+      "hermes",
+      "omnigent"
+    ],
+    "then_restore": true,
+    "confirm": true,
+    "overwrite": true,
+    "acknowledged_keys": 0,
+    "expected_acknowledged_keys": 0,
+    "malformed": 0
+  },
+  "cookie_values_retained_in_protected_artifacts": false,
+  "cookie_coverage": false,
+  "cookie_scan_counts": null,
+  "device_secret_scan_completed": false,
+  "baseline_restored": true,
+  "recovery_verified": false,
+  "controller_inflight_job_present": false,
+  "new_archives_retained": 6,
+  "older_archives_protected": 6,
+  "ha_record_owned": false,
+  "own_catalog_retained": true,
+  "schedule_and_isolation_checks_passed": true,
+  "leased_controller_bytes_preserved": true,
+  "leased_files_sha256": {
+    "focus_acceptance_ui.py": "bfe7b94e7e1c5aaa4dcd226f029cf51020920d7ad2dc2505d551ccb24cf8fa11",
+    "focus_acceptance_ui_page.mjs": "b4d647e3d4deb8b9b1f653b3d9a502e0ce8600a97a814c0906defbdb3d58e2ce"
+  },
+  "private_handoff_manifest_sha256": "3ad10f18df43963d9d4b5a82433c72f943a4b19341f7f8a821199fc616cea5ac",
+  "commercial_acceptance": "not-complete"
+}

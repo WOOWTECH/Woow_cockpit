@@ -1,0 +1,19 @@
+{
+  "readable_files": 645,
+  "archive_index_sidecars": 15,
+  "errors": [
+    {
+      "root": "/var/lib/woowtech-backup/ha-imports.json",
+      "stage": "walk",
+      "error_name": "NotADirectoryError"
+    },
+    {
+      "root": "/var/lib/woowtech-backup/requests.json",
+      "stage": "walk",
+      "error_name": "NotADirectoryError"
+    }
+  ],
+  "journal_exit": 0,
+  "scope": "r8-attempt3-readonly-scan-diagnosis",
+  "commercial_acceptance": "not-complete"
+}

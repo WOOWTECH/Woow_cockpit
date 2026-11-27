@@ -174,9 +174,27 @@ def stable_units(rows, properties):
     return result
 
 
+def scan_paths(root):
+    """A required JSON file is read directly; only directories are walked."""
+    if not os.path.exists(root) or os.path.islink(root):
+        raise RuntimeError('scan root unsafe')
+    if os.path.isfile(root):
+        return [root]
+    if not os.path.isdir(root):
+        raise RuntimeError('scan root nonregular')
+    def walk_error(error):
+        raise RuntimeError('scan enumeration failed') from None
+    paths=[]
+    for directory, dirs, files in os.walk(root,onerror=walk_error,followlinks=False):
+        if any(os.path.islink(os.path.join(directory,name)) for name in dirs):
+            raise RuntimeError('scan path unsafe')
+        paths.extend(os.path.join(directory,name) for name in files)
+    return paths
+
+
 def scan_program(needle_source):
     """Strict current storage roots; index sidecars are in archives/."""
-    return 'import json\n' + needle_source + r'''
+    return 'import json, os\n' + needle_source + '\n' + inspect.getsource(scan_paths) + r'''
 import json, os, subprocess, sys
 req=json.load(sys.stdin)
 values=list(req["values"])
@@ -184,24 +202,19 @@ for name in req.get("podman_secrets",[]):
     p=subprocess.run(["/usr/local/bin/woowbk-owner","podman","secret","inspect","--showsecret","--format","{{.SecretData}}",name],capture_output=True,check=True)
     values.append(p.stdout.rstrip(b"\n"))
 needles=secret_scan_needles(values)
-hits=scanned=index_sidecars=0
+hits=scanned=index_sidecars=json_roots=0
 base="/var/lib/woowtech-backup/"
-def walk_error(error): raise RuntimeError("scan enumeration failed") from None
 for root in [base+x for x in ("jobs","ha-backups","ha-imports.json","requests.json","archives","uploads","staging","pending","exports")]+["/run/woowtech-backup"]:
-    if not os.path.exists(root) or os.path.islink(root): raise RuntimeError("scan root unsafe")
-    paths=[root] if os.path.isfile(root) else []
-    for d,dirs,files in os.walk(root,onerror=walk_error,followlinks=False):
-        if any(os.path.islink(os.path.join(d,x)) for x in dirs): raise RuntimeError("scan path unsafe")
-        paths.extend(os.path.join(d,x) for x in files)
-    for p in paths:
+    for p in scan_paths(root):
         if os.path.islink(p): raise RuntimeError("scan path unsafe")
         if p.endswith(".tar") and ("/archives/" in p or "/ha-backups/" in p): continue
         data=open(p,"rb").read(); scanned+=1
+        if p in (base+"ha-imports.json",base+"requests.json"): json_roots+=1
         if "/archives/" in p and p.endswith(".json"): index_sidecars+=1
         hits+=sum(data.count(x) for x in needles)
 j=subprocess.run(["journalctl","--no-pager","-o","cat","--since","@%d"%req["since"]],capture_output=True,check=True).stdout
 hits+=sum(j.count(x) for x in needles)
-print(json.dumps({"scanned":scanned,"hits":hits,"journal_bytes":len(j),"archive_index_sidecars_scanned":index_sidecars}))
+print(json.dumps({"scanned":scanned,"hits":hits,"journal_bytes":len(j),"archive_index_sidecars_scanned":index_sidecars,"regular_json_roots_scanned":json_roots}))
 '''
 
 
@@ -329,7 +342,7 @@ def run(source, recovery_proof=None, recovery_proof_sha256=None):
     recovery_deadline = None
     if provenance:
         receipt['previous_independent_recovery'] = provenance
-        receipt['protected_existing_backups'] = previous['created_backups']
+        receipt['protected_existing_backups'] = sorted(set(previous['created_backups']) | set(previous.get('protected_existing_backups',[])))
         # Preserve the pointer bytes in the NEW private case before any approved
         # new state can replace it. Old case files remain byte-identical.
         with (ev.dir/'previous-guard.json').open('xb') as handle:
@@ -473,6 +486,7 @@ print(json.dumps(out))''',{'sources':sources})
     scan = scan_program(inspect.getsource(b1.secret_scan_needles))
     try:
         save()
+        require('scan: exact reviewed rendered program parity',(REPO/'snippets/focus-acceptance/r8-scan-rendered.py').read_text()==scan)
         require('source: both reviewed checkouts clean', all(not subprocess.check_output(['git','-C',str(p),'status','--porcelain','--untracked-files=no'], text=True).strip() for p in (source, REPO)))
         require('fixture: original recorded full encrypted HA hash matches', FIXTURE.is_file() and sha(FIXTURE) == FIXTURE_SHA)
         require('browser: existing package and Chromium ready', PLAYWRIGHT.is_file() and CHROMIUM.is_file())
@@ -517,7 +531,7 @@ print(json.dumps(out))''',{'sources':sources})
         before_backups={x['id'] for x in listing.get('backups',[])}
         before_uploads={x['id'] for x in listing.get('ha_backups',[])}
         if previous:
-            require('replay: all six old archives remain protected existing backups',set(previous['created_backups']) <= before_backups)
+            require('replay: every old archive remains a protected existing backup',set(receipt['protected_existing_backups']) <= before_backups)
             require('replay: old HA record retained at exact derived SHA',
                     any(x['id'] == previous['ha_id'] and x.get('sha256') == previous['derived_fixture_sha256']
                         for x in listing.get('ha_backups',[])))
@@ -660,6 +674,7 @@ print(json.dumps(out))''',{'sources':sources})
                     data=p.read_bytes(); host_hits+=sum(data.count(v) for v in needles)
             require('leaks: registered and observed values absent from records journal and text evidence',
                     report['hits']==0 and report['scanned']>0 and host_hits==0
+                    and report['regular_json_roots_scanned']==2
                     and report['archive_index_sidecars_scanned'] >= len(before_backups)+len(receipt['created_backups']))
             browser_file=ev.dir/'browser.json'
             require('leaks: browser issued-value scan completed before deletion',browser_file.is_file() and json.loads(browser_file.read_text()).get('issued_values_scanned') is True)

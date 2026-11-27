@@ -1,5 +1,6 @@
 """Offline safety boundaries only; no browser, relay listener or lab device."""
 import importlib.util
+import ast
 import io
 import hashlib
 import json
@@ -279,6 +280,39 @@ class HealthTimerPhaseTests(unittest.TestCase):
         current=self.states();del current[ui.HEALTH_TIMER]
         self.assertFalse(ui.units_equal(current,self.states(),self.properties()))
         self.assertFalse(ui.units_equal(self.states(),self.states(),{}))
+
+
+class ActualScanRootTests(unittest.TestCase):
+    def test_complete_rendered_scanner_matches_review_artifact_and_imports(self):
+        source=Path(__file__).with_name('ha_import_b1_e2e.py').read_text()
+        node=next(n for n in ast.parse(source).body if isinstance(n,ast.FunctionDef) and n.name=='secret_scan_needles')
+        rendered=ui.scan_program(ast.get_source_segment(source,node)+'\n')
+        reviewed=Path(__file__).resolve().parents[3]/'snippets/focus-acceptance/r8-scan-rendered.py'
+        self.assertEqual(rendered,reviewed.read_text())
+        compile(rendered,'<reviewed rendered scanner>','exec')
+        imports={alias.name for n in ast.parse(rendered).body if isinstance(n,ast.Import) for alias in n.names}
+        self.assertTrue({'json','os','subprocess','sys'}<=imports)
+
+    def test_required_json_file_roots_are_read_directly_not_walked(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ('ha-imports.json','requests.json'):
+                root=Path(folder)/name;root.write_text('{}')
+                self.assertEqual(ui.scan_paths(str(root)),[str(root)])
+
+    def test_archive_directory_keeps_index_sidecars_and_nested_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)/'archives';(root/'nested').mkdir(parents=True)
+            paths=[root/'backup.json',root/'backup.tar',root/'nested/receipt.json']
+            for path in paths:path.write_bytes(b'ordinary fixture')
+            self.assertEqual(set(ui.scan_paths(str(root))),{str(path) for path in paths})
+
+    def test_missing_root_and_symlinked_root_or_directory_are_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            with self.assertRaises(RuntimeError):ui.scan_paths(str(root/'absent'))
+            (root/'real').mkdir();(root/'link').symlink_to(root/'real',target_is_directory=True)
+            with self.assertRaises(RuntimeError):ui.scan_paths(str(root/'link'))
+            with self.assertRaises(RuntimeError):ui.scan_paths(str(root))
 
 
 if __name__ == '__main__':

@@ -249,8 +249,10 @@ async function finishBrowser() {
     const complete = !cookieObservationFailed && observed.every(x => x.status === 'fulfilled');
     issuedScanCounts = { observed_values: values.length, device_files: report.scanned,
       archive_index_sidecars: report.archive_index_sidecars_scanned,
+      regular_json_roots: report.regular_json_roots_scanned,
       device_hits: report.hits, host_files: hostFiles, host_hits: hostHits, observations_complete: complete };
     issuedScan = complete && report.hits === 0 && report.scanned > 0
+      && report.regular_json_roots_scanned === 2
       && report.archive_index_sidecars_scanned > 0 && hostFiles > 0 && hostHits === 0;
     checks.push({ check: 'UI cookie observation completed without gaps', ok: complete });
     check('UI issued Cockpit values absent from records journal and private evidence', issuedScan);

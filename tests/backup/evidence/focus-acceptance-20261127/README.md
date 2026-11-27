@@ -170,6 +170,35 @@ Targeted Python22/22 passed; `r8-scope-preparation.json` is offline preparation.
 Attempt3 requires parent review and has not run; old cookie coverage is still
 absent and no commercial acceptance closure is claimed.
 
+### Attempt3 actual result and strict scanner correction
+
+`r8-attempt3.json` preserves **57/60 FAIL**, exit1/734.8seconds, exact leased
+`f0f61598` driver and frozen product `1adf4df2`. Real browser completed,12
+functional checks passed, one tick/click/import intent, expected/actual issue
+keys0, no page errors; Hermes/Omnigent imported and EMQX excluded. Four jobs
+succeeded in one systemd chain with safety backups and real moved-data proof.
+Both original baseline restores and exact marker/unit/image/schedule/fixture/
+isolation checks passed. Six new and six older archives plus the old HA remain;
+own catalog entry retained because hygiene prevented cleanup. Dev-d was released
+after verified baseline recovery; no automatic replay.
+
+Cookie-finally and later device scanning failed before reports. The protected
+browser result has issued_scan_counts:null; actual cookie values were memory
+only, not retained in protected artifacts. No recovery scan can retroactively
+prove them. `r8-attempt3-terminal-facts.json` records these limits and the exact
+leased source preservation hashes; failed files remain unchanged.
+
+`r8-attempt3-scan-diagnosis.json` proves the shared scanner walked the regular
+required ha-imports.json/requests.json roots and raised NotADirectoryError.
+The narrow correction reads file roots directly and walks directories strictly,
+retaining every actual index sidecar. `r8-scanner-fix-preparation.json` records
+26/26 guarded offline tests and rendered-program parity/import checks.
+The full rendered device scanner is in `snippets/focus-acceptance/r8-scan-rendered.py`.
+Actual post-fix runtime is still pending reviewed recovery-only execution;
+`r8-attempt3-recovery-proposal.md` gives the bounded command and required evidence.
+The next proof must preserve all12 archives/HA and leave old cookie absence
+explicit, then obtain new real-page cookie proof in a separately reviewed run.
+
 ### Original preparation scope
 
 The new `focus_acceptance_ui.py`, `focus_acceptance_ui_page.mjs` and
