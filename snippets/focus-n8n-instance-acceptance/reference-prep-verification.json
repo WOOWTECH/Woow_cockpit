@@ -1,0 +1,19 @@
+{
+  "blocked": 0,
+  "earlier_rendered_entry_failure": "NameError json missing in entry namespace; fixed; original log retained",
+  "errors": 0,
+  "evidence_sha256": {
+    "n8n-reference-prep-final.log": "6b0f1510c9f2be7f088c83d90fd9c31314db6e56197929f97174c7e88735b603",
+    "n8n-reference-prep-gate1.log": "8d89c60abcd8a0dd2a3207bb989b2b1d2eb5251f25ad013ec1aa06e7fa75e68a",
+    "n8n-reference-prep-gate2.log": "af2815b3809023f45e46d28e832c1ad6a2f41f227ffacffe8cb132922273238b",
+    "n8n-reference-prep-readonly.json": "6908c5e83efbb8853754589a168ab6f97d0ac9683468c6351ef5cf807087e48e"
+  },
+  "failures": 0,
+  "native": "denied",
+  "new_reference_tests": 7,
+  "runtime_reference_mutation": false,
+  "safety3_failed_preserved": true,
+  "shim_hits": 0,
+  "skipped": 0,
+  "tests": 7
+}

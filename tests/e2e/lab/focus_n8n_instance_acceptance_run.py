@@ -406,6 +406,7 @@ class Controller:
         self.resources();self.acquire_original();self.frozen_engine()
         self.require('no_previous_safety',not self.r['full_safety'])
         self.require('all_exact_images',set(plan.IMAGE_IDS.values())<=set(self.op('inventory')['images']))
+        self.require_image_references()
         protected=self.op('preserved_safety_prepare')
         self.r['preserved_old_safeties']=protected;self.save()
         self.require('old_pairs_private_copy_verified',protected.get('private_copy_verified') is True and protected.get('private_files')==4)
@@ -436,6 +437,13 @@ class Controller:
             self.settle();self.stop_units();self.restore_catalog();self.restore_timer()
             self.require('safety_stage_returns_original_services',same_found(self.op('inventory'),self.r['before']))
             self.op('preserved_safety_check')
+
+    def require_image_references(self):
+        for ref,config in plan.IMAGE_IDS.items():
+            self.r['last_image_reference']=ref;self.save()
+            p=self.h.owner('podman','image','inspect',ref,'--format','{{.ID}}',timeout=30)
+            self.require('catalog_image_reference_pin',p.returncode==0 and
+                p.stdout.decode().strip().removeprefix('sha256:')==config)
 
     def sql(self,database,query,*,json_result=True):
         if database not in ('n8n','postgres',self.name,self.name+'_outside'):
