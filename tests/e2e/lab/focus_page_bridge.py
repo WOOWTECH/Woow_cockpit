@@ -26,13 +26,17 @@ copy of a whole database service a restore kept first, e.g. Odoo's cold cluster)
 `ha_record_existed`) so the driver's own cleanup removes it. Imports perform no I/O;
 `python3 focus_page_bridge.py` only compiles the device programs.
 
-Two optional inputs (absent: exactly the earlier flow, the same page config byte for byte):
+Three optional inputs (absent: exactly the earlier flow, the same page config byte for byte):
   key=None     an unencrypted HA backup: no key reaches the page; it checks that the wizard asks for none and that no
                request carries one; gate `unencrypted` also reads the engine's jobs (key_provided false)
   choices={}   what the run names of the choices a check may offer ({app: {kind: value}}: an Odoo database, an add-on,
                a node). The page picks exactly those, from what the check lists only (a recheck when an add-on or node
                pick needs it), and stops before the confirmation when the check offers something the run did not
                name; gate `choices`: the checks, both requests, the first conversion and the chain carry exactly them
+  waits={...}  a large backup (the 4.47 GB Nextcloud full share): the page's own bounded waits in seconds, {upload,
+               check, result} (the upload with its upload-finish, each check, the import's result; each from a minute up
+               to the page's bound), which may then be up to LONG_PAGE_SECONDS instead of PAGE_SECONDS; the page config
+               carries them as `waits_ms`. Nothing else changes: the same gates, reads and judgement
 """
 import hashlib
 import importlib.util
@@ -53,6 +57,8 @@ PAGE = HERE / 'focus_acceptance_ui_page.mjs'
 PLAYWRIGHT = Path('/home/woowtechopenclaw/Woow_cockpit/node_modules/playwright-core/index.mjs')
 CHROMIUM = Path.home() / '.cache/ms-playwright/chromium-1208/chrome-linux64/chrome'
 PAGE_SECONDS = 20 * 60                   # the page's bound, as in R8 and page-emqx
+LONG_PAGE_SECONDS = 60 * 60              # the bound's ceiling when the caller names the page's own waits (a large backup)
+WAIT_NAMES = ('upload', 'check', 'result')   # the page's bounded waits (focus_acceptance_ui_protocol.DEFAULT_WAITS_MS)
 TERM_GRACE = 15                          # SIGTERM lets the page close Chromium; its process group is killed after this
 RELAY_DRAIN = 15                         # the closed browser's connections finish (their exec children end) within this
 MIN_START = 5 * 60                       # never start with less time than this before the caller's deadline
@@ -154,11 +160,26 @@ def normalized_choices(choices, importable):
     return {app: dict(kinds) for app, kinds in choices.items()}
 
 
-def page_settings(apps, importable, stops, *, encrypted=True, choices=None):
+def normalized_waits(waits, page_seconds=None):
+    """The page's own waits {upload, check, result} in seconds (focus_acceptance_ui_protocol.validWaits, there in ms): every
+    one of them, each a whole number from 60 up to LONG_PAGE_SECONDS and, with `page_seconds` (the page's bound, then at
+    most LONG_PAGE_SECONDS), none longer than that bound. Raises ValueError."""
+    if (not isinstance(waits, dict) or set(waits) != set(WAIT_NAMES)
+            or not all(isinstance(value, int) and not isinstance(value, bool) and 60 <= value <= LONG_PAGE_SECONDS
+                       for value in waits.values())
+            or (page_seconds is not None and (not isinstance(page_seconds, int) or isinstance(page_seconds, bool)
+                                              or not 60 <= page_seconds <= LONG_PAGE_SECONDS
+                                              or max(waits.values()) > page_seconds))):
+        raise ValueError('waits: upload, check and result in seconds, each from 60 up to the page bound (at most 60 min)')
+    return {name: waits[name] for name in WAIT_NAMES}
+
+
+def page_settings(apps, importable, stops, *, encrypted=True, choices=None, waits=None):
     """What the page is told (focus_acceptance_ui_protocol.pageExpectations): select exactly `apps`; `importable`
     importable, `stops` stopped and excluded; exact mode compares the check's lines and keys with the one request. The
-    page's check names say which apps. `encrypted` False (an unencrypted HA backup: no key step, no key) and `choices`
-    (what the run names of the check's offers) are added only when given, so an earlier call's settings are unchanged."""
+    page's check names say which apps. `encrypted` False (an unencrypted HA backup: no key step, no key), `choices`
+    (what the run names of the check's offers) and `waits` (the page's own waits in seconds, as `waits_ms`) are added only
+    when given, so an earlier call's settings are unchanged."""
     apps, importable, stops = selection(apps, importable, stops)
     extra = {}
     if encrypted is not True:
@@ -167,6 +188,8 @@ def page_settings(apps, importable, stops, *, encrypted=True, choices=None):
         extra['encrypted'] = False
     if choices is not None:
         extra['choices'] = normalized_choices(choices, importable)
+    if waits is not None:
+        extra['waits_ms'] = {name: seconds * 1000 for name, seconds in normalized_waits(waits).items()}
     names = ', '.join
     texts = {'upload': 'UI uploaded the real fixture through the actual page',
              'select': f'UI selects exactly {names(apps)}',
@@ -805,7 +828,7 @@ def _read_browser(path):
 
 def import_via_page(*, device, apps, importable, stops, fixture, password, evidence, deadline, ops, key=None,
                     choices=None, source=REPO, lock=None, playwright=None, chromium=None, page_seconds=PAGE_SECONDS,
-                    device_headroom=DEVICE_HEADROOM, clock=time.monotonic):
+                    device_headroom=DEVICE_HEADROOM, clock=time.monotonic, waits=None):
     """One import of the fixture through the device's real Cockpit page; returns PageImport (judged, never raises for a
     failed page or a failed gate). Raises Refused before the page when a precondition fails, Interrupted after a soft
     stop. `deadline` is a clock() value: the page gets at most `page_seconds` (20 min) of it, the rest reads its jobs.
@@ -819,18 +842,24 @@ def import_via_page(*, device, apps, importable, stops, fixture, password, evide
     check may offer (an Odoo database, an add-on, a node). The page picks exactly those, only from what the check lists,
     runs the check again when an add-on/node pick needs it, and stops before the confirmation when the check offers a
     choice the run did not name or does not offer a named one; {} names nothing (any offered choice then stops). Gate
-    `choices`: the checks, the page's record, both requests, the first conversion and the chain carry exactly them."""
+    `choices`: the checks, the page's record, both requests, the first conversion and the chain carry exactly them.
+    `waits` (None: the page's earlier 10, 10 and 20 minutes and a bound of at most PAGE_SECONDS): {upload, check, result}
+    seconds for a large backup; `page_seconds` may then be up to LONG_PAGE_SECONDS, never shorter than a wait."""
     began = clock()
     summary = {'bridge': 'focus_page_bridge', 'phase': 'preconditions', 'device': device, 'passed': False}
     try:
         device = relay.device_name(device)
         apps, importable, stops = selection(apps, importable, stops)
-        settings = page_settings(apps, importable, stops, encrypted=key is not None, choices=choices)
+        if waits is not None:
+            waits = normalized_waits(waits, page_seconds)
+        settings = page_settings(apps, importable, stops, encrypted=key is not None, choices=choices, waits=waits)
     except ValueError as error:
         raise Refused(str(error), summary) from None
     choosing, keyless = choices is not None, key is None
     choices = settings.get('choices')
     summary.update(apps=apps, importable=importable, stops=stops)
+    if waits is not None:   # a large backup's own waits; an earlier call's summary has no such key
+        summary['waits'] = waits
     fixture, evidence, source = Path(fixture), Path(evidence), Path(source)
     playwright, chromium = Path(playwright or PLAYWRIGHT), Path(chromium or CHROMIUM)
     lock = lock or lock_path(device)
@@ -842,7 +871,7 @@ def import_via_page(*, device, apps, importable, stops, fixture, password, evide
         reasons.append('fixture is not a regular file')
     if (not keyless and (not isinstance(key, str) or len(key) < 16)) or not isinstance(password, str) or len(password) < 6:
         reasons.append('HA key or Cockpit password missing')
-    if not 60 <= int(page_seconds) <= PAGE_SECONDS or deadline - began < MIN_START:
+    if not 60 <= int(page_seconds) <= (PAGE_SECONDS if waits is None else LONG_PAGE_SECONDS) or deadline - began < MIN_START:
         reasons.append('not enough time before the deadline')
     if evidence.exists() or evidence.is_symlink() or not evidence.parent.is_dir():
         reasons.append('evidence must be a new directory in an existing one')
@@ -1028,6 +1057,8 @@ def self_check():
         compile(program, '<device program>', 'exec')
     assert page_settings(['open-design'], ['open-design'], [])['exact'] is True
     assert page_settings(['headscale'], ['headscale'], [], encrypted=False, choices={})['encrypted'] is False
+    assert page_settings(['nextcloud'], ['nextcloud'], [], waits={'upload': 1800, 'check': 600, 'result': 1500}
+                         )['waits_ms'] == {'upload': 1800000, 'check': 600000, 'result': 1500000}
     print('page bridge prepared: offline syntax PASS (a library: a full-flow driver calls import_via_page)')
     return 0
 
