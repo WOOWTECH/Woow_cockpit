@@ -24,6 +24,14 @@ The bridge changes nothing itself: only status, list, jobs and job-status are se
 programs inside the device. What the page created (the HA record when it was new, the converted and safety backups) is
 reported (`created_backups`, `ha_record_existed`) so the driver's own cleanup removes it. Imports perform no I/O;
 `python3 focus_page_bridge.py` only compiles the device programs.
+
+Two optional inputs (absent: exactly the earlier flow, the same page config byte for byte):
+  key=None     an unencrypted HA backup: no key reaches the page; it checks that the wizard asks for none and that no
+               request carries one; gate `unencrypted` also reads the engine's jobs (key_provided false)
+  choices={}   what the run names of the choices a check may offer ({app: {kind: value}}: an Odoo database, an add-on,
+               a node). The page picks exactly those, from what the check lists only (a recheck when an add-on or node
+               pick needs it), and stops before the confirmation when the check offers something the run did not
+               name; gate `choices`: the checks, both requests, the first conversion and the chain carry exactly them
 """
 import hashlib
 import importlib.util
@@ -58,6 +66,8 @@ KEY = re.compile(r'[a-z0-9.-]{4,70}:[0-9a-f]{16}\Z')      # haissues.KEY_RE
 JOB = re.compile(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}\Z')
 APP = re.compile(r'[a-z0-9][a-z0-9-]{1,40}\Z')            # the page protocol's APP_ID
 TEXT = re.compile(r"[A-Za-z0-9 ,()/:'<>.=_-]{3,140}\Z")   # the page protocol's CHECK_TEXT
+CHOICE_KINDS = ('addon', 'node', 'database')              # the page protocol's CHOICE_KINDS (haapps choices)
+CHOICE_VALUE = re.compile(r'[A-Za-z0-9_.@:+-]{1,100}\Z')  # the page protocol's CHOICE_VALUE
 
 
 def _sibling(name):
@@ -130,11 +140,32 @@ def selection(apps, importable, stops):
     return apps, [app for app in apps if app in importable], [app for app in apps if app in stops]
 
 
-def page_settings(apps, importable, stops):
+def normalized_choices(choices, importable):
+    """The run's named choices {app: {kind: value}} (focus_acceptance_ui_protocol.validChoices): only importable selected
+    apps, only the kinds a check can offer (a database for Odoo only), only plain safe values. {} is valid: nothing
+    named, and any choice the check offers then stops the run."""
+    if (not isinstance(choices, dict) or not all(isinstance(app, str) and APP.fullmatch(app) and app in importable
+                                                     and isinstance(kinds, dict) and kinds for app, kinds in choices.items())
+            or not all(kind in CHOICE_KINDS and (kind != 'database' or app == 'odoo')
+                       and isinstance(value, str) and CHOICE_VALUE.fullmatch(value)
+                       for app, kinds in choices.items() for kind, value in kinds.items())):
+        raise ValueError('choices: {app: {kind: value}} of importable selected apps, kinds addon, node or (Odoo) database')
+    return {app: dict(kinds) for app, kinds in choices.items()}
+
+
+def page_settings(apps, importable, stops, *, encrypted=True, choices=None):
     """What the page is told (focus_acceptance_ui_protocol.pageExpectations): select exactly `apps`; `importable`
     importable, `stops` stopped and excluded; exact mode compares the check's lines and keys with the one request. The
-    page's check names say which apps."""
+    page's check names say which apps. `encrypted` False (an unencrypted HA backup: no key step, no key) and `choices`
+    (what the run names of the check's offers) are added only when given, so an earlier call's settings are unchanged."""
     apps, importable, stops = selection(apps, importable, stops)
+    extra = {}
+    if encrypted is not True:
+        if encrypted is not False:
+            raise ValueError('encrypted is True or False')
+        extra['encrypted'] = False
+    if choices is not None:
+        extra['choices'] = normalized_choices(choices, importable)
     names = ', '.join
     texts = {'upload': 'UI uploaded the real fixture through the actual page',
              'select': f'UI selects exactly {names(apps)}',
@@ -147,15 +178,108 @@ def page_settings(apps, importable, stops):
         raise ValueError('selection too long for the page check names')
     return {'apps': apps, 'importable': importable, 'blocked': stops,
             'result_rows': [[app, 'imported'] for app in importable] + [[app, 'excluded'] for app in stops],
-            'exact': True, 'select_stage': 'select-apps', 'texts': texts}
+            'exact': True, 'select_stage': 'select-apps', 'texts': texts, **extra}
 
 
-def check_outcome(job, ha_id, apps, importable, stops):
+# ---------------------------------------------------------------- the choices a check offers (CONTRACT section 7 HaCheck)
+
+def choice_rows(row, kind):
+    """`choices.<kind>` of one app as the page reads them (backup.js haChoicesOf): rows with a value; ok unless false."""
+    source = row.get('choices') if isinstance(row, dict) and isinstance(row.get('choices'), dict) else {}
+    rows = source.get(kind) if isinstance(source.get(kind), list) else []
+    return [{'value': item['value'], 'ok': item.get('ok') is not False, 'default': item.get('default') is True}
+            for item in rows if isinstance(item, dict) and isinstance(item.get('value'), str) and item['value']]
+
+
+def _section_databases(odoo):
+    section = (odoo.get('odoo') or {}) if isinstance(odoo.get('odoo'), dict) else {}
+    return [db for db in section.get('databases') or [] if isinstance(db, dict) and isinstance(db.get('name'), str)]
+
+
+def database_names(odoo):
+    """Every database of an Odoo check (backup.js haOdooDatabasesV2): `choices.database`, then the section's."""
+    names = [row['value'] for row in choice_rows(odoo, 'database')] + [db['name'] for db in _section_databases(odoo)]
+    return list(dict.fromkeys(names))
+
+
+def usable_databases(result):
+    """The Odoo databases that can move (backup.js applyHaCheck / haDatabaseOk); none when Odoo is not importable."""
+    odoo = next((row for row in result.get('apps') or [] if isinstance(row, dict) and row.get('app_id') == 'odoo'), None)
+    if odoo is None or odoo.get('importable') is not True:
+        return []
+    rows, section = choice_rows(odoo, 'database'), _section_databases(odoo)
+    names = list(dict.fromkeys([db['name'] for db in section] + [row['value'] for row in rows]))
+
+    def ok(name):
+        row = next((item for item in rows if item['value'] == name), None)
+        return row['ok'] if row else any(db['name'] == name and db.get('ok') is True for db in section)
+    return [name for name in names if ok(name)]
+
+
+def plan_choices(result, named, picked=None):
+    """What the page has to do so that exactly the run's named choices are imported, from what THIS check (`result`, its
+    ha_check) offers; the same rules as focus_acceptance_ui_protocol.planChoices, which the page runs:
+    {problems, clicks, database, import_choices, check_choices}. `picked`: the add-on/node picks already made (the
+    params.choices a recheck carried)."""
+    problems, clicks, import_choices, check_choices = [], [], {}, {}
+    named, picked = named or {}, picked or {}
+    apps = [row for row in result.get('apps') or [] if isinstance(row, dict) and isinstance(row.get('app_id'), str)]
+    importable = [row for row in apps if row.get('importable') is True]
+    ids = [row['app_id'] for row in importable]
+    for app, kinds in named.items():
+        if app not in ids:
+            problems.append(f'{app}: a choice was named for an app the check does not import')
+            continue
+        for kind in kinds:
+            if kind not in CHOICE_KINDS or (kind == 'database' and app != 'odoo'):
+                problems.append(f'{app}: no {kind} choice')
+    database = None
+    for row in importable:
+        app = row['app_id']
+        for kind in ('addon', 'node'):
+            rows, value = choice_rows(row, kind), (named.get(app) or {}).get(kind)
+            already = (picked.get(app) or {}).get(kind) if isinstance(picked.get(app), dict) else None
+            if len(rows) >= 2:
+                if value is None:
+                    problems.append(f'{app}: the check offers a {kind} choice and the run named none')
+                    continue
+                if not any(item['value'] == value and item['ok'] for item in rows):
+                    problems.append(f'{app}: the named {kind} is not one the check offers')
+                    continue
+                current = already if already is not None else next((item['value'] for item in rows if item['default']), None)
+                click = current != value
+                if click:
+                    clicks.append({'app': app, 'kind': kind, 'value': value})
+                if click or already is not None:
+                    import_choices.setdefault(app, {})[kind] = value
+                    check_choices.setdefault(app, {})[kind] = value
+            elif value is not None and not (len(rows) == 1 and rows[0]['value'] == value and rows[0]['ok']):
+                problems.append(f'{app}: the named {kind} is not one the check offers')
+        if app == 'odoo':
+            usable, value = usable_databases(result), (named.get('odoo') or {}).get('database')
+            if value is not None and value not in usable:
+                problems.append('odoo: the named database is not one the check can move')
+            elif value is None and len(usable) != 1:
+                problems.append('odoo: the check offers several databases and the run named none')
+            else:
+                database = value if value is not None else usable[0]
+                import_choices.setdefault('odoo', {})['database'] = database
+    return {'problems': problems, 'clicks': clicks, 'database': database, 'import_choices': import_choices,
+            'check_choices': check_choices}
+
+
+def check_outcome(job, ha_id, apps, importable, stops, choices=None):
     """(expected acknowledgement {group: sorted distinct keys}, confirmation lines the page lists) of the one check of
     this import, which must be exactly the expected outcome: the check of exactly `apps`, every app of `importable`
     importable, every app of `stops` not importable with a stop line about the whole app. Every confirmation line of the
     shared part and of an importable app must carry a valid key: those keys, each once, are what the one acknowledgement
-    sends. A line about one database refuses (the bridge chooses none). Raises ValueError with the reason."""
+    sends. Without `choices` a line about one database refuses (the bridge chooses none). With `choices` (the run's named
+    choices) the check must offer exactly what plan_choices can satisfy, have been made with the add-on/node picks
+    (params.choices), and the lines are the ones the page lists for the chosen Odoo database: its own lines count, those
+    of the other databases are not listed, and the page's line naming the databases left on HA is counted. Raises
+    ValueError with the reason."""
+    if choices is not None:
+        return _check_outcome_chosen(job, ha_id, apps, importable, stops, choices)
     apps, importable, stops = selection(apps, importable, stops)
     job = job if isinstance(job, dict) else {}
     params = job.get('params') or {}
@@ -204,6 +328,136 @@ def check_outcome(job, ha_id, apps, importable, stops):
             if not any(isinstance(issue, dict) and issue.get('level') == 'stop' for issue in issues):
                 raise ValueError(f'{app} is stopped without a stop line')
     return expected, lines
+
+
+def _check_outcome_chosen(job, ha_id, apps, importable, stops, choices):
+    apps, importable, stops = selection(apps, importable, stops)
+    choices = normalized_choices(choices, importable)
+    job = job if isinstance(job, dict) else {}
+    params = job.get('params') or {}
+    result = (job.get('result') or {}).get('ha_check') or {}
+    rows, shared = result.get('apps'), result.get('shared')
+    if (job.get('type') != 'verify' or job.get('state') != 'succeeded' or params.get('source') != 'ha'
+            or params.get('ha_backup_id') != ha_id or not isinstance(params.get('apps'), list)
+            or sorted(params['apps']) != sorted(apps) or result.get('schema') != 2 or result.get('ha_backup_id') != ha_id
+            or not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows)
+            or sorted(str(row.get('app_id')) for row in rows) != sorted(apps) or not isinstance(shared, list)):
+        raise ValueError('one current check of exactly the selected apps required')
+    picked = params.get('choices') if isinstance(params.get('choices'), dict) else {}
+    plan = plan_choices(result, choices, picked)
+    if plan['problems']:
+        raise ValueError(plan['problems'][0])
+    if plan['clicks']:
+        raise ValueError('the current check was not made with the chosen add-on or node')
+    database = plan['database']
+    expected, listed = {}, []
+
+    def lines_of(group, issues, confirmed, app=None):
+        keys = []
+        for issue in issues:
+            if not isinstance(issue, dict) or issue.get('level') not in LEVELS:
+                raise ValueError('unknown check line')
+            if issue.get('database') is not None and not (app == 'odoo' and issue.get('database') == database):
+                continue   # a line about another database (or of no chosen one) is not listed by the page
+            if confirmed and issue['level'] == 'stop':
+                raise ValueError('a stop line in the shared part, in an importable app or of the chosen database')
+            if confirmed and issue['level'] == 'confirm':
+                if (not isinstance(issue.get('message'), str) or not issue['message']
+                        or not isinstance(issue.get('key'), str) or not KEY.fullmatch(issue['key'])):
+                    raise ValueError('confirmation line without a valid key')
+                keys.append(issue['key'])
+                listed.append(issue)
+        if keys:
+            expected[group] = sorted(set(keys))
+
+    lines_of(SHARED, shared, True)
+    odoo = None
+    for row in rows:
+        app, issues = row.get('app_id'), row.get('issues')
+        if not isinstance(issues, list):
+            raise ValueError('check lines unavailable')
+        if row.get('importable') is True:
+            if app not in importable:
+                raise ValueError(f'{app} is importable, the run expected it stopped')
+            lines_of(app, issues, True, app)
+            odoo = row if app == 'odoo' else odoo
+        else:
+            if app not in stops:
+                raise ValueError(f'{app} is not importable, the run expected it importable')
+            lines_of(app, issues, False, app)
+            if not any(isinstance(issue, dict) and issue.get('level') == 'stop' for issue in issues):
+                raise ValueError(f'{app} is stopped without a stop line')
+    left = (odoo is not None and database is not None and len(database_names(odoo)) >= 2
+            and not any(issue.get('id') == 'odoo.databases-left' for issue in listed))
+    return expected, len(listed) + (1 if left else 0)
+
+
+def choice_decision(checks, choices, importable):
+    """The run's choices against the page's checks (one, or two when an add-on/node pick needed the check again):
+    (current check, {database, import_choices, check_choices, checks}) or ValueError. The first check is the one made
+    without params.choices; a second must carry exactly the picks the first one made necessary."""
+    choices = normalized_choices(choices, importable)
+    if not isinstance(checks, list) or len(checks) not in (1, 2) or not all(isinstance(job, dict) for job in checks):
+        raise ValueError('one check, or two with a recheck')
+    plain = [job for job in checks if not (job.get('params') or {}).get('choices')]
+    again = [job for job in checks if (job.get('params') or {}).get('choices')]
+    if len(plain) != 1:
+        raise ValueError('exactly one check without choices')
+    first = plan_choices((plain[0].get('result') or {}).get('ha_check') or {}, choices)
+    if first['problems']:
+        raise ValueError(first['problems'][0])
+    if bool(first['clicks']) != bool(again) or len(again) > 1:
+        raise ValueError('a recheck exactly when a named add-on or node was not what the first check showed')
+    current = again[0] if again else plain[0]
+    if again and (again[0].get('params') or {}).get('choices') != first['check_choices']:
+        raise ValueError('the recheck did not carry exactly the picked add-on or node')
+    final = plan_choices((current.get('result') or {}).get('ha_check') or {}, choices,
+                         (current.get('params') or {}).get('choices') or {})
+    if final['problems'] or final['clicks']:
+        raise ValueError((final['problems'] or ['the recheck does not show the picked add-on or node'])[0])
+    return current, {'database': final['database'], 'import_choices': final['import_choices'],
+                     'check_choices': final['check_choices'], 'checks': len(checks)}
+
+
+def chosen_exactly(decision, browser_choices, requests, first_params):
+    """The page chose and sent exactly what the run named (choices only): its record, its requests, the import's first
+    conversion (only its own app's choices and, for Odoo, odoo_database) and the chain (every app's choices)."""
+    if not isinstance(decision, dict) or not isinstance(browser_choices, dict) or not isinstance(requests, dict):
+        return False
+    picks, wanted = decision['check_choices'], decision['import_choices']
+    checks, sent = requests.get('check'), requests.get('import')
+    chain = (first_params or {}).get('chain') if isinstance(first_params, dict) else None
+    apps = (first_params or {}).get('apps') if isinstance(first_params, dict) else None
+    if not isinstance(checks, list) or not isinstance(sent, dict) or not isinstance(chain, dict) \
+            or not isinstance(apps, list) or len(apps) != 1:
+        return False
+    first_app = apps[0]
+    own = {app: kinds for app, kinds in wanted.items() if app == first_app}
+    return (browser_choices.get('problems') == [] and browser_choices.get('database') == decision['database']
+            and browser_choices.get('import_choices') == wanted and browser_choices.get('check_choices') == picks
+            and browser_choices.get('rechecks') == decision['checks'] - 1
+            and len(checks) == decision['checks'] and all(isinstance(item, dict) for item in checks)
+            and checks[0].get('choices') is None and (decision['checks'] == 1 or checks[-1].get('choices') == picks)
+            and sent.get('choices') == (wanted or None)
+            and (first_params.get('choices') or {}) == own
+            and first_params.get('odoo_database') == (decision['database'] if first_app == 'odoo' else None)
+            and (chain.get('choices') or {}) == wanted)
+
+
+def unencrypted_exactly(checks, browser, first_params):
+    """An unencrypted HA backup (no key): the engine was given no key for any check or the import, the wizard showed no
+    key step or field and neither request carried a key."""
+    if not isinstance(browser, dict) or not isinstance(checks, list) or not checks:
+        return False
+    step, requests = browser.get('key_step') or {}, browser.get('requests') or {}
+    sent = requests.get('check') if isinstance(requests.get('check'), list) else []
+    chain = (first_params.get('chain') or {}) if isinstance(first_params, dict) else {}
+    return (all(isinstance(job, dict) and (job.get('params') or {}).get('key_provided') is False for job in checks)
+            and isinstance(first_params, dict) and first_params.get('key_provided') is not True
+            and chain.get('key_provided') is not True
+            and step.get('stepper_key_steps') == 0 and step.get('key_fields_after_check') == 0
+            and bool(sent) and all(isinstance(item, dict) and item.get('key') is False for item in sent)
+            and isinstance(requests.get('import'), dict) and requests['import'].get('key') is False)
 
 
 def keys_equal(expected, given):
@@ -419,10 +673,12 @@ class Ops:
 
 
 class PageImport:
-    """The judged page import: `summary` (JSON, no secret), the check job record and the followed chain records."""
+    """The judged page import: `summary` (JSON, no secret), the (current) check job record, the followed chain records
+    and every check record the page made (two when a named add-on/node needed the check again)."""
 
-    def __init__(self, summary, check_job, chain):
+    def __init__(self, summary, check_job, chain, check_jobs=None):
         self.summary, self.check_job, self.chain = summary, check_job, chain
+        self.check_jobs = list(check_jobs or ([check_job] if check_job else []))
 
     @property
     def passed(self):
@@ -541,23 +797,33 @@ def _read_browser(path):
     return value if isinstance(value, dict) else None
 
 
-def import_via_page(*, device, apps, importable, stops, fixture, key, password, evidence, deadline, ops,
-                    source=REPO, lock=None, playwright=None, chromium=None, page_seconds=PAGE_SECONDS,
+def import_via_page(*, device, apps, importable, stops, fixture, password, evidence, deadline, ops, key=None,
+                    choices=None, source=REPO, lock=None, playwright=None, chromium=None, page_seconds=PAGE_SECONDS,
                     device_headroom=DEVICE_HEADROOM, clock=time.monotonic):
     """One import of the fixture through the device's real Cockpit page; returns PageImport (judged, never raises for a
     failed page or a failed gate). Raises Refused before the page when a precondition fails, Interrupted after a soft
     stop. `deadline` is a clock() value: the page gets at most `page_seconds` (20 min) of it, the rest reads its jobs.
     `evidence` is a new directory (created 0700): the page's screenshots, cookie metadata and browser.json, and the
     bridge's page-bridge.json. `key` (the HA key) and `password` (devadmin's Cockpit password) reach only the page's
-    stdin."""
+    stdin.
+
+    `key` None: an UNENCRYPTED HA backup. The page enters no key and checks that the wizard asks for none, that neither
+    request carries one, and the engine's jobs say no key was provided (gate `unencrypted`).
+    `choices` (None: none of this, exactly the earlier flow): {app: {kind: value}} - what the run names of the choices a
+    check may offer (an Odoo database, an add-on, a node). The page picks exactly those, only from what the check lists,
+    runs the check again when an add-on/node pick needs it, and stops before the confirmation when the check offers a
+    choice the run did not name or does not offer a named one; {} names nothing (any offered choice then stops). Gate
+    `choices`: the checks, the page's record, both requests, the first conversion and the chain carry exactly them."""
     began = clock()
     summary = {'bridge': 'focus_page_bridge', 'phase': 'preconditions', 'device': device, 'passed': False}
     try:
         device = relay.device_name(device)
         apps, importable, stops = selection(apps, importable, stops)
-        settings = page_settings(apps, importable, stops)
+        settings = page_settings(apps, importable, stops, encrypted=key is not None, choices=choices)
     except ValueError as error:
         raise Refused(str(error), summary) from None
+    choosing, keyless = choices is not None, key is None
+    choices = settings.get('choices')
     summary.update(apps=apps, importable=importable, stops=stops)
     fixture, evidence, source = Path(fixture), Path(evidence), Path(source)
     playwright, chromium = Path(playwright or PLAYWRIGHT), Path(chromium or CHROMIUM)
@@ -568,7 +834,7 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
         reasons.append(f'this process does not hold {lock}')
     if fixture.is_symlink() or not fixture.is_file():
         reasons.append('fixture is not a regular file')
-    if not isinstance(key, str) or len(key) < 16 or not isinstance(password, str) or len(password) < 6:
+    if (not keyless and (not isinstance(key, str) or len(key) < 16)) or not isinstance(password, str) or len(password) < 6:
         reasons.append('HA key or Cockpit password missing')
     if not 60 <= int(page_seconds) <= PAGE_SECONDS or deadline - began < MIN_START:
         reasons.append('not enough time before the deadline')
@@ -614,6 +880,8 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
     config = {'ha_id': ha_id, 'fixture': str(fixture), 'password': password, 'key': key, 'evidence': str(evidence),
               'result': str(evidence / 'browser.json'), 'playwright': str(playwright), 'chromium': str(chromium),
               'since': int(time.time()) - 1, 'device': device, **settings}
+    if keyless:
+        del config['key']   # an unencrypted HA backup: the page has no key at all (settings say encrypted: false)
     page = run_page(config, budget, device)
     del config
     page['elapsed_s'] = round(clock() - began, 1)
@@ -624,6 +892,9 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
         'failure_kind': browser.get('failure_kind'), 'checks': browser.get('checks') if isinstance(browser.get('checks'), list) else [],
         'issued_values_scanned': browser.get('issued_values_scanned') is True, 'issued_scan': issued_scan_summary(browser),
         'confirmations': browser.get('confirmations'), 'wire': browser.get('wire')}
+    if browser is not None and (choosing or keyless):   # the new modes' records: keys present or not, never a value
+        summary['browser'].update({name: browser.get(name) for name in ('choices', 'key_step', 'requests')
+                                   if name in browser})
 
     def own_jobs():
         rows = ops.helper('jobs').get('jobs') or []
@@ -652,13 +923,16 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
 
     gates, why = {}, {}
     check_job, chain, expected, lines, inflight = None, [], None, None, None
-    checks, roots, own = [], [], []
+    checks, roots, own, check_jobs, decision = [], [], [], [], None
     try:
         own = own_jobs()
         checks = [row for row in own if row.get('type') == 'verify']
         roots = roots_of(own)
-        if len(checks) == 1:
+        if choosing and len(checks) in (1, 2):   # a second check only when a named add-on/node needed it
+            check_jobs = [ops.wait_job(row['id'], max(1, int(deadline - clock()))) for row in checks]
+        elif len(checks) == 1:
             check_job = ops.wait_job(checks[0]['id'], max(1, int(deadline - clock())))
+            check_jobs = [check_job]
         if len(roots) == 1:
             current, seen = roots[0]['id'], set()
             while current:
@@ -674,8 +948,14 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
                 current = ((job.get('result') or {}).get('group') or {}).get('next_job_id')
     except Exception as error:   # noqa: BLE001 - a job that cannot be read fails its gate, never the driver's cleanup
         why['jobs'] = f'{type(error).__name__}: {str(error)[:160]}'
+    if choosing:
+        try:
+            check_job, decision = choice_decision(check_jobs, choices, importable)
+        except ValueError as error:
+            why['choices'] = str(error)[:200]
     try:
-        expected, lines = check_outcome(check_job, ha_id, apps, importable, stops)
+        expected, lines = (check_outcome(check_job, ha_id, apps, importable, stops, choices) if choosing
+                           else check_outcome(check_job, ha_id, apps, importable, stops))
     except ValueError as error:
         why['expected_outcome'] = str(error)[:200]
     confirmations = (browser or {}).get('confirmations') or {}
@@ -704,10 +984,12 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
         after_read = True
     except Exception as error:   # noqa: BLE001
         why['after'] = type(error).__name__
-    accounted = {row.get('id') for row in checks[:1]} | {job.get('id') for job in chain}
+    accounted = {row.get('id') for row in checks[:2 if choosing else 1]} | {job.get('id') for job in chain}
     unexplained = sorted(after_backups - before_backups - set(created))
-    gates['own_jobs'] = (after_read and len(checks) == 1 and len(roots) == 1 and not active and inflight is None
-                         and {row.get('id') for row in own} <= accounted)
+    # One check; with choices two exactly when a named add-on/node needed the check again (choice_decision).
+    wanted_checks = (decision or {}).get('checks') if choosing else 1
+    gates['own_jobs'] = (after_read and len(checks) == wanted_checks and len(roots) == 1 and not active
+                         and inflight is None and {row.get('id') for row in own} <= accounted)
     gates['record'] = after_read and present
     gates['no_unexplained_backups'] = after_read and not unexplained
     gates['page_bounded'] = page['started'] and not page['timed_out'] and page['stop'] == 'exited'
@@ -717,6 +999,13 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
                              and all(isinstance(item, dict) and item.get('ok') is True for item in summary['browser']['checks']))
     scan = issued_scan_summary(browser)
     gates['issued_scan'] = scan['scanned'] and scan['scan_completed'] is True
+    if choosing:
+        gates['choices'] = decision is not None and chosen_exactly(decision, (browser or {}).get('choices'),
+                                                                   (browser or {}).get('requests'), first)
+        summary.update(chosen=decision, check_job_ids=[job.get('id') for job in check_jobs if isinstance(job, dict)])
+    if keyless:
+        gates['unencrypted'] = unencrypted_exactly(check_jobs, browser, first)
+        summary['unencrypted'] = True
     summary.update(phase='judged', check_job_id=check_job.get('id') if check_job else None,
                    root_job_id=roots[0].get('id') if len(roots) == 1 else None,
                    chain_job_ids=[job.get('id') for job in chain], inflight=inflight,
@@ -725,13 +1014,14 @@ def import_via_page(*, device, apps, importable, stops, fixture, key, password, 
                    expected_acknowledged=expected, confirmation_lines=lines, native_units=native, gates=gates, reasons=why,
                    passed=all(gates.values()), elapsed_s=round(clock() - began, 1))
     _write(evidence / 'page-bridge.json', summary)
-    return PageImport(summary, check_job, chain)
+    return PageImport(summary, check_job, chain, check_jobs)
 
 
 def self_check():
     for program in (PRECONDITIONS, NATIVE_UNITS):
         compile(program, '<device program>', 'exec')
     assert page_settings(['open-design'], ['open-design'], [])['exact'] is True
+    assert page_settings(['headscale'], ['headscale'], [], encrypted=False, choices={})['encrypted'] is False
     print('page bridge prepared: offline syntax PASS (a library: a full-flow driver calls import_via_page)')
     return 0
 
