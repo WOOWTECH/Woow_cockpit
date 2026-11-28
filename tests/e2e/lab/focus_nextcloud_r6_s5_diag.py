@@ -40,6 +40,13 @@ focus-nextcloud-r6-s5-diag/<time>/ (0700, files 0600). One fixed JSON line on st
 
   python3 -B -I tests/e2e/lab/focus_nextcloud_r6_s5_diag.py            the contract (offline)
   HEAVY_FREE=/tmp/woowbk-dev-e-mutation.lock heavy.sh python3 -B -I tests/e2e/lab/focus_nextcloud_r6_s5_diag.py --run
+  ... --remove-retired-root --diagnostic-evidence ~/.woowbk-lab/evidence/focus-nextcloud-r6-s5-diag/<time>-<hex>
+      after a diagnosed run: the first build's proof root (s5b.HISTORY, a literal path), proven exactly as S5-A left it,
+      removed entry by entry (retire); nothing else.
+
+The fixture is always the FIRST S5-A build's (s5b.HISTORY, its committed result kept as history), never S5-B's active
+one. S5-A's rebuild reuses this machinery as its acceptance gate (open_check: layout 'fresh-build', one attempt) and keeps
+the first build's root untouched while it is there (RETIRED_STATE in its before/after snapshot).
 """
 import argparse
 import fcntl
@@ -100,7 +107,9 @@ RELEVANT = tuple('lib/woowbackup/' + name for name in (
     'errors.py', 'habackup.py', 'hacommon.py', 'haissues.py', 'ha_nextcloud.py', 'ha_odoo.py', 'hatarget.py', 'jobs.py',
     'podman.py', 'tempctr.py', 'util.py'))
 DEVICE_OUTPUT = 8 * 1024 * 1024
-S5A_RESULT = s5b.S5A_RESULT            # the committed S5-A result the fixture constants must agree with
+HISTORY_RESULT = s5b.HISTORY_RESULT    # the first S5-A build's committed result: the fixture this tool diagnoses
+RETIRE_AREA = 'focus-nextcloud-r6-s5-retire'
+OPEN_BUDGET = 900                      # the product-path open check's worker deadline (S5-A keeps s5.OPEN_RESERVE for it)
 
 # ---------------------------------------------------------------------- default-deny vocabulary (rendered on the device)
 LSN = r'[0-9A-F]{1,8}/[0-9A-F]{1,8}'
@@ -840,15 +849,37 @@ def stream_member(opened, request, worker, popen, timeout):
     return out
 
 
+def fresh_state(root, fixture, provenance, owner_uid, root_uid=0):
+    """A fixture S5-A has just packed (its work dir still holds the source): the root (root's, nothing writable for
+    others), `owned` (the owner's, 0700), and exactly the literal fixture and provenance paths as single-link regular
+    files of the owner on the root's filesystem. Returns their identities."""
+    top = Path(root); st = top.lstat(); owned = top / 'owned'; o = owned.lstat()
+    need(stat.S_ISDIR(st.st_mode) and st.st_uid == root_uid and not st.st_mode & 0o022, 'fresh-root')
+    need(stat.S_ISDIR(o.st_mode) and o.st_uid == owner_uid and stat.S_IMODE(o.st_mode) == 0o700 and o.st_dev == st.st_dev,
+         'fresh-owned')
+    rows = []
+    for path, name in ((fixture, 'generated-s5-source.tar'), (provenance, 'provenance.private.json')):
+        need(path == str(owned / 'artifact' / name), 'fresh-literal-path')
+        s = os.lstat(path)
+        need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_uid == owner_uid and s.st_dev == st.st_dev, 'fresh-file')
+        rows.append([s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size, s.st_mtime_ns, s.st_ctime_ns])
+    return {'files': rows}
+
+
 def launch(q, popen=subprocess.Popen):
     """Root side: the S5-A proof root and fixture exactly as bound (else refused, nothing started), the worker started
     as the owner with its request and the add-on member on stdin (stream_member), then the proof root and fixture
-    again. Always one JSON document."""
+    again. LAYOUT 'retired-proof-root': the whole root as S5-A left it (proof_root_state); 'fresh-build': a fixture S5-A
+    has just packed (fresh_state), for its product-path open check. Always one JSON document."""
     try:
         need(isinstance(q.get('worker'), str) and hashlib.sha256(q['worker'].encode()).hexdigest() == WORKER_SHA,
              'worker-binding')
         owner = pwd.getpwnam(OWNER).pw_uid
-        before = proof_root_state(PROOF_ROOT, S5A_LEAVES, S5A_COMMAND_RECORDS, S5A_ARTIFACT, COMMAND_RE, owner, ROOT_UID)
+        state = ((lambda: proof_root_state(PROOF_ROOT, S5A_LEAVES, S5A_COMMAND_RECORDS, S5A_ARTIFACT, COMMAND_RE, owner,
+                                           ROOT_UID)) if LAYOUT == 'retired-proof-root' else
+                 (lambda: fresh_state(PROOF_ROOT, FIXTURE, PROVENANCE, owner, ROOT_UID)))
+        need(LAYOUT in ('retired-proof-root', 'fresh-build'), 'layout')
+        before = state()
         digest, identity = sealed_digest(FIXTURE, FIXTURE_BYTES, lambda: None)
         need(digest == FIXTURE_SHA, 'fixture-sha')
         need(hashlib.sha256(read_small(PROVENANCE, 64 * 1024 * 1024)).hexdigest() == PROVENANCE_SHA, 'provenance-sha')
@@ -866,7 +897,7 @@ def launch(q, popen=subprocess.Popen):
         out['status'] = 'ran'
     except Exception as error:   # noqa: BLE001 - recorded; the proof root is still checked below
         out['failure'] = str(error) if str(error).startswith('fixed-') else 'fixed-s5diag-launcher-' + type(error).__name__
-    after = proof_root_state(PROOF_ROOT, S5A_LEAVES, S5A_COMMAND_RECORDS, S5A_ARTIFACT, COMMAND_RE, owner, ROOT_UID)
+    after = state()
     digest_after, identity_after = sealed_digest(FIXTURE, FIXTURE_BYTES, lambda: None)
     out['proof_root_unchanged'] = after == before and digest_after == digest and identity_after == identity
     return out
@@ -904,14 +935,21 @@ WORKER = worker_program()
 WORKER_SHA = hashlib.sha256(WORKER.encode()).hexdigest()
 
 
+def history_values():
+    """The first S5-A build's fixture (s5b.HISTORY): what the diagnostic and the retirement bind, never S5-B's active one."""
+    h = s5b.HISTORY
+    return dict(PROOF_ROOT=h.proof_root, FIXTURE=h.fixture, PROVENANCE=h.provenance, FIXTURE_SHA=h.fixture_sha,
+                FIXTURE_BYTES=h.fixture_bytes, PROVENANCE_SHA=h.provenance_sha, S5A_LEAVES=s5b.S5A_LEAVES,
+                S5A_COMMAND_RECORDS=h.command_records, S5A_ARTIFACT=s5b.S5A_ARTIFACT, COMMAND_RE=s5b.COMMAND_RE,
+                OWNER=OWNER, ROOT_UID=0)
+
+
 def launcher_program(overrides=None, call=True):
-    values = dict(PROOF_ROOT=s5b.PROOF_ROOT, FIXTURE=s5b.FIXTURE, PROVENANCE=s5b.PROVENANCE, FIXTURE_SHA=s5b.FIXTURE_SHA,
-                  FIXTURE_BYTES=s5b.FIXTURE_BYTES, PROVENANCE_SHA=s5b.PROVENANCE_SHA, S5A_LEAVES=s5b.S5A_LEAVES,
-                  S5A_COMMAND_RECORDS=s5b.S5A_COMMAND_RECORDS, S5A_ARTIFACT=s5b.S5A_ARTIFACT, COMMAND_RE=s5b.COMMAND_RE,
-                  OWNER=OWNER, ROOT_UID=0, PRODUCT_LIB=PRODUCT_LIB, SLUG=s5.SLUG, OWNER_EXEC=OWNER_EXEC,
-                  PYTHON='python3', WORKER_SHA=WORKER_SHA, WORKER_OUTPUT=WORKER_OUTPUT)
+    values = dict(history_values(), PRODUCT_LIB=PRODUCT_LIB, SLUG=s5.SLUG, OWNER_EXEC=OWNER_EXEC, PYTHON='python3',
+                  WORKER_SHA=WORKER_SHA, WORKER_OUTPUT=WORKER_OUTPUT, LAYOUT='retired-proof-root')
     values.update(overrides or {})
-    functions =(need, s5b.ident, s5b.read_small, s5b.sealed_digest, s5b.proof_root_state, _drain, stream_member, launch)
+    functions = (need, s5b.ident, s5b.read_small, s5b.sealed_digest, s5b.proof_root_state, fresh_state, _drain,
+                 stream_member, launch)
     body = '\nprint(json.dumps(launch(json.load(sys.stdin))))\n' if call else '\n'
     return render(functions, body, values)
 
@@ -958,6 +996,46 @@ print(json.dumps({'removed':removed,'left':left}))
 '''
 SWEEP = render((need, make_owner_runner), SWEEP_BODY, {'JOB_PATTERN': JOB_PATTERN, 'JOB_TAG': JOB_TAG,
                                                         'PRODUCT_LIB': PRODUCT_LIB, 'OWNER': OWNER})
+# Root, read only: the first build's proof root while it is there (S5-A's rebuild keeps it untouched): absent, or its
+# layout and fixture; a root that is no longer what S5-A left says so instead of failing the caller.
+RETIRED_STATE_BODY = r'''
+q=json.load(sys.stdin)
+out={'present':os.path.lexists(PROOF_ROOT)}
+if out['present']:
+ try:
+  owner=pwd.getpwnam(OWNER).pw_uid
+  out['state']=proof_root_state(PROOF_ROOT,S5A_LEAVES,S5A_COMMAND_RECORDS,S5A_ARTIFACT,COMMAND_RE,owner,ROOT_UID)
+  out['fixture_sha256'],out['identity']=sealed_digest(FIXTURE,FIXTURE_BYTES,lambda:None)
+  out['valid']=out['fixture_sha256']==FIXTURE_SHA
+ except (ValueError,OSError) as error:
+  out['valid']=False;out['reason']=str(error) if str(error).startswith('fixed-') else type(error).__name__
+print(json.dumps(out))
+'''
+
+
+def retired_state_program(overrides=None):
+    return render((need, s5b.ident, s5b.read_small, s5b.sealed_digest, s5b.proof_root_state), RETIRED_STATE_BODY,
+                  dict(history_values(), **(overrides or {})))
+
+
+RETIRED_STATE = retired_state_program()
+# Root: the first build's proof root, removed entry by entry after it was proven exactly as S5-A left it (s5b.remove_root);
+# only through --remove-retired-root with the diagnostic's own evidence of a finished run on this root (retire).
+RETIRE_BODY = r'''
+q=json.load(sys.stdin)
+need(q.get('root')==PROOF_ROOT and q.get('removal')=='retired-after-the-diagnostic','retire-binding')
+owner=pwd.getpwnam(OWNER).pw_uid
+print(json.dumps(remove_root(PROOF_ROOT,S5A_LEAVES,S5A_COMMAND_RECORDS,S5A_ARTIFACT,COMMAND_RE,owner,FIXTURE,FIXTURE_BYTES,
+                             FIXTURE_SHA,PROVENANCE,PROVENANCE_SHA,lambda:None,ROOT_UID)))
+'''
+
+
+def retire_program(overrides=None):
+    return render((need, s5b.ident, s5b.read_small, s5b.sealed_digest, s5b.proof_root_state, s5b.remove_root), RETIRE_BODY,
+                  dict(history_values(), **(overrides or {})))
+
+
+RETIRE = retire_program()
 
 
 # ====================================================================== host side
@@ -989,13 +1067,14 @@ def acquire(handle, timeout, *, clock=time.monotonic, sleep=time.sleep, flock=fc
 
 
 def tool_binding(commit):
-    """What this run is bound to, offline: the committed S5-A result (s5b.s5a_result: passed, exactly this fixture,
-    SHA-256, size, provenance and proof root, else refused), the programs' digests and the S5-B product commit the
-    installed engine is compared with."""
+    """What this run is bound to, offline: the first S5-A build's committed result (s5b.history_result: passed, exactly
+    s5b.HISTORY's fixture, SHA-256, size, provenance and proof root, else refused), the programs' digests and the S5-B
+    product commit the installed engine is compared with."""
+    h = s5b.HISTORY
     return {'phase': PHASE, 'source_commit': commit, 'tool_sha256': sha(Path(__file__).read_bytes()),
             'worker_sha256': WORKER_SHA, 'launcher_sha256': sha(LAUNCHER.encode()), 'sweep_sha256': sha(SWEEP.encode()),
-            's5a_result_sha256': s5b.s5a_result(S5A_RESULT), 'fixture': s5b.FIXTURE, 'fixture_sha256': s5b.FIXTURE_SHA,
-            'fixture_bytes': s5b.FIXTURE_BYTES, 'provenance_sha256': s5b.PROVENANCE_SHA, 'proof_root': s5b.PROOF_ROOT,
+            's5a_result_sha256': s5b.history_result(HISTORY_RESULT), 'fixture': h.fixture, 'fixture_sha256': h.fixture_sha,
+            'fixture_bytes': h.fixture_bytes, 'provenance_sha256': h.provenance_sha, 'proof_root': h.proof_root,
             'compared_product_commit': s5b.PRODUCT_COMMIT}
 
 
@@ -1183,9 +1262,134 @@ def run_locked(binding, *, device=wake.device, inventory=collect, call=device_ca
     return 0 if record['status'] == 'diagnosed' and record.get('device_unchanged') else 1
 
 
+# ====================================================================== S5-A's gate: the product's own check opens a fixture
+
+def open_check_binding():
+    """What S5-A's lease binds of the open check: this tool's bytes and its device programs."""
+    return {'tool_sha256': sha(Path(__file__).read_bytes()), 'worker_sha256': WORKER_SHA, 'sweep_sha256': sha(SWEEP.encode())}
+
+
+def judge_open(launcher, sweep):
+    """{s5.OPEN_CHECKS name: bool} of one open check (all true: the product's own check path opened the fixture)."""
+    w = launcher.get('worker') if launcher.get('status') == 'ran' and isinstance(launcher.get('worker'), dict) else {}
+    member, before = w.get('member') or {}, w.get('controldata_before') or {}
+    first = (w.get('attempts') or [{}])[0]
+    details, probe, stream = first.get('details') or {}, w.get('role_probe') or {}, launcher.get('stream') or {}
+    counts = details.get('counts') if isinstance(details.get('counts'), dict) else {}
+    checks = {
+        'proof_unchanged': launcher.get('proof_root_unchanged') is True,
+        'stream_intact': bool(member.get('sha256')) and member.get('sha256') == stream.get('sha256')
+                         and stream.get('broken') is None,
+        'member_root_entry': member.get('root_entry_in_member') is True,
+        'config_dbuser': (member.get('dbuser'), member.get('dbname')) == (s5.NC_ROLE, s5.NC_DB),
+        'clean_shutdown': before.get('state') == 'shut down',
+        'started': (w.get('wait_ready') or {}).get('ok') is True,
+        'product_call_answered': first.get('ok') is True and first.get('at') == 0,
+        'nextcloud_database': all(details.get(k) is True for k in ('database_found', 'nextcloud', 'shape_read')),
+        'users': type(counts.get('users')) is int and counts['users'] >= 1,
+        'encryption': details.get('encryption_enabled') is True,
+        'superuser': (probe.get('connected_as'), probe.get('bootstrap_superuser'), probe.get('postgres_role'))
+                     == ('postgres', s5.SUPERUSER, True),
+        'cleanup': w.get('left') == [] and w.get('order') == ['server-state', 'remove-container', 'remove-volume', 'cleanup']
+                   and isinstance(sweep, dict) and sweep.get('left') == [],
+    }
+    require(tuple(checks) == s5.OPEN_CHECKS, 'open-checks-contract')
+    return checks
+
+
+def open_check(fixture, ev, *, deadline, call=device_call, now=time.time):
+    """S5-A's acceptance gate (s5.run_locked, the dev-e mutex held): the fixture S5-A has just packed, opened through the
+    product's own check path exactly as this diagnostic does it -- root reads it with the installed habackup (layout
+    'fresh-build': the literal fixture and provenance, their SHA-256), the owner's worker runs TempObjects, PgSink,
+    start_ha_cluster and ha_database with PINNED_OPTIONS once (schedule [0]) -- then the product's sweep of that job id
+    only. Returns {status: passed|failed, job_id, checks, reason, facts, sweep}."""
+    archive = fixture.get('archive') if isinstance(fixture, dict) else None
+    root = archive[:-len(s5b.ARTIFACT_TAIL)] if isinstance(archive, str) and archive.endswith(s5b.ARTIFACT_TAIL) else ''
+    require(re.fullmatch(s5.ROOT_RE, root) is not None and root != s5b.HISTORY.proof_root
+            and re.fullmatch('[0-9a-f]{64}', str(fixture.get('sha256'))) is not None
+            and re.fullmatch('[0-9a-f]{64}', str(fixture.get('provenance_sha256'))) is not None
+            and type(fixture.get('bytes')) is int and fixture['bytes'] > 0, 'open-check-fixture')
+    budget = min(OPEN_BUDGET, deadline - now() - 120)
+    require(budget >= 300, 'open-check-no-time-left')
+    program = launcher_program({'PROOF_ROOT': root, 'FIXTURE': archive,
+                                'PROVENANCE': root + '/owned/artifact/provenance.private.json',
+                                'FIXTURE_SHA': fixture['sha256'], 'FIXTURE_BYTES': fixture['bytes'],
+                                'PROVENANCE_SHA': fixture['provenance_sha256'], 'LAYOUT': 'fresh-build'})
+    job_id = new_job_id(now())
+    request = {'worker': WORKER, 'timeout': budget + LAUNCH_GRACE,
+               'worker_request': {'job_id': job_id, 'deadline': now() + budget, 'schedule': [0]}}
+    launcher = call(program, request, ev, 'open-check', root=True, timeout=budget + 2 * LAUNCH_GRACE)
+    ev.save('open-check-launcher.private.json', launcher)
+    sweep = call(SWEEP, {'job_id': job_id}, ev, 'open-check-sweep', root=False, timeout=600)
+    checks = judge_open(launcher, sweep)
+    failed = [name for name, ok in checks.items() if not ok]
+    w = launcher.get('worker') if isinstance(launcher.get('worker'), dict) else {}
+    return {'status': 'failed' if failed else 'passed', 'job_id': job_id, 'checks': checks,
+            'reason': ('fixed-s5diag-open-check-' + failed[0]) if failed else None,
+            'facts': {'launcher': launcher.get('status'), 'launcher_reason': launcher.get('reason'),
+                      'image': (w.get('image') or {}).get('ref'), 'wait_ready': w.get('wait_ready'),
+                      'controldata_before': {k: (w.get('controldata_before') or {}).get(k)
+                                             for k in ('state', 'checkpoint', 'redo_wal_file', 'timeline')},
+                      'first_attempt': {k: ((w.get('attempts') or [{}])[0]).get(k) for k in ('ok', 'at', 'details')},
+                      'role_probe': {k: (w.get('role_probe') or {}).get(k)
+                                     for k in ('connected_as', 'bootstrap_superuser', 'postgres_role')},
+                      'failure': w.get('failure')},
+            'sweep': sweep}
+
+
+# ====================================================================== retiring the first build's proof root
+
+def diagnostic_evidence(path, *, evidence_root=EVIDENCE):
+    """The diagnostic's own finished run on the first build's proof root: one folder of its evidence area holding its
+    fixed result (diagnosed, the proof root unchanged) and its binding (exactly s5b.HISTORY's fixture and root)."""
+    folder = Path(path)
+    require(folder.is_dir() and not folder.is_symlink() and folder.parent.resolve() == Path(evidence_root).resolve(),
+            'retire-diagnostic-evidence')
+    docs = {}
+    for name in ('fixed-result.json', 'binding.json'):
+        p = folder / name
+        require(p.is_file() and not p.is_symlink() and p.stat().st_size <= 1024 * 1024, 'retire-diagnostic-evidence')
+        docs[name] = json.loads(p.read_text())
+    line, binding, h = docs['fixed-result.json'], docs['binding.json'], s5b.HISTORY
+    require(line.get('phase') == PHASE and line.get('status') == 'diagnosed' and line.get('proof_root_unchanged') is True
+            and binding.get('phase') == PHASE and binding.get('fixture_sha256') == h.fixture_sha
+            and binding.get('proof_root') == h.proof_root and binding.get('fixture') == h.fixture,
+            'retire-diagnostic-evidence')
+    return {'evidence': str(folder), 'job_id': line.get('job_id'), 'verdict': line.get('verdict')}
+
+
+def retire(diagnostic, commit, *, device=wake.device, inventory=collect, evidence_root=LAB / 'evidence' / RETIRE_AREA):
+    """Caller holds the dev-e mutex: the first build's proof root -- a literal path, s5b.HISTORY -- removed entry by entry
+    (RETIRE: s5b.remove_root after proof_root_state and the fixture's and provenance's SHA-256), only when dev-e is cold
+    and quiet and the root is still exactly as S5-A left it. Nothing else is touched."""
+    ev = upload.Evidence(Path(evidence_root) / (time.strftime('%Y%m%dT%H%M%S') + '-' + secrets.token_hex(3)))
+    h = s5b.HISTORY
+    record = {'status': 'failed', 'phase': 's5-retired-root-removal', 'source_commit': commit, 'root': h.proof_root,
+              'diagnostic': diagnostic, 'private_evidence': str(ev.path)}
+    try:
+        found = inventory()
+        case.admission(found)
+        require(device(case.QUIESCENT, root=True).get('active_jobs') == 0, 'active-product-job')
+        state = device(RETIRED_STATE, root=True, timeout=600)
+        ev.save('before.private.json', {'inventory': found, 'retired': state})
+        require(state.get('present') is True and state.get('valid') is True, 'retired-root-not-as-s5a-left-it')
+        removal = device(RETIRE, {'root': h.proof_root, 'removal': 'retired-after-the-diagnostic'}, root=True, timeout=900)
+        after = device(RETIRED_STATE, root=True, timeout=600)
+        record.update(removal=removal, present_after=after.get('present'))
+        if removal.get('status') == 'removed' and after.get('present') is False:
+            record['status'] = 'removed'
+    except (ValueError, RuntimeError, KeyError, OSError) as error:
+        record['reason'] = str(error) if str(error).startswith('fixed-') else 'fixed-s5diag-retire-' + type(error).__name__
+    ev.save('fixed-result.json', record)
+    print(json.dumps(record))
+    return 0 if record['status'] == 'removed' else 1
+
+
 def contract():
+    h = s5b.HISTORY
     return {'phase': PHASE, 'code_only_until_run': True, 'device': DEVICE, 'lock': LOCK, 'lock_timeout_seconds': LOCK_TIMEOUT,
-            'fixture': s5b.FIXTURE, 'fixture_sha256': s5b.FIXTURE_SHA, 'proof_root': s5b.PROOF_ROOT, 'owner': OWNER,
+            'fixture': h.fixture, 'fixture_sha256': h.fixture_sha, 'proof_root': h.proof_root, 'owner': OWNER,
+            'retire': '--remove-retired-root --diagnostic-evidence <this tool\'s evidence folder of a diagnosed run>',
             'product_library': PRODUCT_LIB, 'job_ids': f'j<utc>Z-{JOB_TAG}<4 hex>', 'attempt_schedule_seconds': SCHEDULE,
             'worker_budget_seconds': WORKER_BUDGET, 'deviations_from_the_product_check': dict(DEVIATIONS),
             'worker_sha256': WORKER_SHA, 'launcher_sha256': sha(LAUNCHER.encode()), 'evidence': str(EVIDENCE),
@@ -1196,14 +1400,25 @@ def contract():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--run', action='store_true')
+    parser.add_argument('--remove-retired-root', action='store_true',
+                        help='after a diagnosed run: remove the first build\'s proof root (s5b.HISTORY), nothing else')
+    parser.add_argument('--diagnostic-evidence', type=Path, help='this tool\'s evidence folder of that diagnosed run')
     parser.add_argument('--lock-timeout', type=int, default=LOCK_TIMEOUT)
     args = parser.parse_args(argv)
-    if not args.run:
+    if not args.run and not args.remove_retired_root:
         print(json.dumps(contract(), indent=2, sort_keys=True, ensure_ascii=False))
         return 0
+    require(not (args.run and args.remove_retired_root), 'one-mode-at-a-time')
     require(os.environ.get('HEAVY_FREE') == LOCK, 'heavy-seat-required')
     commit, clean = s5.checkout(REPO)
     require(clean, 'clean-checkout')
+    if args.remove_retired_root:
+        require(args.diagnostic_evidence is not None, 'diagnostic-evidence-required')
+        s5b.history_result(HISTORY_RESULT)                        # the committed history is the bound one
+        diagnostic = diagnostic_evidence(args.diagnostic_evidence)  # refused before the lock when it is not a diagnosed run
+        with open(LOCK, 'a') as lock:
+            acquire(lock, args.lock_timeout)
+            return retire(diagnostic, commit)
     binding = tool_binding(commit)
     with open(LOCK, 'a') as lock:
         acquire(lock, args.lock_timeout)

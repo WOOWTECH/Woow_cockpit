@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """CODE ONLY until separately leased: S5-B, the import acceptance of the S5-A server-side-encrypted Nextcloud backup.
 
-S5-A (focus_nextcloud_r6_s5.py, run at 4163367c) left a generated HA-shaped TEST backup inside dev-e (never a HAOS
-export): Nextcloud 35.0.1 in master-key mode, one file written before encryption, two after, the installer's skeleton
-in plaintext, every key file in the share member. Its backup.json says protected: false and compressed: false, so no
-HA key exists for it and none is sent in any request (the R6 HA-key leak scan still runs and must find nothing).
+S5-A (focus_nextcloud_r6_s5.py) leaves a generated HA-shaped TEST backup inside dev-e (never a HAOS export): Nextcloud
+35.0.1 in master-key mode, one file written before encryption, two after, the installer's skeleton in plaintext, every
+key file in the share member. Its backup.json says protected: false and compressed: false, so no HA key exists for it
+and none is sent in any request (the R6 HA-key leak scan still runs and must find nothing).
+
+Which S5-A fixture: the ACTIVE result S5A_RESULT (s5a-source-fixture-rebuild-result.json), committed by the coordinator
+after the real rebuild, checked strictly (s5a_binding: passed, the real add-on's database s5.FIXTURE_SHAPE, opened by the
+product's own check before S5-A accepted it, its source commit and builder in this history, a proof root of its own) and
+named by the lease (s5a_result, s5a_source_commit, s5a_builder_sha256, s5a_command_records, fixture_shape,
+product_open_check). Without it nothing runs. The first build (4163367c, s5a-source-fixture-20261128-result.json) has no
+role postgres; it stays as HISTORY for the diagnostic and the retirement of its proof root only.
 
 Under ONE lease (--lease-template prints the fields this checkout binds), on the R6 cold-to-cold path
 (focus_nextcloud_r6_case.run with BINDING, focus_nextcloud_r6.run_locked with Variant -- their request recording, job
@@ -75,23 +82,34 @@ PRODUCT_COMMIT = 'b058df278d661cc6195cd40936ff6494036c63a1'
 FIX_COMMIT = '50a29370b17bbc8fe63131f1c9f8ee9ffd5b8628'      # ha_nextcloud.nc_true: '1'/true/yes/on (Nextcloud 35 stores '1')
 NC_SHA = '192bf019565ced71bbde05ea0b39b8f43e40f5a91267b36e605d3ea187deb138'   # ha_nextcloud.py of PRODUCT_COMMIT
 # No prior engine is bound: dev-e's engine/helper/VERSION are captured when the run starts and returned exactly.
-# The S5-A fixture, inside dev-e.
-S5A_RESULT = REPO / 'tests/backup/evidence/focus-nextcloud-r6-20261127/s5a-source-fixture-20261128-result.json'
-S5A_SOURCE_COMMIT = '4163367cf67776c1e65c41cb51cda42761b2e1fc'
-S5A_ENGINE_COMMIT = s5.ENGINE_COMMIT    # the engine S5-A ran next to (its result says so); a fact of that evidence only
-PROOF_ROOT = '/var/lib/woowbk-nextcloud-s5-afe8d885402badf3'
-FIXTURE = PROOF_ROOT + '/owned/artifact/generated-s5-source.tar'
-PROVENANCE = PROOF_ROOT + '/owned/artifact/provenance.private.json'
-CREDENTIALS = PROOF_ROOT + '/owned/credentials.private.json'
-FIXTURE_SHA = '5aac0fccb4f44c05efb0c8224278dbf47de3975d339bb18bcd69ec5688f5e8a7'
-FIXTURE_BYTES = 127600640
-PROVENANCE_SHA = '094bd5e8afa4f558ffb38a3673333329b247c5d0b429c552bbaebc53cd031403'
+# The S5-A fixture, inside dev-e, bound from S5-A's committed result evidence (never from a device).
+EVIDENCE = REPO / 'tests/backup/evidence/focus-nextcloud-r6-20261127'
 S5A_LEAVES = ('artifact', 'credentials.private.json', 'fixed-result.json', 'nc-identity.json', 'occ-gate.private.json',
               'pg-identity.json', 'redis-identity.json', 'source-result.json')
-S5A_COMMAND_RECORDS = 339
 S5A_ARTIFACT = ('generated-s5-source.tar', 'provenance.private.json')
+ARTIFACT_TAIL = '/owned/artifact/generated-s5-source.tar'
 COMMAND_RE = r'command-[0-9]{4}\.(?:json|stdout\.private|stderr\.private)'
-HA_ID = 'ha-' + FIXTURE_SHA[:20]
+S5A_ENGINE_COMMIT = s5.ENGINE_COMMIT    # the engine S5-A runs next to (its result says so); a fact of that evidence only
+# HISTORY: the first S5-A build (4163367c, 2026-11-28). Its cluster was initialised with POSTGRES_USER=nextcloud, so it has
+# no role postgres and the product's check cannot open it (focus_nextcloud_r6_s5_diag). Kept as history: only the
+# diagnostic and the retirement of its proof root bind it, never an S5-B run.
+HISTORY_RESULT = EVIDENCE / 's5a-source-fixture-20261128-result.json'
+HISTORY = SimpleNamespace(
+    source_commit='4163367cf67776c1e65c41cb51cda42761b2e1fc', engine_commit=s5.ENGINE_COMMIT,
+    proof_root='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3',
+    fixture='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3' + ARTIFACT_TAIL,
+    provenance='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3/owned/artifact/provenance.private.json',
+    credentials='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3/owned/credentials.private.json',
+    fixture_sha='5aac0fccb4f44c05efb0c8224278dbf47de3975d339bb18bcd69ec5688f5e8a7', fixture_bytes=127600640,
+    provenance_sha='094bd5e8afa4f558ffb38a3673333329b247c5d0b429c552bbaebc53cd031403', command_records=339)
+# ACTIVE: the rebuilt fixture S5-B imports (the real add-on's database, s5.FIXTURE_SHAPE, opened by the product's own check
+# before S5-A accepted it). After the real rebuild the coordinator commits S5-A's fixed-result.json under this name: that
+# one reviewed commit is the switch; every value below comes from it (bind, s5a_binding) and the lease template names it.
+S5A_RESULT = EVIDENCE / 's5a-source-fixture-rebuild-result.json'
+S5A = None                    # the active binding (s5a_binding), None while no rebuild result is committed
+S5A_ERROR = 'fixed-s5b-s5a-rebuild-result-not-committed'
+PROOF_ROOT = FIXTURE = PROVENANCE = CREDENTIALS = FIXTURE_SHA = FIXTURE_BYTES = PROVENANCE_SHA = None
+S5A_COMMAND_RECORDS = S5A_SOURCE_COMMIT = HA_ID = None
 USER = s5.USER
 SECRET_KEYS = ('secret', 'passwordsalt', 'dbpassword', 'mail_smtppassword')   # ha_nextcloud.SECRET_KEYS
 PRIVATE_KEY_RE = r'nextcloud/files_encryption/OC_DEFAULT_MODULE/((?:master|pubShare)_[0-9a-f]{8})\.privateKey'
@@ -118,7 +136,10 @@ LEASE_KEYS = ('lane', 'device', 'phases', 'source_commit', 'product_commit', 'pr
               'fix_commit', 'fixture_sha256', 'fixture_bytes',
               'proof_root', 's5a_result_sha256', 'provenance_sha256', 'source_policy', 'pin_refresh_policy',
               'recovery_grace_seconds', 'original_inactive_units', 'reserve_bytes', 'memory_cap_bytes', 'not_before_utc',
-              'expires_utc', 'proof_root_removal', 'image_operations', 'host_fixture_copy')
+              'expires_utc', 'proof_root_removal', 'image_operations', 'host_fixture_copy',
+              # the active S5-A rebuild (S5A_RESULT): which result, made by which commit and builder, its shape and gate
+              's5a_result', 's5a_source_commit', 's5a_builder_sha256', 's5a_command_records', 'fixture_shape',
+              'product_open_check')
 REMOVAL = 'only-after-everything-passed'
 
 
@@ -403,16 +424,21 @@ def remove_root(root, leaves, records, artifact, command_re, owner_uid, fixture,
     return {'status': 'removed', 'files': state['files'], 'bytes': state['bytes']}
 
 
-DEVICE = {
-    'PROOF_ROOT': PROOF_ROOT, 'FIXTURE': FIXTURE, 'PROVENANCE': PROVENANCE, 'CREDENTIALS': CREDENTIALS,
-    'FIXTURE_SHA': FIXTURE_SHA, 'FIXTURE_BYTES': FIXTURE_BYTES, 'PROVENANCE_SHA': PROVENANCE_SHA, 'USER': USER,
-    'HA_ID': HA_ID, 'S5A_LEAVES': S5A_LEAVES, 'S5A_COMMAND_RECORDS': S5A_COMMAND_RECORDS, 'S5A_ARTIFACT': S5A_ARTIFACT,
-    'COMMAND_RE': COMMAND_RE, 'OWNER': 'appowner', 'ROOT_UID': 0, 'SLUG': s5.SLUG, 'SECRET_KEYS': SECRET_KEYS,
-    'PRIVATE_KEY_RE': PRIVATE_KEY_RE, 'KEY_LAYOUT': KEY_LAYOUT, 'STORE': '/var/lib/woowtech-backup',
-    'FLOOR': RESERVE + MARGIN, 'MEMORY_CAP': DEVICE_CAP - MARGIN, 'MEMORY_FILE': '/sys/fs/cgroup/memory.current',
-    'DISKS': ('/home', '/var/lib'), 'EXEC': ('podman', 'exec', '-u', 'www-data', 'nextcloud-app'),
-    'DATA_ROOT': '/var/www/html/data', 'DAV_BASE': 'http://127.0.0.1:18081', 'SCAN_LIMIT': 512 * MIB,
-}
+def device_values():
+    """The values the device programs are rendered with (the active S5-A binding's, see bind)."""
+    return {
+        'PROOF_ROOT': PROOF_ROOT, 'FIXTURE': FIXTURE, 'PROVENANCE': PROVENANCE, 'CREDENTIALS': CREDENTIALS,
+        'FIXTURE_SHA': FIXTURE_SHA, 'FIXTURE_BYTES': FIXTURE_BYTES, 'PROVENANCE_SHA': PROVENANCE_SHA, 'USER': USER,
+        'HA_ID': HA_ID, 'S5A_LEAVES': S5A_LEAVES, 'S5A_COMMAND_RECORDS': S5A_COMMAND_RECORDS, 'S5A_ARTIFACT': S5A_ARTIFACT,
+        'COMMAND_RE': COMMAND_RE, 'OWNER': 'appowner', 'ROOT_UID': 0, 'SLUG': s5.SLUG, 'SECRET_KEYS': SECRET_KEYS,
+        'PRIVATE_KEY_RE': PRIVATE_KEY_RE, 'KEY_LAYOUT': KEY_LAYOUT, 'STORE': '/var/lib/woowtech-backup',
+        'FLOOR': RESERVE + MARGIN, 'MEMORY_CAP': DEVICE_CAP - MARGIN, 'MEMORY_FILE': '/sys/fs/cgroup/memory.current',
+        'DISKS': ('/home', '/var/lib'), 'EXEC': ('podman', 'exec', '-u', 'www-data', 'nextcloud-app'),
+        'DATA_ROOT': '/var/www/html/data', 'DAV_BASE': 'http://127.0.0.1:18081', 'SCAN_LIMIT': 512 * MIB,
+    }
+
+
+DEVICE = device_values()
 BODIES = {
     # root, read only: the proof root as S5-A left it, the fixture's SHA-256, the compact provenance, the shape of the
     # credentials file (never its content), the HA store entry still absent
@@ -537,28 +563,120 @@ def fix_included(repo, commit=PRODUCT_COMMIT, fix=FIX_COMMIT):
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
-def s5a_result(path=S5A_RESULT):
-    """The committed S5-A result: passed, this fixture under this proof root, the engine S5-A ran next to."""
-    raw = path.read_bytes(); doc = json.loads(raw); fixture = doc.get('fixture') or {}
-    require(doc.get('status') == 'passed' and doc.get('phase') == s5.PHASE and doc.get('source_commit') == S5A_SOURCE_COMMIT
-            and doc.get('original_target_exact') is True and doc.get('engine_commit') == S5A_ENGINE_COMMIT
-            and fixture.get('archive') == FIXTURE and fixture.get('sha256') == FIXTURE_SHA
-            and fixture.get('bytes') == FIXTURE_BYTES and fixture.get('provenance_sha256') == PROVENANCE_SHA
+def history_result(path=HISTORY_RESULT):
+    """The committed FIRST S5-A result, exactly HISTORY (passed, its fixture, root, provenance and records): its SHA-256.
+    For the diagnostic and the retirement of its proof root only."""
+    raw = Path(path).read_bytes(); doc = json.loads(raw); fixture = doc.get('fixture') or {}
+    require(doc.get('status') == 'passed' and doc.get('phase') == s5.PHASE and doc.get('source_commit') == HISTORY.source_commit
+            and doc.get('original_target_exact') is True and doc.get('engine_commit') == HISTORY.engine_commit
+            and fixture.get('archive') == HISTORY.fixture and fixture.get('sha256') == HISTORY.fixture_sha
+            and fixture.get('bytes') == HISTORY.fixture_bytes and fixture.get('provenance_sha256') == HISTORY.provenance_sha
             and fixture.get('haos_export') is False and fixture.get('s5_import_acceptance') is False
-            and doc.get('owned_leftovers') == {'leaves': list(S5A_LEAVES), 'command_records': S5A_COMMAND_RECORDS,
-                                               'artifact': list(S5A_ARTIFACT)}, 's5a-result')
+            and doc.get('owned_leftovers') == {'leaves': list(S5A_LEAVES), 'command_records': HISTORY.command_records,
+                                               'artifact': list(S5A_ARTIFACT)}, 'history-result')
     return sha(raw)
 
 
+def git_is_ancestor(repo, commit):
+    return subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', commit, 'HEAD'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def git_blob(repo, commit, path):
+    p = subprocess.run(['git', '-C', str(repo), 'show', f'{commit}:{path}'], stdout=subprocess.PIPE,
+                       stderr=subprocess.DEVNULL)
+    return p.stdout if p.returncode == 0 else None
+
+
+def s5a_binding(path=None, *, repo=REPO, verify_git=True):
+    """The ACTIVE S5-A result (S5A_RESULT), strictly: a passed rebuild with the real add-on's database
+    (s5.FIXTURE_SHAPE), opened by the product's own check before S5-A accepted it (every s5.OPEN_CHECKS true), its owned
+    source removed and its fixture under a proof root of its own (never the history's root or bytes). `verify_git`: its
+    source commit is in this checkout's history and the builder there is the one the result names. Returns the binding."""
+    path = Path(S5A_RESULT if path is None else path)
+    raw = path.read_bytes()
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        raise ValueError('fixed-s5b-s5a-rebuild-result') from None
+    doc = doc if isinstance(doc, dict) else {}
+    fixture, left, gate = (doc.get(k) if isinstance(doc.get(k), dict) else {}
+                           for k in ('fixture', 'owned_leftovers', 'product_open_check'))
+    archive, commit, builder = fixture.get('archive'), doc.get('source_commit'), doc.get('builder_sha256')
+    root = archive[:-len(ARTIFACT_TAIL)] if isinstance(archive, str) and archive.endswith(ARTIFACT_TAIL) else ''
+    hexed = lambda value, n: isinstance(value, str) and re.fullmatch('[0-9a-f]{%d}' % n, value) is not None   # noqa: E731
+    require(len(raw) <= 1024 * 1024 and doc.get('status') == 'passed' and doc.get('phase') == s5.PHASE
+            and doc.get('native_status') == 'passed' and doc.get('original_target_exact') is True
+            and doc.get('runtime_s5_import_acceptance') is False and doc.get('engine_commit') == S5A_ENGINE_COMMIT
+            and hexed(commit, 40) and hexed(builder, 64) and doc.get('fixture_shape') == s5.FIXTURE_SHAPE
+            and re.fullmatch(s5.ROOT_RE, root) is not None and root != HISTORY.proof_root
+            and fixture.get('status') == 'passed' and fixture.get('kind') == 'generated-ha-shaped-test-fixture'
+            and fixture.get('haos_export') is False and fixture.get('s5_import_acceptance') is False
+            and hexed(fixture.get('sha256'), 64) and fixture['sha256'] != HISTORY.fixture_sha
+            and type(fixture.get('bytes')) is int and 0 < fixture['bytes'] <= s5.FIXTURE_CAP
+            and hexed(fixture.get('provenance_sha256'), 64)
+            and left.get('leaves') == list(S5A_LEAVES) and left.get('artifact') == list(S5A_ARTIFACT)
+            and type(left.get('command_records')) is int and 0 < left['command_records'] < 30000
+            and doc.get('owned_removal') == {'status': 'owned-source-removed', 'removed': ['html', 'pg', 'data'],
+                                             'fixture_retained': True}
+            and gate.get('status') == 'passed' and isinstance(gate.get('job_id'), str)
+            and re.fullmatch(r'j[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}', gate['job_id']) is not None
+            and gate.get('checks') == {name: True for name in s5.OPEN_CHECKS}, 's5a-rebuild-result')
+    if verify_git:
+        require(git_is_ancestor(repo, commit), 's5a-rebuild-source-commit')
+        blob = git_blob(repo, commit, 'tests/e2e/lab/focus_nextcloud_r6_s5.py')
+        require(blob is not None and sha(blob) == builder, 's5a-rebuild-builder')
+    return SimpleNamespace(result=path, result_sha256=sha(raw), source_commit=commit, builder_sha256=builder,
+                           proof_root=root, fixture=archive, provenance=root + '/owned/artifact/provenance.private.json',
+                           credentials=root + '/owned/credentials.private.json', fixture_sha=fixture['sha256'],
+                           fixture_bytes=fixture['bytes'], provenance_sha=fixture['provenance_sha256'],
+                           command_records=left['command_records'], open_check_job=gate['job_id'])
+
+
+def bind(binding, error=None):
+    """Every module value S5-B takes from the S5-A fixture, from the active binding (s5a_binding); None while no rebuild
+    result is committed: the values stay None and nothing can run (S5A_ERROR says why)."""
+    global S5A, S5A_ERROR, PROOF_ROOT, FIXTURE, PROVENANCE, CREDENTIALS, FIXTURE_SHA, FIXTURE_BYTES, PROVENANCE_SHA
+    global S5A_COMMAND_RECORDS, S5A_SOURCE_COMMIT, HA_ID, DEVICE, PROGRAMS
+    S5A, S5A_ERROR = binding, (None if binding is not None else error or 'fixed-s5b-s5a-rebuild-result-not-committed')
+    b = binding or SimpleNamespace(proof_root=None, fixture=None, provenance=None, credentials=None, fixture_sha=None,
+                                   fixture_bytes=None, provenance_sha=None, command_records=None, source_commit=None)
+    PROOF_ROOT, FIXTURE, PROVENANCE, CREDENTIALS = b.proof_root, b.fixture, b.provenance, b.credentials
+    FIXTURE_SHA, FIXTURE_BYTES, PROVENANCE_SHA = b.fixture_sha, b.fixture_bytes, b.provenance_sha
+    S5A_COMMAND_RECORDS, S5A_SOURCE_COMMIT = b.command_records, b.source_commit
+    HA_ID = 'ha-' + FIXTURE_SHA[:20] if FIXTURE_SHA else None
+    DEVICE = device_values()
+    PROGRAMS = programs()
+    Variant.uploaded_bytes = FIXTURE_BYTES
+
+
+def s5a_result(path=None):
+    """The active S5-A result's SHA-256 after the strict check (s5a_binding)."""
+    return s5a_binding(path).result_sha256
+
+
+def in_repo(path, repo=REPO):
+    """`path` as the lease names it: relative to the checkout (the committed result always is), else as it is."""
+    path, repo = Path(path), Path(repo)
+    return str(path.relative_to(repo)) if path.is_relative_to(repo) else str(path)
+
+
 def lease_template(repo=REPO):
-    """The lease fields this checkout binds; the time window is the coordinator's."""
+    """The lease fields this checkout binds; the time window is the coordinator's. Refused while no S5-A rebuild result
+    is committed, and when the committed one is not the one this process bound its device programs to."""
     commit, clean = s5.checkout(repo)
+    require(S5A is not None, (S5A_ERROR or 'fixed-s5b-').replace('fixed-s5b-', ''))
+    active = s5a_binding(S5A_RESULT, repo=repo)
+    require(active.result_sha256 == S5A.result_sha256, 's5a-binding-changed')
     return {'lane': 'nextcloud-r6', 'device': 'woowbk-dev-e', 'phases': [PHASE],
             'source_commit': commit if clean else 'REQUIRES_A_CLEAN_COMMITTED_CHECKOUT',
             'product_commit': PRODUCT_COMMIT, 'product_checkout': str(FROZEN),
             'product_manifest_sha256': source.manifest_hash(git_manifest(repo)), 'fix_commit': FIX_COMMIT,
-            'fixture_sha256': FIXTURE_SHA, 'fixture_bytes': FIXTURE_BYTES, 'proof_root': PROOF_ROOT,
-            's5a_result_sha256': s5a_result(), 'provenance_sha256': PROVENANCE_SHA,
+            'fixture_sha256': active.fixture_sha, 'fixture_bytes': active.fixture_bytes, 'proof_root': active.proof_root,
+            's5a_result_sha256': active.result_sha256, 'provenance_sha256': active.provenance_sha,
+            's5a_result': in_repo(active.result, repo), 's5a_source_commit': active.source_commit,
+            's5a_builder_sha256': active.builder_sha256, 's5a_command_records': active.command_records,
+            'fixture_shape': dict(s5.FIXTURE_SHAPE), 'product_open_check': active.open_check_job,
             'source_policy': case.SOURCE_POLICY, 'pin_refresh_policy': case.PIN_POLICY, 'recovery_grace_seconds': 1800,
             'original_inactive_units': list(r6.INACTIVE_UNITS), 'reserve_bytes': RESERVE, 'memory_cap_bytes': DEVICE_CAP,
             'not_before_utc': 'REQUIRES_GRANTED_START', 'expires_utc': 'REQUIRES_GRANTED_START_PLUS_120_MINUTES',
@@ -1008,6 +1126,8 @@ def scan_evidence(roots, values):
 def run_case(args, lease, commit, deadline):
     """Caller holds the dev-e mutex. Read-only proofs first (no mutation), then R6's cold-to-cold path, then the S5-B
     end checks; the proof root goes only when all of it passed."""
+    require(S5A is not None and lease.get('proof_root') == PROOF_ROOT and lease.get('s5a_result_sha256') == S5A.result_sha256,
+            'active-s5a-binding')
     ev = upload.Evidence(LAB / 'evidence' / (AREA + '-run') / time.strftime('%Y%m%dT%H%M%S'))
     lease_sha = source.manifest_hash(lease)
     require(not pending(r6.RECEIPT), 'r6-recovery-pending')
@@ -1064,7 +1184,8 @@ def run_case(args, lease, commit, deadline):
         failure = failure or 'fixed-s5b-end-check-' + type(error).__name__
     passed = rc == 0 and engine_back and clean and evidence_clean and removed
     record = {'status': 'passed' if passed else 'failed', 'phase': PHASE, 'source_commit': commit,
-              'product_commit': PRODUCT_COMMIT, 'fix_commit': FIX_COMMIT,
+              'product_commit': PRODUCT_COMMIT, 'fix_commit': FIX_COMMIT, 's5a_result_sha256': S5A.result_sha256,
+              's5a_source_commit': S5A.source_commit,
               'prior_engine_manifest_sha256': s5.manifest_hash(prior_engine), 'fixture_sha256': FIXTURE_SHA, 'fixture_bytes': FIXTURE_BYTES, 'ha_key_needed': False,
               'host_fixture_copy': False, 'case_rc': rc, 'prior_engine_returned_exactly': engine_back,
               'owned_store_clean': clean, 'store_delta': delta, 'evidence_leak_scan': leak, 'proof_root': PROOF_ROOT,
@@ -1080,7 +1201,8 @@ def run_case(args, lease, commit, deadline):
 def contract():
     return {'phase': PHASE, 'code_only_until_leased': True, 'product_commit': PRODUCT_COMMIT, 'product_checkout': str(FROZEN),
             'fix_commit': FIX_COMMIT, 'prior_engine': 'captured at run time (source transaction), returned exactly',
-            'fixture': FIXTURE,
+            's5a_result': in_repo(S5A_RESULT), 's5a_bound': S5A is not None, 's5a_binding_error': S5A_ERROR,
+            'fixture_shape': dict(s5.FIXTURE_SHAPE), 'fixture': FIXTURE,
             'fixture_sha256': FIXTURE_SHA, 'fixture_bytes': FIXTURE_BYTES, 'ha_key_needed': False,
             'confirmation': {'id': SSE_ID, 'reasons': list(SSE_REASONS), 'key': SSE_KEY},
             'reserve_bytes': RESERVE, 'device_memory_cap_bytes': DEVICE_CAP, 'lease_headroom_seconds': HEADROOM,
@@ -1107,6 +1229,16 @@ def main(argv=None):
         fcntl.flock(lock, fcntl.LOCK_EX)   # blocking: heavy.sh only waited for the lock to be free
         locked_admission(lease, commit, deadline)
         return run_case(args, lease, commit, deadline)
+
+
+# The active binding, as committed: format and values only here (no git at import); the lease template and the admission
+# check it again in full (s5a_binding with verify_git) before anything runs.
+try:
+    bind(s5a_binding(verify_git=False))
+except FileNotFoundError:
+    bind(None)
+except (ValueError, KeyError, TypeError, OSError) as _error:
+    bind(None, str(_error) if str(_error).startswith('fixed-') else 'fixed-s5b-s5a-rebuild-result-unreadable')
 
 
 if __name__ == '__main__':

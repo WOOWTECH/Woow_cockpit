@@ -41,6 +41,59 @@ REPO = Path(__file__).resolve().parents[2]
 MASTER = 'master_0123abcd'
 LIBRARIES = lambda: (habackup, ha_nextcloud, ha_odoo)   # noqa: E731 - the repository's own engine
 GIB = 1024 ** 3
+REBUILD_ROOT = '/var/lib/woowbk-nextcloud-s5-00112233445566aa'
+OPEN_JOB = 'j20261129T010203Z-5d1a0b0c'
+# A shape the first S5-A build had (POSTGRES_USER=nextcloud: no role postgres, the installer's own oc_ role).
+FIRST_BUILD_SHAPE = dict(s5.FIXTURE_SHAPE, superuser='nextcloud', superusers=['nextcloud'], roles=['nextcloud', 'oc_s5owner'],
+                         table_owners=['oc_s5owner'], config_dbuser='oc_s5owner')
+
+
+def rebuild_result(**changes):
+    """An S5-A rebuild result as s5.run_locked writes it (fixed-result.json): made at this checkout's HEAD with the builder
+    committed there, the real add-on's database shape, opened by the product's own check, its own proof root."""
+    head = subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip()
+    builder = subprocess.check_output(['git', '-C', str(REPO), 'show', head + ':tests/e2e/lab/focus_nextcloud_r6_s5.py'])
+    doc = {'status': 'passed', 'phase': s5.PHASE, 'source_commit': head, 'builder_sha256': sha(builder),
+           'native_status': 'passed', 'original_target_exact': True,
+           'owned_removal': {'status': 'owned-source-removed', 'removed': ['html', 'pg', 'data'], 'fixture_retained': True},
+           'owned_leftovers': {'leaves': list(s5b.S5A_LEAVES), 'command_records': 372, 'artifact': list(s5b.S5A_ARTIFACT)},
+           'fixture': {'status': 'passed', 'kind': 'generated-ha-shaped-test-fixture', 'haos_export': False,
+                       'archive': REBUILD_ROOT + s5b.ARTIFACT_TAIL, 'bytes': 131072000, 'sha256': 'ab' * 32,
+                       'provenance_sha256': 'cd' * 32, 'source_files': 2300, 's5_import_acceptance': False},
+           'engine_commit': s5.ENGINE_COMMIT, 'fixture_shape': copy.deepcopy(s5.FIXTURE_SHAPE),
+           'product_open_check': {'status': 'passed', 'job_id': OPEN_JOB,
+                                  'checks': {name: True for name in s5.OPEN_CHECKS}, 'reason': None},
+           'runtime_s5_import_acceptance': False,
+           'private_receipt_dir': '/home/lab/.woowbk-lab/evidence/focus-nextcloud-r6-s5/20261129T010000'}
+    doc.update(changes)
+    return doc
+
+
+ACTIVE = {}
+
+
+def setUpModule():
+    """The active S5-A binding these tests run against: a rebuild result written to a temporary file and bound exactly as
+    a committed one would be (s5a_binding with the git checks)."""
+    tmp = Path(tempfile.mkdtemp())
+    path = tmp / 's5a-source-fixture-rebuild-result.json'
+    path.write_text(json.dumps(rebuild_result()))
+    ACTIVE.update(tmp=tmp, path=path, original=s5b.S5A_RESULT, patch=patch.object(s5b, 'S5A_RESULT', path))
+    ACTIVE['patch'].start()
+    s5b.bind(s5b.s5a_binding(path))
+
+
+def tearDownModule():
+    ACTIVE['patch'].stop()
+    s5b.bind(None)
+    shutil.rmtree(ACTIVE['tmp'], True)
+
+
+def result_file(doc):
+    """`doc` written as a result file of its own (removed with the test module's temporary folder)."""
+    path = Path(tempfile.mkdtemp(dir=ACTIVE['tmp'])) / 'result.json'
+    path.write_text(json.dumps(doc))
+    return path
 
 
 def sha(raw):
@@ -162,17 +215,77 @@ class ProductBindingTests(unittest.TestCase):
         self.assertNotEqual(s5b.PRODUCT_COMMIT, source.PRODUCT_COMMIT)
         self.assertEqual(s5b.BINDING.product_commit, s5b.PRODUCT_COMMIT)
 
-    def test_the_s5a_result_binds_the_fixture_and_its_root(self):
-        self.assertEqual(s5b.s5a_result(), sha(s5b.S5A_RESULT.read_bytes()))
-        doc = json.loads(s5b.S5A_RESULT.read_text())
-        self.assertTrue(s5b.FIXTURE.startswith(s5b.PROOF_ROOT + '/owned/'))
-        self.assertRegex(s5b.PROOF_ROOT, s5.ROOT_RE)
-        self.assertEqual(doc['fixture']['archive'], s5b.FIXTURE)
+    def test_the_first_build_is_kept_as_history_and_bound_exactly(self):
+        self.assertEqual(s5b.history_result(), sha(s5b.HISTORY_RESULT.read_bytes()))
+        doc = json.loads(s5b.HISTORY_RESULT.read_text())
+        self.assertEqual(doc['fixture']['archive'], s5b.HISTORY.fixture)
+        self.assertTrue(s5b.HISTORY.fixture.startswith(s5b.HISTORY.proof_root + '/owned/'))
+        self.assertRegex(s5b.HISTORY.proof_root, s5.ROOT_RE)
+        self.assertEqual(s5b.HISTORY.fixture_sha, '5aac0fccb4f44c05efb0c8224278dbf47de3975d339bb18bcd69ec5688f5e8a7')
         for change in ({'status': 'failed'}, {'fixture': dict(doc['fixture'], sha256='0' * 64)},
                        {'owned_leftovers': dict(doc['owned_leftovers'], command_records=1)}, {'engine_commit': '0' * 40}):
-            with self.subTest(change=sorted(change)), tempfile.TemporaryDirectory() as tmp:
-                p = Path(tmp) / 'result.json'; p.write_text(json.dumps(dict(doc, **change)))
-                with self.assertRaisesRegex(ValueError, 's5a-result'): s5b.s5a_result(p)
+            with self.subTest(change=sorted(change)):
+                with self.assertRaisesRegex(ValueError, 'history-result'): s5b.history_result(result_file(dict(doc, **change)))
+        with self.assertRaisesRegex(ValueError, 's5a-rebuild-result'):   # nor can it pass as the active rebuild
+            s5b.s5a_binding(s5b.HISTORY_RESULT)
+
+    def test_the_active_rebuild_result_binds_every_value_strictly(self):
+        good = rebuild_result()
+        b = s5b.s5a_binding(result_file(good))
+        self.assertEqual((b.proof_root, b.fixture, b.fixture_sha, b.fixture_bytes, b.provenance_sha, b.command_records,
+                          b.open_check_job),
+                         (REBUILD_ROOT, REBUILD_ROOT + s5b.ARTIFACT_TAIL, 'ab' * 32, 131072000, 'cd' * 32, 372, OPEN_JOB))
+        self.assertEqual((s5b.PROOF_ROOT, s5b.FIXTURE_SHA, s5b.S5A_COMMAND_RECORDS, s5b.HA_ID),
+                         (REBUILD_ROOT, 'ab' * 32, 372, 'ha-' + 'ab' * 10))      # bound by setUpModule
+        gate = good['product_open_check']
+        faults = {'failed': {'status': 'failed'}, 'native': {'native_status': 'failed'},
+                  'first-build-shape': {'fixture_shape': FIRST_BUILD_SHAPE}, 'no-shape': {'fixture_shape': None},
+                  'no-gate': {'product_open_check': None}, 'gate-failed': {'product_open_check': dict(gate, status='failed')},
+                  'gate-incomplete': {'product_open_check': dict(gate, checks=dict(gate['checks'], superuser=False))},
+                  'gate-other-checks': {'product_open_check': dict(gate, checks={'started': True})},
+                  'history-root': {'fixture': dict(good['fixture'], archive=s5b.HISTORY.fixture)},
+                  'history-bytes': {'fixture': dict(good['fixture'], sha256=s5b.HISTORY.fixture_sha)},
+                  'outside-var-lib': {'fixture': dict(good['fixture'], archive='/tmp/x' + s5b.ARTIFACT_TAIL)},
+                  'source-kept': {'owned_removal': {'status': 'owned-discarded'}}, 'engine': {'engine_commit': '0' * 40},
+                  'records': {'owned_leftovers': dict(good['owned_leftovers'], command_records=0)},
+                  'leaves': {'owned_leftovers': dict(good['owned_leftovers'], leaves=['artifact'])},
+                  'not-cold': {'original_target_exact': False}, 'acceptance-claimed': {'runtime_s5_import_acceptance': True}}
+        for name, change in faults.items():
+            with self.subTest(fault=name), self.assertRaisesRegex(ValueError, 's5a-rebuild-result'):
+                s5b.s5a_binding(result_file(dict(good, **change)))
+        for change, reason in (({'source_commit': '0' * 40}, 's5a-rebuild-source-commit'),
+                               ({'builder_sha256': '0' * 64}, 's5a-rebuild-builder')):
+            with self.subTest(change=sorted(change)):
+                with self.assertRaisesRegex(ValueError, reason):
+                    s5b.s5a_binding(result_file(dict(good, **change)))
+                s5b.s5a_binding(result_file(dict(good, **change)), verify_git=False)   # import time: format only
+
+    def test_without_a_committed_rebuild_nothing_can_run(self):
+        saved = s5b.S5A
+        try:
+            s5b.bind(None)
+            self.assertEqual((s5b.FIXTURE, s5b.PROOF_ROOT, s5b.HA_ID, s5b.Variant.uploaded_bytes), (None, None, None, None))
+            with patch.object(s5, 'checkout', lambda repo: ('c' * 40, True)), \
+                    self.assertRaisesRegex(ValueError, 'fixed-s5b-s5a-rebuild-result-not-committed'):
+                s5b.lease_template(REPO)
+            self.assertEqual((s5b.contract()['s5a_bound'], s5b.contract()['s5a_binding_error']),
+                             (False, 'fixed-s5b-s5a-rebuild-result-not-committed'))
+            with self.assertRaisesRegex(ValueError, 'active-s5a-binding'):
+                s5b.run_case(types.SimpleNamespace(), {'proof_root': REBUILD_ROOT}, 'c' * 40, 0)
+        finally:
+            s5b.bind(saved)
+        self.assertEqual(s5b.PROOF_ROOT, REBUILD_ROOT)
+
+    def test_a_committed_result_that_changed_after_the_bind_is_refused(self):
+        original = ACTIVE['path'].read_bytes()
+        try:
+            ACTIVE['path'].write_text(json.dumps(rebuild_result(owned_leftovers=dict(
+                rebuild_result()['owned_leftovers'], command_records=373))))
+            with patch.object(s5, 'checkout', lambda repo: ('c' * 40, True)), \
+                    self.assertRaisesRegex(ValueError, 's5a-binding-changed'):
+                s5b.lease_template(REPO)
+        finally:
+            ACTIVE['path'].write_bytes(original)
 
 
 class LeaseTests(unittest.TestCase):
@@ -207,6 +320,20 @@ class LeaseTests(unittest.TestCase):
         self.assertTrue(template['not_before_utc'].startswith('REQUIRES_') and template['expires_utc'].startswith('REQUIRES_'))
         self.assertEqual(template['original_inactive_units'], list(r6.INACTIVE_UNITS))
         self.assertIs(template['host_fixture_copy'], False)
+        # The active S5-A rebuild, named: which result, made by which commit and builder, its shape and its gate.
+        good = rebuild_result()
+        self.assertEqual({k: template[k] for k in ('s5a_result', 's5a_source_commit', 's5a_builder_sha256',
+                                                   's5a_command_records', 'fixture_shape', 'product_open_check',
+                                                   'proof_root', 'fixture_sha256', 'fixture_bytes', 'provenance_sha256')},
+                         {'s5a_result': str(ACTIVE['path']), 's5a_source_commit': good['source_commit'],
+                          's5a_builder_sha256': good['builder_sha256'], 's5a_command_records': 372,
+                          'fixture_shape': s5.FIXTURE_SHAPE, 'product_open_check': OPEN_JOB, 'proof_root': REBUILD_ROOT,
+                          'fixture_sha256': 'ab' * 32, 'fixture_bytes': 131072000, 'provenance_sha256': 'cd' * 32})
+        self.assertEqual(template['s5a_result_sha256'], sha(ACTIVE['path'].read_bytes()))
+        # The committed result is named relative to the checkout, under its fixed name: committing it is the switch.
+        self.assertEqual(s5b.in_repo(REPO / 'tests/backup/evidence/focus-nextcloud-r6-20261127/s5a-source-fixture-rebuild-result.json'),
+                         'tests/backup/evidence/focus-nextcloud-r6-20261127/s5a-source-fixture-rebuild-result.json')
+        self.assertEqual(ACTIVE['original'], s5b.EVIDENCE / 's5a-source-fixture-rebuild-result.json')
 
     def test_exactly_this_lease_is_admitted_and_every_field_matters(self):
         expires = datetime.datetime.fromisoformat(self.lease['expires_utc'].replace('Z', '+00:00')).timestamp()
@@ -215,11 +342,14 @@ class LeaseTests(unittest.TestCase):
                      'source_commit': 'd' * 40, 'product_commit': source.PRODUCT_COMMIT, 'product_checkout': '/tmp/other',
                      'product_manifest_sha256': '0' * 64, 'fix_commit': '0' * 40,
                      'fixture_sha256': '0' * 64, 'fixture_bytes': 1,
-                     'proof_root': '/var/lib/woowbk-nextcloud-s5-0123456789abcdef', 's5a_result_sha256': '0' * 64,
+                     'proof_root': s5b.HISTORY.proof_root, 's5a_result_sha256': '0' * 64,
                      'provenance_sha256': '0' * 64, 'source_policy': 'keep', 'pin_refresh_policy': 'none',
                      'recovery_grace_seconds': 60, 'original_inactive_units': [], 'reserve_bytes': 12 * GIB,
                      'memory_cap_bytes': 4 * GIB, 'proof_root_removal': 'always', 'image_operations': ['pull'],
-                     'host_fixture_copy': True}
+                     'host_fixture_copy': True, 's5a_result': str(s5b.HISTORY_RESULT.relative_to(REPO)),
+                     's5a_source_commit': s5b.HISTORY.source_commit, 's5a_builder_sha256': '0' * 64,
+                     's5a_command_records': s5b.HISTORY.command_records, 'fixture_shape': FIRST_BUILD_SHAPE,
+                     'product_open_check': 'j20261128T000000Z-00000000'}
         self.assertEqual(sorted(mutations), sorted(set(s5b.LEASE_KEYS) - {'not_before_utc', 'expires_utc'}))
         for field, value in mutations.items():
             with self.subTest(field=field), self.assertRaises(ValueError):
@@ -278,11 +408,19 @@ class OfflineEntryTests(unittest.TestCase):
         self.assertEqual(contract['mutations'], 0)
 
     def test_script_runs_isolated_like_the_heavy_command(self):
+        """The committed binding, as a fresh process sees it: refused until the rebuild result is committed, then bound."""
         out = subprocess.run([sys.executable, '-B', '-I', str(LAB / 'focus_nextcloud_r6_s5b.py'), '--lease-template'],
-                             cwd=REPO, capture_output=True, timeout=300, check=True)
-        template = json.loads(out.stdout)
-        self.assertEqual(template['product_commit'], s5b.PRODUCT_COMMIT)
-        self.assertEqual(template['phases'], [s5b.PHASE])
+                             cwd=REPO, capture_output=True, timeout=300)
+        if (s5b.EVIDENCE / 's5a-source-fixture-rebuild-result.json').exists():
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            template = json.loads(out.stdout)
+            self.assertEqual(template['product_commit'], s5b.PRODUCT_COMMIT)
+            self.assertEqual(template['phases'], [s5b.PHASE])
+            self.assertEqual(template['fixture_shape'], s5.FIXTURE_SHAPE)
+        else:
+            self.assertEqual(out.returncode, 2)
+            self.assertIn(b'fixed-s5b-preflight-refused-no-mutation: fixed-s5b-s5a-rebuild-result-not-committed', out.stderr)
+            self.assertEqual(out.stdout, b'')
 
 
 # ====================================================================== what the product says
@@ -476,6 +614,7 @@ class DeviceRoot:
                                               "  'passwordsalt' => 'unit-salt-0123456789',\n  'secret' => 'unit-secret-it\\'s',\n"
                                               "  'version' => '35.0.1.1',\n  'installed' => true,\n  'dbtype' => 'pgsql',\n"
                                               "  'dbtableprefix' => 'oc_',\n  'dbname' => 'nextcloud',\n"
+                                              "  'dbuser' => 'nextcloud',\n"
                                               f"  'dbpassword' => '{self.dbpassword}',\n"
                                               "  'datadirectory' => '/share/nextcloud',\n);\n").encode())
         self.write('data/.ncdata', b'# Nextcloud data directory')
@@ -495,7 +634,8 @@ class DeviceRoot:
         proof = {'webdav_before': True, 'webdav_after_restart': True, 'plaintext_before_encryption': True,
                  'master_key_mode': True, 'pg_shutdown': True, 'master_key_id': MASTER, 'plaintext': digests,
                  'encrypted_files': found['encrypted'], 'plaintext_files': found['plaintext'],
-                 'cipher_and_keys': found['cipher_and_keys'], 'facts': {'core_encryption_enabled': {'value': '1'}}}
+                 'cipher_and_keys': found['cipher_and_keys'], 'facts': {'core_encryption_enabled': {'value': '1'}},
+                 'database_shape': dict({k: s5.FIXTURE_SHAPE[k] for k in s5.DB_SHAPE_KEYS}, tables=154)}
         with patch.object(s5, 'product', side_effect=AssertionError('never the installed product')):
             self.built = s5.build_fixture(work, proof, libraries=LIBRARIES)
         s5.discard_owned(work, ('html', 'pg', 'data'))

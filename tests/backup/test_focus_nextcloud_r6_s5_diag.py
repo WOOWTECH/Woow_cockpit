@@ -365,12 +365,16 @@ def run_worker(device, member=None, **request):
 # ====================================================================== the cause, in the product's own code
 
 class ProductMechanismTests(unittest.TestCase):
-    def test_s5a_builds_the_cluster_with_superuser_nextcloud_and_the_product_opens_it_as_postgres(self):
-        args = s5.Native({'proof_root': '/var/lib/woowbk-nextcloud-s5-' + '0' * 16, 'deadline': 0,
-                          'nonce': '0' * 16}).source_args('pg')
-        self.assertIn('--env=POSTGRES_USER=' + diag.S5A_POSTGRES_USER, args)
+    def test_the_first_build_made_superuser_nextcloud_the_product_opens_as_postgres_the_rebuild_uses_postgres(self):
+        first = subprocess.check_output(['git', '-C', str(REPO), 'show',
+                                         s5b.HISTORY.source_commit + ':tests/e2e/lab/focus_nextcloud_r6_s5.py'], text=True)
+        self.assertIn("'--env=POSTGRES_USER=" + diag.S5A_POSTGRES_USER + "'", first)   # the first build (history)
         self.assertEqual(inspect.signature(ha_odoo.Cluster).parameters['superuser'].default, 'postgres')
         self.assertIn("'pg_isready', '-q', '-U', self.superuser", inspect.getsource(ha_odoo.Cluster.wait_ready))
+        args = s5.Native({'proof_root': '/var/lib/woowbk-nextcloud-s5-' + '0' * 16, 'deadline': 0,
+                          'nonce': '0' * 16}).source_args('pg')
+        self.assertIn('--env=POSTGRES_USER=postgres', args)                                # the rebuild
+        self.assertEqual(s5.FIXTURE_SHAPE['superuser'], 'postgres')
 
     def test_a_missing_postgres_role_is_filed_as_not_ready_with_exactly_the_s5b_stop_text(self):
         stderr = ROLE_MISSING.format('postgres').encode()
@@ -398,10 +402,17 @@ class ProgramTests(unittest.TestCase):
                 compile(program, name, 'exec')
                 self.assertLess(len(program.encode()), 120 * 1024)
         self.assertEqual(diag.WORKER_SHA, sha(diag.WORKER.encode()))
-        for value in (f'PROOF_ROOT={s5b.PROOF_ROOT!r}', f'FIXTURE_SHA={s5b.FIXTURE_SHA!r}', f'WORKER_SHA={diag.WORKER_SHA!r}',
-                      f'S5A_COMMAND_RECORDS={s5b.S5A_COMMAND_RECORDS!r}', "OWNER_EXEC=('/usr/local/bin/woowbk-owner',)",
-                      "OWNER='appowner'", "PRODUCT_LIB='/usr/local/lib/woowtech-cockpit-backup'", 'ROOT_UID=0'):
+        h = s5b.HISTORY   # always the FIRST build's fixture, never S5-B's active binding
+        for value in (f'PROOF_ROOT={h.proof_root!r}', f'FIXTURE_SHA={h.fixture_sha!r}', f'WORKER_SHA={diag.WORKER_SHA!r}',
+                      f'S5A_COMMAND_RECORDS={h.command_records!r}', "OWNER_EXEC=('/usr/local/bin/woowbk-owner',)",
+                      "OWNER='appowner'", "PRODUCT_LIB='/usr/local/lib/woowtech-cockpit-backup'", 'ROOT_UID=0',
+                      "LAYOUT='retired-proof-root'"):
             self.assertIn(value, diag.LAUNCHER)
+        self.assertEqual(h.proof_root, '/var/lib/woowbk-nextcloud-s5-afe8d885402badf3')
+        for program in (diag.RETIRED_STATE, diag.RETIRE):
+            compile(program, 'retire', 'exec')
+            self.assertIn(f'PROOF_ROOT={h.proof_root!r}', program)
+            self.assertIn(f'FIXTURE_SHA={h.fixture_sha!r}', program)
         self.assertIn("OWNER='appowner'", diag.WORKER)
         self.assertTrue(diag.WORKER.rstrip().endswith('worker_main()'))
         self.assertEqual(diag.DATA_DIR, ha_odoo.HA_DATA)
@@ -409,7 +420,7 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual(diag.JOB_PATTERN + r'\Z', tempctr.JOB_RE.pattern)
         self.assertTrue(tempctr.JOB_RE.fullmatch(diag.new_job_id()))
         self.assertTrue(diag.new_job_id().split('-')[1].startswith(diag.JOB_TAG))
-        self.assertEqual(s5b.FIXTURE, s5b.PROOF_ROOT + '/owned/artifact/generated-s5-source.tar')
+        self.assertEqual(s5b.HISTORY.fixture, s5b.HISTORY.proof_root + '/owned/artifact/generated-s5-source.tar')
 
     def test_the_rendered_worker_defines_everything_it_uses(self):
         w = rendered_worker()
@@ -753,7 +764,8 @@ class LauncherTests(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(raw), mode='r|') as tar:
             names = [m.name for m in tar]
         self.assertIn('data/postgres/PG_VERSION', names)
-        self.assertNotIn('data/postgres', names)   # S5-A's packing: no entry for the cluster's own directory
+        # The rebuilt packing (HA's tar order): the cluster's own directory before its files (the first build had none).
+        self.assertLess(names.index('data/postgres'), names.index('data/postgres/PG_VERSION'))
 
     def test_a_changed_fixture_or_proof_root_or_worker_is_refused_before_anything_starts(self):
         marker = self.dev.tmp / 'worker-ran'
@@ -901,18 +913,20 @@ class HostTests(unittest.TestCase):
             diag.acquire(waiter, 10, clock=clock, sleep=clock.sleep)
 
     def test_a_different_s5a_result_refuses_before_the_lock_and_the_device(self):
-        doc = json.loads(s5b.S5A_RESULT.read_text())
+        doc = json.loads(s5b.HISTORY_RESULT.read_text())
         doc['fixture']['sha256'] = '0' * 64
         tampered = self.tmp / 's5a.json'
         tampered.write_text(json.dumps(doc))
-        with patch.object(diag, 'S5A_RESULT', tampered), self.assertRaisesRegex(ValueError, 'fixed-s5b-s5a-result'):
+        with patch.object(diag, 'HISTORY_RESULT', tampered), self.assertRaisesRegex(ValueError, 'fixed-s5b-history-result'):
             diag.tool_binding('c' * 40)
         never = lambda *a, **k: (_ for _ in ()).throw(AssertionError('no device step before the binding'))   # noqa: E731
-        with patch.object(diag, 'S5A_RESULT', tampered), patch.object(diag.s5, 'checkout', return_value=('c' * 40, True)), \
+        with patch.object(diag, 'HISTORY_RESULT', tampered), patch.object(diag.s5, 'checkout', return_value=('c' * 40, True)), \
                 patch.dict(os.environ, {'HEAVY_FREE': diag.LOCK}), patch.object(diag, 'acquire', never), \
-                patch.object(diag, 'run_locked', never), self.assertRaisesRegex(ValueError, 'fixed-s5b-s5a-result'):
+                patch.object(diag, 'run_locked', never), self.assertRaisesRegex(ValueError, 'fixed-s5b-history-result'):
             diag.main(['--run'])
-        self.assertEqual(diag.tool_binding('c' * 40)['s5a_result_sha256'], sha(s5b.S5A_RESULT.read_bytes()))
+        binding = diag.tool_binding('c' * 40)
+        self.assertEqual(binding['s5a_result_sha256'], sha(s5b.HISTORY_RESULT.read_bytes()))
+        self.assertEqual((binding['proof_root'], binding['fixture_sha256']), (s5b.HISTORY.proof_root, s5b.HISTORY.fixture_sha))
 
     def test_the_run_needs_the_heavy_seat_and_a_clean_checkout(self):
         with patch.dict(os.environ, {'HEAVY_FREE': ''}), self.assertRaisesRegex(ValueError, 'heavy-seat-required'):
@@ -924,7 +938,7 @@ class HostTests(unittest.TestCase):
     def test_contract_is_offline_and_names_every_deviation(self):
         doc = diag.contract()
         self.assertEqual(doc['deviations_from_the_product_check'], dict(diag.DEVIATIONS))
-        self.assertEqual((doc['pulls'], doc['fixture_sha256'], doc['owner']), (0, s5b.FIXTURE_SHA, 'appowner'))
+        self.assertEqual((doc['pulls'], doc['fixture_sha256'], doc['owner']), (0, s5b.HISTORY.fixture_sha, 'appowner'))
 
     def test_verdicts(self):
         base = copy.deepcopy(self.worker)
@@ -939,6 +953,245 @@ class HostTests(unittest.TestCase):
         self.assertEqual(diag.verdict(missing_db), 'missing-database')
         early = {'stage': 'image', 'failure': {'stage': 'image'}}
         self.assertEqual(diag.verdict(early), 'failed-before-start:image')
+
+
+# ====================================================================== S5-A's gate: the product's own check opens a fixture
+
+def packed_member(dev):
+    """The add-on member of a fixture packed by S5-A's own build_fixture (DeviceRoot) and its outer layout size."""
+    with habackup.open_backup(dev.fixture) as opened, opened.open_addon(s5.SLUG) as stream:
+        return b''.join(iter(lambda: stream.read(1 << 20), b'')), opened.layout.size
+
+
+def launcher_reply(worker, member, **extra):
+    """What the launcher hands back for one open check (its stream and proof root as they would be)."""
+    return dict({'status': 'ran', 'worker': worker, 'stream': {'bytes': len(member), 'sha256': sha(member), 'broken': None},
+                 'proof_root_unchanged': True, 'worker_rc': 0}, **extra)
+
+
+class OpenCheckTests(unittest.TestCase):
+    """A rebuilt fixture -- packed by S5-A's own build_fixture with the real add-on's shape -- opened through the product's
+    own check path (the rendered worker on the repository's engine, a fake dev-e podman behind OwnerRunner.run)."""
+
+    def setUp(self):
+        self.dev = DeviceRoot(self)
+        self.member, self.size = packed_member(self.dev)
+
+    def worker(self, psql):
+        return run_worker(FakeDevice(psql=psql), member=self.member, schedule=[0], layout_size=self.size)
+
+    def test_a_rebuilt_fixture_opens_and_every_gate_fact_is_true(self):
+        worker = self.worker(healthy)
+        self.assertEqual(diag.judge_open(launcher_reply(worker, self.member), {'removed': [], 'left': []}),
+                         {name: True for name in s5.OPEN_CHECKS})
+        self.assertTrue(worker['member']['root_entry_in_member'])   # data/postgres came before its files
+        self.assertEqual((worker['member']['dbuser'], worker['member']['dbname']), ('nextcloud', 'nextcloud'))
+        self.assertEqual([a['at'] for a in worker['attempts']], [0])   # one attempt: the product's own call
+
+    def test_the_first_builds_database_fails_the_gate(self):
+        checks = diag.judge_open(launcher_reply(self.worker(missing_role), self.member), {'removed': [], 'left': []})
+        self.assertEqual(sorted(name for name, ok in checks.items() if not ok),
+                         ['encryption', 'nextcloud_database', 'product_call_answered', 'superuser', 'users'])
+
+    def test_any_broken_fact_fails_the_gate(self):
+        worker = self.worker(healthy)
+        good = launcher_reply(worker, self.member)
+        for name, reply, sweep in (('proof_unchanged', dict(good, proof_root_unchanged=False), {'left': []}),
+                                   ('stream_intact', dict(good, stream=dict(good['stream'], sha256='0' * 64)), {'left': []}),
+                                   ('stream_intact', dict(good, stream=dict(good['stream'], broken='reader-OSError')),
+                                    {'left': []}),
+                                   ('cleanup', dict(good, worker=dict(worker, left=['woowbk-x-hapg'])), {'left': []}),
+                                   ('cleanup', good, {'left': ['woowbk-x-hapg']}), ('cleanup', good, None)):
+            with self.subTest(fact=name):
+                checks = diag.judge_open(reply, sweep)
+                self.assertFalse(checks[name])
+                self.assertTrue(all(ok for other, ok in checks.items() if other != name))
+        self.assertFalse(any(diag.judge_open({'status': 'refused', 'reason': 'fixed-s5diag-fresh-file'}, {'left': []}).values()))
+
+    def test_open_check_renders_the_fresh_build_launcher_and_sweeps_only_its_own_job(self):
+        worker, calls, saved = self.worker(healthy), [], {}
+
+        def call(program, request, ev, prefix, *, root, timeout):
+            calls.append({'program': program, 'request': request, 'prefix': prefix, 'root': root, 'timeout': timeout})
+            return launcher_reply(worker, self.member) if prefix == 'open-check' else {'removed': [], 'left': []}
+        ev = SimpleNamespace(save=lambda name, value: saved.update({name: value}))
+        root = '/var/lib/woowbk-nextcloud-s5-' + '7' * 16
+        fixture = {'archive': root + s5b.ARTIFACT_TAIL, 'sha256': 'ab' * 32, 'bytes': 100, 'provenance_sha256': 'cd' * 32}
+        result = diag.open_check(fixture, ev, deadline=10_000.0, call=call, now=lambda: 1_000.0)
+        self.assertEqual((result['status'], result['reason'], result['checks']),
+                         ('passed', None, {name: True for name in s5.OPEN_CHECKS}))
+        launcher, sweep = calls
+        for value in ("LAYOUT='fresh-build'", f'PROOF_ROOT={root!r}', f"FIXTURE={fixture['archive']!r}",
+                      f"PROVENANCE={root + '/owned/artifact/provenance.private.json'!r}", f"FIXTURE_SHA={'ab' * 32!r}",
+                      'FIXTURE_BYTES=100', f"PROVENANCE_SHA={'cd' * 32!r}", f'WORKER_SHA={diag.WORKER_SHA!r}'):
+            self.assertIn(value, launcher['program'])
+        self.assertEqual((launcher['root'], launcher['request']['worker']), (True, diag.WORKER))
+        q = launcher['request']['worker_request']
+        self.assertEqual((q['schedule'], q['deadline'], result['job_id']), ([0], 1_000.0 + diag.OPEN_BUDGET, q['job_id']))
+        self.assertTrue(q['job_id'].split('-')[1].startswith(diag.JOB_TAG))
+        self.assertEqual((sweep['program'], sweep['request'], sweep['root']), (diag.SWEEP, {'job_id': q['job_id']}, False))
+        self.assertIn('open-check-launcher.private.json', saved)
+        for bad, reason in (({'archive': s5b.HISTORY.fixture}, 'open-check-fixture'), ({'sha256': 'x'}, 'open-check-fixture'),
+                            ({'archive': '/tmp/root' + s5b.ARTIFACT_TAIL}, 'open-check-fixture')):
+            with self.subTest(bad=sorted(bad)), self.assertRaisesRegex(ValueError, reason):
+                diag.open_check(dict(fixture, **bad), ev, deadline=10_000.0, call=call, now=lambda: 1_000.0)
+        with self.assertRaisesRegex(ValueError, 'open-check-no-time-left'):
+            diag.open_check(fixture, ev, deadline=1_300.0, call=call, now=lambda: 1_000.0)
+
+
+class FreshLauncherTests(unittest.TestCase):
+    """The launcher in layout 'fresh-build' (S5-A's open check): only the literal fixture and provenance are checked."""
+    setUp, overrides, launch, member = LauncherTests.setUp, LauncherTests.overrides, LauncherTests.launch, LauncherTests.member
+
+    def test_the_fresh_build_launcher_hands_the_member_over_and_checks_the_literal_files(self):
+        out = self.launch(LAYOUT='fresh-build', S5A_COMMAND_RECORDS=-1)   # the record count plays no part here
+        raw, size = self.member()
+        self.assertEqual((out['status'], out['worker']['received']['sha256'], out['proof_root_unchanged']),
+                         ('ran', sha(raw), True))
+        self.assertEqual(len(out['proof_root_before']['files']), 2)
+        copy_path = self.dev.tmp / 'copy.tar'
+        copy_path.write_bytes(self.dev.fixture.read_bytes())
+        self.assertEqual(self.launch(LAYOUT='fresh-build', FIXTURE=str(copy_path))['reason'],
+                         'fixed-s5diag-fresh-literal-path')
+        os.chmod(self.dev.work, 0o750)
+        self.assertEqual(self.launch(LAYOUT='fresh-build')['reason'], 'fixed-s5diag-fresh-owned')
+        os.chmod(self.dev.work, 0o700)
+        self.assertEqual(self.launch(LAYOUT='other')['reason'], 'fixed-s5diag-layout')
+
+
+# ====================================================================== retiring the first build's proof root
+
+class RetireTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.diag_root = self.tmp / 'diag-evidence'
+        self.diag_root.mkdir()
+
+    def diag_run(self, name='20261129T010000-5d1a0001', binding=None, **line):
+        h = s5b.HISTORY
+        folder = self.diag_root / name
+        folder.mkdir()
+        (folder / 'fixed-result.json').write_text(json.dumps(dict(
+            {'phase': diag.PHASE, 'status': 'diagnosed', 'proof_root_unchanged': True, 'job_id': JOB,
+             'verdict': 'missing-postgres-role'}, **line)))
+        (folder / 'binding.json').write_text(json.dumps(binding or {'phase': diag.PHASE, 'fixture': h.fixture,
+                                                                    'fixture_sha256': h.fixture_sha, 'proof_root': h.proof_root}))
+        return folder
+
+    def test_only_a_diagnosed_run_on_the_first_builds_root_admits_the_removal(self):
+        info = diag.diagnostic_evidence(self.diag_run(), evidence_root=self.diag_root)
+        self.assertEqual((info['job_id'], info['verdict']), (JOB, 'missing-postgres-role'))
+        h = s5b.HISTORY
+        faults = {'refused': {'status': 'refused'}, 'changed-root': {'proof_root_unchanged': False},
+                  'other-tool': {'phase': 'other'},
+                  'other-fixture': {'binding': {'phase': diag.PHASE, 'fixture': h.fixture, 'fixture_sha256': '0' * 64,
+                                                'proof_root': h.proof_root}},
+                  'other-root': {'binding': {'phase': diag.PHASE, 'fixture': h.fixture, 'fixture_sha256': h.fixture_sha,
+                                             'proof_root': '/var/lib/woowbk-nextcloud-s5-' + '0' * 16}}}
+        for number, (name, change) in enumerate(faults.items()):
+            with self.subTest(fault=name), self.assertRaisesRegex(ValueError, 'retire-diagnostic-evidence'):
+                diag.diagnostic_evidence(self.diag_run(f'run-{number}', **change), evidence_root=self.diag_root)
+        outside = self.tmp / 'elsewhere'
+        outside.mkdir()
+        with self.assertRaisesRegex(ValueError, 'retire-diagnostic-evidence'):
+            diag.diagnostic_evidence(outside, evidence_root=self.diag_root)
+        (self.diag_root / 'link').symlink_to(self.diag_run('real'))
+        with self.assertRaisesRegex(ValueError, 'retire-diagnostic-evidence'):
+            diag.diagnostic_evidence(self.diag_root / 'link', evidence_root=self.diag_root)
+
+    def retire(self, states, removal=None):
+        calls = []
+
+        def device(program, request=None, *, root=False, timeout=300):
+            calls.append((program, request, root))
+            if program == diag.RETIRED_STATE:
+                return states.pop(0)
+            if program == diag.RETIRE:
+                return removal or {'status': 'removed', 'files': 348, 'bytes': 127600640}
+            return {'active_jobs': 0}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = diag.retire({'evidence': 'x', 'job_id': JOB}, 'c' * 40, device=device, inventory=inventory_row,
+                             evidence_root=self.tmp / 'retire')
+        return rc, json.loads(out.getvalue().strip().splitlines()[-1]), calls
+
+    def test_retire_removes_exactly_the_first_builds_root_after_proving_it(self):
+        rc, record, calls = self.retire([{'present': True, 'valid': True}, {'present': False}])
+        self.assertEqual((rc, record['status'], record['root']), (0, 'removed', s5b.HISTORY.proof_root))
+        [removal] = [c for c in calls if c[0] == diag.RETIRE]
+        self.assertEqual(removal[1:], ({'root': s5b.HISTORY.proof_root, 'removal': 'retired-after-the-diagnostic'}, True))
+        ev = Path(record['private_evidence'])
+        self.assertEqual(sorted(p.name for p in ev.iterdir()), ['before.private.json', 'fixed-result.json'])
+        self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600 for p in ev.iterdir()))
+
+    def test_retire_refuses_a_root_that_is_not_as_s5a_left_it_or_gone(self):
+        for states in ([{'present': True, 'valid': False, 'reason': 'fixed-s5diag-proof-root-leaves'}], [{'present': False}]):
+            with self.subTest(states=states):
+                rc, record, calls = self.retire(list(states))
+                self.assertEqual((rc, record['status'], record['reason']), (1, 'failed',
+                                                                             'fixed-s5diag-retired-root-not-as-s5a-left-it'))
+                self.assertFalse(any(c[0] == diag.RETIRE for c in calls))
+
+    def overrides(self, dev):
+        return {'PROOF_ROOT': str(dev.root), 'FIXTURE': str(dev.fixture), 'PROVENANCE': str(dev.provenance),
+                'FIXTURE_SHA': dev.built['sha256'], 'FIXTURE_BYTES': dev.built['bytes'],
+                'PROVENANCE_SHA': sha(dev.provenance.read_bytes()), 'S5A_COMMAND_RECORDS': 9,
+                'OWNER': pwd.getpwuid(os.getuid()).pw_name, 'ROOT_UID': os.getuid()}
+
+    def program(self, program, request):
+        p = subprocess.run([sys.executable, '-I', '-c', program], input=json.dumps(request).encode(), capture_output=True,
+                           timeout=300)
+        return p.returncode, (json.loads(p.stdout) if p.returncode == 0 else p.stderr.decode())
+
+    def test_the_device_programs_prove_and_remove_only_the_root_s5a_left(self):
+        dev = DeviceRoot(self)
+        values = self.overrides(dev)
+        state = diag.retired_state_program(values)
+        rc, before = self.program(state, {})
+        self.assertEqual((rc, before['present'], before['valid'], before['fixture_sha256']),
+                         (0, True, True, dev.built['sha256']))
+        rc, refused = self.program(diag.retire_program(values), {'root': str(dev.root), 'removal': 'always'})
+        self.assertNotEqual(rc, 0)
+        self.assertIn('fixed-s5diag-retire-binding', refused)
+        self.assertTrue(dev.root.exists())
+        rc, removed = self.program(diag.retire_program(values), {'root': str(dev.root),
+                                                                 'removal': 'retired-after-the-diagnostic'})
+        self.assertEqual((rc, removed['status'], removed['files']), (0, 'removed', 2 + 7 + 9))
+        self.assertFalse(dev.root.exists())
+        self.assertTrue(dev.varlib.exists())
+        self.assertEqual(self.program(state, {}), (0, {'present': False}))
+
+    def test_a_changed_root_is_reported_by_the_state_and_never_removed(self):
+        dev = DeviceRoot(self)
+        dev.write('extra.json', b'{}')
+        values = self.overrides(dev)
+        rc, state = self.program(diag.retired_state_program(values), {})
+        self.assertEqual((rc, state['valid'], state['reason']), (0, False, 'fixed-s5diag-proof-root-leaves'))
+        rc, _ = self.program(diag.retire_program(values), {'root': str(dev.root), 'removal': 'retired-after-the-diagnostic'})
+        self.assertNotEqual(rc, 0)
+        self.assertTrue((dev.work / 'extra.json').exists() and dev.fixture.exists())
+
+    def test_main_needs_the_diagnostic_evidence_one_mode_and_the_heavy_seat(self):
+        clean = patch.object(diag.s5, 'checkout', return_value=('c' * 40, True))
+        never = lambda *a, **k: (_ for _ in ()).throw(AssertionError('no lock or device step'))   # noqa: E731
+        with patch.dict(os.environ, {'HEAVY_FREE': ''}), self.assertRaisesRegex(ValueError, 'heavy-seat-required'):
+            diag.main(['--remove-retired-root', '--diagnostic-evidence', str(self.diag_run())])
+        with patch.dict(os.environ, {'HEAVY_FREE': diag.LOCK}), clean, patch.object(diag, 'acquire', never):
+            with self.assertRaisesRegex(ValueError, 'diagnostic-evidence-required'):
+                diag.main(['--remove-retired-root'])
+            with self.assertRaisesRegex(ValueError, 'one-mode-at-a-time'):
+                diag.main(['--run', '--remove-retired-root'])
+            with self.assertRaisesRegex(ValueError, 'retire-diagnostic-evidence'):   # not this tool's evidence area
+                diag.main(['--remove-retired-root', '--diagnostic-evidence', str(self.diag_run('other'))])
+        seen = []
+        with patch.dict(os.environ, {'HEAVY_FREE': diag.LOCK}), clean, \
+                patch.object(diag, 'diagnostic_evidence', lambda path: {'evidence': str(path)}), \
+                patch.object(diag, 'acquire', lambda lock, timeout: seen.append(('lock', timeout))), \
+                patch.object(diag, 'open', lambda path, mode: contextlib.nullcontext(path), create=True), \
+                patch.object(diag, 'retire', lambda info, commit: seen.append((info, commit)) or 0):
+            self.assertEqual(diag.main(['--remove-retired-root', '--diagnostic-evidence', '/x']), 0)
+        self.assertEqual(seen, [('lock', diag.LOCK_TIMEOUT), ({'evidence': '/x'}, 'c' * 40)])
 
 
 if __name__ == '__main__':
