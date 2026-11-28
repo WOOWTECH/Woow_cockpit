@@ -103,6 +103,10 @@ def mode_page(device, scenario):
             else:
                 params['backup_id'] = device.jobs[-1]['result']['backup_id']
                 device.backups[result['safety_backup_id']] = {'id': result['safety_backup_id'], 'type': 'safety'}
+                if scenario.get('kept'):   # the restore kept a copy of the whole database service first (kept.py S4)
+                    result['kept'] = copy.deepcopy(scenario['kept'])
+                    for view in scenario['kept'].values():
+                        device.backups[view['backup_id']] = {'id': view['backup_id'], 'type': 'safety', 'kept': True}
             new = device.job(template['type'], params, 'succeeded', result)
             if template['type'] == 'restore':
                 device.jobs[-2]['result']['group']['next_job_id'] = new['id']
@@ -304,6 +308,31 @@ class OdooDatabaseTests(ModeCase):
         [(config, _seconds, _name)] = dev.configs
         self.assertEqual(config['choices'], {'odoo': {'database': 'woowtest2'}})
         self.assertNotIn('encrypted', config)
+
+    def test_the_copy_a_restore_kept_of_the_cold_cluster_is_the_pages_own_and_goes_to_the_drivers_cleanup(self):
+        kept = '20261128T030000Z-00005ee0'
+        view = {'odoo': {'backup_id': kept, 'databases': ['odoo', 'woowbk_lab_other'], 'more': 0,
+                         'put_back': ['woowbk_lab_other'], 'not_put_back': [], 'notes': []}}
+        dev, result = self.run_odoo(self.scenario(kept=view))
+        self.assertTrue(result.passed, (result.gates, result.summary.get('reasons')))
+        self.assertTrue(result.gates['no_unexplained_backups'])
+        self.assertEqual(result.summary['unexplained_new_backups'], [])
+        converted, restore = result.chain
+        self.assertEqual(result.summary['created_backups'],
+                         [converted['result']['backup_id'], restore['result']['safety_backup_id'], kept])
+        self.assertEqual(result.summary['safety'], {'odoo': restore['result']['safety_backup_id']})   # unchanged views
+        # Without the kept copy in the restore's result, the same new backup is still an unexplained one.
+        dev = self.device()
+        page = mode_page(dev, self.scenario())
+
+        def with_stray(config, seconds, name):
+            outcome = page(config, seconds, name)
+            dev.backups[kept] = {'id': kept, 'type': 'safety', 'kept': True}
+            return outcome
+        result = self.run_bridge(dev, with_stray, app='odoo', key=HA_KEY, choices={'odoo': {'database': 'woowtest2'}})
+        self.assertFalse(result.gates['no_unexplained_backups'])
+        self.assertEqual(result.summary['unexplained_new_backups'], [kept])
+        self.assertFalse(result.passed)
 
     def test_the_only_database_that_can_move_needs_no_name(self):
         check = odoo_check(databases=(('woowtest', False), ('woowtest2', True)))

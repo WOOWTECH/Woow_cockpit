@@ -365,6 +365,13 @@ class ChainTests(unittest.TestCase):
         self.assertTrue(bridge.chain_complete(chain(apps=('omnigent', 'hermes')), HA, ['hermes', 'omnigent']))
         records = chain()
         self.assertEqual(bridge.created_by(records), ['20261128T010200Z-0b0b0b00', '20261128T010300Z-0c0c0c00'])
+        kept = copy.deepcopy(records)   # a restore that kept a whole database service first (kept.py S4): its copy too
+        kept[1]['result']['kept'] = {APP: {'backup_id': '20261128T010400Z-0d0d0d00', 'put_back': [], 'not_put_back': []},
+                                     'broken': 'not a view'}
+        self.assertEqual(bridge.created_by(kept), ['20261128T010200Z-0b0b0b00', '20261128T010300Z-0c0c0c00',
+                                                   '20261128T010400Z-0d0d0d00'])
+        kept[0]['result']['kept'] = {APP: {'backup_id': '20261128T010500Z-0e0e0e00'}}   # only a restore's result counts
+        self.assertNotIn('20261128T010500Z-0e0e0e00', bridge.created_by(kept))
         self.assertEqual(bridge.by_app(records, 'backup', 'backup_id'), {APP: '20261128T010200Z-0b0b0b00'})
         self.assertEqual(bridge.by_app(records, 'restore', 'safety_backup_id'), {APP: '20261128T010300Z-0c0c0c00'})
 

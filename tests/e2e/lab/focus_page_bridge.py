@@ -21,8 +21,9 @@ bridge only watches and judges:
           app, all succeeded, in the first job's unit), the browser's fixed checks and its issued-value (cookie) scan
 
 The bridge changes nothing itself: only status, list, jobs and job-status are sent (READ_ONLY), plus two fixed read-only
-programs inside the device. What the page created (the HA record when it was new, the converted and safety backups) is
-reported (`created_backups`, `ha_record_existed`) so the driver's own cleanup removes it. Imports perform no I/O;
+programs inside the device. What the page created (the HA record when it was new, the converted and safety backups, a
+copy of a whole database service a restore kept first, e.g. Odoo's cold cluster) is reported (`created_backups`,
+`ha_record_existed`) so the driver's own cleanup removes it. Imports perform no I/O;
 `python3 focus_page_bridge.py` only compiles the device programs.
 
 Two optional inputs (absent: exactly the earlier flow, the same page config byte for byte):
@@ -526,13 +527,18 @@ def chain_complete(records, ha_id, importable):
 
 
 def created_by(records):
-    """The backups the followed jobs made: each conversion's backup and each restore's safety backup."""
+    """The backups the followed jobs made: each conversion's backup, each restore's safety backup and each copy of a
+    whole database service a restore kept before it rebuilt that service (result.kept.<app>.backup_id, kept.py S4: an
+    ordinary `safety` backup nothing prunes, e.g. Odoo's cold cluster). A chain without kept copies: exactly as before."""
     found = []
     for job in records:
         result = job.get('result') or {}
-        value = result.get('backup_id') if job.get('type') == 'backup' else result.get('safety_backup_id')
-        if isinstance(value, str) and value and value not in found:
-            found.append(value)
+        values = [result.get('backup_id') if job.get('type') == 'backup' else result.get('safety_backup_id')]
+        if job.get('type') == 'restore' and isinstance(result.get('kept'), dict):
+            values += [item.get('backup_id') for item in result['kept'].values() if isinstance(item, dict)]
+        for value in values:
+            if isinstance(value, str) and value and value not in found:
+                found.append(value)
     return found
 
 
