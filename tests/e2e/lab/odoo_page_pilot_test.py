@@ -40,6 +40,7 @@ OTHER = 'restore.other-databases:' + '7' * 16
 EXTRA = 'woowbk_lab_other'
 OWN_MANUAL = '20261124T152938Z-3b26976e'      # dev-c's own earlier backups: never touched
 N8N_BASELINE = '20261118T095520Z-33eb7474'
+OLD_SAFETY = '20261124T152230Z-5f41c20c'      # the older odoo+n8n safety backup N8-01 protects (the prune would take it)
 CONTAINER_UNIT = {'odoo18-db': 'odoo-db.service', 'odoo18-web': 'odoo.service', 'odoo18-gateway': 'odoo-gateway.service'}
 
 
@@ -80,10 +81,17 @@ class Dev:
         self.facts = {'base_url': 'http://localhost:8069',
                       'marker': json.dumps({'digest': 'sha256:' + m.SUBSTITUTE['web']['id'], 'core_date': '18.0.20260926'})}
         self.partners = {'base': '41', 'ha': '23'}
-        self.backups = {OWN_MANUAL: {'id': OWN_MANUAL, 'type': 'manual', 'apps': [{'id': 'odoo'}]},
-                        N8N_BASELINE: {'id': N8N_BASELINE, 'type': 'manual', 'apps': [{'id': 'n8n'}]}}
+        self.backups = {OWN_MANUAL: self.row(OWN_MANUAL, 'manual', ['odoo'], '2026-11-24T15:29:38Z'),
+                        N8N_BASELINE: self.row(N8N_BASELINE, 'manual', ['n8n'], '2026-11-18T09:55:20Z'),
+                        OLD_SAFETY: self.row(OLD_SAFETY, 'safety', ['odoo', 'n8n'], '2026-11-24T15:22:30Z', size=12103680)}
+        self.original = copy.deepcopy(self.backups)
         self.snapshots = {}
         self.policy = {'schema': 1, 'default_keep_last': None, 'apps': {}}
+        self.protected = []            # retention-plan's protected list (in use by a job, pinned by a failed restore)
+        self.hidden, self.hidden_files, self.pruned = {}, {}, []
+        self.preserve_fail = self.put_back_fail = None
+        self.put_back_alters = False
+        self.stuck_restore = False
         self.offer, self.page_mode = list(offer), page_mode
         self.put_back_ok, self.own_restore_ok, self.isolated = True, True, True
         self.stop_after_import = self.stop_in_baseline = self.stop_in_bridge = False
@@ -100,11 +108,26 @@ class Dev:
     def up(self):
         return all(state == 'active' for state in self.units.values())
 
+    @staticmethod
+    def row(bid, kind, apps, created, size=1000, **extra):
+        return {'id': bid, 'type': kind, 'apps': [{'id': app} for app in apps], 'created': created, 'size': size,
+                'sha256': hashlib.sha256(bid.encode()).hexdigest(), **extra}
+
     def backup(self, kind, **extra):
         self.sequence += 1
         bid = '20261128T1000%02dZ-%08x' % (self.sequence, self.sequence)
-        self.backups[bid] = {'id': bid, 'type': kind, 'apps': [{'id': 'odoo'}], **extra}
+        self.backups[bid] = self.row(bid, kind, ['odoo'], '2026-11-28T10:00:%02dZ' % self.sequence, **extra)
         return bid
+
+    def prune(self, exclude):
+        """flows.prune_safety for odoo after a successful restore: the 3 newest Odoo safety backups stay (a kept copy holds a
+        slot and is never deleted); every older one goes."""
+        rows = sorted((b for b in self.backups.values() if b['type'] == 'safety' and 'odoo' in {a['id'] for a in b['apps']}),
+                      key=lambda b: (b['created'], b['id']), reverse=True)
+        for row in rows[3:]:
+            if row['id'] not in exclude and not row.get('kept'):
+                del self.backups[row['id']]
+                self.pruned.append(row['id'])
 
     def job(self, kind, params, state, result, unit=None):
         self.sequence += 1
@@ -151,7 +174,7 @@ class Dev:
                                        'ha_import': {'apps': ['odoo'], 'odoo_database': choices['odoo']['database'],
                                                      'test_mode': False},
                                        'group': {'next_job_id': None, 'results': [{'app_id': 'odoo', 'status': 'converted'}]}})
-        safety = self.backup('safety', created='before-kept')
+        safety = self.backup('safety')
         kept = self.backup('safety', kept=True)
         self.backups[converted]['from_ha']['kept'] = kept
         others = [db for db in self.dbs if db not in ('odoo', 'postgres')]
@@ -161,6 +184,9 @@ class Dev:
         if self.put_back_ok:
             self.data, self.dbs = 'ha', sorted(['odoo', 'postgres', *others])
         state = 'succeeded' if self.put_back_ok else 'rolled-back'
+        if self.put_back_ok and not self.stuck_restore:
+            self.prune({converted, safety})
+        state = 'running' if self.stuck_restore else state   # a restore that never ends (the run's waits give up)
         second = self.job('restore', {'backup_id': converted, 'apps': ['odoo'], 'ha_backup_id': ha_id,
                                       'acknowledged': copy.deepcopy(ack), 'chain': {'apps': ['odoo']}},
                           state, {'safety_backup_id': safety, 'rolled_back': not self.put_back_ok,
@@ -191,6 +217,8 @@ class Dev:
             return answer(json.dumps({'page': {n: sha(REPO / 'backup' / n) for n in self.bridge.PAGE_FILES},
                                       'cockpit_socket': True, 'hostname': 'woowbk-dev-c', 'devadmin_uid': 1000,
                                       'headroom': 1500 * 1024 ** 2}) + '\n')
+        if name == 'PRESERVE':
+            return self.preserve_program(json.loads(input))
         if name == 'NATIVE_UNITS':
             rows = {job['id']: job for job in self.jobs}
             return answer(json.dumps([{k: rows[j][k] for k in ('id', 'unit', 'type', 'state')}
@@ -198,6 +226,47 @@ class Dev:
         if argv[:2] in (('ls', '-A'), ('sh', '-c')):
             return answer('')
         raise AssertionError(('root', argv[:3]))
+
+    def preserve_program(self, q):
+        """odoo_cold_keep_preserve's three operations as dev-c answers them (the files themselves: odoo_cold_keep_preserve_test)."""
+        self.log('preserve', q['op'], tuple(q['ids']))
+        assert q['case'].startswith('odoo-ck-') and q['ids'] == sorted(q['ids'])
+        if q['op'] == 'preserve':
+            if self.preserve_fail == 'before':
+                return answer(returncode=1)
+            for bid in q['ids']:
+                row = self.backups[bid]
+                assert row['type'] == 'safety' and q['expect'][bid] == row['sha256']
+                self.hidden[bid] = self.backups.pop(bid)
+                self.hidden_files[bid + '.tar'] = {'sha256': row['sha256'], 'bytes': row['size'], 'mode': 384, 'uid': 0,
+                                                   'gid': 0, 'mtime_ns': 1795533865849123502}
+                self.hidden_files[bid + '.json'] = {'sha256': hashlib.sha256(bid.encode() + b'.json').hexdigest(),
+                                                    'bytes': 912, 'mode': 384, 'uid': 0, 'gid': 0,
+                                                    'mtime_ns': 1795533867143150283}
+            if self.preserve_fail == 'after-move':   # moved, then the program died: the controller never heard back
+                return answer(returncode=1)
+            if self.preserve_fail == 'signal':
+                raise self.m.Stopped('signal 15')
+            return answer(json.dumps({'case': q['case'], 'ids': q['ids'], 'phase': 'moved',
+                                      'files': copy.deepcopy(self.hidden_files)}) + '\n')
+        if q['op'] == 'put_back':
+            if self.put_back_fail:
+                return answer(returncode=1)
+            if not self.hidden:
+                return answer(json.dumps({'case': q['case'], 'ids': q['ids'], 'phase': 'none-moved', 'files': {},
+                                          'restored_files': 0}) + '\n')
+            for bid in q['ids']:
+                self.backups[bid] = self.hidden.pop(bid)
+                if self.put_back_alters:   # back under its name, but not the record the product listed before
+                    self.backups[bid] = dict(self.backups[bid], verified={'ok': False})
+            files, self.hidden_files = self.hidden_files, {}
+            return answer(json.dumps({'case': q['case'], 'ids': q['ids'], 'phase': 'returned', 'files': files,
+                                      'restored_files': len(files)}) + '\n')
+        if q['op'] == 'where':
+            return answer(json.dumps({'case': q['case'], 'folder': bool(self.hidden), 'record': bool(self.hidden),
+                                      'files': {bid + suffix: {'archives': bid in self.backups, 'private': bid in self.hidden}
+                                                for bid in q['ids'] for suffix in ('.tar', '.json')}}) + '\n')
+        raise AssertionError(q)
 
     def owner(self, *argv, input=None, timeout=600, check=False):
         m = self.m
@@ -236,7 +305,8 @@ class Dev:
     def ok(self, command, request=None, *, ev, timeout=1800):
         self.log('ok', command, {k: v for k, v in (request or {}).items() if k not in ('request_id', 'key')})
         if command == 'status':
-            return {'version': '2026.11.28', 'active_job': None,
+            running = next((job['id'] for job in self.jobs if job['state'] == 'running'), None)
+            return {'version': '2026.11.28', 'active_job': {'id': running} if running else None,
                     'apps': [{'id': 'odoo', 'state': 'running' if self.up() else 'stopped', 'problems': []},
                              {'id': 'n8n', 'state': 'stopped', 'problems': []}]}
         if command == 'list':
@@ -244,7 +314,8 @@ class Dev:
         if command == 'jobs':
             return {'jobs': [self.public(job) for job in reversed(self.jobs)]}
         if command == 'retention-plan':
-            return {'policy': self.policy, 'saved_policy': copy.deepcopy(self.policy), 'policy_problem': None}
+            return {'policy': self.policy, 'saved_policy': copy.deepcopy(self.policy), 'policy_problem': None,
+                    'protected': copy.deepcopy(self.protected)}
         if command == 'inspect':
             return {'ok': True, 'preflight': {'ok': True, 'checks': [{'id': 'safety', 'status': 'ok'}],
                                               'apps': [{'id': 'odoo', 'mode': 'inplace'}]}}
@@ -263,6 +334,8 @@ class Dev:
                 self.data, self.dbs, self.marker = data, list(dbs), marker
             result = {'safety_backup_id': self.backup('safety'), 'rolled_back': not self.own_restore_ok,
                       'health': [{'id': 'odoo/health-1', 'status': 'ok'}]}
+            if self.own_restore_ok:
+                self.prune({request['backup_id'], result['safety_backup_id']})
             return {'job_id': self.job('restore', {'backup_id': request['backup_id'], 'apps': ['odoo']},
                                        'succeeded' if self.own_restore_ok else 'rolled-back', result)['id']}
         if command == 'ha-import-start':
@@ -294,6 +367,8 @@ class Dev:
     def wait_job(self, job_id, *, ev, timeout=3600):
         self.log('wait_job', job_id)
         job = next(job for job in self.jobs if job['id'] == job_id)
+        if job['state'] == 'running':
+            raise self.m.Failed(f'job {job_id} did not finish in {timeout} s')
         if self.stop_in_bridge and job['type'] == 'backup' and job['params'].get('source') == 'ha':
             self.stop_in_bridge = False   # a SIGTERM while the bridge followed the page's chain (after the page)
             raise self.m.Stopped('signal 15')
@@ -437,7 +512,8 @@ def simulated(m, root, *, bridge=None, dirty=False, heavy=True, dev_options=None
                 (m.h, 'run_check', dev.run_check), (m.h, 'wait_job', dev.wait_job), (m.h, 'psql', dev.psql),
                 (m.h, 'http_code', dev.http_code), (time, 'sleep', lambda _s: None)):
             stack.enter_context(patch.object(target, name, value))
-        dev.programs = {m.HEADROOM: 'HEADROOM', m.ENGINE_HASHES: 'ENGINE_HASHES', m.h.LEAK_SCAN: 'LEAK_SCAN'}
+        dev.programs = {m.HEADROOM: 'HEADROOM', m.ENGINE_HASHES: 'ENGINE_HASHES', m.h.LEAK_SCAN: 'LEAK_SCAN',
+                        m.keep.device_program(m.HERE): 'PRESERVE'}
         if bridge is not None:
             dev.programs.update({bridge.PRECONDITIONS: 'PRECONDITIONS', bridge.NATIVE_UNITS: 'NATIVE_UNITS'})
             stack.enter_context(patch.object(m, 'load_bridge', lambda: bridge))
@@ -528,7 +604,8 @@ PREFLIGHT = [
     'preflight: the Odoo Quadlets and env file pin the documented substitute images, each loaded with its recorded image ID',
     'preflight: odoo-db, odoo and odoo-gateway are all inactive (started for this run) or all active (used as they are)',
     'preflight: the retention policy keeps every manual Odoo backup (the baseline makes it delete none)',
-    'preflight: no earlier Odoo safety backup that this run\'s two restores would make the product prune (keep 3 newest)']
+    'preflight: the older Odoo safety backups the restores would make the product prune can be protected (none in use or '
+    'pinned, at most 5)']
 SETUP_TO_EXTRA = [
     'setup: dev-c\'s substitute Odoo stack is up: odoo-db, odoo and odoo-gateway active and healthy (started by this run '
     'when found inactive)',
@@ -541,6 +618,10 @@ SETUP_TO_EXTRA = [
     'baseline: it opens and its restore preflight passes (Odoo in place, no failed check)',
     'baseline: it deleted no backup (retention) and is listed as a manual Odoo backup',
     'extra database: woowbk_lab_other with one marker row created in dev-c\'s Odoo cluster (this run\'s own)']
+PROTECT = ['protect: the older Odoo safety backups the restores would prune are out of the product\'s view (moved whole, '
+           'hashes recorded first)']
+RETURN = ['protect: the older Odoo safety backups are back byte for byte (names, mode, owner, mtime, SHA-256) and listed '
+          'as before']
 SPACE = ['import: host disk keeps the 12 GiB floor after the upload, check, conversion and restore writes']
 CHECK = [
     'check: the job succeeded and checks exactly odoo of this HA record',
@@ -577,17 +658,19 @@ EVIDENCE = ['leaks: no registered value (HA key, HA test credentials, Cockpit pa
 AFTER = ['after: dev-c still runs with network none and no published port',
          'after: dev-c\'s backups and HA records are exactly the ones it had before',
          'after: the Odoo Quadlets and env file are byte for byte as before, no job running']
-HELPER = (PREFLIGHT + SETUP_TO_EXTRA + SPACE
+HELPER = (PREFLIGHT + SETUP_TO_EXTRA + PROTECT + SPACE
           + ['upload: upload-begin, copy, upload-finish answer the HA record (id from the SHA-256), Odoo importable and '
              'installed here'] + CHECK
           + ['import: one-action import started with the database woowtest2 and every listed key acknowledged once'] + CHAIN
-          + VERIFY + RECOVERY + CLEANUP + LEAKS + EVIDENCE + AFTER)
+          + VERIFY + RECOVERY + RETURN + CLEANUP + LEAKS + EVIDENCE + AFTER)
 
 
 def as_found(test, dev):
-    """The simulated dev-c is exactly as it was: its Odoo data, databases and units, its backups and HA records."""
+    """The simulated dev-c is exactly as it was: its Odoo data, databases and units, its backups (the older safety backup
+    the prune would have taken included, record for record) and HA records; nothing left out of the product's view."""
     test.assertEqual((dev.data, dev.dbs, dev.marker), ('base', ['odoo', 'postgres'], None))
-    test.assertEqual(sorted(dev.backups), sorted([OWN_MANUAL, N8N_BASELINE]))
+    test.assertEqual(dev.backups, dev.original)
+    test.assertEqual((dev.hidden, dev.pruned), ({}, []))
     test.assertEqual(dev.ha, [])
     test.assertEqual(set(dev.units.values()), {'inactive'})
 
@@ -614,14 +697,14 @@ class FullRunTests(unittest.TestCase):
         run = simulate(m, ['--run', '--via-page'], bridge=bridge)
         self.assertEqual(run.code, 0, failed(run))
         texts = bridge.page_settings(['odoo'], ['odoo'], [], choices={'odoo': {'database': 'woowtest2'}})['texts']
-        expected = (PREFLIGHT + SETUP_TO_EXTRA + SPACE + page_block(texts) + CHECK + CHAIN + VERIFY + RECOVERY + CLEANUP
-                    + LEAKS + COCKPIT + EVIDENCE + AFTER)
+        expected = (PREFLIGHT + SETUP_TO_EXTRA + PROTECT + SPACE + page_block(texts) + CHECK + CHAIN + VERIFY + RECOVERY
+                    + RETURN + CLEANUP + LEAKS + COCKPIT + EVIDENCE + AFTER)
         self.assertEqual(names(run), expected)
-        self.assertEqual(len(expected), 78)
+        self.assertEqual(len(expected), 80)
         self.assertTrue(all(r['ok'] for r in run.results))
         lines = run.stdout.splitlines()
         self.assertEqual(lines[0], 'source commit ' + 'f' * 40)
-        self.assertEqual(lines[-1], 'odoo cold keep flow: 78/78 PASS')
+        self.assertEqual(lines[-1], 'odoo cold keep flow: 80/80 PASS')
         self.assertRegex(lines[-2], r'lock held for [0-9]+ s')
         self.assertEqual([line for line in lines[1:-2]], [m.label(n) + ': PASS' for n in expected])
         as_found(self, run.dev)
@@ -669,8 +752,8 @@ class FullRunTests(unittest.TestCase):
         run = simulate(m, ['--run'])
         self.assertEqual(run.code, 0, failed(run))
         self.assertEqual(names(run), HELPER)
-        self.assertEqual(len(HELPER), 52)
-        self.assertEqual(run.stdout.splitlines()[-1], 'odoo cold keep flow: 52/52 PASS')
+        self.assertEqual(len(HELPER), 54)
+        self.assertEqual(run.stdout.splitlines()[-1], 'odoo cold keep flow: 54/54 PASS')
         as_found(self, run.dev)
         [start] = [c for c in run.dev.calls if c[:2] == ('ok', 'ha-import-start')]
         self.assertEqual(start[2], {'ha_backup_id': run.dev.store_id, 'apps': ['odoo'], 'confirm': True, 'test_mode': False,
@@ -688,12 +771,12 @@ class FullRunTests(unittest.TestCase):
         m = load('odoo_ck_active')
         run = simulate(m, ['--run'], dev_options={'units': 'active'})
         self.assertEqual(run.code, 0, failed(run))
-        self.assertEqual(len(run.results), 52)
+        self.assertEqual(len(run.results), 54)
         self.assertEqual(set(run.dev.units.values()), {'active'})
         self.assertFalse([c for c in run.dev.calls if c[0] == 'owner' and c[1][:3] in (('systemctl', '--user', 'start'),
                                                                                       ('systemctl', '--user', 'stop'))])
         self.assertEqual((run.dev.data, run.dev.dbs), ('base', ['odoo', 'postgres']))
-        self.assertEqual(sorted(run.dev.backups), sorted([OWN_MANUAL, N8N_BASELINE]))
+        self.assertEqual(run.dev.backups, run.dev.original)
 
 
 class AdmissionTests(unittest.TestCase):
@@ -768,18 +851,31 @@ class PreflightRefusalTests(unittest.TestCase):
         self.refused(run, 'preflight: odoo-db, odoo and odoo-gateway are all inactive (started for this run) or all active '
                           '(used as they are)')
 
-    def test_an_older_odoo_safety_backup_the_restores_would_make_the_product_prune(self):
+    def test_an_older_safety_backup_in_use_or_pinned_by_a_failed_restore_cannot_be_protected(self):
         original = Dev.__init__
 
         def init(dev, *a, **k):
             original(dev, *a, **k)
-            dev.backups['20261120T000000Z-00005afe'] = {'id': '20261120T000000Z-00005afe', 'type': 'safety',
-                                                        'apps': [{'id': 'odoo'}, {'id': 'n8n'}]}
+            dev.protected = [{'id': OLD_SAFETY, 'type': 'safety', 'reason': 'a failed restore still needs it'}]
         with patch.object(Dev, '__init__', init):
-            run = simulate(load('odoo_ck_prune'), ['--run'])
-        self.refused(run, 'preflight: no earlier Odoo safety backup that this run\'s two restores would make the product '
-                          'prune (keep 3 newest)')
-        self.assertIn('20261120T000000Z-00005afe', run.dev.backups)
+            run = simulate(load('odoo_ck_pinned'), ['--run'])
+        self.refused(run, PREFLIGHT[-1])
+        self.assertEqual(run.dev.backups, run.dev.original)   # nothing moved, nothing deleted
+        self.assertNotIn('preserve', [c[0] for c in run.dev.calls])
+
+    def test_more_older_safety_backups_than_the_protection_takes(self):
+        original = Dev.__init__
+
+        def init(dev, *a, **k):
+            original(dev, *a, **k)
+            for n in range(5):
+                bid = '20261120T00000%dZ-0000000%d' % (n, n)
+                dev.backups[bid] = dev.row(bid, 'safety', ['odoo'], '2026-11-20T00:00:0%dZ' % n)
+            dev.original = copy.deepcopy(dev.backups)
+        with patch.object(Dev, '__init__', init):
+            run = simulate(load('odoo_ck_many'), ['--run'])
+        self.refused(run, PREFLIGHT[-1])
+        self.assertEqual(run.dev.backups, run.dev.original)
 
     def test_a_retention_policy_that_would_delete_older_manual_backups(self):
         original = Dev.__init__
@@ -976,6 +1072,146 @@ class PageStopTests(unittest.TestCase):
         self.assertEqual(run.receipt['started_units'], list(m.UNIT_NAMES))
 
 
+def with_dev(**changes):
+    """A patch of Dev.__init__ that sets these attributes on every simulated dev-c."""
+    original = Dev.__init__
+
+    def init(dev, *a, **k):
+        original(dev, *a, **k)
+        for name, value in changes.items():
+            setattr(dev, name, value)
+    return patch.object(Dev, '__init__', init)
+
+
+def preserve_ops(dev):
+    return [c[1] for c in dev.calls if c[0] == 'preserve']
+
+
+class ProtectionTests(unittest.TestCase):
+    """The older odoo+n8n safety backup the run's restores would make the product prune: out of view before the first
+    restore, back byte for byte after the last one, on every path; a return that cannot be proven leaves the receipt
+    pending with the exact state."""
+
+    def test_without_the_protection_the_products_own_prune_deletes_it(self):
+        m = load('odoo_ck_unprotected')
+        name = PROTECT[0]
+        with patch.object(m.Run, 'step_protect', lambda run: run.ev.check(name, True)):
+            run = simulate(m, ['--run'])
+        self.assertEqual(run.dev.pruned, [OLD_SAFETY])   # the baseline restore's prune: S2, the kept copy, S1 stay
+        self.assertNotIn(OLD_SAFETY, run.dev.backups)
+        self.assertIn(AFTER[1], failed(run))               # the exact after-comparison sees the loss
+
+    def test_the_full_runs_move_it_out_before_the_first_restore_and_back_after_the_last(self):
+        for argv, bridge in ((['--run'], None), (['--run', '--via-page'], bridge_module())):
+            with self.subTest(argv=argv):
+                run = simulate(load('odoo_ck_protected'), argv, bridge=bridge)
+                self.assertEqual(run.code, 0, failed(run))
+                kinds = [(c[0], c[1]) if c[0] in ('preserve', 'ok') else (c[0],) for c in run.dev.calls]
+                moved, back = kinds.index(('preserve', 'preserve')), kinds.index(('preserve', 'put_back'))
+                first_restore = min(i for i, k in enumerate(kinds) if k in (('ok', 'ha-import-start'), ('page',)))
+                own_restore = kinds.index(('ok', 'restore-start'))
+                first_delete = next(i for i, c in enumerate(run.dev.calls) if c[0] == 'helper' and c[1] == 'delete')
+                self.assertLess(moved, first_restore)
+                self.assertLess(own_restore, back)
+                self.assertLess(back, first_delete)
+                self.assertEqual(preserve_ops(run.dev), ['preserve', 'put_back'])
+                as_found(self, run.dev)   # the old one back record for record, nothing pruned, nothing left hidden
+                preserved = run.receipt['preserved']
+                self.assertEqual((preserved['ids'], preserved['phase'], preserved['restored_files']), ([OLD_SAFETY], 'returned', 2))
+                self.assertEqual(preserved['expect'], {OLD_SAFETY: run.dev.original[OLD_SAFETY]['sha256']})
+                self.assertEqual(sorted(preserved['files']), [OLD_SAFETY + '.json', OLD_SAFETY + '.tar'])
+                self.assertTrue(preserved['case'].startswith('odoo-ck-') and run.receipt['complete'])
+
+    def test_nothing_older_nothing_moved(self):
+        original = Dev.__init__
+
+        def init(dev, *a, **k):
+            original(dev, *a, **k)
+            del dev.backups[OLD_SAFETY]
+            dev.original = copy.deepcopy(dev.backups)
+        with patch.object(Dev, '__init__', init):
+            run = simulate(load('odoo_ck_none'), ['--run'])
+        self.assertEqual(run.code, 0, failed(run))
+        self.assertEqual(preserve_ops(run.dev), [])
+        self.assertIn((PROTECT[0], True), [(r['check'], r['ok']) for r in run.results])
+        self.assertIn((RETURN[0], True), [(r['check'], r['ok']) for r in run.results])
+        self.assertNotIn('preserved', run.receipt or {})
+
+    def test_every_stop_after_the_move_returns_it_and_a_stop_before_moves_nothing(self):
+        cases = (('preserve fails before moving', {'preserve_fail': 'before'}, ['preserve', 'put_back'], None),
+                 ('preserve dies after moving', {'preserve_fail': 'after-move'}, ['preserve', 'put_back'], None),
+                 ('a signal while it moves', {'preserve_fail': 'signal'}, ['preserve', 'put_back'], None),
+                 ('the check offers no woowtest2', {'offer': ('woowtest', 'woowtest3')}, ['preserve', 'put_back'], None),
+                 ('a failed put-back of the import', {'put_back_ok': False}, ['preserve', 'put_back'], 'page'),
+                 ('a signal after the import', {'stop_after_import': True}, ['preserve', 'put_back'], None),
+                 ('a signal during the page', {'page_mode': 'interrupt'}, ['preserve', 'put_back'], 'page'),
+                 ('a page stopping before the acknowledgement', {'page_mode': 'stop-before-ack'}, ['preserve', 'put_back'],
+                  'page'),
+                 ('a signal while the baseline is made', {'stop_in_baseline': True}, [], None),
+                 ('a unit that fails to start', {'failing_starts': {'odoo.service'}}, [], None))
+        for label_text, changes, ops, mode in cases:
+            with self.subTest(label_text):
+                with with_dev(**changes):
+                    run = simulate(load('odoo_ck_stop'), ['--run', '--via-page'] if mode == 'page' else ['--run'],
+                                   bridge=bridge_module() if mode == 'page' else None)
+                self.assertEqual(run.code, 1)
+                self.assertEqual(preserve_ops(run.dev), ops)
+                self.assertIn((RETURN[0], True), [(r['check'], r['ok']) for r in run.results])
+                as_found(self, run.dev)
+                self.assertTrue(run.receipt['complete'])
+                if ops:
+                    self.assertEqual(run.receipt['preserved']['phase'], 'returned')
+
+    def test_an_own_restore_that_fails_still_returns_it_but_the_receipt_stays_pending(self):
+        with with_dev(own_restore_ok=False):
+            run = simulate(load('odoo_ck_own_fail'), ['--run'])
+        self.assertEqual(run.code, 1)
+        self.assertIn((RETURN[0], True), [(r['check'], r['ok']) for r in run.results])
+        self.assertEqual(run.dev.backups[OLD_SAFETY], run.dev.original[OLD_SAFETY])
+        self.assertEqual(run.dev.hidden, {})
+        self.assertFalse(run.receipt['complete'])
+        self.assertEqual(run.receipt['preserved']['phase'], 'returned')
+
+    def test_while_a_job_of_the_run_may_still_run_it_stays_out_of_view_and_the_receipt_pending(self):
+        with with_dev(stuck_restore=True):
+            run = simulate(load('odoo_ck_stuck'), ['--run'])
+        self.assertEqual(run.code, 1)
+        self.assertIn('recovery: every job of this run ended in time (otherwise everything stays for the coordinator)',
+                      failed(run))
+        self.assertIn(RETURN[0], failed(run))
+        self.assertEqual(preserve_ops(run.dev), ['preserve'])   # never put back behind a running restore
+        self.assertIn(OLD_SAFETY, run.dev.hidden)
+        self.assertEqual(run.dev.pruned, [])
+        self.assertFalse(run.receipt['complete'])
+        self.assertEqual((run.receipt['preserved']['phase'], run.receipt['preserved']['ids']), ('moved', [OLD_SAFETY]))
+
+    def test_a_backup_listed_back_with_another_record_is_no_proven_return(self):
+        with with_dev(put_back_alters=True):
+            run = simulate(load('odoo_ck_altered'), ['--run'])
+        self.assertEqual(run.code, 1)
+        self.assertIn(RETURN[0], failed(run))
+        self.assertEqual(run.receipt['preserved']['phase'], 'return-unproven')
+        self.assertFalse(run.receipt['complete'])
+
+    def test_a_return_that_cannot_be_proven_records_where_each_file_is(self):
+        with with_dev(put_back_fail=True):
+            run = simulate(load('odoo_ck_unproven'), ['--run'])
+        self.assertEqual(run.code, 1)
+        self.assertIn(RETURN[0], failed(run))
+        self.assertIn(AFTER[1], failed(run))
+        preserved = run.receipt['preserved']
+        self.assertEqual(preserved['phase'], 'return-unproven')
+        self.assertEqual(preserved['where']['files'], {OLD_SAFETY + '.tar': {'archives': False, 'private': True},
+                                                       OLD_SAFETY + '.json': {'archives': False, 'private': True}})
+        self.assertFalse(run.receipt['complete'])
+        self.assertEqual(preserve_ops(run.dev), ['preserve', 'put_back', 'where'])
+        # Such a receipt stops the next run before the lock (admission: no earlier run of this case is pending).
+        folder = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / 'odoo_cold_keep_flow.json').write_text(json.dumps(run.receipt))
+        self.assertTrue(load('odoo_ck_next').Receipt(folder / 'odoo_cold_keep_flow.json').pending())
+
+
 class InputTests(unittest.TestCase):
     def test_the_driver_hands_the_bridge_exactly_its_inputs(self):
         m = load('odoo_ck_inputs')
@@ -1023,7 +1259,7 @@ class InputTests(unittest.TestCase):
         self.assertEqual((m.DEVICE, m.LOCK, m.h.DEVICE), ('woowbk-dev-c', '/tmp/woowbk-dev-c-mutation.lock', 'woowbk-dev-c'))
         self.assertEqual(m.HA_ID, 'ha-1840b054568cb54d9b79')
         self.assertEqual([unit for unit, _c, _u in m.UNITS], ['odoo-db.service', 'odoo.service', 'odoo-gateway.service'])
-        for name in HELPER + COCKPIT + UNCHANGED + page_block({k: 'x' * 3 for k in ('upload', 'select', 'view', 'lines',
+        for name in HELPER + COCKPIT + UNCHANGED + PROTECT + RETURN + page_block({k: 'x' * 3 for k in ('upload', 'select', 'view', 'lines',
                                                                                   'result', 'intent', 'keys')})[18:]:
             self.assertEqual(m.label(name), name)   # the driver's own lines are in the fixed vocabulary, none is cut
         bridge = bridge_module()

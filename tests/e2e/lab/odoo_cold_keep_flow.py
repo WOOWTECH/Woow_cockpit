@@ -38,7 +38,8 @@ odoo_cold_keep_flow.json lists what it made; written at every change, complete o
              run's writes), installed engine == --source (default this checkout; it must hold the cold-keep fixes
              816e4889/647fe670), no job running, the Quadlets/env pin the substitute images (each loaded with its
              recorded ID), the three units all inactive or all active, the retention policy keeps every manual Odoo
-             backup, no older Odoo safety backup the run's two restores would make the product prune (keep 3 newest)
+             backup, every older Odoo safety backup the run's restores would make the product prune is protectable
+             (none in use by a job or pinned by a failed restore, at most 5: refused otherwise)
   setup      the stack up (started when found inactive, after a memory check), the engine reports Odoo running, the
              containers run the substitute image IDs and Odoo's upgrade marker names the substitute web image, the
              device headroom for the jobs and the Cockpit session (1280 MiB)
@@ -46,6 +47,12 @@ odoo_cold_keep_flow.json lists what it made; written at every change, complete o
              database woowbk_lab_other; every backup, HA record and job id recorded
   baseline   a FRESH backup of dev-c's own Odoo (this run's: it opens, its restore preflight passes, retention deleted
              nothing), then the extra database woowbk_lab_other with one marker row (this run's)
+  protect    before the first restore: the product keeps the 3 newest safety backups per app after each successful
+             restore (flows.prune_safety); the import and the own restore add two and a kept copy, so every older Odoo
+             safety backup would be deleted (dev-c: 20261124T152230Z-5f41c20c, odoo+n8n, which N8-01 protects and
+             returned). They leave the product's view whole: recorded in the receipt, then by the device program
+             odoo_cold_keep_preserve.py (the N8-01 primitives reused: native_locks, read_regular, atomic) under the
+             engine's own locks, hash-bound to the listing, moved by link + unlink into a private root folder
   import     page or helper: the check (exactly odoo; importable; the choice offers exactly woowtest and woowtest2; the
              whole-cluster line restore.other-databases names woowbk_lab_other; every confirmation line of woowtest2 is a
              reviewed one, keyed), the chain (conversion with the choice, restore not rolled back, health ok, no warning,
@@ -59,17 +66,22 @@ odoo_cold_keep_flow.json lists what it made; written at every change, complete o
              the run is waited for (30 min), then -- once an import job exists -- the baseline is restored and dev-c's
              own Odoo compared exactly with the record (facts, partners, databases; woowbk_lab_other dropped when still
              there); without an import job the same comparison without a restore
+  return     after that last restore and before the cleanup, on every path: the protected backups back under their own
+             names byte for byte (inode, SHA-256, size, mode, owner, mtime) and listed by the product as before; never
+             while a job of the run may still run; a return that cannot be proven leaves the receipt pending with the
+             exact state (where each file is)
   cleanup    only what this run made, and only once dev-c's own Odoo is verifiably back: the conversion, the safety
              backups, the kept copy, the baseline; the HA record when this run uploaded it; the units it started; no job
              object, staging folder or key file. Otherwise everything stays for the coordinator (receipt pending)
   leaks      the HA test values (key, passwords, the n8n credential value) in the engine's records, uploads, run dir and
              the device journal; with --via-page devadmin's Cockpit password too; every registered value in this run's
              private evidence: 0 hits
-  after      isolation; backups and HA records exactly as before; Quadlets and env byte for byte; no job running
+  after      isolation; backups (the protected ones included) and HA records exactly as before; Quadlets and env byte
+             for byte; no job running
 
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the source commit, the lock time and the count line); details go to
 the private, redacted evidence folder ~/.woowbk-lab/evidence/odoo-cold-keep/<time>/ (0700, files 0600). A passing run has
-52 checks (helper path) or 78 (--via-page: 27 of them the page's own and the bridge's gates). Exit status: 0 every check
+54 checks (helper path) or 80 (--via-page: 27 of them the page's own and the bridge's gates). Exit status: 0 every check
 passed, 1 a check failed (the recovery ran), 2 refused before the lock (nothing on dev-c read), 3 the lock stayed taken.
 The page's restore keeps a whole-cluster copy that only the restore's result names: focus_page_bridge.created_by counts it
 as the page's own backup (19f77889), otherwise the gate no_unexplained_backups fails and the copy escapes the cleanup.
@@ -152,6 +164,7 @@ REPIN_SHA = {'web': 'a147d805c2bb9c7fb36a4b88731475ab8d0160bb4bcea23ab9160780e40
              'gateway': 'd0f726947d7012063d816f46ac33609259a9c291ccc8f584749231706062f579',
              'env': '7e973eb42dae8f0b7e452b405d31e5782e20acae9bf9e5221b0f29e38da98aeb'}
 SAFE_LABEL = re.compile(r"[^A-Za-z0-9 ,()/:'<>.=_-]")
+ROW_FIELDS = ('id', 'type', 'created', 'size', 'sha256', 'note', 'apps', 'key_id', 'verified')   # a listed backup, compared
 SQL_DATABASES = 'SELECT datname FROM pg_database WHERE datistemplate=false ORDER BY datname;'
 SQL_PARTNERS = 'SELECT count(*) FROM res_partner;'
 SQL_MARKER = "SELECT coalesce(string_agg(marker, ',' ORDER BY marker), '') || '|' || count(*) FROM lab_keep;"
@@ -168,6 +181,7 @@ def _load(name):
 h = _load('ha_import_e2e')
 h.DEVICE = DEVICE                 # every helper/owner/root call of the dev-c driver goes to dev-c (its default too)
 Failed = h.Failed
+keep = _load('odoo_cold_keep_preserve')   # the older Odoo safety backups out of view and back (N8-01 primitives)
 HA_ID = 'ha-' + FIXTURE_SHA[:20]
 
 
@@ -520,6 +534,10 @@ class Run:
         self.partners = None          # woowtest2's partner count from the check
         self.ack = None               # what the one acknowledgement sends
         self.restored = False         # dev-c's own Odoo verifiably as before (restored, or never changed)
+        self.at_risk = {}             # older Odoo safety backups the restores would prune: id -> the listed SHA-256
+        self.at_risk_rows = {}        # ... and their listed records (compared field for field after the return)
+        self.preserved = None         # their move out of the product's view: case, ids, expect, phase, files
+        self.settled = True           # False when a job of this run was still running at the recovery
 
     # -------- helpers
     def require(self, name, ok, detail=''):
@@ -619,13 +637,18 @@ class Run:
         self.require('preflight: odoo-db, odoo and odoo-gateway are all inactive (started for this run) or all active '
                      '(used as they are)', states in ({'inactive'}, {'active'}), self.found)
         policy = h.ok('retention-plan', {}, ev=ev)
-        keep = keep_last(policy.get('saved_policy'), APP)
+        keep_n = keep_last(policy.get('saved_policy'), APP)
         self.require('preflight: the retention policy keeps every manual Odoo backup (the baseline makes it delete none)',
-                     keep is None, {'keep_last': keep, 'policy_problem': bool(policy.get('policy_problem'))})
+                     keep_n is None, {'keep_last': keep_n, 'policy_problem': bool(policy.get('policy_problem'))})
         backups, ha = self.listing()
-        risk = safety_at_risk(backups)
-        self.require('preflight: no earlier Odoo safety backup that this run\'s two restores would make the product prune '
-                     '(keep 3 newest)', not risk, {'at_risk': risk[:10]})
+        risk, rows = safety_at_risk(backups), {row.get('id'): row for row in backups}
+        pinned = sorted(set(risk) & {row.get('id') for row in policy.get('protected') or [] if isinstance(row, dict)})
+        self.at_risk = {bid: rows[bid].get('sha256') for bid in risk}
+        self.at_risk_rows = {bid: {key: rows[bid].get(key) for key in ROW_FIELDS} for bid in risk}
+        self.require('preflight: the older Odoo safety backups the restores would make the product prune can be protected '
+                     '(none in use or pinned, at most 5)', len(risk) <= keep.MAX_IDS and not pinned
+                     and all(isinstance(sha, str) and keep.SHA.fullmatch(sha) for sha in self.at_risk.values()),
+                     {'at_risk': risk[:10], 'in_use_or_pinned': pinned})
         self.backups_before = sorted(row.get('id') for row in backups)
         self.ha_before = sorted(row.get('id') for row in ha)
 
@@ -736,6 +759,65 @@ class Run:
                f"CREATE TABLE lab_keep(marker text PRIMARY KEY); INSERT INTO lab_keep VALUES ('{MARKER}');")
         self.require('extra database: woowbk_lab_other with one marker row created in dev-c\'s Odoo cluster (this run\'s '
                      'own)', EXTRA_DB in self.databases() and self.marker() == f'{MARKER}|1')
+
+    # -------- the older Odoo safety backups out of the product's view while the run's restores could prune them
+    def step_protect(self):
+        """Before the first restore: every older Odoo safety backup the run's restores would make the product prune
+        (flows.prune_safety keeps the 3 newest per app; this run adds two and a kept copy) leaves the product's view whole,
+        recorded first (receipt, then the device's own record), hash-bound to what the product listed."""
+        ev = self.ev
+        name = ('protect: the older Odoo safety backups the restores would prune are out of the product\'s view (moved '
+                'whole, hashes recorded first)')
+        if not self.at_risk:
+            ev.check(name, True, {'moved': 0})
+            return
+        ids = sorted(self.at_risk)
+        self.preserved = {'case': 'odoo-ck-' + ev.dir.name, 'ids': ids, 'expect': dict(self.at_risk), 'phase': 'moving',
+                          'parent': keep.PARENT, 'files': {}}
+        self.note(preserved=dict(self.preserved))   # before the move: from here every stop path returns them
+        result = root_json(keep.device_program(HERE), {'op': 'preserve', 'case': self.preserved['case'], 'ids': ids,
+                                                       'expect': self.preserved['expect']}, timeout=300)
+        files = result.get('files') if isinstance(result.get('files'), dict) else {}
+        self.preserved.update(phase='moved', files=files)
+        self.note(preserved=dict(self.preserved))
+        listed = {row.get('id') for row in self.listing()[0]}
+        self.require(name, result.get('phase') == 'moved' and sorted(files) == sorted(n for bid in ids for n in keep.names_out(bid))
+                     and all((files.get(bid + '.tar') or {}).get('sha256') == self.at_risk[bid] for bid in ids)
+                     and not listed & set(ids), {'moved': ids, 'still_listed': sorted(listed & set(ids))})
+
+    def return_preserved(self):
+        """After the last restore of the run (the recovery's), before the cleanup: the moved backups back under their own
+        names, byte for byte, and listed by the product exactly as before. Never while a job of the run may still run (a
+        later prune could delete them); a return that cannot be proven leaves the receipt pending with the exact state."""
+        ev = self.ev
+        name = ('protect: the older Odoo safety backups are back byte for byte (names, mode, owner, mtime, SHA-256) and '
+                'listed as before')
+        p = self.preserved
+        if not p or p.get('phase') == 'returned':
+            ev.check(name, True, {'returned': 0})
+            return
+        if not self.settled or h.ok('status', ev=ev).get('active_job'):
+            ev.check(name, False, {'kept_out_of_view_for_the_coordinator': p['ids'], 'reason': 'a job is still running'})
+            return
+        try:
+            result = root_json(keep.device_program(HERE), {'op': 'put_back', 'case': p['case'], 'ids': p['ids']}, timeout=300)
+            rows = {row.get('id'): row for row in self.listing()[0]}
+            listed = all({key: (rows.get(bid) or {}).get(key) for key in ROW_FIELDS} == self.at_risk_rows.get(bid)
+                         and (rows.get(bid) or {}).get('sha256') == sha for bid, sha in p['expect'].items())
+            exact = result.get('phase') == 'none-moved' or not p.get('files') or result.get('files') == p['files']
+            ok = result.get('phase') in ('returned', 'none-moved') and exact and listed
+        except (Failed, subprocess.TimeoutExpired, OSError, ValueError) as error:
+            result, ok = {'error': type(error).__name__}, False
+        if ok:
+            p.update(phase='returned', restored_files=result.get('restored_files'))
+        else:
+            try:   # the exact state for the coordinator: where each file is now
+                p.update(phase='return-unproven', where=root_json(keep.device_program(HERE),
+                                                                 {'op': 'where', 'case': p['case'], 'ids': p['ids']}))
+            except (Failed, subprocess.TimeoutExpired, OSError, ValueError) as error:
+                p.update(phase='return-unproven', where={'error': type(error).__name__})
+        self.note(preserved=dict(p))
+        ev.check(name, ok, {'ids': p['ids'], 'phase': p['phase'], 'restored_files': result.get('restored_files')})
 
     # -------- the import: the helper calls the page sends
     def space(self):
@@ -1002,6 +1084,7 @@ class Run:
         try:
             chain = self.settle()
         except Failed as error:
+            self.settled = False   # a job may still run: nothing is restored or returned behind it
             ev.check('recovery: every job of this run ended in time (otherwise everything stays for the coordinator)', False,
                      str(error)[:200])
             return
@@ -1163,7 +1246,7 @@ class Run:
         if not self.changed:
             return
         complete = (self.restored and not self.created and not self.baseline and not self.created_ha
-                    and not self.started and not self.extra_db)
+                    and not self.started and not self.extra_db and (not self.preserved or self.preserved.get('phase') == 'returned'))
         self.note(restored=self.restored, complete=complete, signals_ignored=SIGNALS['ignored'])
 
 
@@ -1171,7 +1254,7 @@ def run_all(run):
     """The run's phases, then -- whatever stopped them -- the recovery, cleanup, leak scans and the after checks."""
     ev = run.ev
     steps = (('preflight', run.preflight), ('setup', run.setup), ('before', run.step_before),
-             ('baseline', run.step_baseline), ('extra database', run.step_extra_db),
+             ('baseline', run.step_baseline), ('extra database', run.step_extra_db), ('protect', run.step_protect),
              ('import', run.step_page_import if run.via_page else run.step_import), ('verify', run.verify_import))
     failed = None
     try:
@@ -1185,7 +1268,8 @@ def run_all(run):
         ev.check(f'run stopped in a step ({type(error).__name__})', False, str(error)[:300])
     finally:
         SIGNALS['recovering'] = True
-        parts = (('recovery', run.recover), ('cleanup', run.cleanup), ('leaks', run.leaks)) if run.changed else ()
+        parts = ((('recovery', run.recover), ('return', run.return_preserved), ('cleanup', run.cleanup),
+                  ('leaks', run.leaks)) if run.changed else ())
         for name, part in parts + (('after', run.after),):
             try:
                 ev.log(f'== {name}')
@@ -1199,8 +1283,9 @@ def run_all(run):
 # ---------------------------------------------------------------- offline self-check
 
 def self_check():
-    for program in (UNITS_PROGRAM, HEADROOM, ENGINE_HASHES):
+    for program in (UNITS_PROGRAM, HEADROOM, ENGINE_HASHES, keep.device_program(HERE)):
         compile(program, '<device program>', 'exec')
+    assert len(keep.device_program(HERE).encode()) < 120 * 1024   # one argv string (MAX_ARG_STRLEN 128 KiB)
     assert HA_ID == 'ha-1840b054568cb54d9b79' and len(FIXTURE_SHA) == 64
     for item in SUBSTITUTE.values():
         assert '@sha256:' in item['ref'] and len(item['id']) == 64 and '@sha256:' in item['source']
