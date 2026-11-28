@@ -11,7 +11,8 @@ refuses to start offline without a DERP map; only the derp block of dev-d's conf
 to it and put back), and the rest of the Headscale flow ran unchanged: real Tailscale clients (x86) registering and
 pinging through the embedded DERP region, identity and settings, restart, automatic rollback, the restore of dev-d's own
 Headscale, owned-only cleanup (converted and safety backups deleted, dev-d's baseline kept, the catalog entry this run
-installed removed again), leak scans of every registered value and isolation. **125/125** in 405 s (the lock held
+installed removed again), leak scans of every registered value and isolation. **123/123** (the driver's own total line; the capture's 125 PASS lines include its wrapper's two outer
+preflight checks, source tree committed and the dev-d lock; corrected 2026-11-28 by the evidence review) in 405 s (the lock held
 404 s).
 
 `page-full-flow.json` is the capture's fixed-status record (131 lines) and stdout hash. Private run:

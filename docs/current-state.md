@@ -192,12 +192,13 @@ base1 manifest 的 API 版本不能當 Cockpit 套件版本；安裝程式從 dp
 
 2026.11.19.x 只能匯入 Odoo、n8n。這一版把匯入擴大到這台以 Podman 部署、在 HA 也有對應 add-on 的十個服務：EMQX、Odoo、n8n、Nextcloud、Omnigent、LiteLLM、Hermes、Headscale、OpenDesign、code-server。並照負責人的方向（2026-11-25），讓體驗和「把 HAOS 備份還原到另一台 HAOS」一致：HAOS 不會擋的地方不擋，需要注意的事改成列出清單、確認一次後繼續。
 
-- 十個服務都在實驗室用真實的 HA 備份完整實測：檢查、匯入、匯入後與重新開機後的驗證、故意失敗時自動退回、退回原狀、清理與機密掃描；每個服務也都從 Cockpit 頁面實際操作匯入一次（EMQX 81、OpenDesign 103、Omnigent 與 Hermes 85、code-server 105、Nextcloud 含共享資料夾 4.47 GB 145 與不含 82、Headscale 125、n8n 61、LiteLLM 92、Odoo 80）。
+- 十個服務都在實驗室用真實的 HA 備份完整實測：檢查、匯入、匯入後與重新開機後的驗證、故意失敗時自動退回、退回原狀、清理與機密掃描；每個服務也都從 Cockpit 頁面實際操作匯入一次（EMQX 81、OpenDesign 103、Omnigent 與 Hermes 85、code-server 105、Nextcloud 含共享資料夾 4.47 GB 145 與不含 82、Headscale 123、n8n 61、LiteLLM 92、Odoo 80）。
 - Nextcloud：開了伺服器端加密的來源可以匯入，確認一次後解密照常（96）；符號連結與子資料夾裡的 `.htaccess` 不會搬，檢查會列出來請你確認（140）。
 - EMQX：匯入後套件自己的升級不再被誤判失敗而退回（Woow_podman_emqx #11），並實際從開源的 5.8.8 升到 5.8.9 驗證（61）。
 - 實測找到並修正兩個產品錯誤：Nextcloud 35 的加密設定值 `1` 沒被認出；資料庫登入被拒、帳號或資料庫不存在，都被說成「資料庫還沒有準備好」。
 - 沒有實測：ARM 機器做的新服務備份（這一輪由負責人決定略過；Odoo、n8n 的 ARM 備份 2026.11.19.2 已接受）、Odoo 的原始租戶映像（只用替代映像實測）、超過 8 GiB 的單一項目。
 - 完整驗收紀錄：[backup/final-acceptance-status.md](backup/final-acceptance-status.md)。
+- 十服務證據總核對：[backup/ten-service-evidence-review.md](backup/ten-service-evidence-review.md)，逐一列出每個服務已證明與還沒證明的項目。
 
 ## 2026.11.19.2：接受 ARM 機器做的 HA 備份
 

@@ -134,7 +134,7 @@ N1 的提交紀錄只看得到 84 個檢查名稱。第 85 個 `mismatch_refused
 | HS2 | 原始未加密 x86 完整流程（HS-15 之後） | 96／96 | 11-27 | dev-d | `6ccf7106` | 輔助程式 | [original-ha-x86-full-flow.json](../../tests/backup/evidence/parity-headscale-virtual-20261127/original-ha-x86-full-flow.json) |
 | HS3 | 額外虛擬資料表：沙盒子程序（產生的資料庫） | 通過 | 11-27 | dev-d | `6ccf7106` | 產生的來源 | [installed-child-generated.json](../../tests/backup/evidence/parity-headscale-virtual-20261127/installed-child-generated.json) |
 
-HS1 的證據 README 也寫 125／125；證據檔保持原樣，狀態文件已改成驅動程式自己的 123／123。
+HS1 的證據 README 原本也寫 125／125，已同步改成驅動程式自己的 123／123（2026-11-28）；狀態文件也已改正。
 
 ### OpenDesign
 
