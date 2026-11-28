@@ -624,6 +624,55 @@ class ViaPageFlowTests(unittest.TestCase):
         self.assertEqual(run.dev.ha, [])
         self.assertIn('page_cockpit_password_absent', [r['check'] for r in run.results])
 
+    def test_the_bridges_wait_ends_at_the_terminal_state_and_recovery_waits_for_the_busy_unit(self):
+        """The chain runs in its first job's unit: the conversion is terminal while that unit still runs the restore. The
+        bridge's wait (page_wait) returns at the terminal state and owns the backup at once; adopting the page then waits
+        for every unit to be quiet with the chain's first job as the receipt's pending job (recovery would settle it)."""
+        m = load('ll_waits')
+        first, second = 'j20261128T120000Z-0000aaa1', 'j20261128T120001Z-0000aaa2'
+        converted, safety = '20261128T120000Z-0b0b0b01', '20261128T120001Z-0c0c0c01'
+        root = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        path = root / 'receipt.json'
+        seen = {'polls': 0, 'pending_while_busy': []}
+        jobs = {first: {'id': first, 'type': 'backup', 'state': 'succeeded', 'result': {
+                    'backup_id': converted, 'group': {'next_job_id': second}}},
+                second: {'id': second, 'type': 'restore', 'state': 'running', 'result': {}}}
+
+        class Transport:
+            def helper(self, command, request, **_kwargs):
+                if command == 'job-status':
+                    return 0, {'ok': True, 'job': copy.deepcopy(jobs[request['job_id']])}
+                if command == 'list':
+                    return 0, {'ok': True, 'backups': [], 'ha_backups': []}
+                raise AssertionError(command)
+
+            def root(self, *_args, input, **_kwargs):
+                q = json.loads(input)
+                assert q['op'] == 'job_quiescent', q['op']
+                seen['polls'] += 1
+                seen['pending_while_busy'].append(json.loads(path.read_text())['pending'])
+                if seen['polls'] == 3:   # the restore ends: the first job's unit goes quiet
+                    jobs[second].update(state='succeeded', result={'safety_backup_id': safety,
+                                                                   'group': {'next_job_id': None, 'results': []}})
+                return SimpleNamespace(returncode=0, stdout=json.dumps(seen['polls'] >= 3).encode())
+        c = m.Controller(SimpleNamespace(receipt=path, source='unused'), lease(m.plan, fixture_sha=m.plan.FIXTURE_SHA),
+                         SimpleNamespace(drv=Transport()), clock=Clock(), sleep=lambda _s: None)
+        c.r['before_backups'] = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            job = c.page_wait(first, 600)
+            self.assertEqual((job['state'], seen['polls'], c.r['created_backups']), ('succeeded', 0, [converted]))
+            with self.assertRaisesRegex(TimeoutError, 'still running'):
+                c.page_wait(second, 0.05)   # bounded by the bridge's own timeout
+            c.adopt_page({'phase': 'judged', 'root_job_id': first, 'check_job_id': None})
+        self.assertEqual(seen['pending_while_busy'][0], {'command': 'page', 'request_id': 'page', 'tag': 'page',
+                                                         'job_id': first})
+        self.assertIsNone(c.r['pending'])
+        self.assertEqual(c.r['created_backups'], [converted, safety])
+        self.assertEqual(c.r['converted'], converted)
+        self.assertEqual(set(c.r['jobs']), {first, second})
+        self.assertNotIn('store_id', c.r)   # nothing listed: no upload of the page's to remove
+
     def test_the_lease_must_name_the_page_import_exactly_when_via_page_is_given(self):
         m = load('ll_lease')
         plan = m.plan
