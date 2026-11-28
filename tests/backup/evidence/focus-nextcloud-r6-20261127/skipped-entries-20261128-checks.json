@@ -1,0 +1,602 @@
+{
+  "status": "passed",
+  "phase": "skipped-entries-import",
+  "device": "woowbk-dev-e",
+  "attempt": 2,
+  "passed": 140,
+  "failed": 0,
+  "sections": {
+    "preflight": 1,
+    "setup": 4,
+    "before": 5,
+    "upload": 3,
+    "check": 5,
+    "convert": 2,
+    "import": 31,
+    "restart": 26,
+    "rollback": 4,
+    "auto rollback": 27,
+    "recovery": 5,
+    "after": 16,
+    "cleanup gate": 2,
+    "cleanup": 6,
+    "leaks": 3
+  },
+  "checks": [
+    {
+      "check": "preflight: no existing job is running",
+      "ok": true
+    },
+    {
+      "check": "setup: installed engine equals committed source",
+      "ok": true
+    },
+    {
+      "check": "setup: original catalog hash retained",
+      "ok": true
+    },
+    {
+      "check": "setup: five units active and Nextcloud healthy",
+      "ok": true
+    },
+    {
+      "check": "setup: the installed engine, helper and VERSION are the frozen product",
+      "ok": true
+    },
+    {
+      "check": "before: original encrypted baseline opens with existing private kit",
+      "ok": true
+    },
+    {
+      "check": "before: dev-e's own markers read (baseline user and its WebDAV file)",
+      "ok": true
+    },
+    {
+      "check": "before: dev-e's own account logs in (OCS) and the wrong password is refused",
+      "ok": true
+    },
+    {
+      "check": "before: fresh live directory sizes available",
+      "ok": true
+    },
+    {
+      "check": "before: the derived folder is not in dev-e's own data dir (anything there later came from the import)",
+      "ok": true
+    },
+    {
+      "check": "upload: the derived backup is made while the original is read once and streamed once into the upload file (the original's SHA-256, the derived bytes and SHA-256 exact on the host and inside dev-e; nothing materialised)",
+      "ok": true
+    },
+    {
+      "check": "upload: upload-finish publishes the HA record of exactly the derived file (id, SHA-256, size), nextcloud importable and installed here",
+      "ok": true
+    },
+    {
+      "check": "upload: the published HA file is the inode written inside dev-e, its full SHA-256 again",
+      "ok": true
+    },
+    {
+      "check": "check: the job succeeds for nextcloud alone, importable, no stop",
+      "ok": true
+    },
+    {
+      "check": "check: exactly two lines to confirm: nextcloud.symlinks-skipped naming exactly the reviewed link and nextcloud.htaccess-skipped naming exactly the reviewed .htaccess, the product's texts, each with the key bound to that name",
+      "ok": true
+    },
+    {
+      "check": "check: every other line is a notice or an automatic step, none about file lists (the control file is no user's file), all recorded",
+      "ok": true
+    },
+    {
+      "check": "check: the section is the original full share's with the control file as one more file of the data directory",
+      "ok": true
+    },
+    {
+      "check": "check: amd64, add-on 0.2.3, target 35.0.1.1",
+      "ok": true
+    },
+    {
+      "check": "convert: without any acknowledgement the conversion is refused at the link line (confirmation-required naming exactly it with its bound key, Nextcloud skipped, no stop, no backup added)",
+      "ok": true
+    },
+    {
+      "check": "convert: with the link's bound key alone the conversion passes that line and is refused at the .htaccess line (confirmation-required naming exactly it with its bound key, no backup added)",
+      "ok": true
+    },
+    {
+      "check": "import: ha-convert-start succeeds (the product's space guard; host floor held)",
+      "ok": true
+    },
+    {
+      "check": "import: the notes and reminders name Collabora, the data fingerprint and the MCP admin lines",
+      "ok": true
+    },
+    {
+      "check": "import: inspect: preflight passes, settings same, in place",
+      "ok": true
+    },
+    {
+      "check": "import: the uploaded HA file is deleted before the restore (as the page allows; host space)",
+      "ok": true
+    },
+    {
+      "check": "import: restore-start succeeds with its safety backup and every health check ok",
+      "ok": true
+    },
+    {
+      "check": "import: nextcloud converted with exactly the two acknowledged lines (their bound keys), no stop",
+      "ok": true
+    },
+    {
+      "check": "import: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "import: the HA test user's WebDAV files (CJK names, nested, 4 MiB binary) have the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "import: every HA user's files on disk equal the backup (per-user manifest digests, showcase method)",
+      "ok": true
+    },
+    {
+      "check": "import: OCS login with the HA password and with HA's app password (secret moved); wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "import: the second HA user reads the file shared with them (user share moved)",
+      "ok": true
+    },
+    {
+      "check": "import: the password-protected public link serves the file; without or with a wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "import: the HA test user's CalDAV event is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "import: the HA test user's CardDAV contact is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "import: the older version is on disk and listed by the versions API",
+      "ok": true
+    },
+    {
+      "check": "import: Office settings (richdocuments wopi keys) and the cron mode are exactly this device's",
+      "ok": true
+    },
+    {
+      "check": "import: Nextcloud reports this device's Office server (capabilities as for dev-e's own account)",
+      "ok": true
+    },
+    {
+      "check": "import: Collabora discovery is served on this device's gateway",
+      "ok": true
+    },
+    {
+      "check": "import: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "import: occ files:scan --all: nothing new, nothing removed, no error (the database and the files agree)",
+      "ok": true
+    },
+    {
+      "check": "import: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "import: the web server serves nothing below the data dir (Nextcloud's own protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "import: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "import: Office: the HA user's document has a WOPI session of this device (its file served, wrong token 403)",
+      "ok": true
+    },
+    {
+      "check": "import: Office: this device's Collabora opens the document over WOPI and its text is the document's",
+      "ok": true
+    },
+    {
+      "check": "import: Office: a text typed in Collabora is saved into Nextcloud (the rest of the document kept)",
+      "ok": true
+    },
+    {
+      "check": "import: Office: the copy, its trash entry and the lab relay are gone",
+      "ok": true
+    },
+    {
+      "check": "import: the two left-out entries are not on disk: no nested .htaccess and no symbolic link anywhere below the data dir, neither left-out name in the derived folder",
+      "ok": true
+    },
+    {
+      "check": "import: the control file next to them is there byte for byte (SHA-256, size; owned like the data dir's protection file) and the derived folder holds nothing else",
+      "ok": true
+    },
+    {
+      "check": "import: the data dir's protection file is the one this device writes (Nextcloud's own rules, exact SHA-256)",
+      "ok": true
+    },
+    {
+      "check": "import: the web server serves nothing of the derived folder (control file, folder and both left-out names: 403/404)",
+      "ok": true
+    },
+    {
+      "check": "restart: nextcloud-app restarted, five units active, status.php answers",
+      "ok": true
+    },
+    {
+      "check": "restart: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "restart: the HA test user's WebDAV files (CJK names, nested, 4 MiB binary) have the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "restart: every HA user's files on disk equal the backup (per-user manifest digests, showcase method)",
+      "ok": true
+    },
+    {
+      "check": "restart: OCS login with the HA password and with HA's app password (secret moved); wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "restart: the second HA user reads the file shared with them (user share moved)",
+      "ok": true
+    },
+    {
+      "check": "restart: the password-protected public link serves the file; without or with a wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "restart: the HA test user's CalDAV event is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "restart: the HA test user's CardDAV contact is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "restart: the older version is on disk and listed by the versions API",
+      "ok": true
+    },
+    {
+      "check": "restart: Office settings (richdocuments wopi keys) and the cron mode are exactly this device's",
+      "ok": true
+    },
+    {
+      "check": "restart: Nextcloud reports this device's Office server (capabilities as for dev-e's own account)",
+      "ok": true
+    },
+    {
+      "check": "restart: Collabora discovery is served on this device's gateway",
+      "ok": true
+    },
+    {
+      "check": "restart: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "restart: occ files:scan --all: nothing new, nothing removed, no error (the database and the files agree)",
+      "ok": true
+    },
+    {
+      "check": "restart: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "restart: the web server serves nothing below the data dir (Nextcloud's own protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "restart: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "restart: Office: the HA user's document has a WOPI session of this device (its file served, wrong token 403)",
+      "ok": true
+    },
+    {
+      "check": "restart: Office: this device's Collabora opens the document over WOPI and its text is the document's",
+      "ok": true
+    },
+    {
+      "check": "restart: Office: a text typed in Collabora is saved into Nextcloud (the rest of the document kept)",
+      "ok": true
+    },
+    {
+      "check": "restart: Office: the copy, its trash entry and the lab relay are gone",
+      "ok": true
+    },
+    {
+      "check": "restart: the two left-out entries are not on disk: no nested .htaccess and no symbolic link anywhere below the data dir, neither left-out name in the derived folder",
+      "ok": true
+    },
+    {
+      "check": "restart: the control file next to them is there byte for byte (SHA-256, size; owned like the data dir's protection file) and the derived folder holds nothing else",
+      "ok": true
+    },
+    {
+      "check": "restart: the data dir's protection file is the one this device writes (Nextcloud's own rules, exact SHA-256)",
+      "ok": true
+    },
+    {
+      "check": "restart: the web server serves nothing of the derived folder (control file, folder and both left-out names: 403/404)",
+      "ok": true
+    },
+    {
+      "check": "rollback: new owned injection paths are absent",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: a restore with a one-shot ExecStartPre failure ends rolled-back",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the HA test user's WebDAV files (CJK names, nested, 4 MiB binary) have the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: every HA user's files on disk equal the backup (per-user manifest digests, showcase method)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: OCS login with the HA password and with HA's app password (secret moved); wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the second HA user reads the file shared with them (user share moved)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the password-protected public link serves the file; without or with a wrong password 401",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the HA test user's CalDAV event is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the HA test user's CardDAV contact is served with its UID",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the older version is on disk and listed by the versions API",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Office settings (richdocuments wopi keys) and the cron mode are exactly this device's",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Nextcloud reports this device's Office server (capabilities as for dev-e's own account)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Collabora discovery is served on this device's gateway",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: occ files:scan --all: nothing new, nothing removed, no error (the database and the files agree)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the web server serves nothing below the data dir (Nextcloud's own protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Office: the HA user's document has a WOPI session of this device (its file served, wrong token 403)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Office: this device's Collabora opens the document over WOPI and its text is the document's",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Office: a text typed in Collabora is saved into Nextcloud (the rest of the document kept)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Office: the copy, its trash entry and the lab relay are gone",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the two left-out entries are not on disk: no nested .htaccess and no symbolic link anywhere below the data dir, neither left-out name in the derived folder",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the control file next to them is there byte for byte (SHA-256, size; owned like the data dir's protection file) and the derived folder holds nothing else",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the data dir's protection file is the one this device writes (Nextcloud's own rules, exact SHA-256)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the web server serves nothing of the derived folder (control file, folder and both left-out names: 403/404)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: its own safety backup (the imported state) is deleted",
+      "ok": true
+    },
+    {
+      "check": "rollback: the import's safety backup restored (manual rollback), every health check ok",
+      "ok": true
+    },
+    {
+      "check": "rollback: dev-e's own markers are back exactly and the HA-only users are gone",
+      "ok": true
+    },
+    {
+      "check": "rollback: dev-e's own account logs in again (OCS)",
+      "ok": true
+    },
+    {
+      "check": "recovery: original baseline independently verified",
+      "ok": true
+    },
+    {
+      "check": "recovery: exact pre-import markers restored",
+      "ok": true
+    },
+    {
+      "check": "recovery: all rollback checks passed",
+      "ok": true
+    },
+    {
+      "check": "after: dev-e's own markers are unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: config.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the users unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the storages and user count in the database unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the data dir top entries unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the five units unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: status.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the Office settings and the cron mode unchanged",
+      "ok": true
+    },
+    {
+      "check": "recovery: admission watcher has returned",
+      "ok": true
+    },
+    {
+      "check": "recovery: every new job has a recorded ID",
+      "ok": true
+    },
+    {
+      "check": "cleanup gate: original baseline independently verified",
+      "ok": true
+    },
+    {
+      "check": "after: dev-e's own markers are unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: config.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the users unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the storages and user count in the database unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the data dir top entries unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the five units unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: status.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the Office settings and the cron mode unchanged",
+      "ok": true
+    },
+    {
+      "check": "cleanup gate: exact baseline state comparisons passed",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: no throwaway container, volume or network of a job left",
+      "ok": true
+    },
+    {
+      "check": "cleanup: no staging folder and no key file left",
+      "ok": true
+    },
+    {
+      "check": "leaks: the HA key and the HA test credentials are in no engine record, upload, staging, run dir or the device journal, and not in this evidence",
+      "ok": true
+    },
+    {
+      "check": "leaks: the public link token is only in the Nextcloud web servers' access logs of the client's own public-link requests (a public link carries its token in the URL)",
+      "ok": true
+    },
+    {
+      "check": "leaks: existing baseline kit absent from records and evidence",
+      "ok": true
+    },
+    {
+      "check": "cleanup: all deletion and leak checks passed",
+      "ok": true
+    }
+  ],
+  "plan": {
+    "derived": {
+      "bytes": 4467947520,
+      "sha256": "757ab01f51aecd32a2f84f81968b2bb74902279235fc2033a1041d49d578d0f9"
+    },
+    "keys": [
+      "nextcloud.htaccess-skipped:be4255ffa0c0c68d",
+      "nextcloud.symlinks-skipped:21e15d17fb62cb3d"
+    ],
+    "provenance_sha256": "d69e10c5d0a6fda93fd903465362b051e77a56b29bf6a4883ede40582e144fa6",
+    "source_commit": "dcc9f43a36aba6130b026e1a2fa6b62eb7620ced",
+    "duration_s": 154.8
+  },
+  "derived_is_haos_export": false,
+  "commercial_acceptance": "not-complete"
+}

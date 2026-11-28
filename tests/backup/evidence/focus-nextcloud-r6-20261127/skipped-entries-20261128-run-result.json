@@ -1,0 +1,81 @@
+{
+  "status": "passed",
+  "phase": "skipped-entries-import",
+  "source_commit": "3b4d882393a94decfcda161dd91c168beea04162",
+  "product_commit": "b058df278d661cc6195cd40936ff6494036c63a1",
+  "provenance_sha256": "d69e10c5d0a6fda93fd903465362b051e77a56b29bf6a4883ede40582e144fa6",
+  "fixture_sha256": "2dcfc6769d6fed7dd5c375fc379aac43da606931c8378e3970c33f78a4bded9d",
+  "fixture_bytes": 4467947520,
+  "derived_sha256": "757ab01f51aecd32a2f84f81968b2bb74902279235fc2033a1041d49d578d0f9",
+  "derived_bytes": 4467947520,
+  "derived_materialized": false,
+  "upload_route": "host-derivation-streamed-once-into-the-upload-file",
+  "confirmation_keys": [
+    "nextcloud.htaccess-skipped:be4255ffa0c0c68d",
+    "nextcloud.symlinks-skipped:21e15d17fb62cb3d"
+  ],
+  "added_entries": [
+    "nextcloud/woowbk-r6-skipped-entries",
+    "nextcloud/woowbk-r6-skipped-entries/control.txt",
+    "nextcloud/woowbk-r6-skipped-entries/.htaccess",
+    "nextcloud/woowbk-r6-skipped-entries/control-link.txt"
+  ],
+  "prior_engine_manifest_sha256": "12cbeae4c294496de1ad8f574dbe6b7324cf7382703c54a86b860b0767c3f693",
+  "case_rc": 0,
+  "prior_engine_returned_exactly": true,
+  "owned_store_clean": true,
+  "store_delta": {
+    "archives": {
+      "added": [],
+      "removed": []
+    },
+    "ha-backups": {
+      "added": [],
+      "removed": []
+    },
+    "uploads": {
+      "added": [
+        "ua2b7f4e31cffd8f7.done"
+      ],
+      "removed": []
+    },
+    "jobs": {
+      "added": [
+        "j20261128T052047Z-6fbbdc49.json",
+        "j20261128T052047Z-6fbbdc49.lock",
+        "j20261128T052047Z-6fbbdc49.log",
+        "j20261128T052227Z-4c38aaa3.json",
+        "j20261128T052227Z-4c38aaa3.lock",
+        "j20261128T052227Z-4c38aaa3.log",
+        "j20261128T052425Z-b2abc172.json",
+        "j20261128T052425Z-b2abc172.lock",
+        "j20261128T052425Z-b2abc172.log",
+        "j20261128T052628Z-584cb916.json",
+        "j20261128T052628Z-584cb916.lock",
+        "j20261128T052628Z-584cb916.log",
+        "j20261128T053127Z-cb408b6d.json",
+        "j20261128T053127Z-cb408b6d.lock",
+        "j20261128T053127Z-cb408b6d.log",
+        "j20261128T053906Z-092557a9.json",
+        "j20261128T053906Z-092557a9.lock",
+        "j20261128T053906Z-092557a9.log",
+        "j20261128T054337Z-277cb73d.json",
+        "j20261128T054337Z-277cb73d.lock",
+        "j20261128T054337Z-277cb73d.log"
+      ],
+      "removed": []
+    }
+  },
+  "evidence_leak_scan": {
+    "files": 238,
+    "hits": 0,
+    "provenance_hits": 0
+  },
+  "fixed_failure": null,
+  "pulls": 0,
+  "private_receipt_dir": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-skipped-run/20261128T131617",
+  "case_evidence": [
+    "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-skipped-control/20261128T131620",
+    "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-skipped/20261128T131646"
+  ]
+}
