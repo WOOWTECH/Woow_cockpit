@@ -422,6 +422,27 @@ class FailureReasonTests(unittest.TestCase):
         self.assertEqual(podman.classify(b'Error: mkdir /home/x/.local: permission denied: unknown')[0], 'permission',
                          'a refusal of the file system is not a registry that refuses')
 
+    def test_a_refused_login_is_not_a_server_that_is_still_starting(self):
+        # libpq 14 and later (every PostgreSQL 16 image) start each failed connection with the words
+        # 'connection to server on socket "..." failed:' or 'connection to server at "...", port N failed:', the
+        # server's refusal follows them: the account and the name kinds must still be told (no retry helps them).
+        socket = b'psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: '
+        tcp = b'psql: error: connection to server at "127.0.0.1", port 5432 failed: '
+        for prefix in (socket, tcp):
+            for refusal, code in ((b'FATAL:  password authentication failed for user "odoo"', 'db-auth'),
+                                  (b'FATAL:  no pg_hba.conf entry for host "[local]", user "x", database "y"', 'db-auth'),
+                                  (b'FATAL:  database "nextcloud" does not exist', 'db-missing'),
+                                  (b'FATAL:  role "postgres" does not exist', 'role-missing'),
+                                  (b'FATAL:  the database system is starting up', 'db-not-ready'),
+                                  (b'FATAL:  the database system is in recovery mode', 'db-not-ready'),
+                                  (b'FATAL:  the database system is shutting down', 'db-not-ready')):
+                with self.subTest(prefix=prefix[22:44], code=code):
+                    self.assertEqual(podman.classify(prefix + refusal, 2)[0], code)
+        self.assertEqual(podman.classify(socket + b'No such file or directory\n\tIs the server running locally and '
+                                                  b'accepting connections on that socket?', 2)[0], 'db-not-ready')
+        self.assertEqual(podman.classify(tcp + b'Connection refused\n\tIs the server running on that host and '
+                                               b'accepting TCP/IP connections?', 2)[0], 'db-not-ready')
+
     def test_only_the_tail_of_a_huge_stderr_is_read(self):
         noise = b'x' * (podman.STDERR_TAIL * 2)
         self.assertEqual(podman.classify(b'no space left on device\n' + noise)[0], None)

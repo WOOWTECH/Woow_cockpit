@@ -1,0 +1,133 @@
+{
+  "status": "diagnosed",
+  "phase": "s5-check-postgres-diagnosis",
+  "verdict": "missing-postgres-role",
+  "reason": null,
+  "source_commit": "b0f5ce88f1bc086ac807b82630c747cbdbb81049",
+  "job_id": "j20261128T004555Z-5d1a7108",
+  "proof_root_unchanged": true,
+  "device_unchanged": true,
+  "engine_relevant_differs_from_s5b_product": [],
+  "image": "docker.io/pgvector/pgvector:0.8.6-pg16",
+  "member_bytes": 60313600,
+  "stream_intact": true,
+  "controldata_before": {
+    "state": "shut down",
+    "checkpoint": "0/1E27048",
+    "redo": "0/1E27048",
+    "redo_wal_file": "000000010000000000000001",
+    "timeline": "1"
+  },
+  "wal_files": [
+    "000000010000000000000001"
+  ],
+  "missing_dirs": [],
+  "root_entry_in_member": false,
+  "wait_ready": {
+    "ok": true,
+    "seconds": 3.3
+  },
+  "pg_isready_quiet_rcs": [
+    2,
+    0
+  ],
+  "pg_isready_answer": "accepting connections",
+  "first_attempt_equals_s5b_stop": true,
+  "attempts": [
+    {
+      "at": 0,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    },
+    {
+      "at": 5,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    },
+    {
+      "at": 10,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    },
+    {
+      "at": 20,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    },
+    {
+      "at": 40,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    },
+    {
+      "at": 60,
+      "ok": false,
+      "reason": "db-not-ready",
+      "stderr": [
+        "psql-connect FATAL role-missing name=postgres"
+      ]
+    }
+  ],
+  "role_probe": {
+    "connected_as": "config-dbuser",
+    "bootstrap_superuser": "nextcloud",
+    "postgres_role": false,
+    "postgres_database": true
+  },
+  "server": {
+    "state": {
+      "status": "running",
+      "running": true,
+      "oom": false,
+      "exit": 0,
+      "restarts": 0
+    },
+    "log_counts": {
+      "FATAL role-missing name=postgres": 11,
+      "LOG listening-socket path=/var/run/postgresql/.s.PGSQL.5432": 1,
+      "LOG ready": 1,
+      "LOG starting version=16.15": 1,
+      "LOG was-shut-down": 1,
+      "entrypoint-skip-init": 1
+    }
+  },
+  "failure": null,
+  "cleanup": {
+    "order": [
+      "server-state",
+      "remove-container",
+      "remove-volume",
+      "cleanup"
+    ],
+    "left": [],
+    "swept": {
+      "removed": [],
+      "left": []
+    }
+  },
+  "deviations": [
+    "hapg-log-driver-k8s-file",
+    "member-streamed-by-root-launcher",
+    "no-target-read",
+    "no-share-member-walk",
+    "extra-read-only-containers",
+    "diagnostic-attempts-and-role-probe",
+    "present-images-only"
+  ],
+  "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-s5-diag/20261128T084555-5d1a7108"
+}

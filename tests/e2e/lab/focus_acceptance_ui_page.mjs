@@ -4,7 +4,8 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { issueKeyCount, validImportIntent } from './focus_acceptance_ui_protocol.mjs';
+import { issueKeyCount, validImportIntent, pageExpectations, issueKeys, confirmLineCount, acknowledgedOf,
+  exactAcknowledged, planChoices } from './focus_acceptance_ui_protocol.mjs';
 import { parseSetCookie, digest, coverage, observedValues, provedPublicTombstone,
   nativeCapabilityProgram, readPrimarySourceProof } from './focus_acceptance_ui_cookies.mjs';
 
@@ -15,8 +16,30 @@ if (process.argv.slice(2).join(' ') !== '--run') {
 const config = JSON.parse(readFileSync(0, 'utf8'));
 if (!/^https:\/\/127\.0\.0\.1:[0-9]{1,5}$/.test(config.base)
     || !/^ha-[0-9a-f]{20}$/.test(config.ha_id)) throw new Error('invalid private transport configuration');
+// The apps to select and what to expect come from the controller; without them the R8 three-selected case.
+// `device` names the lab device whose Cockpit this is (focus_page_bridge.py); without it dev-d, exactly as before.
+const expect = pageExpectations(config);
+// The app ids the import request is read for: R8's three, and every app this run selects.
+const wireApps = new Set(['hermes', 'omnigent', 'emqx', ...expect.apps]);
+// Two modes only a config that says so enters (focus_page_bridge.py); every earlier config runs exactly as before:
+// `encrypted: false` - an unencrypted HA backup: the wizard has no key step, the page has no key and none is sent;
+// `choices` - the run names what the check may offer (an Odoo database, an add-on or a node); the page selects exactly
+// that, only from what the check lists, and the check's lines, keys and the requests are judged with it.
+const keyless = expect.encrypted === false;
+const choosing = expect.choices !== undefined;
+if (keyless && config.key !== undefined && config.key !== null) throw new Error('invalid private transport configuration');
+const modes = keyless || choosing;
+const requestsSeen = { check: [], import: null };   // modes only: what each request carried (key: present or not)
+const checkIds = new Set();                         // modes only: the finished checks this page saw
+let latestCheck = null, latestCheckChoices = null, chosenDatabase, rechecks = 0;
+const picked = {};                                  // choices only: the add-on/node radios this page set
+const keyStep = {};                                 // unencrypted only: what the wizard showed of a key step
+let choiceRecord = null;                            // choices only: what was named, offered, chosen and sent
 const { chromium } = await import(pathToFileURL(config.playwright).href);
 const checks = [];
+// Exact mode only: the check's confirmation keys and lines against the one request the page sent (keys, never values).
+const confirmations = expect.exact
+  ? { expected_keys: null, sent_keys: null, lines_expected: null, lines_shown: null, check_importable: null } : null;
 const channels = new Map();
 const requests = new Set();
 const responseBuffers = new Map();
@@ -47,11 +70,47 @@ function observe(payload) {
     if (!Array.isArray(value.apps) || typeof value.request_id !== 'string') { wire.malformed++; return; }
     requests.add(value.request_id);
     wire.unique_import_requests = requests.size;
-    wire.import_apps = value.apps.filter(x => ['hermes', 'omnigent', 'emqx'].includes(x)).sort();
+    wire.import_apps = value.apps.filter(x => wireApps.has(x)).sort();
     wire.then_restore = value.then_restore === true;
     wire.confirm = value.confirm === true;
     wire.overwrite = value.overwrite === true;
     wire.acknowledged_keys = Object.values(value.acknowledged || {}).reduce((n, xs) => n + (Array.isArray(xs) ? xs.length : 0), 0);
+    if (confirmations) confirmations.sent_keys = acknowledgedOf(value.acknowledged);
+    if (modes) requestsSeen.import = { key: Object.hasOwn(value, 'key'), choices: choicesOf(value.choices) };
+  } else if (modes && channel && channels.get(channel) === 'ha-check-start') {
+    // Whether the check request carried a key (never its value) and which choices it was given.
+    requestsSeen.check.push({ key: Object.hasOwn(value, 'key'), choices: choicesOf(value.choices) });
+  }
+}
+
+// The `choices` of a request as {app: {kind: value}} of plain strings (null: none sent; 'malformed': anything else).
+function choicesOf(value) {
+  if (value === undefined) return null;
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return 'malformed';
+  const result = {};
+  for (const [app, kinds] of Object.entries(value)) {
+    if (kinds === null || typeof kinds !== 'object' || Array.isArray(kinds)) return 'malformed';
+    result[app] = {};
+    for (const [kind, item] of Object.entries(kinds)) {
+      if (typeof item !== 'string') return 'malformed';
+      result[app][kind] = item;
+    }
+  }
+  return result;
+}
+
+// The check's expected keys and lines, as the one confirmation lists them (with the chosen Odoo database, if any).
+function expectFrom(check) {
+  const options = choosing ? [{ database: chosenDatabase ?? null }] : [];
+  try { wire.expected_acknowledged_keys = issueKeyCount(check, ...options); }
+  catch { wire.malformed++; }
+  if (confirmations) {
+    try {
+      confirmations.expected_keys = issueKeys(check, ...options);
+      confirmations.lines_expected = confirmLineCount(check, ...options);
+      confirmations.check_importable = check.apps.filter(app => app.importable === true)
+        .map(app => String(app.app_id)).sort();
+    } catch { wire.malformed++; }
   }
 }
 
@@ -83,8 +142,22 @@ function observeReply(payload) {
   responseBuffers.delete(channel);
   const job = reply.job;
   if (job?.type !== 'verify' || job.params?.ha_backup_id !== config.ha_id || !job.result?.ha_check) return;
-  try { wire.expected_acknowledged_keys = issueKeyCount(job.result.ha_check); }
-  catch { wire.malformed++; }
+  if (modes) {
+    if (typeof job.id === 'string') checkIds.add(job.id);
+    latestCheck = job.result.ha_check;
+    latestCheckChoices = choicesOf(job.params?.choices);
+  }
+  // With choices the keys and lines wait for the choice: the chosen Odoo database decides which lines are listed.
+  if (!choosing) expectFrom(job.result.ha_check);
+}
+
+// Bounded wait for something the page's own observers record (a recheck's finished check).
+async function until(condition, ms) {
+  const deadline = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('observed state deadline');
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
 }
 
 let browser;
@@ -148,13 +221,16 @@ try {
   await iframe.waitFor({ state: 'attached' });
   frame = await (await iframe.elementHandle()).contentFrame();
   await frame.locator('[data-focus="list-upload"]').waitFor();
-  const capability = await frame.evaluate(async program => {
+  // A config without `device` passes the program alone, as R8 and page-emqx always did (their Cockpit is dev-d's); a
+  // device's own run passes its name too. The same three spawns either way.
+  const capability = await frame.evaluate(async probe => {
+    const { program, device } = typeof probe === 'string' ? { program: probe, device: 'woowbk-dev-d' } : probe;
     const uid = await window.cockpit.spawn(['id', '-u'], { superuser: 'require', err: 'message' });
     const host = await window.cockpit.spawn(['hostname'], { err: 'message' });
     const native = JSON.parse(await window.cockpit.spawn(['python3', '-B', '-I', '-c', program],
       { superuser: 'require', err: 'ignore' }));
-    return { root: uid.trim() === '0' && host.trim() === 'woowbk-dev-d', native };
-  }, nativeCapabilityProgram);
+    return { root: uid.trim() === '0' && host.trim() === device, native };
+  }, config.device === undefined ? nativeCapabilityProgram : { program: nativeCapabilityProgram, device: expect.device });
   rootVerified = capability.root === true; nativeCapability = capability.native;
   check('UI real administrative Cockpit bridge reaches this device', rootVerified);
   recording = true;
@@ -165,27 +241,52 @@ try {
   await frame.locator('[data-focus="restore-upload"]').click();
   await frame.waitForFunction(id => window.location.hash === `#/ha/${id}`, config.ha_id, { timeout: 10 * 60 * 1000 });
   await frame.locator('#ha-info').waitFor();
-  check('UI uploaded derived real fixture through actual page', true);
-  stage = 'select-three-apps';
+  check(expect.texts.upload, true);
+  stage = expect.select_stage;
   await frame.locator(`[data-focus="ha-import-${config.ha_id}"]`).click();
   const initiallySelected = await frame.locator('input[id^="ha-app-"]:checked').evaluateAll(xs => xs.map(x => x.id));
   for (const id of initiallySelected) await frame.locator(`#${id}`).uncheck();
-  for (const app of ['emqx', 'omnigent', 'hermes']) {
+  for (const app of expect.apps) {
     await frame.locator(`#ha-app-${app}`).check();
   }
   const selected = await frame.locator('input[id^="ha-app-"]:checked').evaluateAll(xs => xs.map(x => x.id.slice(7)).sort());
-  check('UI selects exactly the three reviewed apps', JSON.stringify(selected) === JSON.stringify(['emqx', 'hermes', 'omnigent']));
+  check(expect.texts.select, JSON.stringify(selected) === JSON.stringify([...expect.apps].sort()));
+  if (keyless) {
+    // The upload's record says no chosen add-on is encrypted: the wizard lists no key step and checks at once.
+    keyStep.stepper_key_steps = await frame.locator('.stepper li[data-step="key"]').count();
+    check('UI unencrypted HA backup: the wizard asks for no key', keyStep.stepper_key_steps === 0);
+  }
   await frame.locator('[data-focus="ha-apps-next"]').click();
-  stage = 'key-and-check';
-  await frame.locator('#ha-key').fill(config.key);
-  await frame.locator('[data-focus="ha-key-next"]').click();
+  if (keyless) stage = 'check';
+  else {
+    stage = 'key-and-check';
+    await frame.locator('#ha-key').fill(config.key);
+    await frame.locator('[data-focus="ha-key-next"]').click();
+  }
   await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
+  if (keyless) {
+    keyStep.key_fields_after_check = await frame.locator('#ha-key').count();
+    check('UI unencrypted HA backup: the check ran without a key step', keyStep.key_fields_after_check === 0);
+  }
+  if (choosing) {
+    stage = 'choices';
+    check('UI selects each choice the run named, only from what the check offers', await chooseAsNamed());
+  }
   stage = 'one-confirmation';
   check('UI actual check confirmation keys observed including valid zero', wire.expected_acknowledged_keys !== null);
-  check('UI corrupt EMQX blocked and both other apps importable',
-    await frame.locator('[data-ha-app="emqx"][data-importable="no"] .ha-issue-stop').count() > 0
-    && await frame.locator('[data-ha-app="hermes"][data-importable="yes"]').count() === 1
-    && await frame.locator('[data-ha-app="omnigent"][data-importable="yes"]').count() === 1);
+  let viewOk = true;
+  for (const app of expect.blocked)
+    viewOk = viewOk && await frame.locator(`[data-ha-app="${app}"][data-importable="no"] .ha-issue-stop`).count() > 0;
+  for (const app of expect.importable)
+    viewOk = viewOk && await frame.locator(`[data-ha-app="${app}"][data-importable="yes"]`).count() === 1;
+  check(expect.texts.view, viewOk);
+  if (confirmations) {
+    // Every confirmation line the check lists is on the page, and the check itself calls exactly the expected apps importable.
+    confirmations.lines_shown = await frame.locator('#ha-confirm-list .ha-issue-confirm').count();
+    check(expect.texts.lines, Number.isInteger(confirmations.lines_expected)
+      && confirmations.lines_shown === confirmations.lines_expected
+      && JSON.stringify(confirmations.check_importable) === JSON.stringify(expect.importApps));
+  }
   check('UI has exactly one acknowledgement and import waits for it',
     await frame.locator('#ha-ack').count() === 1 && !(await frame.locator('#ha-ack').isChecked())
     && await frame.locator('[data-focus="ha-import"]').isDisabled());
@@ -199,12 +300,24 @@ try {
   await frame.locator('[data-focus="ha-import"]').click(); clicks++;
   stage = 'import-and-result';
   await frame.locator('[data-result="group"]').waitFor({ timeout: 20 * 60 * 1000 });
-  check('UI result imports both apps and retains excluded EMQX row',
-    await frame.locator('[data-ha-app="hermes"][data-status="imported"]').count() === 1
-    && await frame.locator('[data-ha-app="omnigent"][data-status="imported"]').count() === 1
-    && await frame.locator('[data-ha-app="emqx"][data-status="excluded"]').count() === 1);
-  check('UI one click sends one real acknowledged import intent for only importable apps',
-    validImportIntent(wire, ticks, clicks));
+  let resultOk = true;
+  for (const [app, status] of expect.result_rows)
+    resultOk = resultOk && await frame.locator(`[data-ha-app="${app}"][data-status="${status}"]`).count() === 1;
+  if (expect.exact && resultOk) {
+    // A restore's kept copy (Odoo's cold cluster) is listed below the apps as an li.ha-group-row.ha-kept-item, not an app
+    // row. It is counted only when the rows differ, so every earlier result asks exactly what it asked before.
+    let rows = await frame.locator('#view li.ha-group-row').count();
+    if (rows !== expect.result_rows.length) rows -= await frame.locator('#view li.ha-group-row.ha-kept-item').count();
+    resultOk = rows === expect.result_rows.length;
+  }
+  check(expect.texts.result, resultOk);
+  check(expect.texts.intent, choosing ? validImportIntent(wire, ticks, clicks, expect.importApps, 1 + rechecks)
+    : validImportIntent(wire, ticks, clicks, expect.importApps));
+  if (confirmations) check(expect.texts.keys, exactAcknowledged(confirmations.expected_keys, confirmations.sent_keys));
+  if (keyless)
+    check('UI unencrypted HA backup: neither the check nor the import request carried a key', requestsSeen.check.length > 0
+      && requestsSeen.check.every(request => request.key === false) && requestsSeen.import?.key === false);
+  if (choosing) check('UI the check and import requests carry exactly the chosen choices', requestsMatchChoices());
   check('UI no page script errors during this page flow', pageErrors === 0);
   await frame.locator('#view').screenshot({ path: join(config.evidence, 'result.png'), mask: [frame.locator('input,textarea')] });
   completed = true;
@@ -215,6 +328,63 @@ try {
   checks.push({ check: 'UI bounded flow completed', ok: false });
 } finally {
   await finishBrowser();
+}
+
+// The choice step (choices only): every add-on/node the run named that is not what the radio already shows is picked and
+// the check runs again with it (the page's own 「重新檢查」); then the Odoo database is chosen (the named one, or the single
+// one that can move). Nothing the check does not list is ever picked; a choice the check offers but the run did not name
+// stops the page before the confirmation is ticked.
+async function chooseAsNamed() {
+  choiceRecord = { named: expect.choices, database: null, picks: {}, import_choices: null, check_choices: null, rechecks: 0,
+    problems: [] };
+  let plan = latestCheck ? planChoices(latestCheck, expect.choices, picked)
+    : { problems: ['no finished check observed'], clicks: [] };
+  if (!plan.problems.length && plan.clicks.length) {
+    for (const { app, kind, value } of plan.clicks) {
+      await frame.locator(`input[name="ha-${kind}-${app}"][value="${value}"]`).check();
+      (picked[app] ||= {})[kind] = value;
+    }
+    const seen = checkIds.size;
+    await frame.locator('[data-focus="ha-recheck"]').click();
+    rechecks++;
+    await until(() => checkIds.size > seen, 10 * 60 * 1000);
+    await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
+    plan = planChoices(latestCheck, expect.choices, picked);
+    if (plan.clicks.length) plan.problems.push('the recheck did not keep the chosen add-on or node');
+  }
+  Object.assign(choiceRecord, { problems: plan.problems, rechecks });
+  if (plan.problems.length) return false;
+  const database = plan.database === null ? null : frame.locator(`input[name="ha-odoo-database"][value="${plan.database}"]`);
+  if (database && !(await database.isChecked())) await database.check();
+  chosenDatabase = plan.database;
+  let shown = !database || await database.isChecked();
+  for (const [app, kinds] of Object.entries(expect.choices))
+    for (const [kind, value] of Object.entries(kinds))
+      if (kind !== 'database' && offeredRows(latestCheck, app, kind) >= 2)
+        shown = shown && await frame.locator(`input[name="ha-${kind}-${app}"][value="${value}"]`).isChecked();
+  Object.assign(choiceRecord, { database: plan.database, picks: structuredClone(picked), import_choices: plan.importChoices,
+    check_choices: plan.checkChoices });
+  expectFrom(latestCheck);
+  return shown;
+}
+
+// How many `choices.<kind>` rows the check lists for an app (radios appear from two on).
+function offeredRows(check, app, kind) {
+  const row = (check?.apps || []).find(item => item?.app_id === app);
+  return Array.isArray(row?.choices?.[kind]) ? row.choices[kind].length : 0;
+}
+
+// Choices only: the first check carried none, a recheck exactly the picks, the import exactly the picks and the database.
+function requestsMatchChoices() {
+  const canonical = value => JSON.stringify(value, (key, item) => (item && typeof item === 'object' && !Array.isArray(item)
+    ? Object.fromEntries(Object.keys(item).sort().map(name => [name, item[name]])) : item));
+  const empty = value => Object.keys(value || {}).length === 0;
+  const checks = requestsSeen.check;
+  return Boolean(choiceRecord) && checks.length === 1 + rechecks && checks[0].choices === null
+    && (rechecks === 0 || canonical(checks[checks.length - 1].choices) === canonical(choiceRecord.check_choices))
+    && (rechecks === 0 ? latestCheckChoices === null : canonical(latestCheckChoices) === canonical(choiceRecord.check_choices))
+    && requestsSeen.import !== null && (empty(choiceRecord.import_choices) ? requestsSeen.import.choices === null
+      : canonical(requestsSeen.import.choices) === canonical(choiceRecord.import_choices));
 }
 
 function observeCookies(response) {
@@ -341,7 +511,11 @@ async function finishBrowser() {
     catch { checks.push({ check: 'UI browser closed', ok: false }); }
   }
   const result = { stage, failure_kind: failureKind, completed, issued_values_scanned: issuedScan, page_errors: pageErrors,
-    issued_scan_counts: issuedScanCounts, acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks };
+    issued_scan_counts: issuedScanCounts, acknowledgement_ticks: ticks, import_clicks: clicks, wire, checks,
+    ...(confirmations ? { confirmations } : {}),
+    // Only the new modes add records (keys present or not, never a value): an earlier config's record is unchanged.
+    ...(keyless ? { key_step: keyStep } : {}), ...(choosing ? { choices: choiceRecord } : {}),
+    ...(modes ? { requests: requestsSeen } : {}) };
   writeFileSync(config.result, JSON.stringify(result, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   })();
   return finishing;

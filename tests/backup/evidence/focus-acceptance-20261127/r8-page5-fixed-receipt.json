@@ -1,0 +1,309 @@
+{
+  "scope": "actual-R8-PAGE5-functional-import-time-privacy-and-original-recovery",
+  "driver_commit": "0118d53d094c85b7210025b1de1b89fa1ff3dc94",
+  "product_source_commit": "59a1b0f95132ea51c899f590eea7e3b02c5dba43",
+  "exit": 0,
+  "elapsed_seconds": 623.9,
+  "passed": 85,
+  "failed": 0,
+  "parent_capture_sha256": "97b8d98e69a9b8a1bbc8d16ddabc6d3ad9dddd097e0d9cd28b083ae721d47ccb",
+  "summary_sha256": "bcaedb2ae1ce0e4a868fa03d62424e9ca2e241b692e20492fb9182125712377b",
+  "results_sha256": "ce75323946809eaf41b48fe071416c2691fe041b1569960fb9a9f2e84e44faf8",
+  "browser_metadata_sha256": "dc2aa39daae68161f219932c2c1b6191ed59564eee72fb682fd2349e6433f119",
+  "private_recovery_sha256": "f842348f6a85f67ce97e4f1c8486c6f7aa8b2bc85e4b3c51baf44d47e44af49d",
+  "pre_scan_cookie_metadata_sha256": "cb1fa308b04bb406c2a2e4057dd65376b2fc43c79380199a58acf593a4b19491",
+  "private_guard_sha256": "3e09dc61c478de5923cec1036d8c4f2097ae5a463ce0c8734f63c1f470552b20",
+  "guard_phase": "complete",
+  "baseline_restored": true,
+  "recovery_verified": true,
+  "inflight": null,
+  "stdout_sha256": "b0baab265635fc34f61e624e7c393414bbd12ab7c269c5c97c79edc186041de9",
+  "saved_launch_log_sha256": "3960ff7b841196523c8343029e94ea823d338845d4fea2cf0a41df0c79b69150",
+  "stdout_prefix_bytes": 4958,
+  "stdout_prefix_hash_matches": true,
+  "saved_launch_trailer_bytes": 96,
+  "saved_launch_trailer_sha256": "ccd9b0e8cd6c7b3b7fd8a72d072ddf570afccf8053a92f77b98794f2eacab9a7",
+  "reported_stderr_bytes_not_published": 80,
+  "raw_stdout_log_or_stderr_published": false,
+  "browser": {
+    "completed": true,
+    "issued_values_scanned": true,
+    "checks_passed": 14,
+    "checks_failed": 0,
+    "acknowledgement_ticks": 1,
+    "import_clicks": 1,
+    "page_errors": 0,
+    "wire": {
+      "check_starts": 1,
+      "import_starts": 1,
+      "unique_import_requests": 1,
+      "separate_restore_starts": 0,
+      "import_apps": [
+        "hermes",
+        "omnigent"
+      ],
+      "then_restore": true,
+      "confirm": true,
+      "overwrite": true,
+      "acknowledged_keys": 0,
+      "expected_acknowledged_keys": 0,
+      "malformed": 0
+    },
+    "issued_scan_counts": {
+      "cookie_metadata": [
+        {
+          "name": "cockpit",
+          "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+          "length": 7,
+          "expires": null,
+          "maxAge": null,
+          "classification": "proved-public-protocol-tombstone",
+          "initial_jar_member": true,
+          "live_jar_member": false
+        },
+        {
+          "name": "cockpit",
+          "sha256": "c5082ae576b29f356b07eea24f530dfe227f41dcd22f53634a2f5a1aef18100b",
+          "length": 96,
+          "expires": null,
+          "maxAge": null,
+          "classification": "http-session",
+          "initial_jar_member": false,
+          "live_jar_member": true
+        }
+      ],
+      "observations_complete": true,
+      "administrative_root_verified": true,
+      "source_version": "362",
+      "native_cockpit_capability": {
+        "package_version": "362-1~bpo24.04.1",
+        "binary_sha256": "4b09c1484234c0b49d00a3e63d108217b5b9270801958e86a4b80cd560848845"
+      },
+      "primary_source_commit": "ca0d360e3a858a7eb189edde15cf7b976018404b",
+      "primary_sources": [
+        {
+          "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/ca0d360e3a858a7eb189edde15cf7b976018404b/src/ws/cockpitauth.c",
+          "sha256": "d3ad1a818ec7b7d2270f6c36f8364f96ffe34a42018800381a78ee68100b43e7"
+        },
+        {
+          "url": "https://raw.githubusercontent.com/cockpit-project/cockpit/ca0d360e3a858a7eb189edde15cf7b976018404b/src/ws/cockpithandlers.c",
+          "sha256": "7c6551f0a993da62ff1aecbd5382fc4087f9f6d327fe53055e3d0a931c0e9cca"
+        }
+      ],
+      "observed_values": 2,
+      "match_counts": [
+        {
+          "names": [
+            "cockpit"
+          ],
+          "sha256": "1185f37d33b0f89e331f101a51bb8e51165c7efda15950b86a3ebcbb363f898e",
+          "length": 7,
+          "classification": "proved-public-protocol-tombstone",
+          "device": {
+            "hits": 8,
+            "categories": {
+              "jobs": {
+                "hits": 8,
+                "matched_files": 8
+              }
+            }
+          },
+          "host_hits": 0
+        },
+        {
+          "names": [
+            "cockpit"
+          ],
+          "sha256": "c5082ae576b29f356b07eea24f530dfe227f41dcd22f53634a2f5a1aef18100b",
+          "length": 96,
+          "classification": "credential-zero-hits-required",
+          "device": {
+            "hits": 0,
+            "categories": {}
+          },
+          "host_hits": 0
+        }
+      ],
+      "device_files": 651,
+      "archive_index_sidecars": 19,
+      "actual_archive_index_sidecars_expected": 19,
+      "regular_json_roots": 2,
+      "device_hits": 8,
+      "credential_device_hits": 0,
+      "public_marker_device_hits": 8,
+      "host_files": 12,
+      "host_hits": 0,
+      "credential_host_hits": 0,
+      "live_jar_stable_during_scan": true,
+      "no_unscanned_late_values": true,
+      "unscanned_late_cookie_metadata": [],
+      "scan_completed": true
+    }
+  },
+  "actual_expired_cookie_observations": 0,
+  "actual_renewed_credential_history_observed": false,
+  "privacy_scope": "This PAGE5 session during its real imports; all observed values scanned; only proved public362 marker excluded from credential-zero assertion",
+  "registered_and_observed_native_scan": {
+    "scanned": 651,
+    "hits": 0,
+    "journal_bytes": 869424,
+    "archive_index_sidecars_scanned": 19,
+    "regular_json_roots_scanned": 2
+  },
+  "all7_owned_jobs_terminal": true,
+  "owned_jobs": [
+    {
+      "file": "job-j20261127T022237Z-f79f9d85.json",
+      "sha256": "b513e5b25300d5183b532afaad571b2aaea1d1579a27d302a19827882610b0bd",
+      "job_id": "j20261127T022237Z-f79f9d85",
+      "type": "verify",
+      "state": "succeeded",
+      "next_job_id": null
+    },
+    {
+      "file": "job-j20261127T022307Z-ab777098.json",
+      "sha256": "4de147ab8c96524abfc06843d86f19c5b4add34de53b19f17b0213c1c45f0a56",
+      "job_id": "j20261127T022307Z-ab777098",
+      "type": "backup",
+      "state": "succeeded",
+      "next_job_id": "j20261127T022351Z-769921cd"
+    },
+    {
+      "file": "job-j20261127T022351Z-769921cd.json",
+      "sha256": "355a3652d6ee78a66e9951ca5cde43a72a75e959ab6079c100014e9c3a9477d4",
+      "job_id": "j20261127T022351Z-769921cd",
+      "type": "restore",
+      "state": "succeeded",
+      "next_job_id": "j20261127T022457Z-0b761cd1"
+    },
+    {
+      "file": "job-j20261127T022457Z-0b761cd1.json",
+      "sha256": "4845bc27a0c0fa46b04d14626ed59d330ca4854aa57036cdaa46dff803b86e61",
+      "job_id": "j20261127T022457Z-0b761cd1",
+      "type": "backup",
+      "state": "succeeded",
+      "next_job_id": "j20261127T022517Z-fb6c62bd"
+    },
+    {
+      "file": "job-j20261127T022517Z-fb6c62bd.json",
+      "sha256": "09a5ce1e501689c793667bc341704e4cdeda2a350362353c78f22a76b64de920",
+      "job_id": "j20261127T022517Z-fb6c62bd",
+      "type": "restore",
+      "state": "succeeded",
+      "next_job_id": null
+    },
+    {
+      "file": "job-j20261127T022815Z-8b312f9a.json",
+      "sha256": "26a05a620b208f658bd3d2bb0be56f49c24b46c793c2f3c330d287b50e48872c",
+      "job_id": "j20261127T022815Z-8b312f9a",
+      "type": "restore",
+      "state": "succeeded",
+      "next_job_id": null
+    },
+    {
+      "file": "job-j20261127T022958Z-d9bc28b5.json",
+      "sha256": "a6519b3286b49797ad3c7c9bf8aa392b9e1204a0875b36cd05c85c9ffbee0ecc",
+      "job_id": "j20261127T022958Z-d9bc28b5",
+      "type": "restore",
+      "state": "succeeded",
+      "next_job_id": null
+    }
+  ],
+  "no_active_job_check_passed_before_original_baseline_restore": true,
+  "new_device_probe_performed_for_this_review": false,
+  "cleanup": {
+    "created_archive_ids": [
+      "20261127T022351Z-4b3571a9",
+      "20261127T022408Z-cd13efd6",
+      "20261127T022517Z-e73a7be9",
+      "20261127T022615Z-ab3a79f6",
+      "20261127T022858Z-e4a401c2",
+      "20261127T023027Z-56efbb36"
+    ],
+    "owned_archives_deleted": 6,
+    "exact_original_catalog_returned": true,
+    "catalog_CAS_verified": true,
+    "schedule_original": {
+      "ActiveState": "inactive",
+      "UnitFileState": "masked"
+    },
+    "all8_selected_images_and_durable_units_returned": true,
+    "derived_upload_owned": false,
+    "protected_existing_ha_id": "ha-ce9f985764ebcb8804dc",
+    "protected_existing_ha_retained": true,
+    "HA_inventory_retained": true,
+    "old_case_ids_before": 12,
+    "old_owned_safety_pruning": [
+      {
+        "id": "20261126T234730Z-b8d0ca69",
+        "type": "safety",
+        "events": [
+          {
+            "file": "job-j20261127T022517Z-fb6c62bd.json",
+            "sha256": "09a5ce1e501689c793667bc341704e4cdeda2a350362353c78f22a76b64de920",
+            "job_id": "j20261127T022517Z-fb6c62bd"
+          }
+        ]
+      },
+      {
+        "id": "20261126T234924Z-e3c4387b",
+        "type": "safety",
+        "events": [
+          {
+            "file": "job-j20261127T022351Z-769921cd.json",
+            "sha256": "355a3652d6ee78a66e9951ca5cde43a72a75e959ab6079c100014e9c3a9477d4",
+            "job_id": "j20261127T022351Z-769921cd"
+          }
+        ]
+      },
+      {
+        "id": "20261127T002730Z-2f946126",
+        "type": "safety",
+        "events": [
+          {
+            "file": "job-j20261127T022958Z-d9bc28b5.json",
+            "sha256": "a6519b3286b49797ad3c7c9bf8aa392b9e1204a0875b36cd05c85c9ffbee0ecc",
+            "job_id": "j20261127T022958Z-d9bc28b5"
+          }
+        ]
+      },
+      {
+        "id": "20261127T003004Z-75d94716",
+        "type": "safety",
+        "events": [
+          {
+            "file": "job-j20261127T022815Z-8b312f9a.json",
+            "sha256": "26a05a620b208f658bd3d2bb0be56f49c24b46c793c2f3c330d287b50e48872c",
+            "job_id": "j20261127T022815Z-8b312f9a"
+          }
+        ]
+      }
+    ],
+    "old_case_ids_retained": [
+      "20261126T224835Z-3c00f119",
+      "20261126T225018Z-d4fe5bf8",
+      "20261126T234155Z-c75a7da6",
+      "20261126T234341Z-df4130f4",
+      "20261127T002650Z-7ed90af6",
+      "20261127T002847Z-c22716d6",
+      "20261127T003327Z-bc34f000",
+      "20261127T003500Z-652b9963"
+    ],
+    "no_untracked_new_archive_check_passed": true
+  },
+  "historical_PAGE4": {
+    "passed": 59,
+    "failed": 4,
+    "failed_file_hashes_unchanged": {
+      "summary.json": "cf5a768f42a68b794412782247557f4c44b194d0b875f4ca80fe80f3adf08f09",
+      "results.json": "0b93f211864505c73b778c6ee84804588b79a2da63127dfc4ec87b9912076c1c",
+      "recovery.json": "e5719be24e5d6d7baae85e02e709b437b8949df328e07c907207da1aaab5a270",
+      "browser.json": "0917d61d111e17ccb039281b3a18ce84b5f2bbe626a70c4a1730e01cc38b41ca"
+    },
+    "saved_previous_guard_sha256": "329fba10a4e4e290209fa7ae5e5545549214227a38d0c0033473234569581b67",
+    "result_rewritten": false,
+    "cookie_absence_retroactively_proved": false
+  },
+  "probe02_used_different_session": true,
+  "all_other_services_and_commercial_acceptance": "not-complete"
+}

@@ -1,5 +1,45 @@
 # Focused real acceptance, 2026-11-27
 
+## Actual PAGE5 —85/85 PASS, including import-time cookie coverage
+
+Parent's ONE real PAGE5 exited0 in623.9s with frozen driver
+`0118d53d094c85b7210025b1de1b89fa1ff3dc94`, product
+`59a1b0f95132ea51c899f590eea7e3b02c5dba43`, case102112. All85saved checks
+passed. One actual page confirmation/click produced two conversions and two
+same-unit restores, retained the excluded corrupt EMQX row, changed both live
+apps to HA data and restored both originals. The private guard is complete,
+baseline_restored/recovery_verifiedtrue, inflightnull. All7owned jobs are saved
+terminal/succeeded; the actual no-active-job check passed before baseline
+restores. This host review made no new device query.
+
+The SAME PAGE5 browser observed2values through its real imports with no gaps,
+stable final jar and no unscanned late values. Its96byte live session hash
+`c5082ae5...18100b` had0device/host matches. The7byte proved public362 protocol
+marker hash`1185f37d...f898e` had8matches in8job files only and0host matches;
+those matches remain counted. Native362/root/HTTP/source/jar proof passed.
+Neither value had Expires/Max-Age: no genuine expired or renewed credential
+history was observed in this run. Every nonpublic value remains strict0.
+Actual scans covered651records,19of19archive sidecars and2required JSON roots;
+registered/observed-value and host matches were0.
+
+All6new owned archives were deleted after baseline/privacy proof, original
+catalog returned through exact CAS, original masked/inactive schedule and all8
+selected images/durable units returned. Existing HA was reused without acquiring
+ownership and remained protected. Of12prior test archive IDs,4owned safety
+copies were normally pruned with actual successful job-log events;8remain.
+No manual/original-baseline deletion is excused. Previous PAGE4's59/63FAIL files
+and guard copy remain immutable; PAGE5 does not retroactively prove its lost
+cookie absent. Probe02 also used a different session. Broader commercial
+acceptance remains incomplete.
+
+Safe artifacts: `r8-page5-capture.json` and `r8-page5-summary.json` are exact
+fixed-field copies; `r8-page5-fixed-receipt.json` contains only selected metadata,
+hashes/counts and recovery facts. Raw private guard, cookies, headers, screenshots,
+logs and job bodies are not copied. The capture stdout hashb0baab26... matches
+the saved launch log's4958byte stdout prefix. The full launch log has96additional
+trailer bytes and a different hash; both hashes and that distinction are retained
+without publishing trailer contents. Parent reports80stderr bytes withheld.
+
 ## Coordinator page4, cookie diagnosis and original catalog return
 
 | Actual step | Driver / runtime | Result and scope |
@@ -312,3 +352,36 @@ Offline targeted9/9 verifies defaults, fixed relay destination/user, original
 fixture protection and the four-job boundary. These are not real acceptance.
 Only the leased real page can prove Cockpit login, TLS/WebSocket transport,
 one-confirmation results and the independent application/baseline checks.
+
+## R1 rerun with the corrected same-unit expectation: 70/70 (2026-11-28, dev-d)
+
+The earlier R1 record stays 70/72: its harness expected every chain job to run in a systemd unit of its own, while the
+product runs the whole chain in the first job's unit. The HOLD-ed harness was replaced by the page harness's
+`--helper-three-selected` mode (saved as found from the Codex worktree, reviewed, given 8 offline tests) and run once
+under its own lease (driver `2d8fe242`, source `ce8c4cfb`, the engine installed on dev-d; every file R1 uses equals
+the PR #23 engine): 70/70 in about 500 s.
+
+- One import of the real B1 backup whose EMQX member is cut short by 64 bytes: EMQX is stopped at the check (the
+  intended broken member), Omnigent and Hermes are imported; five linked jobs (the failed EMQX conversion, then a
+  conversion and a restore for each app), each restore with its own safety backup, the HA data live afterwards.
+- All five jobs share the first job's unit (`woowtech-backup-j20261127T204813Z-b9c68626.service`); the unit was sampled
+  84 times through the whole chain, peak 182.9 MiB.
+- The protected HA record that PAGE5 kept was not owned by this run and stays; the lab baselines were restored; the
+  registered-token scan had 0 hits over 19 archive sidecars; PAGE5's guard and evidence are byte-unchanged.
+
+Files: `r1-helper-20261128-checks.txt` (the 70 fixed check lines) and `r1-helper-20261128-summary.json`. The private
+run is `~/.woowbk-lab/evidence/focus-acceptance-r1-helper/20261128T044707/`.
+
+## page-emqx: a normal EMQX import through the real Cockpit page, 81/81 (2026-11-28, dev-d)
+
+The page harness's new `--page-emqx` mode (driver `e236d5d6`, source `ce8c4cfb` = dev-d's installed engine) took the
+ORIGINAL, undamaged B1 encrypted HA backup through the real page in headless Chromium: upload, only EMQX selected,
+EMQX importable, every confirmation line the check listed shown and acknowledged exactly once, one import click whose
+request carried every listed key once, the result page showing EMQX imported. Then two linked jobs (EMQX conversion
+and restore) in the first job's unit, the restore with its own safety backup; EMQX held HA's data (HA's Dashboard
+admin logs in, no dev-d marker left, every HA MQTT account present); dev-d's own EMQX baseline restored and its
+markers read back with dev-d's admin; strict secret scans clean; the upload this run created deleted; PAGE5's and
+R1's guards and evidence byte-unchanged. 81/81 in 565 s.
+
+Files: `page-emqx-20261128-capture.json` (the capture's fixed-status record and stdout hash) and
+`page-emqx-20261128-summary.json`. Private run: `~/.woowbk-lab/evidence/focus-acceptance-page-emqx/20261128T054946/`.

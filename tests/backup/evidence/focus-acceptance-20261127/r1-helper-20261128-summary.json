@@ -1,0 +1,23 @@
+{
+  "archive_index_sidecars_scanned": 19,
+  "baseline_restored": true,
+  "browser_used": false,
+  "case": "r1-three-selected-memory",
+  "checks": "70/70",
+  "commercial_acceptance": "not-complete",
+  "device": "woowbk-dev-d",
+  "driver_commit": "2d8fe242a7ed",
+  "first_unit": "woowtech-backup-j20261127T204813Z-b9c68626.service",
+  "ha_record_owned": false,
+  "memory_peak_bytes": 191791104,
+  "memory_read_errors": 1,
+  "memory_samples": 84,
+  "mode": "helper-three-selected",
+  "native_units_shared": true,
+  "observed_marker_tokens": 2,
+  "phase": "complete",
+  "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-r1-helper/20261128T044707",
+  "recovery_verified": true,
+  "root_job_id": "j20261127T204813Z-b9c68626",
+  "source_commit": "ce8c4cfbd8a1d7ff27233e3986a524408a6604f7"
+}

@@ -1,0 +1,443 @@
+{
+  "status": "passed",
+  "phase": "s5-import-acceptance",
+  "date_utc": "2026-11-28T01:37Z..01:5xZ",
+  "device": "woowbk-dev-e",
+  "attempt": 4,
+  "source_commit": "3f284a396fd951a3c357fcced909ab32515929f9",
+  "product_commit": "b058df278d661cc6195cd40936ff6494036c63a1",
+  "fix_commit": "50a29370b17bbc8fe63131f1c9f8ee9ffd5b8628",
+  "fixture": {
+    "path": "/var/lib/woowbk-nextcloud-s5-3d7c8af46600c589/owned/artifact/generated-s5-source.tar",
+    "sha256": "df9a7adf75d13adcfd3a431027ffe68ce9f5a4c48bbc6db5a406a48eafb4e708",
+    "bytes": 127467520,
+    "in_device_copy": true,
+    "ha_key_needed": false
+  },
+  "image_pulls": 0,
+  "passed": 96,
+  "failed": 0,
+  "sections": {
+    "preflight": 1,
+    "setup": 4,
+    "before": 4,
+    "upload": 3,
+    "check": 5,
+    "convert": 1,
+    "import": 17,
+    "restart": 12,
+    "rollback": 4,
+    "auto rollback": 13,
+    "recovery": 5,
+    "after": 16,
+    "cleanup gate": 2,
+    "cleanup": 6,
+    "leaks": 3
+  },
+  "checks": [
+    {
+      "check": "preflight: no existing job is running",
+      "ok": true
+    },
+    {
+      "check": "setup: installed engine equals committed source",
+      "ok": true
+    },
+    {
+      "check": "setup: original catalog hash retained",
+      "ok": true
+    },
+    {
+      "check": "setup: five units active and Nextcloud healthy",
+      "ok": true
+    },
+    {
+      "check": "setup: the installed engine, helper and VERSION are the frozen product (with the fix)",
+      "ok": true
+    },
+    {
+      "check": "before: original encrypted baseline opens with existing private kit",
+      "ok": true
+    },
+    {
+      "check": "before: dev-e's own markers read (baseline user and its WebDAV file)",
+      "ok": true
+    },
+    {
+      "check": "before: dev-e's own account logs in (OCS) and the wrong password is refused",
+      "ok": true
+    },
+    {
+      "check": "before: fresh live directory sizes available",
+      "ok": true
+    },
+    {
+      "check": "upload: the S5-A fixture is copied inside dev-e into the upload file (bytes and SHA-256 exact, never through the host)",
+      "ok": true
+    },
+    {
+      "check": "upload: upload-finish publishes the HA record of exactly this fixture (id, SHA-256, size), nextcloud importable and installed here",
+      "ok": true
+    },
+    {
+      "check": "upload: the published HA file is the inode written inside dev-e, its full SHA-256 again",
+      "ok": true
+    },
+    {
+      "check": "check: the job succeeds for nextcloud alone, importable, no stop",
+      "ok": true
+    },
+    {
+      "check": "check: exactly one confirmation: nextcloud.server-side-encryption, reasons exactly files_encryption and encryption_enabled, its bound key, the not-yet-tested text",
+      "ok": true
+    },
+    {
+      "check": "check: every other line is a reviewed notice (settings not carried, file lists differ), all recorded",
+      "ok": true
+    },
+    {
+      "check": "check: the section is the generated source (35.0.1.1, PostgreSQL 16, one user, no share, the data dir in the backup)",
+      "ok": true
+    },
+    {
+      "check": "check: processor unknown (the generated add-on names no HA image), add-on 0.2.3, target 35.0.1.1",
+      "ok": true
+    },
+    {
+      "check": "convert: without the acknowledgement the conversion is refused (confirmation-required, Nextcloud skipped by exactly the encryption line, no stop, no backup added)",
+      "ok": true
+    },
+    {
+      "check": "import: ha-convert-start succeeds (the product's space guard; host floor held)",
+      "ok": true
+    },
+    {
+      "check": "import: the notes and reminders name Collabora, the data fingerprint and the MCP admin lines",
+      "ok": true
+    },
+    {
+      "check": "import: inspect: preflight passes, settings same, in place",
+      "ok": true
+    },
+    {
+      "check": "import: the uploaded HA file is deleted before the restore (as the page allows; host space)",
+      "ok": true
+    },
+    {
+      "check": "import: restore-start succeeds with its safety backup and every health check ok",
+      "ok": true
+    },
+    {
+      "check": "import: nextcloud converted with exactly the acknowledged encryption line (its bound key), no stop",
+      "ok": true
+    },
+    {
+      "check": "import: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "import: s5owner logs in with the S5-A password (OCS, the password moved); a wrong one is refused 401",
+      "ok": true
+    },
+    {
+      "check": "import: every S5-A ciphertext, plaintext and key file is on disk byte for byte as S5-A wrote it (per-file SHA-256, native key layout)",
+      "ok": true
+    },
+    {
+      "check": "import: the plaintext of the S5-A files (pre-encryption and encrypted) and of 8+ skeleton files read through WebDAV equals the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "import: s5owner's files on disk equal the S5-A source (per-user manifest digest)",
+      "ok": true
+    },
+    {
+      "check": "import: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "import: occ files:scan --all: nothing new, nothing removed, no error",
+      "ok": true
+    },
+    {
+      "check": "import: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "import: the web server serves nothing below the data dir (protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "import: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "import: a new file written through WebDAV after the import is stored with the native encryption header and only its master-key share key, reads back exactly, a wrong password 401, nothing else changed",
+      "ok": true
+    },
+    {
+      "check": "restart: nextcloud-app restarted, five units active, status.php answers",
+      "ok": true
+    },
+    {
+      "check": "restart: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "restart: s5owner logs in with the S5-A password (OCS, the password moved); a wrong one is refused 401",
+      "ok": true
+    },
+    {
+      "check": "restart: every S5-A ciphertext, plaintext and key file is on disk byte for byte as S5-A wrote it (per-file SHA-256, native key layout)",
+      "ok": true
+    },
+    {
+      "check": "restart: the plaintext of the S5-A files (pre-encryption and encrypted) and of 8+ skeleton files read through WebDAV equals the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "restart: s5owner's files on disk equal the S5-A source (per-user manifest digest)",
+      "ok": true
+    },
+    {
+      "check": "restart: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "restart: occ files:scan --all: nothing new, nothing removed, no error",
+      "ok": true
+    },
+    {
+      "check": "restart: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "restart: the web server serves nothing below the data dir (protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "restart: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "restart: the file written after the import still reads back and is unchanged on disk",
+      "ok": true
+    },
+    {
+      "check": "rollback: new owned injection paths are absent",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: a restore with a one-shot ExecStartPre failure ends rolled-back",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: status.php installed 35.0.1.1, no maintenance, no database upgrade needed",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: s5owner logs in with the S5-A password (OCS, the password moved); a wrong one is refused 401",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: every S5-A ciphertext, plaintext and key file is on disk byte for byte as S5-A wrote it (per-file SHA-256, native key layout)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the plaintext of the S5-A files (pre-encryption and encrypted) and of 8+ skeleton files read through WebDAV equals the recorded SHA-256",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: s5owner's files on disk equal the S5-A source (per-user manifest digest)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: clients see a new data fingerprint (restored-from-backup signal), the one in config.php",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: occ files:scan --all: nothing new, nothing removed, no error",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: Nextcloud's own setup check says the data directory is protected",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the web server serves nothing below the data dir (protection file; static control served)",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: database: root storage is this device's data dir, tables owned by oc_admin",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: the file written after the import still reads back and is unchanged on disk",
+      "ok": true
+    },
+    {
+      "check": "auto rollback: its own safety backup (the imported state) is deleted",
+      "ok": true
+    },
+    {
+      "check": "rollback: the import's safety backup restored (manual rollback), every health check ok",
+      "ok": true
+    },
+    {
+      "check": "rollback: dev-e's own markers are back exactly and the HA-only users are gone",
+      "ok": true
+    },
+    {
+      "check": "rollback: dev-e's own account logs in again (OCS)",
+      "ok": true
+    },
+    {
+      "check": "recovery: original baseline independently verified",
+      "ok": true
+    },
+    {
+      "check": "recovery: exact pre-import markers restored",
+      "ok": true
+    },
+    {
+      "check": "recovery: all rollback checks passed",
+      "ok": true
+    },
+    {
+      "check": "after: dev-e's own markers are unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: config.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the users unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the storages and user count in the database unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the data dir top entries unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the five units unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: status.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the Office settings and the cron mode unchanged",
+      "ok": true
+    },
+    {
+      "check": "recovery: admission watcher has returned",
+      "ok": true
+    },
+    {
+      "check": "recovery: every new job has a recorded ID",
+      "ok": true
+    },
+    {
+      "check": "cleanup gate: original baseline independently verified",
+      "ok": true
+    },
+    {
+      "check": "after: dev-e's own markers are unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: config.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the users unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the storages and user count in the database unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the data dir top entries unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the five units unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: status.php unchanged",
+      "ok": true
+    },
+    {
+      "check": "after: the Office settings and the cron mode unchanged",
+      "ok": true
+    },
+    {
+      "check": "cleanup gate: exact baseline state comparisons passed",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: a backup this run created is deleted",
+      "ok": true
+    },
+    {
+      "check": "cleanup: no throwaway container, volume or network of a job left",
+      "ok": true
+    },
+    {
+      "check": "cleanup: no staging folder and no key file left",
+      "ok": true
+    },
+    {
+      "check": "leaks: the HA key and the HA test credentials are in no engine record, upload, staging, run dir or the device journal, and not in this evidence",
+      "ok": true
+    },
+    {
+      "check": "leaks: existing baseline kit absent from records and evidence",
+      "ok": true
+    },
+    {
+      "check": "leaks: the s5owner password, HA's config.php secret values and the master and public-share private key files are in no engine record, upload, staging, run dir or the device journal, and not in this evidence",
+      "ok": true
+    },
+    {
+      "check": "cleanup: all deletion and leak checks passed",
+      "ok": true
+    }
+  ],
+  "final_lines": [
+    {
+      "status": "passed",
+      "phase": "s5-import-acceptance-cold-return",
+      "product_commit": "b058df278d661cc6195cd40936ff6494036c63a1",
+      "data_baseline_safe": true,
+      "pulls": 0
+    },
+    {
+      "status": "passed",
+      "phase": "s5-import-acceptance",
+      "case_rc": 0,
+      "prior_engine_returned_exactly": true,
+      "owned_store_clean": true,
+      "proof_root_removed": true,
+      "fixed_failure": null
+    }
+  ],
+  "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-s5b/20261128T093748/",
+  "commercial_acceptance": "not-complete"
+}

@@ -6,6 +6,20 @@ commands the Cockpit page sends (lane codeserver-import, 2026-11-23).
   python3 -I tests/e2e/lab/services_a_capture.py --private=FILE <evidence.json> codeserver-x86 -- \\
       python3 -I tests/e2e/lab/codeserver_full_flow.py --run
   python3 -I tests/e2e/lab/codeserver_full_flow.py --self-check      (offline; never touches a device or a secret)
+  ... codeserver_full_flow.py --run --via-page                        (upload, check, import through the real page)
+
+--via-page: the upload, check, conversion and restore step goes through dev-e's REAL Cockpit page instead of the helper
+calls (focus_page_bridge.py, under this run's own lock hold): the page uploads the file, selects only woow-code-server,
+takes the HA key, shows the check and its one confirmation, ticks it once and starts the import (the conversion and its
+restore as two linked jobs). The check's facts, the conversion's and the restore's are then checked on the page's own
+jobs exactly as below; the page adds its fixed browser checks, the expected outcome (woow-code-server importable,
+nothing stopped, every confirmation line keyed, read from the actual check), every key acknowledged exactly once, the
+chain in one unit and the issued Cockpit cookie scan. Everything after the import is unchanged. It also reads
+devadmin.pass (the Cockpit login) and adds that password to the leak scan. Without --via-page the run is exactly the
+helper flow. The page acknowledges whatever its check lists and imports in the same flow, so the reviewed-check rule
+(require_reviewed_check) is judged on the page's own check AFTER the import: an unreviewed confirmation line fails the
+run there (the import already ran; dev-e's code-server then needs its batch2 baseline back, as after any run that stops
+past the import).
 
 One run = one hold of /tmp/woowbk-dev-e-mutation.lock (flock, waiting up to an hour), dev-e's outer isolation
 (`true none {}`) recorded before and after, the checkout committed (no tracked change). Every engine call is the root
@@ -73,6 +87,10 @@ MIN_DEVICE_HEADROOM = 1024 * 1024 * 1024   # the jobs, the SQLite child and one 
 FLOOR = 12 * 1024 ** 3          # the team keeps >= 12 GiB free on the host at every moment
 MARGIN = 256 * 1024 ** 2
 NEEDS = {'upload': None, 'check': 64 * 1024 ** 2, 'convert': 768 * 1024 ** 2, 'restore': 512 * 1024 ** 2}
+# --via-page: the page's whole import (upload, check, conversion, restore) in one step: at most 25 minutes (the page's
+# own 20 and reading its jobs), always leaving 10 minutes of the hold budget for the steps after it.
+PAGE_STEP_BUDGET = 25 * 60
+REST_RESERVE = 10 * 60
 FIXTURE = (LAB / 'ha-fixtures' / '20261123-batch2' / 'x86' / 'woow-b2-codeserver-x86-enc'
            / 'woow-b2-codeserver-x86-enc-20261123.tar')
 FIXTURE_SHA = '8f2dc23fd17b115c7317cf07f90b2fc685e901ead9282be3f3da8cef16c9856f'
@@ -800,6 +818,11 @@ class Run:
         if not ev.check('check: ha-check-start job succeeded', job['state'] == 'succeeded',
                         f'{took:.0f} s {job.get("error")}'):
             raise Failed('check job failed')
+        self.judge_check(job)
+
+    def judge_check(self, job):
+        """The facts of the check job (the helper's, or the page's own with --via-page): the same checks either way."""
+        ev = self.ev
         result = job['result']['ha_check']['apps'][0]
         ev.save('check-result.json', result)
         section = result.get('woow-code-server') or {}
@@ -839,6 +862,26 @@ class Run:
         if not ev.check('import: ha-convert-start job succeeded with a backup id', job['state'] == 'succeeded'
                         and (job.get('result') or {}).get('backup_id'), f'{took:.0f} s {job.get("error")}'):
             raise Failed('convert failed')
+        self.judge_convert(job, before_ids)
+        inspect = drv.ok('inspect', {'backup_id': self.converted}, ev=ev, timeout=900)
+        pre = inspect.get('preflight') or {}
+        failed = [c for c in pre.get('checks') or [] if c.get('status') == 'fail']
+        ev.check('import: inspect: preflight passes, settings same, in place',
+                 pre.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
+                                                      and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
+                 failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
+                                for a in pre.get('apps') or []])
+        self.space('import', 'restore')
+        rjob, rtook = drv.restore(self.converted, ['woow-code-server'], ev=ev, tag='restore-cs-x86')
+        ev.save('restore-job.json', rjob)
+        self.judge_restore(rjob, rtook, 'import: restore-start of the converted backup succeeded with a safety backup, '
+                                        'not rolled back, every health check ok')
+        drv.save_state()
+
+    def judge_convert(self, job, before_ids):
+        """The converted backup of the conversion job (the helper's, or the page's first chain job): kept for cleanup at
+        once, its import facts and its listing row."""
+        ev = self.ev
         result = job['result']
         self.converted = result['backup_id']
         drv.created_backup(self.converted)
@@ -854,28 +897,122 @@ class Run:
                  self.converted not in before_ids and row.get('type') == 'manual'
                  and (row.get('from_ha') or {}).get('ha_backup_id') == self.store_id and bool(row.get('key_id')),
                  {'type': row.get('type'), 'from_ha': bool(row.get('from_ha')), 'size': row.get('size')})
-        inspect = drv.ok('inspect', {'backup_id': self.converted}, ev=ev, timeout=900)
-        pre = inspect.get('preflight') or {}
-        failed = [c for c in pre.get('checks') or [] if c.get('status') == 'fail']
-        ev.check('import: inspect: preflight passes, settings same, in place',
-                 pre.get('ok') and not failed and all((a.get('settings') or {}).get('state') == 'same'
-                                                      and a.get('mode') == 'inplace' for a in pre.get('apps') or []),
-                 failed[:3] or [(a.get('id'), a.get('mode'), (a.get('settings') or {}).get('state'))
-                                for a in pre.get('apps') or []])
-        self.space('import', 'restore')
-        rjob, rtook = drv.restore(self.converted, ['woow-code-server'], ev=ev, tag='restore-cs-x86')
-        ev.save('restore-job.json', rjob)
+
+    def judge_restore(self, rjob, rtook, name):
+        """The restore of the converted backup (restore-start, or the page's second chain job): its safety backup kept for
+        cleanup at once; it must have succeeded, not rolled back, every health check ok."""
+        ev = self.ev
         rresult = rjob.get('result') or {}
         self.safety = rresult.get('safety_backup_id')
         drv.created_backup(self.safety)
         health = rresult.get('health') or []
-        if not ev.check('import: restore-start of the converted backup succeeded with a safety backup, not rolled back, '
-                        'every health check ok', rjob['state'] == 'succeeded' and self.safety
+        if not ev.check(name, rjob['state'] == 'succeeded' and self.safety
                         and rresult.get('rolled_back') is False and health
                         and all(h.get('status') == 'ok' for h in health),
-                        {'state': rjob['state'], 'error': rjob.get('error'), 'took_s': round(rtook, 1),
+                        {'state': rjob['state'], 'error': rjob.get('error'),
+                         'took_s': None if rtook is None else round(rtook, 1),
                          'downtime_s': rresult.get('downtime_seconds')}):
             raise Failed('restore failed')
+
+    # -------- --via-page: the same import through dev-e's real Cockpit page (focus_page_bridge)
+    def space_page(self):
+        """The host keeps FLOOR free after everything the page's import may write: the HA file, the check, the conversion
+        and the restore together (the helper path checks them one step at a time)."""
+        st = os.statvfs('/')
+        free = st.f_bavail * st.f_frsize
+        need = FIXTURE.stat().st_size + NEEDS['check'] + NEEDS['convert'] + NEEDS['restore'] + MARGIN
+        ok = free - need >= FLOOR
+        self.ev.check('page import: host disk keeps the 12 GiB floor after the upload, check, conversion and restore '
+                      'writes', ok, {'free_gib': round(free / 1024 ** 3, 2), 'need_mib': need >> 20})
+        if not ok:
+            raise Failed('host disk before the page import')
+
+    def adopt_page(self, summary, existed):
+        """What the page created goes to this run's own cleanup at once, before any judgement can stop the run: the
+        conversion's and the restore's backups, and the HA record when the page's upload made it."""
+        for backup_id in summary.get('created_backups') or []:
+            drv.created_backup(backup_id)
+        self.store_id = 'ha-' + FIXTURE_SHA[:20]
+        if not existed:
+            try:
+                present = self.store_id in {h.get('id') for h in drv.ok('list', ev=self.ev).get('ha_backups') or []}
+            except (Failed, subprocess.TimeoutExpired, OSError, ValueError, KeyError):
+                present = True   # unknown: the cleanup tries to delete it and says whether that worked
+            if present:
+                self.created_store = self.store_id
+        drv.save_state()
+
+    def step_page_import(self, bridge=None):
+        """Upload, check, conversion and restore through the real page (one confirmation as the page shows it); then the
+        same facts as the helper path, read from the page's own check and chain jobs."""
+        ev = self.ev
+        bridge = bridge or _load('focus_page_bridge')
+        self.space_page()
+        space = drv.device_python(SPACE, {}, as_owner=False, timeout=120)
+        ev.save('space-before-page.json', space)
+        ev.check('page import: real space above the product\'s floor (running reserve + watch margin) the conversion '
+                 'enforces', isinstance(space.get('floor'), int) and space['min_free'] > space['floor'],
+                 {k: space.get(k) for k in ('running_reserve', 'watch_margin', 'floor', 'min_free')})
+        listing = drv.ok('list', ev=ev)
+        before_ids = {b['id'] for b in listing['backups']}
+        existed = 'ha-' + FIXTURE_SHA[:20] in {h.get('id') for h in listing.get('ha_backups') or []}
+        ops = bridge.Ops(helper=lambda command, request=None: drv.ok(command, request, ev=ev),
+                         wait_job=lambda job_id, timeout: drv.wait_job(job_id, ev=ev, timeout=timeout),
+                         root_json=lambda script, request: drv.device_python(script, request, as_owner=False, timeout=300))
+        deadline = min(time.monotonic() + PAGE_STEP_BUDGET, self.lock_started + HOLD_BUDGET - REST_RESERVE)
+        try:
+            page = bridge.import_via_page(device=DEVICE, lock=LOCK, apps=['woow-code-server'],
+                                          importable=['woow-code-server'], stops=[], fixture=FIXTURE,
+                                          key=self.args.secrets['HA_BACKUP_KEY'],
+                                          password=self.args.secrets['COCKPIT_PASSWORD'], evidence=ev.dir / 'page',
+                                          deadline=deadline, ops=ops, source=REPO)
+        except bridge.BridgeError as error:
+            self.adopt_page(error.summary, existed)
+            ev.check('page import: refused before the page started (nothing changed)' if isinstance(error, bridge.Refused)
+                     else 'page import: stopped by a signal (the browser closed in order, the relay reaped)', False,
+                     {'reasons': error.summary.get('reasons'), 'phase': error.summary.get('phase'),
+                      'check_job_ids': error.summary.get('check_job_ids'), 'root_job_ids': error.summary.get('root_job_ids')})
+            raise Failed('page import did not run to the end') from None
+        self.adopt_page(page.summary, existed)
+        summary, gates = page.summary, page.gates
+        for item in page.browser_checks:
+            ev.check(f'page: {item.get("check")}', item.get('ok') is True)
+        ev.check('page: bounded (20 min), the browser closed in order and every relay exec child reaped',
+                 gates.get('page_bounded') and gates.get('cleanup'), summary.get('page'))
+        ev.check('page: the uploaded HA record is the fixture (id and SHA-256)', gates.get('record'),
+                 {'ha_id': summary.get('ha_id'), 'existed_before': summary.get('ha_record_existed')})
+        ev.check('page: exactly the page\'s own check and import jobs, none left running, no other new backup',
+                 gates.get('own_jobs') and gates.get('no_unexplained_backups'),
+                 {'check': summary.get('check_job_id'), 'chain': summary.get('chain_job_ids'),
+                  'unexplained': summary.get('unexplained_new_backups'), 'reasons': summary.get('reasons')})
+        ev.check('page: the check calls woow-code-server importable, stops nothing, and lists every confirmation line '
+                 'keyed (read from the actual check)', gates.get('expected_outcome'),
+                 {'lines': summary.get('confirmation_lines'), 'groups': sorted(summary.get('expected_acknowledged') or {}),
+                  'reasons': summary.get('reasons')})
+        ev.check('page: the one acknowledgement, the import and its jobs carry every listed confirmation key exactly once',
+                 gates.get('acknowledged_exact'))
+        ev.check('page: one conversion and its restore succeeded as two linked jobs in the first job\'s unit',
+                 gates.get('chain') and gates.get('native_units'), {'jobs': summary.get('chain_job_ids')})
+        ev.check('page: every issued Cockpit session value is absent from the records, the journal and the private evidence',
+                 gates.get('issued_scan'), (summary.get('browser') or {}).get('issued_scan'))
+        if not page.passed:
+            raise Failed('page import')
+        record = next((h for h in drv.ok('list', ev=ev).get('ha_backups') or [] if h.get('id') == self.store_id), {})
+        found = {a.get('app_id'): a.get('installed') for a in record.get('importable_apps') or []}
+        ev.check('upload: woow-code-server is importable and installed here', found.get('woow-code-server') is True, found)
+        job = page.check_job
+        if not ev.check('check: the page\'s check job succeeded', job.get('state') == 'succeeded', job.get('error')):
+            raise Failed('check job failed')
+        self.judge_check(job)
+        convert, restore = page.chain
+        ev.save('convert-job.json', convert)
+        if not ev.check('import: the page\'s conversion job succeeded with a backup id', convert.get('state') == 'succeeded'
+                        and (convert.get('result') or {}).get('backup_id'), convert.get('error')):
+            raise Failed('convert failed')
+        self.judge_convert(convert, before_ids)
+        ev.save('restore-job.json', restore)
+        self.judge_restore(restore, None, 'import: the page\'s restore of the converted backup succeeded with a safety '
+                                          'backup, not rolled back, every health check ok')
         drv.save_state()
 
     # -------- verification (the client)
@@ -1007,8 +1144,10 @@ class Run:
     # -------- cleanup and leaks
     def step_leaks(self):
         ev = self.ev
-        request = {'secrets': {'HA_BACKUP_KEY': self.args.secrets['HA_BACKUP_KEY'], 'TEST_LOGIN': self.args.test_login},
-                   'uid': self.uid, 'needles': NEEDLES}
+        secrets = {'HA_BACKUP_KEY': self.args.secrets['HA_BACKUP_KEY'], 'TEST_LOGIN': self.args.test_login}
+        if getattr(self.args, 'via_page', False):   # the page logged in to Cockpit with devadmin's password
+            secrets['COCKPIT_PASSWORD'] = self.args.secrets['COCKPIT_PASSWORD']
+        request = {'secrets': secrets, 'uid': self.uid, 'needles': NEEDLES}
         report = drv.device_python(LEAKS, request, as_owner=False, timeout=900)
         host = drv.scan_host_evidence(ev.dir, self.args.secrets)
         ev.save('leaks.json', {'device': report, 'host': host})
@@ -1071,6 +1210,8 @@ def run_all(run):
              ('import', run.step_import), ('verify', lambda: run.verify('verify', wrong=True)),
              ('needles', run.collect_needles), ('restart', run.step_restart),
              ('auto rollback', run.step_auto_rollback), ('rollback', run.step_rollback_to_own))
+    if getattr(run.args, 'via_page', False):   # upload, check and import become the page's one step; the rest stays
+        steps = steps[:2] + (('page import', run.step_page_import),) + steps[5:]
     failed = None
     try:
         for name, step in steps:
@@ -1206,6 +1347,8 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
     parser.add_argument('--run', action='store_true')
     parser.add_argument('--self-check', action='store_true')
+    parser.add_argument('--via-page', action='store_true',
+                        help='upload, check and import through dev-e\'s real Cockpit page (focus_page_bridge.py)')
     args = parser.parse_args(argv)
     if args.self_check or not args.run:
         return self_check()
@@ -1217,6 +1360,8 @@ def main(argv):
                                secret_dir / 'dev-d-markers.json')
     if len(args.secrets.values.get('HA_BACKUP_KEY', '')) < 16:
         raise SystemExit('HA_BACKUP_KEY missing')
+    if args.via_page:   # devadmin's Cockpit login (shared by every lab device): redacted and scanned like the others
+        args.secrets.register('COCKPIT_PASSWORD', (secret_dir / 'devadmin.pass').read_text().strip())
     import secrets as _secrets
     args.test_login = 'woowbk-test-' + _secrets.token_urlsafe(24)   # generated per run, never a real credential
     args.secrets.register('CSFF_TEST_LOGIN', args.test_login)

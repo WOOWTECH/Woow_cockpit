@@ -1,13 +1,16 @@
-"""Single-case private transport to real dev-d Cockpit; no listener on import.
+"""Single-case private transport to a lab device's real Cockpit (dev-d unless told); no listener on import.
 
 TLS/WebSocket bytes are opaque. Only host127.0.0.1 binds; the device child is an
 unprivileged TCP client to127.0.0.1:9090. No shell, port publish or device config.
+Relay() and command() without a device are exactly the dev-d transport of R8, R1 and page-emqx.
 """
 import asyncio
 from pathlib import Path
+import re
 import threading
 
 DEVICE = 'woowbk-dev-d'
+DEVICE_RE = re.compile(r'woowbk-dev-[a-z]\Z')   # lib.sh device_vars: NAME=woowbk-dev-$DEV
 LP = Path.home() / '.woowbk-lab/bin/labpodman'
 REMOTE = r'''
 import os, socket, threading
@@ -36,13 +39,21 @@ finally: s.close()
 '''
 
 
-def command():
-    return [str(LP), 'exec', '-i', '--user', 'devadmin', DEVICE,
+def device_name(device):
+    """The lab device name itself (woowbk-dev-<letter>); anything else is refused before a process starts."""
+    if not isinstance(device, str) or not DEVICE_RE.fullmatch(device):
+        raise ValueError('lab device name woowbk-dev-<letter> required')
+    return device
+
+
+def command(device=DEVICE):
+    return [str(LP), 'exec', '-i', '--user', 'devadmin', device_name(device),
             'python3', '-I', '-c', REMOTE]
 
 
 class Relay:
-    def __init__(self):
+    def __init__(self, device=DEVICE):
+        self.device = device_name(device)
         self.ready = threading.Event()
         self.error = None
         self.thread = None
@@ -62,7 +73,7 @@ class Relay:
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                *command(), stdin=asyncio.subprocess.PIPE,
+                *command(self.device), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
             self.children.add(proc)
             self.connections += 1

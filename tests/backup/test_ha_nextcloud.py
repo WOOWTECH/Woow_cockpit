@@ -1060,6 +1060,20 @@ class CheckTests(NextcloudCase):
         row = self.check(self.upload_nextcloud(share=share), ['nextcloud'])[0]
         self.assertEqual(issue_of(row, 'nextcloud.server-side-encryption')['items'], ['files_encryption'])
 
+    def test_server_side_encryption_setting_is_read_the_way_nextcloud_reads_it(self):
+        # NC 35's `occ encryption:enable` stores '1' (AppConfig::setValueBool) and Nextcloud reads 1/true/yes/on in any
+        # case (AppConfig::getValueBool). With the keys kept outside the data directory this setting is the only trace.
+        for value in ('1', 'true', 'On', 'YES', 'yes'):
+            with self.subTest(value=value):
+                self.world.ha_details = dict(self.world.ha_details, encryption=value)
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                self.assertEqual(issue_of(row, 'nextcloud.server-side-encryption')['items'], ['encryption_enabled'])
+        for value in ('0', 'no', 'false', 'off', '', None):
+            with self.subTest(value=value):
+                self.world.ha_details = dict(self.world.ha_details, encryption=value)
+                row = self.check(self.upload_nextcloud(), ['nextcloud'])[0]
+                self.assertIsNone(issue_of(row, 'nextcloud.server-side-encryption'))
+
     def test_what_the_reader_leaves_out_of_the_data_directory_is_one_line(self):
         # READ's line `files.skipped`: a device file and a FIFO of the users' files are not moved and are listed (check and
         # conversion alike); a symlink has its own line

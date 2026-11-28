@@ -1,0 +1,14 @@
+{
+  "baseline_restored": true,
+  "case": "page-emqx",
+  "checks": "81/81",
+  "commercial_acceptance": "not-complete",
+  "device": "woowbk-dev-d",
+  "driver_commit": "e236d5d6aff8",
+  "elapsed_seconds": 565.1,
+  "ha_record_owned": true,
+  "phase": "complete",
+  "private_evidence": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-acceptance-page-emqx/20261128T054946",
+  "recovery_verified": true,
+  "source_commit": "ce8c4cfbd8a1d7ff27233e3986a524408a6604f7"
+}

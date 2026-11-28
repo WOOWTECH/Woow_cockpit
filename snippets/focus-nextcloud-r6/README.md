@@ -6,6 +6,37 @@ on driver bugs, now fixed (`282bfba1`: a field the convert request may not carry
 probe stopped the run). Details and evidence: [fullshare05-RESULT.md](fullshare05-RESULT.md). The sections below
 are the earlier history, oldest first.
 
+**2026-11-28: S5-A (the server-side-encryption source) built and verified on dev-e.** The builder (`focus_nextcloud_r6_s5.py`,
+run at `4163367c` = `c46f9a31` here) started a throwaway Nextcloud 35.0.1 + PostgreSQL 16 + Redis inside dev-e from
+the original images, enabled server-side encryption with Nextcloud's own commands (master key; every step checked
+against an occ help contract taken from the v35.0.1 source), wrote one plain file before and files after enabling
+it, proved ciphertext, the native header, master key and one share key per file on disk, re-read everything after a
+restart, and packed an HA-shaped test backup (`generated-s5-source.tar`, 127,600,640 bytes, kept inside dev-e; it is
+generated, not a HAOS export). dev-e's own Nextcloud was exactly unchanged; the throwaway source was removed, the
+fixture and the S5-B inputs kept. Result: `tests/backup/evidence/focus-nextcloud-r6-20261127/s5a-source-fixture-20261128-result.json`.
+The builder's review also found a product defect, fixed in `50a29370`: the importer accepted only 'yes' for
+core/encryption_enabled, while Nextcloud 35 stores '1'.
+
+**2026-11-28 09:5x: S5-B (the import acceptance of the server-side-encrypted source) PASSED 96/96 on dev-e**
+(attempt 04, driver `3f284a39`, frozen product `b058df27` with `50a29370`). History, all with a clean recovery:
+- attempt 01: the product's check stopped with "database not ready": the first fixture had no `postgres` role (its
+  container ran with POSTGRES_USER=nextcloud) while the product opens HA clusters as postgres; the one-shot diagnostic
+  (`focus_nextcloud_r6_s5_diag.py`, verdict `missing-postgres-role`:
+  `tests/backup/evidence/focus-nextcloud-r6-20261127/s5-diagnosis-20261128-result.json`) proved it. The misleading
+  sentence itself was a product defect (podman.REASONS order), fixed on the integration branch in `7a2023e8`.
+- the builder was fixed (`0c874b63`, `04bca4d6`: the real add-on's database shape - superuser postgres, role,
+  database and tables owned by nextcloud, member directory entries - and a gate that opens the packed fixture through
+  the product's own check path, 12/12), the first proof root retired against the diagnostic evidence, and S5-A rebuilt:
+  `s5a-source-fixture-rebuild-result.json` (127,467,520 bytes, sha256 `df9a7adf...`), the switch commit `46a13766`.
+- attempt 02 stopped at a one-off unparseable engine-hash probe before any upload (not reproducible in six retries);
+  attempt 03 passed upload and every substantive check fact and stopped only at the processor: the generated add-on
+  names no HA image, so the product truthfully says `unknown` (HA-06); S5-B expects that since `3f284a39`.
+- attempt 04: check (importable, exactly one confirmation nextcloud.server-side-encryption with files_encryption and
+  encryption_enabled), the unacknowledged conversion refused, the acknowledged import, every ciphertext, plaintext and
+  key file byte for byte, decryption through WebDAV, a new file stored with the native header, restart, an injected
+  failure rolled back automatically, the manual rollback, dev-e exactly as before, cleanup and leak scans:
+  `s5b-import-acceptance-20261128-result.json`. The proof root was removed only after everything passed.
+
 Read-only inventory and original image identity checks are complete. **No image
 bytes copied, no device mutation, no pulls.** This worktree starts at main
 `3e3e9315`. OD-23's final separate handoff commit is `081278f1`; its worktree,
