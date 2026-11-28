@@ -9,7 +9,8 @@ O_EXCL and 0600, at the moment the step needs it (its window starts then), after
 where the tool has one, and prints the lease path and the exact next command.
 
   name          a fresh case name of the controller's form
-  engine-patch  focus_engine_patch.py (dev-d: the installed engine back to the frozen product; files computed by the tool)
+  engine-patch  focus_engine_patch.py (dev-d: the installed engine back to the frozen product; files computed by the tool);
+                --restore-of <its receipt>: the restore-only lease of that same patch (same name), to put the old engine back
   pause         focus_litellm_instance_acceptance_quiesce.py --phase pause (from the successor's pause-admission receipt)
   flow          focus_litellm_instance_acceptance_run.py --phase flow --via-page (after a proven pause; phases flow+recover)
   resume        focus_litellm_instance_acceptance_quiesce.py --phase resume (from the flow receipt after the flow)
@@ -216,7 +217,9 @@ def make_name(d):
     raise Refused('no case name')
 
 
-def engine_patch(d, *, old_source, product, label, leases, minutes=None, out=None, now=None):
+def engine_patch(d, *, old_source, product, label, leases, minutes=None, out=None, now=None, restore_of=None):
+    """The patch lease (both phases, a new name), or with `restore_of` (the patch's own receipt) a restore-only lease under the
+    SAME name: the device keeps its exact copies of the old files under that name."""
     now = now or datetime.now(timezone.utc)
     driver_commit = clean_head(d.checkout, 'driver checkout')
     new = product_head(d, product)
@@ -226,19 +229,27 @@ def engine_patch(d, *, old_source, product, label, leases, minutes=None, out=Non
     except ValueError as error:
         raise Refused(str(error)) from None
     device_name, _lock = d.patch.DEVICES['d']
-    lease = {'granted': True, 'case': d.patch.CASE, 'device': device_name, 'phases': list(d.patch.PHASES),
+    name, phases = 'woowbk_focus_n8n_' + secrets.token_hex(6), list(d.patch.PHASES)
+    if restore_of is not None:
+        receipt = d.private(restore_of, 'engine patch receipt')
+        if (receipt.get('device') != device_name or receipt.get('old_source') != old or receipt.get('new_source') != new
+                or receipt.get('files') != files or not d.patch.CASE_NAME.fullmatch(str(receipt.get('name', '')))):
+            raise Refused('the engine patch receipt is not this patch of dev-d')
+        name, phases = receipt['name'], [d.patch.PHASES[1]]
+    lease = {'granted': True, 'case': d.patch.CASE, 'device': device_name, 'phases': phases,
              'driver_commit': driver_commit, 'source_commit': new, 'old_source_commit': old, 'files': files,
-             'name': 'woowbk_focus_n8n_' + secrets.token_hex(6), 'expires_utc': expiry('engine-patch', minutes, now),
+             'name': name, 'expires_utc': expiry('engine-patch', minutes, now),
              'coordinator_review': REVIEW['engine-patch'].format(old=old[:12], product=new[:12])}
-    for phase in d.patch.PHASES:
+    for phase in phases:
         try:
             d.patch.validate(lease, phase, device_name=device_name, driver=driver_commit, source_commit=new, old_commit=old,
                              names=files, now=now.timestamp())
         except ValueError as error:
             raise Refused(f'focus_engine_patch would refuse: {error}') from None
-    path = write_lease(out or Path(leases) / f'lease-litellm-engine-patch-{label}-dev-d.json', lease)
-    receipt = Path(leases) / f'focus_engine_patch.ll-{label}-dev-d.json'
-    command = ['python3', '-B', '-I', d.lab / 'focus_engine_patch.py', '--execute', '--device', 'd', '--phase', 'engine-patch',
+    kind = 'engine-restore' if restore_of is not None else 'engine-patch'
+    path = write_lease(out or Path(leases) / f'lease-litellm-{kind}-{label}-dev-d.json', lease)
+    receipt = Path(restore_of).resolve() if restore_of is not None else Path(leases) / f'focus_engine_patch.ll-{label}-dev-d.json'
+    command = ['python3', '-B', '-I', d.lab / 'focus_engine_patch.py', '--execute', '--device', 'd', '--phase', phases[0],
                '--lease', path, '--source', Path(product).resolve(), '--old-source', Path(old_source).resolve(), '--receipt', receipt]
     return {'lease': str(path), 'files': files, 'expires_utc': lease['expires_utc'], 'receipt': str(receipt),
             'next': heavy(command, outer=600, grace=60)}
@@ -366,6 +377,7 @@ def main(argv=None):
     p.add_argument('--leases', type=Path, default=LEASES)
     p.add_argument('--minutes', type=int)
     p.add_argument('--out', type=Path, help='another lease path (a second attempt); never overwrites')
+    p.add_argument('--restore-of', type=Path, help='engine-patch: the patch receipt; writes the restore-only lease of that patch')
     a = p.parse_args(argv)
     if not re.fullmatch(r'[a-z0-9-]{1,20}', a.label):
         p.error('label: lowercase letters, digits and dashes')
@@ -381,7 +393,7 @@ def main(argv=None):
             raise Refused('missing: ' + ', '.join('--' + m.replace('_', '-') for m in missing))
         common = dict(label=a.label, leases=a.leases, minutes=a.minutes, out=a.out)
         if a.step == 'engine-patch':
-            result = engine_patch(d, old_source=a.old_source, product=a.product, **common)
+            result = engine_patch(d, old_source=a.old_source, product=a.product, restore_of=a.restore_of, **common)
         elif a.step == 'pause':
             result = pause(d, admission_path=a.pause_receipt, **common)
         elif a.step == 'flow':

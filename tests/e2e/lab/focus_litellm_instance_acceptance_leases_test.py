@@ -228,6 +228,31 @@ class StepTests(GeneratorCase):
         self.assertEqual(datetime.fromisoformat(lease['expires_utc']) - self.now, timedelta(minutes=30))
         self.assertIn('focus_engine_patch.py --execute --device d --phase engine-patch', got['next'])
         self.assertIn('focus_engine_patch.ll-b12-dev-d.json', got['next'])
+        # The restore-only lease of that patch keeps its name (the device's copies of the old files are kept under it).
+        receipt = self.case.leases / 'focus_engine_patch.ll-b12-dev-d.json'
+        receipt.write_text(json.dumps({'device': 'woowbk-dev-d', 'name': lease['name'], 'old_source': OLD,
+                                       'new_source': self.d.plan.FROZEN_PRODUCT, 'files': lease['files'], 'responses': []}))
+        receipt.chmod(0o600)
+        got = gen.engine_patch(self.d, old_source=old, product=new, label='b12', leases=self.case.leases, now=self.now,
+                               restore_of=receipt)
+        restore = self.lease(got['lease'])
+        self.assertEqual(Path(got['lease']).name, 'lease-litellm-engine-restore-b12-dev-d.json')
+        self.assertEqual((restore['name'], restore['phases']), (lease['name'], ['engine-patch-restore']))
+        self.d.patch.validate(restore, 'engine-patch-restore', device_name='woowbk-dev-d', driver=DRIVER,
+                              source_commit=self.d.plan.FROZEN_PRODUCT, old_commit=OLD, names=restore['files'],
+                              now=self.now.timestamp() + 60)
+        with self.assertRaises(ValueError):
+            self.d.patch.validate(restore, 'engine-patch', device_name='woowbk-dev-d', driver=DRIVER,
+                                  source_commit=self.d.plan.FROZEN_PRODUCT, old_commit=OLD, names=restore['files'],
+                                  now=self.now.timestamp() + 60)
+        self.assertIn('--phase engine-patch-restore', got['next'])
+        self.assertIn(str(receipt), got['next'])
+        foreign = json.loads(receipt.read_text())
+        foreign['files'] = ['ha_n8n.py']
+        receipt.write_text(json.dumps(foreign))
+        with self.assertRaisesRegex(gen.Refused, 'not this patch'):
+            gen.engine_patch(self.d, old_source=old, product=new, label='b12r', leases=self.case.leases, now=self.now,
+                             restore_of=receipt)
         # The same engine on both sides is no patch at all.
         shutil.rmtree(old / 'backup-engine')
         shutil.copytree(new / 'backup-engine', old / 'backup-engine')
