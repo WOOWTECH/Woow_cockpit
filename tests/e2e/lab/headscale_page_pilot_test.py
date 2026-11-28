@@ -14,6 +14,7 @@ both drivers (they never touch the import).
 import contextlib
 import copy
 import fcntl
+import gzip
 import hashlib
 import importlib.util
 import io
@@ -445,14 +446,15 @@ def lab(root):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
         path.chmod(0o600)
-    inner = io.BytesIO()
-    with tarfile.open(fileobj=inner, mode='w:gz') as tar:
+    plain = io.BytesIO()
+    with tarfile.open(fileobj=plain, mode='w') as tar:
         for name, value in (('./data/noise_private.key', HA_NOISE), ('./data/.headplane_api_key', HA_API),
                             ('./data/.headplane_cookie_secret', HA_COOKIE)):
             data = value.encode()
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
+    inner = io.BytesIO(gzip.compress(plain.getvalue(), mtime=0))   # the same bytes every run: the same fixture SHA-256
     fixture = root / 'fixtures' / 'x86' / 'woow-b1-x86-plain' / 'woow-b1-x86-plain.tar'
     fixture.parent.mkdir(parents=True)
     with tarfile.open(fixture, 'w') as outer:
