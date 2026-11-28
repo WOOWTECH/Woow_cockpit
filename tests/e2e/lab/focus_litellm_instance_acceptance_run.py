@@ -4,6 +4,22 @@
 Reuses the saved 80-check flow's credential readers and actual API/decryption
 probes. It does not call that flow's setup/run_all/cleanup or its ordinary DB
 conversion path. Every required instance checkpoint is mandatory.
+
+--via-page (flow phase; the lease must say import_path "page", and a lease that says
+it is refused without the flag): the upload, check, conversion and import go through
+dev-d's REAL Cockpit page (focus_page_bridge.py, under this process's own hold of the
+dev-d lock) instead of the helper calls: the page uploads the encrypted file, selects
+only litellm, takes the HA key, shows the check and its one confirmation, ticks it
+once and starts the import (the conversion and its restore as two linked jobs in one
+unit). Every page job is waited for and recorded in the receipt (its backups are this
+case's own). The later outside write and its snapshot move BEFORE the page: the page's
+conversion and restore are one chain, nothing can be written between them, so the
+preservation check proves the import left the live outsiders, roles and passwords as
+they were, not that it ignored the conversion's older copy (the helper flow keeps
+proving that). The check, conversion and import facts are then required on the page's
+own jobs; everything after (verification, restart, witness, forced failure, recovery,
+leaks) is unchanged; devadmin.pass (the Cockpit login) is read, never persisted, and
+the device and the private evidence are scanned for it before the case is cleaned up.
 """
 import argparse
 import base64
@@ -22,6 +38,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
 import focus_litellm_instance_acceptance as plan
 import focus_litellm_instance_acceptance_ops as ops
+# --via-page: the page's whole import (upload, check, conversion, restore) in one step: at most 25 minutes (the page's own 20
+# and reading its jobs), always leaving the controller's 15-minute job reserve of the lease.
+PAGE_STEP_BUDGET = 25*60
+
+
+def load_bridge():
+    """focus_page_bridge, only for --via-page."""
+    spec = importlib.util.spec_from_file_location('focus_page_bridge',HERE/'focus_page_bridge.py')
+    bridge = importlib.util.module_from_spec(spec); spec.loader.exec_module(bridge)
+    return bridge
 
 
 def load_saved():
@@ -56,7 +82,7 @@ def snapshot_difference(current, original, *, limit=30):
     return out
 
 
-def validate_lease(lease, phase, *, now, driver_commit, source_commit):
+def validate_lease(lease, phase, *, now, driver_commit, source_commit, via_page=False):
     if (lease.get('granted') is not True or lease.get('case') != 'litellm-instance-original'
             or lease.get('device') != plan.DEVICE or phase not in lease.get('phases',[])
             or phase not in plan.PHASES or lease.get('driver_commit') != driver_commit
@@ -69,6 +95,8 @@ def validate_lease(lease, phase, *, now, driver_commit, source_commit):
             or lease.get('baseline_policy') != 'require-litellm-absent'
             or lease.get('image_policy') not in ('retain-for-case','remove-own-after-case')):
         raise ValueError('exact coordinator lease does not authorize this phase')
+    if (lease.get('import_path') == 'page') != (via_page is True):
+        raise ValueError('the lease names the page import (import_path page) exactly when --via-page is given')
     expiry = datetime.fromisoformat(lease['expires_utc'])
     if expiry.tzinfo is None: raise ValueError('lease expiry requires timezone')
     expires = expiry.timestamp()
@@ -283,6 +311,8 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         args=argparse.Namespace(secrets=self.h.Secrets(
             [self.h.SECRET_DIR/'b1-creds.env',self.h.SECRET_DIR/'ha-import-creds.env'],
             self.h.SECRET_DIR/'dev-d-markers.json'))
+        if self.via_page():   # devadmin's Cockpit login: redacted and scanned, never written to the receipt
+            args.secrets.register('COCKPIT_PASSWORD',(self.h.SECRET_DIR/'devadmin.pass').read_text().strip())
         ev=self.saved.Ev(args.secrets,area='focus-litellm-instance-acceptance')
         run=self.saved.Run(args,ev)
         if self.r.get('before_probe'): run.before=self.r['before_probe']
@@ -308,6 +338,9 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             self.r['generated_credentials']={name:args.secrets[name] for name in own}
             self.save()
         self.run=run
+
+    def via_page(self):
+        return getattr(self.args,'via_page',False) is True
 
     def app_assertions(self, method, *args):
         count=len(self.run.ev.results); getattr(self.run,method)(*args)
@@ -403,25 +436,19 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             manifest=self.full_archive(self.r['full_safety'])
             self.require('fresh_safety_all_databases',{d[0] for d in manifest['databases']}==set(self.r['original_db']['database_names']))
             self.r['safety_verified']=True; self.save()
-            self.op('fixture',action='create'); self.upload()
-            key=self.run.args.secrets['HA_BACKUP_KEY']
-            checked=self.job('ha-check-start',{'ha_backup_id':self.r['store_id'],'apps':['litellm'],'key':key},'check')
-            self.require('original_check_succeeded',checked.get('state')=='succeeded')
-            check=checked['result']['ha_check']['apps'][0]; self.saved.require_reviewed_check(check)
-            self.require('original_fixture_shape',all(check.get('litellm',{}).get(k)==v for k,v in self.saved.EXPECTED.items()))
-            self.endpoint()
-            converted=self.job('ha-convert-start',{'ha_backup_id':self.r['store_id'],'apps':['litellm'],
-                'key':key,'test_mode':False,'confirm':True},'convert')
-            self.require('instance_conversion_succeeded',converted.get('state')=='succeeded')
-            marker=self.archive(self.r['converted'])
-            self.require('actual_complete_instance_manifest',marker['scope']=='instance' and marker['ha_database']=='litellm'
-                and marker['ha_access_valid'] and marker['globals_present'] and marker['roles_count']>0
-                and {x[0] for x in marker['databases']}=={'postgres','litellm',self.name+'_outside'})
-            password=os.urandom(24).hex(); self.run.args.secrets.register('OWN_INSTANCE_OUTSIDE_PASSWORD',password)
-            self.r['generated_credentials']['OWN_INSTANCE_OUTSIDE_PASSWORD']=password; self.save()
-            self.op('fixture',action='late',password=password)
-            before=self.op('snapshot',tag='late'); self.endpoint()
-            imported=self.job('restore-start',{'backup_id':self.r['converted'],'apps':['litellm'],'confirm':True},'import')
+            self.op('fixture',action='create')
+            if self.via_page():
+                imported,before=self.page_import()
+            else:
+                self.upload()
+                key=self.run.args.secrets['HA_BACKUP_KEY']
+                checked=self.job('ha-check-start',{'ha_backup_id':self.r['store_id'],'apps':['litellm'],'key':key},'check')
+                self.check_facts(checked)
+                converted=self.job('ha-convert-start',{'ha_backup_id':self.r['store_id'],'apps':['litellm'],
+                    'key':key,'test_mode':False,'confirm':True},'convert')
+                self.conversion_facts(converted)
+                before=self.late_outsiders()
+                imported=self.job('restore-start',{'backup_id':self.r['converted'],'apps':['litellm'],'confirm':True},'import')
             self.require('selective_instance_import',plan.success(imported))
             self.full_archive(imported['result']['safety_backup_id'])
             after_import=self.op('snapshot',tag='imported'); preserved=plan.outsiders_equal(before,after_import)
@@ -461,6 +488,106 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
             self.r['recovery_snapshot_difference']=snapshot_difference(recovered,expected); self.save()
         self.require('original_full_catalog_roles_rows',equal)
 
+    def check_facts(self, checked):
+        """The check job's facts (the helper's, or the page's own with --via-page): the same requirements either way."""
+        self.require('original_check_succeeded',checked.get('state')=='succeeded')
+        check=checked['result']['ha_check']['apps'][0]; self.saved.require_reviewed_check(check)
+        self.require('original_fixture_shape',all(check.get('litellm',{}).get(k)==v for k,v in self.saved.EXPECTED.items()))
+        self.endpoint()
+
+    def conversion_facts(self, converted):
+        """The conversion job and its complete instance manifest (the helper's, or the page's first chain job)."""
+        self.require('instance_conversion_succeeded',converted.get('state')=='succeeded')
+        marker=self.archive(self.r['converted'])
+        self.require('actual_complete_instance_manifest',marker['scope']=='instance' and marker['ha_database']=='litellm'
+            and marker['ha_access_valid'] and marker['globals_present'] and marker['roles_count']>0
+            and {x[0] for x in marker['databases']}=={'postgres','litellm',self.name+'_outside'})
+
+    def late_outsiders(self):
+        """The later outside write (a row and a new role password) and the snapshot the import must leave as it is."""
+        password=os.urandom(24).hex(); self.run.args.secrets.register('OWN_INSTANCE_OUTSIDE_PASSWORD',password)
+        self.r['generated_credentials']['OWN_INSTANCE_OUTSIDE_PASSWORD']=password; self.save()
+        self.op('fixture',action='late',password=password)
+        before=self.op('snapshot',tag='late'); self.endpoint()
+        return before
+
+    # -------- --via-page: upload, check, conversion and import through dev-d's real Cockpit page (focus_page_bridge)
+    def page_jobs(self, summary):
+        """Every job the page started, waited for (terminal, its unit quiet) and recorded in the receipt: recovery never
+        starts while one runs, every backup one made is this case's own. Returns {job id: record}."""
+        found={}
+        for jid in list(summary.get('check_job_ids') or [])+([summary['check_job_id']] if summary.get('check_job_id') else []):
+            if jid not in found: found[jid]=self.wait_job(jid)
+        roots=list(summary.get('root_job_ids') or [])+([summary['root_job_id']] if summary.get('root_job_id') else [])
+        for root in roots:
+            current=root
+            while current and current not in found and len(found)<8:
+                found[current]=self.wait_job(current)
+                current=((found[current].get('result') or {}).get('group') or {}).get('next_job_id')
+        return found
+
+    def adopt_page(self, summary):
+        keep=('phase','ha_id','ha_record_existed','check_job_id','check_job_ids','root_job_id','root_job_ids',
+              'chain_job_ids','created_backups','passed','gates','reasons','chosen')
+        self.r['page']={k:summary.get(k) for k in keep if k in summary}; self.save()
+        jobs=self.page_jobs(summary)
+        first=jobs.get(summary.get('root_job_id') or next(iter(summary.get('root_job_ids') or []),None)) or {}
+        converted=(first.get('result') or {}).get('backup_id')
+        if first.get('type')=='backup' and converted: self.r['converted']=converted
+        sid='ha-'+plan.FIXTURE_SHA[:20]
+        if summary.get('phase') not in ('preconditions','refused') and sid in {x['id'] for x in self.helper('list').get('ha_backups',[])}:
+            self.r['store_id']=sid   # recovery removes it when the page's upload made it
+        self.save()
+        return jobs
+
+    def page_import(self, bridge=None):
+        """(the page's restore job, the snapshot the import must leave as it is). The later outside write comes first."""
+        bridge=bridge or load_bridge()
+        self.require('original_fixture_sha256',plan.sha(self.saved.FIXTURE)==plan.FIXTURE_SHA)
+        before=self.late_outsiders()
+        self.budget(900)
+        if self.r.get('catalog_intent'):
+            self.require('owned_catalog_before_job',self.op('inventory')['catalogs'].get('litellm.json')==self.r['catalog_sha'])
+        self.r['upload_intent']=True; self.r['page_intent']=True; self.save()
+        secrets=self.run.args.secrets
+        ops_=bridge.Ops(helper=lambda command,request=None:self.helper(command,request),
+                        wait_job=lambda job_id,timeout:self.wait_job(job_id),
+                        root_json=lambda script,request:self.root_json(script,request,timeout=300))
+        try:
+            page=bridge.import_via_page(device=plan.DEVICE,lock=str(self.saved.LOCK),apps=['litellm'],importable=['litellm'],
+                stops=[],fixture=self.saved.FIXTURE,key=secrets['HA_BACKUP_KEY'],choices={},password=secrets['COCKPIT_PASSWORD'],
+                evidence=self.run.ev.dir/'page',deadline=min(self.clock()+PAGE_STEP_BUDGET,self.deadline-900),ops=ops_,
+                source=Path(self.args.source),clock=self.clock)
+        except bridge.BridgeError as error:
+            self.adopt_page(error.summary)
+            self.require('page_import_ran_to_the_end',False)
+        self.adopt_page(page.summary)
+        for item in page.browser_checks: self.require('page: '+str(item.get('check')),item.get('ok') is True)
+        gates=page.gates
+        self.require('page_bounded_browser_closed_relay_reaped',gates.get('page_bounded') and gates.get('cleanup'))
+        self.require('page_uploaded_record_is_the_fixture',gates.get('record'))
+        self.require('page_own_jobs_only_none_running_no_other_backup',gates.get('own_jobs') and gates.get('no_unexplained_backups'))
+        self.require('page_check_litellm_importable_nothing_stopped_lines_keyed',gates.get('expected_outcome'))
+        self.require('page_every_listed_key_acknowledged_exactly_once',gates.get('acknowledged_exact'))
+        self.require('page_conversion_and_restore_linked_in_one_unit',gates.get('chain') and gates.get('native_units'))
+        self.require('page_nothing_to_choose',gates.get('choices'))
+        self.require('page_issued_cookie_values_absent',gates.get('issued_scan'))
+        self.check_facts(page.check_job)
+        converted,imported=page.chain
+        self.conversion_facts(converted)
+        return imported,before
+
+    def page_password_scan(self):
+        """The page logged in to Cockpit with devadmin's password: it is in no engine record, upload, staging, the journal
+        or this case's private evidence."""
+        secrets=self.run.args.secrets
+        report=self.h.device_python(self.saved.LEAKS,{'secrets':{'COCKPIT_PASSWORD':secrets['COCKPIT_PASSWORD']},
+                                                      'podman_secrets':[],'uid':1019},as_owner=False,timeout=900)
+        host=self.h.scan_host_evidence(self.run.ev.dir,secrets)
+        self.r['page_password_scan']={'device_hits':report.get('hits'),'scanned':report.get('scanned'),'host_hits':host.get('hits')}
+        self.save()
+        self.require('page_cockpit_password_absent',report.get('hits')==0 and report.get('scanned',0)>0 and host.get('hits')==0)
+
     def recover(self):
         self.recovering=True; self.settle()
         if self.r.get('hook_intent'):
@@ -489,6 +616,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
                          self.r.get('leak_scan_passed') is True or self.lease.get('accept_prior_leak_scan') is True)
         elif self.run:
             self.app_assertions('step_leaks')
+            if self.via_page() and self.r.get('page_intent'): self.page_password_scan()
             self.r['leak_scan_passed']=True; self.save()
         # Copies survive every uncertainty. Cleanup runs only after successful
         # recovery and the saved credential scanner, never in a blind finally.
@@ -541,6 +669,8 @@ def main(argv=None):
     parser.add_argument('--phase',choices=plan.PHASES,default='flow'); parser.add_argument('--execute',action='store_true')
     parser.add_argument('--source',default=plan.PRODUCT_DIR)
     parser.add_argument('--lease'); parser.add_argument('--receipt'); parser.add_argument('--output')
+    parser.add_argument('--via-page',action='store_true',
+                        help="flow: upload, check, conversion and import through dev-d's real Cockpit page (focus_page_bridge.py)")
     args=parser.parse_args(argv)
     if not args.execute:
         print(json.dumps({'preparation_only':True,'source_commit':plan.FROZEN_PRODUCT,'device':plan.DEVICE,
@@ -549,7 +679,8 @@ def main(argv=None):
     if not all((args.lease,args.receipt,args.output)): parser.error('execute requires lease, receipt and unique output')
     if Path(args.output).exists(): parser.error('attempt output already exists')
     lease=json.loads(ops.read_regular(args.lease)[0])
-    validate_lease(lease,args.phase,now=time.time(),driver_commit=git(plan.REPO,'rev-parse','HEAD'),source_commit=git(args.source,'rev-parse','HEAD'))
+    page={'via_page':True} if args.via_page else {}   # an earlier call validates exactly as before
+    validate_lease(lease,args.phase,now=time.time(),driver_commit=git(plan.REPO,'rev-parse','HEAD'),source_commit=git(args.source,'rev-parse','HEAD'),**page)
     if git(plan.REPO,'status','--porcelain') or git(args.source,'status','--porcelain'): raise ValueError('dirty source')
     saved=load_saved(); saved.verify_isolation()
     fd,_waited=saved.acquire()  # caller must also hold the existing global heavy slot
@@ -557,7 +688,7 @@ def main(argv=None):
     def interrupted(_signum,_frame): raise InterruptedError('case interrupted; recover receipt')
     for signum in (signal.SIGINT,signal.SIGTERM): signal.signal(signum,interrupted)
     try:
-        validate_lease(lease,args.phase,now=time.time(),driver_commit=git(plan.REPO,'rev-parse','HEAD'),source_commit=git(args.source,'rev-parse','HEAD'))
+        validate_lease(lease,args.phase,now=time.time(),driver_commit=git(plan.REPO,'rev-parse','HEAD'),source_commit=git(args.source,'rev-parse','HEAD'),**page)
         controller=Controller(args,lease,saved); controller.r['phase_succeeded']=False; controller.save()
         getattr(controller,args.phase.replace('-','_'))()
         controller.require('outer_isolation_returned',saved.verify_isolation()=='dev-d isolation: true none {}')
