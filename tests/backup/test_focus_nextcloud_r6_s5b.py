@@ -170,7 +170,7 @@ class ProductBindingTests(unittest.TestCase):
         parent = subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', s5b.FIX_COMMIT + '^'], text=True).strip()
         self.assertFalse(s5b.fix_included(REPO, commit=parent))      # a product without the fix is refused
         with self.assertRaisesRegex(ValueError, 'product-nextcloud-sha'):
-            s5b.git_manifest(REPO, commit=s5b.S5A_ENGINE_COMMIT)     # an engine without the fix: the old ha_nextcloud.py
+            s5b.git_manifest(REPO, commit=s5b.HISTORY.engine_commit)  # an engine without the fix: the old ha_nextcloud.py
 
     def checkout(self, commit, root):
         """The files of `commit` as a clean checkout would hold them (git objects), without creating a worktree."""
@@ -198,7 +198,7 @@ class ProductBindingTests(unittest.TestCase):
                     else:
                         self.assertEqual(s5b.frozen_manifest(root)[1], rows)
             (root / 'backup-engine/woowbackup/ha_nextcloud.py').write_bytes(
-                subprocess.check_output(['git', '-C', str(REPO), 'show', s5b.S5A_ENGINE_COMMIT + ':backup-engine/woowbackup/ha_nextcloud.py']))
+                subprocess.check_output(['git', '-C', str(REPO), 'show', s5b.HISTORY.engine_commit + ':backup-engine/woowbackup/ha_nextcloud.py']))
             with patch.object(source.subprocess, 'check_output', lambda argv, **kw: s5b.PRODUCT_COMMIT if 'rev-parse' in argv else ''):
                 with self.assertRaisesRegex(ValueError, 'nextcloud-sha'): s5b.frozen_manifest(root)
 
@@ -316,7 +316,10 @@ class LeaseTests(unittest.TestCase):
         self.assertEqual(template['product_manifest_sha256'], source.manifest_hash(self.rows))
         # No prior engine is bound (another lane may deploy its own before S5-B): it is captured at run time.
         self.assertFalse(any(k.startswith('prior_engine') for k in template))
-        self.assertNotIn(s5.ENGINE_COMMIT, json.dumps(template))
+        # The engine S5-A runs next to is now the frozen product itself: bound once, as the product, never as a prior.
+        self.assertEqual(s5.ENGINE_COMMIT, s5b.PRODUCT_COMMIT)
+        self.assertEqual([k for k, v in template.items() if v == s5.ENGINE_COMMIT], ['product_commit'])
+        self.assertNotIn(s5b.HISTORY.engine_commit, json.dumps(template))
         self.assertTrue(template['not_before_utc'].startswith('REQUIRES_') and template['expires_utc'].startswith('REQUIRES_'))
         self.assertEqual(template['original_inactive_units'], list(r6.INACTIVE_UNITS))
         self.assertIs(template['host_fixture_copy'], False)

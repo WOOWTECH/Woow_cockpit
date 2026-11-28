@@ -85,9 +85,11 @@ IMAGES = {
     'pg': '9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7',
     'redis': 'd1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad',
 }
-# The engine dev-e runs: deploy-src.sh (OpenDesign flow) installed commit 4cf97c25. Its expected bytes come from this
-# repository's git objects (engine_manifest), never from a device.
-ENGINE_COMMIT = '4cf97c2507d5c0fc28905717efe387ee4d6b19f7'
+# The engine dev-e runs: since the 2026-11-28 page runs (OpenDesign, code-server, Nextcloud no-share) deploy-src.sh
+# installed engine files equal to b058df27's (with the SSE fix 50a29370; 4cf97c25 differed in ha_nextcloud.py only), the
+# same product the S5-B import runs. Its expected bytes come from this repository's git objects (engine_manifest), never
+# from a device.
+ENGINE_COMMIT = 'b058df278d661cc6195cd40936ff6494036c63a1'
 PRODUCT_LIB = '/usr/local/lib/woowtech-cockpit-backup'   # device only: the installed engine, proven equal to ENGINE_COMMIT
 SLUG = 'woow-nextcloud-office'
 PROFILE = '0.2.3'  # envelope compatibility profile, NOT an installed add-on version

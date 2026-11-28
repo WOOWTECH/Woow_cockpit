@@ -95,7 +95,7 @@ S5A_ENGINE_COMMIT = s5.ENGINE_COMMIT    # the engine S5-A runs next to (its resu
 # diagnostic and the retirement of its proof root bind it, never an S5-B run.
 HISTORY_RESULT = EVIDENCE / 's5a-source-fixture-20261128-result.json'
 HISTORY = SimpleNamespace(
-    source_commit='4163367cf67776c1e65c41cb51cda42761b2e1fc', engine_commit=s5.ENGINE_COMMIT,
+    source_commit='4163367cf67776c1e65c41cb51cda42761b2e1fc', engine_commit='4cf97c2507d5c0fc28905717efe387ee4d6b19f7',
     proof_root='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3',
     fixture='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3' + ARTIFACT_TAIL,
     provenance='/var/lib/woowbk-nextcloud-s5-afe8d885402badf3/owned/artifact/provenance.private.json',
