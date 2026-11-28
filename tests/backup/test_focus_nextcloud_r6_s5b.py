@@ -149,7 +149,7 @@ def lists_text(container='nextcloud-app'):
 
 def check_job(issues=None, *, state='succeeded', section=None, **app):
     issues = [sse_issue(), *haissues.from_legacy(warnings=[settings_text()])] if issues is None else issues
-    row = {'app_id': 'nextcloud', 'arch': 'amd64', 'version': '0.2.3', 'target_version': '35.0.1.1',
+    row = {'app_id': 'nextcloud', 'arch': 'unknown', 'version': '0.2.3', 'target_version': '35.0.1.1',
            'nextcloud': dict(s5b.SECTION, files=80, custom_apps=[]) if section is None else section,
            **haissues.check_fields('nextcloud', issues)}
     row.update(app)
@@ -511,6 +511,11 @@ class CheckVerdictTests(unittest.TestCase):
             with self.subTest(key=key):
                 self.assertFalse(self.verdict(check_job(section=dict(s5b.SECTION, **{key: value})))['section'])
         self.assertFalse(self.verdict(check_job(arch='aarch64'))['versions'])
+        # The generated add-on names no HA image: 'unknown' is the product's truthful answer; an -amd64 answer would
+        # mean a different fixture than the bound S5-A result.
+        self.assertEqual(s5b.FIXTURE_ARCH, 'unknown')
+        self.assertTrue(self.verdict(check_job())['versions'])
+        self.assertFalse(self.verdict(check_job(arch='amd64'))['versions'])
 
 
 class ConversionRequestTests(unittest.TestCase):
@@ -1047,7 +1052,7 @@ class FakeDevE:
         issues = [sse_issue(), *haissues.from_legacy(warnings=[settings_text(), lists_text()])]
         if self.mode == 'check-extra-confirm':
             issues.append(haissues.Issue('nextcloud.symlinks-skipped', 'confirm', 'x', ['s5owner/files/link']))
-        return {'app_id': 'nextcloud', 'arch': 'amd64', 'version': '0.2.3', 'target_version': '35.0.1.1',
+        return {'app_id': 'nextcloud', 'arch': 'unknown', 'version': '0.2.3', 'target_version': '35.0.1.1',
                 'nextcloud': dict(s5b.SECTION, files=80, custom_apps=[], datadir_bytes=50 * 1024 ** 2),
                 **haissues.check_fields('nextcloud', issues)}
 

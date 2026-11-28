@@ -90,6 +90,7 @@ S5A_ARTIFACT = ('generated-s5-source.tar', 'provenance.private.json')
 ARTIFACT_TAIL = '/owned/artifact/generated-s5-source.tar'
 COMMAND_RE = r'command-[0-9]{4}\.(?:json|stdout\.private|stderr\.private)'
 S5A_ENGINE_COMMIT = s5.ENGINE_COMMIT    # the engine S5-A runs next to (its result says so); a fact of that evidence only
+FIXTURE_ARCH = 'unknown'   # what the product reads from the generated addon.json (user.image is a sha256 ID, no -amd64 name)
 # HISTORY: the first S5-A build (4163367c, 2026-11-28). Its cluster was initialised with POSTGRES_USER=nextcloud, so it has
 # no role postgres and the product's check cannot open it (focus_nextcloud_r6_s5_diag). Kept as history: only the
 # diagnostic and the retirement of its proof root bind it, never an S5-B run.
@@ -744,7 +745,10 @@ def judge_check(job):
                 and sse.get('key') == SSE_KEY and sse.get('message') == SSE_TEXT and UNTESTED in SSE_TEXT),
         'others': 'unexpected' not in notices and all(i.get('level') in ('notice', 'auto') for i in others),
         'section': all(section.get(k) == v for k, v in SECTION.items()),
-        'versions': (app.get('arch'), app.get('version'), app.get('target_version')) == ('amd64', s5.PROFILE, s5.VERSION),
+        # The generated add-on names no HA image (S5-A keeps the actual cached image ID, truthfully), so the product
+        # reads no processor from addon.json and says 'unknown' (HA-06: no gate; the database that opens the data
+        # refuses another processor's). Real HA backups name their -amd64 image (R6 full share 118/118 covers that).
+        'versions': (app.get('arch'), app.get('version'), app.get('target_version')) == (FIXTURE_ARCH, s5.PROFILE, s5.VERSION),
         'lines': lines, 'notices': notices}
 
 
@@ -934,7 +938,8 @@ def make_run(Base, ctx, variant):
                           'recorded', verdict['others'])
             require_check('check: the section is the generated source (35.0.1.1, PostgreSQL 16, one user, no share, the '
                           'data dir in the backup)', verdict['section'])
-            require_check('check: amd64, add-on 0.2.3, target 35.0.1.1', verdict['versions'])
+            require_check('check: processor unknown (the generated add-on names no HA image), add-on 0.2.3, target '
+                          '35.0.1.1', verdict['versions'])
             apps = result.get('apps') or [{}]
             self.section = apps[0].get('nextcloud') or {}
             self.keys = [SSE_KEY]
