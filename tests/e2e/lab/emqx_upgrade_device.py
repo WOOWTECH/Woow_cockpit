@@ -7,8 +7,8 @@ secret in a reply: dev-d's EMQX secrets are read here only to blank them out of 
 
 What it may touch (and nothing else):
   * the run folder ~/woowbk-emqx-upgrade-<run id: 12 hex>/ (0700, created once by `capture`, removed by `cleanup`):
-    capture/ + capture.json (exact private copies of the EMQX files below), Woow_podman_emqx/ (the throwaway package
-    copy, `stage`), upgrade.log, upgrade.pid, upgrade.done
+    capture/ + capture.json (exact private copies of the EMQX files below), older/Woow_podman_emqx/ and
+    upgrade/Woow_podman_emqx/ (the two throwaway package copies, `stage`), <copy>.log, <copy>.pid, <copy>.done
   * the EMQX files of the package, written back exactly as captured by `restore-files`: ~/.config/containers/systemd/
     emqx*, ~/.config/emqx/**, ~/.local/state/woow-quadlet/emqx/**, ~/.config/systemd/user/*emqx*
   * the folders the package's own scripts made in ~/.local/share/woow-backups/emqx during the run (`cleanup`, only
@@ -16,17 +16,19 @@ What it may touch (and nothing else):
 
 Operations (request field `op`; every request names the run id):
   facts          read-only: the EMQX files (SHA-256, mode, owner, size), the Image=/HealthCmd= lines of the two
-                 Quadlets, the Quadlet manifest, image refs (ID, digest, tags, `podman image exists`), the containers
-                 (image ID, image name, running), the units, the HA import marker in the data volume, dev-d's own
-                 package copy (tree digest, lab-source, smoke.sh SHA-256), the package backup folder, the EMQX secret
-                 and volume NAMES, every image and container of the owner, the run folder; optional line deltas of
-                 captured files
+                 Quadlets and the lines of the installed emqx.container (a public unit, no value), the Quadlet manifest,
+                 image refs (ID, digest, tags, `podman image exists`), the containers (image ID, image name, running), the
+                 units, the HA import marker in the data volume, dev-d's own package copy (tree digest, lab-source,
+                 smoke.sh SHA-256), the package backup folder, the EMQX secret and volume NAMES, every image and container
+                 of the owner, the run folder
   capture        the run folder and exact private copies of every EMQX file (refuses an existing run folder)
-  stage          the throwaway package copy from a tar (regular files only), every file checked against the host's list
-  upgrade        the copy's scripts/upgrade.sh, no option, as appowner, in its own session, output to upgrade.log;
+  stage          one throwaway package copy (`copy`: older | upgrade) from a tar (regular files only), every file checked
+                 against the host's list
+  script         the package's own script of one copy, no option, as appowner, in its own session, output to
+                 <copy>.log: older -> scripts/install.sh (puts EMQX on the older image), upgrade -> scripts/upgrade.sh;
                  bounded (TERM, then KILL of its whole process group); the output comes back without dev-d's secrets
-  upgrade-log    the output so far (same blanking), whether the run ended
-  stop-upgrade   a still running upgrade (recorded pid and start time) is stopped: TERM, then KILL of its group
+  script-log     a copy's output so far (same blanking), whether its script ended
+  stop-scripts   every still running script of the run (recorded pid and start time): TERM, then KILL of its group
   restore-files  every EMQX file back to its captured bytes and mode, every file or folder the run added removed,
                  `systemctl --user daemon-reload`; the files read again
   ready          the broker's own healthcheck and the Dashboard entrance answer (bounded wait)
@@ -52,7 +54,8 @@ import urllib.request
 
 RUN_PREFIX = 'woowbk-emqx-upgrade-'
 RUN_ID = re.compile(r'[0-9a-f]{12}\Z')
-PACKAGE = 'Woow_podman_emqx'                       # the throwaway copy's folder name inside the run folder
+PACKAGE = 'Woow_podman_emqx'                       # each throwaway copy's folder name: <run folder>/<copy>/
+COPIES = {'older': 'scripts/install.sh', 'upgrade': 'scripts/upgrade.sh'}   # the copy -> the package script it runs
 INSTALLED = 'Woow_podman_emqx'                     # dev-d's own copy (deploy-batch1.sh: git archive of ea5886c)
 LAB_SOURCE = 'Woow_podman_emqx.lab-source'
 BACKUP_ROOT = '.local/share/woow-backups/emqx'     # the package's BACKUP_ROOT (scripts/common.sh)
@@ -74,6 +77,7 @@ MAX_FILE = 2 * 1024 * 1024
 MAX_FILES = 600
 MAX_LOG = 2 * 1024 * 1024
 MAX_LINES = 4000
+SCRIPT_MIN_TIMEOUT = 60
 HOME_OVERRIDE = None                               # offline tests only
 
 
@@ -361,16 +365,22 @@ def run_state(q):
     st = lstat_or_none(path)
     if st is None:
         return {'exists': False}
-    return {'exists': True, 'capture': (path / 'capture.json').is_file(), 'staged': (path / PACKAGE).is_dir(),
-            'upgrade_started': os.path.lexists(path / 'upgrade.pid'),
-            'upgrade_done': os.path.lexists(path / 'upgrade.done')}
+    out = {'exists': True, 'capture': (path / 'capture.json').is_file()}
+    for copy in COPIES:
+        out[copy] = {'staged': (path / copy / PACKAGE).is_dir(), 'started': os.path.lexists(path / (copy + '.pid')),
+                     'done': os.path.lexists(path / (copy + '.done'))}
+    return out
 
 
 def facts(q):
     files, dirs = walk()
     quadlets = home() / QUADLET_DIR
+    try:
+        unit = read_nofollow(quadlets / 'emqx.container').decode('utf-8', 'replace').splitlines()
+    except (OSError, ValueError):
+        unit = None
     out = {'files': files, 'dirs': dirs, 'manifest': manifest(),
-           'quadlet': {name: quadlet_lines(quadlets / name) for name in QUADLETS},
+           'quadlet': {name: quadlet_lines(quadlets / name) for name in QUADLETS}, 'quadlet_text': unit,
            'images': {ref: image_info(ref) for ref in q.get('refs') or []},
            'containers': {name: container_info(name) for name in q.get('containers') or []},
            'units': unit_states(list(q.get('units') or [])),
@@ -384,18 +394,6 @@ def facts(q):
         out['lab_source'] = text(read_nofollow(home() / LAB_SOURCE))
     except (OSError, ValueError):
         out['lab_source'] = None
-    deltas = q.get('deltas') or []
-    if deltas:
-        record = json.loads(read_nofollow(existing_run_dir(q) / 'capture.json'))
-        out['deltas'] = {}
-        for rel in deltas:
-            item = record['files'].get(rel)
-            if item is None or rel not in files:
-                out['deltas'][rel] = None
-                continue
-            old = read_nofollow(run_dir(q) / 'capture' / item['copy']).decode('utf-8', 'replace')
-            new = read_nofollow(home() / rel).decode('utf-8', 'replace')
-            out['deltas'][rel] = line_delta(old, new)
     return out
 
 
@@ -428,9 +426,19 @@ def _member_path(name):
     return Path(*parts)
 
 
+def copy_name(q):
+    copy = q.get('copy')
+    if copy not in COPIES:
+        raise fixed('copy')
+    return copy
+
+
 def stage(q):
     path = existing_run_dir(q)
-    dest = path / PACKAGE
+    copy = copy_name(q)
+    if not os.path.lexists(path / copy):
+        os.mkdir(path / copy, 0o700)
+    dest = path / copy / PACKAGE
     if os.path.lexists(dest):
         raise fixed('stage-exists')
     raw = base64.b64decode(q.get('tar_b64') or '', validate=True)
@@ -567,24 +575,30 @@ def bounded(value, low, high):
     return value
 
 
-def upgrade(q):
+def script(q):
+    """One copy's package script (install.sh of the older copy, upgrade.sh of the upgrade copy), no option."""
     path = existing_run_dir(q)
-    script = path / PACKAGE / 'scripts' / 'upgrade.sh'
-    st = lstat_or_none(script)
+    copy = copy_name(q)
+    target = path / copy / PACKAGE / COPIES[copy]
+    st = lstat_or_none(target)
     if st is None or not stat.S_ISREG(st.st_mode) or not st.st_mode & 0o100:
-        raise fixed('no-staged-upgrade')
-    if os.path.lexists(path / 'upgrade.pid'):
-        raise fixed('upgrade-already-started')
-    timeout = bounded(q.get('timeout'), 60, 3600)
-    log = os.open(path / 'upgrade.log', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        raise fixed('no-staged-script')
+    if os.path.lexists(path / (copy + '.pid')):
+        raise fixed('script-already-started')
+    others = [other for other in COPIES if other != copy and os.path.lexists(path / (other + '.pid'))
+              and not os.path.lexists(path / (other + '.done'))]
+    if others:
+        raise fixed('another-script-running')
+    timeout = bounded(q.get('timeout'), SCRIPT_MIN_TIMEOUT, 3600)
+    log = os.open(path / (copy + '.log'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     started = time.monotonic()
     try:
-        proc = subprocess.Popen([str(script)], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+        proc = subprocess.Popen([str(target)], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
                                 cwd=str(home()), start_new_session=True)
     finally:
         os.close(log)
     ticks = start_ticks(proc.pid)
-    write_new(path / 'upgrade.pid', ('%d %s\n' % (proc.pid, ticks)).encode(), 0o600)
+    write_new(path / (copy + '.pid'), ('%d %s\n' % (proc.pid, ticks)).encode(), 0o600)
     timed_out = False
     try:
         proc.wait(timeout=timeout)
@@ -593,44 +607,54 @@ def upgrade(q):
         stop_group(proc.pid, ticks, wait=lambda seconds: proc.wait(timeout=seconds))
         if proc.poll() is None:
             proc.wait()
-    write_new(path / 'upgrade.done', str(proc.returncode).encode(), 0o600)
-    lines, hits, truncated = blank(read_nofollow(path / 'upgrade.log', 64 * MAX_LOG), device_secret_values())
-    return {'rc': proc.returncode, 'timed_out': timed_out, 'seconds': round(time.monotonic() - started, 1),
+    write_new(path / (copy + '.done'), str(proc.returncode).encode(), 0o600)
+    lines, hits, truncated = blank(read_nofollow(path / (copy + '.log'), 64 * MAX_LOG), device_secret_values())
+    return {'copy': copy, 'rc': proc.returncode, 'timed_out': timed_out, 'seconds': round(time.monotonic() - started, 1),
             'lines': lines, 'device_secret_hits': hits, 'truncated': truncated}
 
 
-def upgrade_log(q):
+def script_log(q):
     path = existing_run_dir(q)
-    if not os.path.lexists(path / 'upgrade.log'):
-        return {'started': False}
-    lines, hits, truncated = blank(read_nofollow(path / 'upgrade.log', 64 * MAX_LOG), device_secret_values())
-    done = path / 'upgrade.done'
-    return {'started': True, 'done': os.path.lexists(done),
+    copy = copy_name(q)
+    if not os.path.lexists(path / (copy + '.log')):
+        return {'copy': copy, 'started': False}
+    lines, hits, truncated = blank(read_nofollow(path / (copy + '.log'), 64 * MAX_LOG), device_secret_values())
+    done = path / (copy + '.done')
+    return {'copy': copy, 'started': True, 'done': os.path.lexists(done),
             'rc': int(read_nofollow(done)) if os.path.lexists(done) else None,
             'lines': lines, 'device_secret_hits': hits, 'truncated': truncated}
 
 
-def recorded(path):
+def recorded(path, copy):
     try:
-        pid, ticks = read_nofollow(path / 'upgrade.pid').decode().split()
+        pid, ticks = read_nofollow(path / (copy + '.pid')).decode().split()
         return int(pid), ticks
     except (OSError, ValueError):
         return None, None
 
 
-def stop_upgrade(q):
-    path = run_dir(q)
-    if not os.path.lexists(path / 'upgrade.pid'):
-        return {'started': False, 'running': False, 'was_running': False}
-    if os.path.lexists(path / 'upgrade.done'):
-        return {'started': True, 'running': False, 'was_running': False}
-    pid, ticks = recorded(path)
+def running(path, copy):
+    """(started, still running) of one copy's script by its pid record."""
+    if not os.path.lexists(path / (copy + '.pid')):
+        return False, False
+    if os.path.lexists(path / (copy + '.done')):
+        return True, False
+    pid, ticks = recorded(path, copy)
     if pid is None:
         raise fixed('pid-record-unreadable')
-    was = alive(pid, ticks)
-    if was:
-        stop_group(pid, ticks)
-    return {'started': True, 'running': alive(pid, ticks), 'was_running': was}
+    return True, alive(pid, ticks)
+
+
+def stop_scripts(q):
+    path = run_dir(q)
+    found = {}
+    for copy in COPIES:
+        started, was = running(path, copy)
+        if was:
+            pid, ticks = recorded(path, copy)
+            stop_group(pid, ticks)
+        found[copy] = {'started': started, 'was_running': was, 'running': running(path, copy)[1]}
+    return {'copies': found, 'running': any(item['running'] for item in found.values())}
 
 
 def dashboard_url():
@@ -722,17 +746,20 @@ def cleanup(q):
     path = run_dir(q)
     if q.get('remove_run_dir') is True and lstat_or_none(path) is not None:
         existing_run_dir(q)
-        if os.path.lexists(path / 'upgrade.pid') and not os.path.lexists(path / 'upgrade.done'):
-            pid, ticks = recorded(path)
-            if pid is None or alive(pid, ticks):
-                raise fixed('upgrade-still-running')
+        for copy in COPIES:
+            try:
+                still = running(path, copy)[1]
+            except ValueError:          # an unreadable pid record: never removed behind a script that may still run
+                still = True
+            if still:
+                raise fixed('script-still-running')
         shutil.rmtree(path)
     return {'removed': removed, 'unexplained': unexplained, 'run_dir_removed': lstat_or_none(path) is None,
             'backup_root': backup_root(), 'backup_parent': backup_parent()}
 
 
-OPS = {'facts': facts, 'capture': capture, 'stage': stage, 'upgrade': upgrade, 'upgrade-log': upgrade_log,
-       'stop-upgrade': stop_upgrade, 'restore-files': restore_files, 'ready': ready, 'smoke': smoke, 'cleanup': cleanup}
+OPS = {'facts': facts, 'capture': capture, 'stage': stage, 'script': script, 'script-log': script_log,
+       'stop-scripts': stop_scripts, 'restore-files': restore_files, 'ready': ready, 'smoke': smoke, 'cleanup': cleanup}
 
 
 def dispatch(q):

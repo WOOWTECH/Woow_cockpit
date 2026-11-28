@@ -1,5 +1,6 @@
 """Offline tests of the EMQX upgrade-after-import lab driver (emqx_upgrade_after_import.py), its device side
-(emqx_upgrade_device.py) and the host-side image helper (emqx_upgrade_image_prep.py).
+(emqx_upgrade_device.py) and the host-side image helper (emqx_upgrade_image_prep.py). Open-source images only: the
+import on dev-d's own 5.8.9, the package's installer moves it to the older 5.8.8, the package's upgrade.sh back to 5.8.9.
 
 No device, no podman, no secret: dev-d is a simulation (SimDevice) driven through the driver's own Run, the device side
 runs against a temporary home with a fake command runner, the image helper against a fake host. Run through the guard
@@ -40,15 +41,17 @@ def sha(data):
     return hashlib.sha256(data if isinstance(data, bytes) else data.encode()).hexdigest()
 
 
-DIGEST = 'sha256:' + 'e' * 64          # dev-d's digest of the loaded 5.9.4 image (simulated)
-NEW_REF = drv.TARGET['name'] + '@' + DIGEST
-OLD_TEMPLATE = ('# Woow EMQX 5.8.9 MQTT broker\n[Container]\nContainerName=woow-emqx\n'
-                'Image=docker.io/emqx/emqx:5.8.9@sha256:35b46f7aa7a0d51f3959e4344221ac5ec7f948b03e43099286b6c40a07bb393b\n'
-                'PublishPort=@@EMQX_PUBLISH_MQTT@@:1883\nPublishPort=@@EMQX_PUBLISH_DASHBOARD@@:18083\n'
-                'HealthCmd=emqx ctl status\nHealthInterval=30s\n')
-NEW_TEMPLATE = OLD_TEMPLATE.replace('HealthCmd=emqx ctl status\n',
-                                    '# The local node endpoint avoids starting another Erlang VM on each probe.\n'
-                                    'HealthCmd=curl -fsS --max-time 8 -o /dev/null http://127.0.0.1:18093/status\n')
+DIGEST = 'sha256:' + 'e' * 64          # dev-d's digest of the loaded 5.8.8 image (simulated)
+OLDER_REF = drv.OLDER['name'] + '@' + DIGEST
+REGISTRY_589 = 'Image=docker.io/emqx/emqx:5.8.9@sha256:35b46f7aa7a0d51f3959e4344221ac5ec7f948b03e43099286b6c40a07bb393b\n'
+# ea5886c (dev-d's installed package) and c01c897 (main) emqx.container templates, shortened: the same token lines,
+# main has the curl health check and its comment.
+TPL_INSTALLED = ('# Woow EMQX 5.8.9 MQTT broker\n[Container]\nContainerName=woow-emqx\n' + REGISTRY_589 +
+                 'PublishPort=@@EMQX_PUBLISH_MQTT@@:1883\nPublishPort=@@EMQX_PUBLISH_DASHBOARD@@:18083\n'
+                 'HealthCmd=emqx ctl status\nHealthInterval=30s\n')
+TPL_MAIN = TPL_INSTALLED.replace('HealthCmd=emqx ctl status\n',
+                                 '# The local node endpoint avoids starting another Erlang VM on each probe.\n'
+                                 'HealthCmd=curl -fsS --max-time 8 -o /dev/null http://127.0.0.1:18093/status\n')
 ENTRANCE_TEMPLATE = ('[Container]\nContainerName=woow-emqx-entrance\nImage=docker.io/nginxinc/nginx-unprivileged:1.27-alpine'
                      '@sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0\n')
 OLD_SMOKE = b'#!/usr/bin/env bash\necho old smoke\n'
@@ -61,6 +64,15 @@ CREDS = {'HA_BACKUP_KEY': 'ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12', 'B1_EMQX_ADMIN_P
          'B1_MQTT_PW1': 'fake-mqtt-pw-sensor', 'B1_MQTT_USER2': 'b1-gateway', 'B1_MQTT_PW2': 'fake-mqtt-pw-gateway',
          'B1_MQTT_USER3': 'b1-admin', 'B1_MQTT_PW3': 'fake-mqtt-pw-admin', 'B1_X86_EMQX_API_KEY': 'fake-api-key-x86',
          'B1_X86_EMQX_API_SECRET': 'fake-api-secret-x86'}
+SMOKE_IMPORTED = ['PASS A1 emqx.service is active', 'PASS A1 emqx-entrance.service is active', 'PASS A2 woow-emqx is healthy',
+                  'PASS A2 woow-emqx-entrance is healthy', 'PASS A3 five ports published on 127.0.0.1',
+                  'WARN A4 dashboard login skipped: this broker\'s Dashboard accounts come from a Home Assistant import',
+                  'PASS A9 dashboard entrance answers HTTP 200', 'PASS A9 private endpoints return 404',
+                  'PASS A9 MQTT WebSocket upgrade through /mqtt',
+                  'WARN A5/A6/A10 MQTT access checks skipped: this broker\'s authentication and ACL come from a Home Assistant import',
+                  'PASS A7 bootstrap CSV is 0400 emqx', 'PASS A7 base.hocon is mounted read-only',
+                  'PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect',
+                  '11 passed, 0 failed, 2 warnings']
 
 
 def render(text):
@@ -80,6 +92,27 @@ def backup_id(n):
     return '20261128T15%04dZ-%08x' % (n, 0xb000 + n)
 
 
+def install_lines():
+    return (['install.sh: podman 4.9.3 (>= 4.9)', 'install.sh: changed: emqx.container',
+             'install.sh: restarting (changed): emqx.service', 'install.sh: woow-emqx is healthy (active check)']
+            + SMOKE_IMPORTED + ['emqx is installed and healthy.', '  Dashboard  http://127.0.0.1:18083/   user admin'])
+
+
+def upgrade_lines(rolled_back=False):
+    lines = ['upgrade.sh: podman 4.9.3 (>= 4.9)', 'backup.sh: exported the broker data',
+             'upgrade.sh: pre-upgrade data backup: /home/appowner/.local/share/woow-backups/emqx/backup-20261128-150102',
+             'upgrade.sh: saved the installed units in /home/appowner/.local/share/woow-backups/emqx/upgrade-20261128-150101/units',
+             'install.sh: changed: emqx.container', 'install.sh: restarting (changed): emqx.service'] + SMOKE_IMPORTED[:-1]
+    if rolled_back:
+        lines[-6] = 'FAIL A9 MQTT WebSocket upgrade returned HTTP 400'
+        return lines + ['10 passed, 1 failed, 2 warnings',
+                        'upgrade.sh: WARNING: upgrade failed; rolling back to the units saved in /x/units',
+                        'PASS A1 emqx.service is active', '9 passed, 0 failed, 1 warnings (quick)',
+                        'upgrade.sh: ERROR: upgrade failed and was rolled back; the previous version is running again']
+    return lines + ['11 passed, 0 failed, 2 warnings',
+                    'upgrade.sh: upgrade complete (unit snapshot: /home/appowner/.local/share/woow-backups/emqx/upgrade-20261128-150101)']
+
+
 class FakePackage:
     """The leased package checkout: c01c897 files and two blobs of ea5886c."""
 
@@ -88,16 +121,17 @@ class FakePackage:
 
     def files(self, commit):
         assert commit == drv.PACKAGE_COMMIT
-        quadlet = NEW_TEMPLATE + ('Image=second\n' if self.extra else '')
+        quadlet = TPL_MAIN + ('Image=second\n' if self.extra else '')
         return {'quadlet/emqx.container': (quadlet.encode(), 0o664),
                 'quadlet/emqx-entrance.container': (ENTRANCE_TEMPLATE.encode(), 0o664),
+                'scripts/install.sh': (b'#!/usr/bin/env bash\necho install\n', 0o775),
                 'scripts/upgrade.sh': (b'#!/usr/bin/env bash\necho upgrade\n', 0o775),
                 'tests/smoke.sh': (b'#!/usr/bin/env bash\necho smoke\n', 0o775),
                 'README.md': (b'# Woow EMQX\n', 0o664)}
 
     def show(self, commit, rel):
         assert commit == drv.INSTALLED_COMMIT
-        return {'tests/smoke.sh': OLD_SMOKE, 'quadlet/emqx.container': OLD_TEMPLATE.encode()}[rel]
+        return {'tests/smoke.sh': OLD_SMOKE, 'quadlet/emqx.container': TPL_INSTALLED.encode()}[rel]
 
 
 class SimDevice:
@@ -106,7 +140,7 @@ class SimDevice:
     def __init__(self, secrets, source, **knobs):
         self.secrets, self.knobs, self.calls, self.observed = secrets, knobs, [], []
         self.engine = drv.tree_engine(source)
-        self.quadlet_text = render(drv.pinned(OLD_TEMPLATE, 'Image=' + drv.OLD['ref']))
+        self.quadlet_text = render(drv.pinned(TPL_INSTALLED, 'Image=' + drv.CURRENT['ref']))
         self.files = {drv.QUADLET: meta(self.quadlet_text),
                       '.config/containers/systemd/emqx-entrance.container': meta(drv.pinned(ENTRANCE_TEMPLATE, 'Image=' + drv.ENTRANCE['ref'])),
                       '.config/containers/systemd/emqx.network': meta('[Network]\n'),
@@ -117,18 +151,19 @@ class SimDevice:
                          and not rel.endswith('emqx.env')}
         self._manifest_meta()
         self.dirs = {'.config/emqx': 0o700, '.local/state/woow-quadlet/emqx': 0o700}
-        self.images = {drv.OLD['ref']: {'present': True, 'id': drv.OLD['image_id'], 'digest': drv.OLD['ref'].split('@')[1],
-                                        'tags': ['docker.io/emqx/emqx:5.8.9'], 'exists': True},
+        self.images = {drv.CURRENT['ref']: {'present': True, 'id': drv.CURRENT['image_id'],
+                                            'digest': drv.CURRENT['ref'].split('@')[1],
+                                            'tags': ['docker.io/emqx/emqx:5.8.9'], 'exists': True},
                        drv.ENTRANCE['ref']: {'present': True, 'id': drv.ENTRANCE['image_id'],
                                              'digest': drv.ENTRANCE['ref'].split('@')[1],
                                              'tags': ['docker.io/nginxinc/nginx-unprivileged:1.27-alpine'], 'exists': True}}
-        if not knobs.get('no_new_image'):
+        if not knobs.get('no_older_image'):
             digest = knobs.get('device_digest', DIGEST)
-            self.images[drv.TARGET['name']] = {'present': True, 'id': knobs.get('new_id', drv.TARGET['image_id']),
-                                               'digest': digest, 'tags': [drv.TARGET['name']], 'exists': True}
-            self.images[drv.TARGET['name'] + '@' + digest] = dict(self.images[drv.TARGET['name']])
-        self.containers = {'woow-emqx': {'present': True, 'image_id': drv.OLD['image_id'], 'image_name': drv.OLD['ref'],
-                                         'running': True},
+            self.images[drv.OLDER['name']] = {'present': True, 'id': knobs.get('older_id', drv.OLDER['image_id']),
+                                              'digest': digest, 'tags': [drv.OLDER['name']], 'exists': True}
+            self.images[drv.OLDER['name'] + '@' + digest] = dict(self.images[drv.OLDER['name']])
+        self.containers = {'woow-emqx': {'present': True, 'image_id': drv.CURRENT['image_id'],
+                                         'image_name': drv.CURRENT['ref'], 'running': True},
                            'woow-emqx-entrance': {'present': True, 'image_id': drv.ENTRANCE['image_id'],
                                                   'image_name': drv.ENTRANCE['ref'], 'running': True}}
         self.units = {'emqx.service': ['active', 'running'], 'emqx-entrance.service': ['active', 'running'],
@@ -141,10 +176,10 @@ class SimDevice:
         self.jobs, self.serial = {}, 0
         self.backup_root = self.backup_parent = None
         self.run = {'exists': False}
-        self.captured = self.staged_quadlet = None
-        self.upgrade_log = []
+        self.captured, self.staged, self.script_logs = None, {}, {}
         self.timer_state = {'UnitFileState': 'masked', 'ActiveState': 'inactive'}
         self.catalog = {'emqx.json': 'a' * 64, 'hermes.json': 'b' * 64}
+        self.probes, self.upgraded = 0, False
         self.initial = self.snapshot()
 
     # -------- model helpers
@@ -172,11 +207,22 @@ class SimDevice:
         self.jobs[job['id']] = job
         return job
 
+    def install(self, text):
+        """What the package's installer leaves: the rendered emqx.container, its manifest line, the broker restarted."""
+        self.quadlet_text = render(text)
+        self.files[drv.QUADLET] = meta(self.quadlet_text)
+        self.manifest['/home/appowner/' + drv.QUADLET] = self.files[drv.QUADLET]['sha256']
+        self._manifest_meta()
+        self.restart_emqx()
+
     def restart_emqx(self):
-        new = self.quadlet_text != self.initial['quadlet_text']
-        self.containers['woow-emqx'] = {'present': True, 'image_id': drv.TARGET['image_id'] if new else drv.OLD['image_id'],
-                                        'image_name': NEW_REF if new else drv.OLD['ref'], 'running': True}
-        self.version = '5.9.4' if new else '5.8.9'
+        image = [line[6:] for line in self.quadlet_text.splitlines() if line.startswith('Image=')][0]
+        older = image.startswith(drv.OLDER['name'] + '@')
+        self.version = '5.8.8' if older else '5.8.9'
+        running = not (older and self.knobs.get('older') == 'nostart')
+        self.containers['woow-emqx'] = {'present': True, 'image_id': drv.OLDER['image_id'] if older else drv.CURRENT['image_id'],
+                                        'image_name': image, 'running': running}
+        self.units['emqx.service'] = ['active', 'running'] if running else ['activating', 'auto-restart']
 
     # -------- the device interface of Run
     def isolated(self):
@@ -205,8 +251,8 @@ class SimDevice:
             assert set(request) == {'ha_backup_id', 'apps', 'request_id', 'key'}
             section = {'mqtt_users': 3, 'acl_rules': 4, 'dashboard_users': 2, 'api_keys': 1, 'banned': 1}
             issues = [{'id': 'emqx.access-from-ha', 'level': 'auto', 'message': 'x'}]
-            if self.knobs.get('check_stop'):
-                issues.append({'id': 'emqx.blocked', 'level': 'stop', 'message': 'no'})
+            if self.knobs.get('check_stop') or self.version != '5.8.9':     # haissues.version_issues: a stop
+                issues.append({'id': 'version.different', 'level': 'stop', 'message': 'no'})
             job = self.add_job(type='verify', params={'source': 'ha', 'ha_backup_id': drv.HA_ID, 'apps': ['emqx']},
                                result={'ha_check': {'schema': 2, 'ha_backup_id': drv.HA_ID, 'shared': [],
                                                     'apps': [{'app_id': 'emqx', 'importable': True, 'issues': issues,
@@ -281,16 +327,18 @@ class SimDevice:
 
     def probe(self, request):
         self.calls.append('probe')
-        self.stop('probe:' + self.version)
+        self.probes += 1
+        self.stop('probe#%d' % self.probes)
         tokens = ['issued-ha-token-%d-a' % len(self.observed), 'issued-ha-token-%d-b' % len(self.observed)]
         for token in tokens:
             self.secrets.register_observed(token)
             self.observed.append(token)
         assert request['ha_admin_password'] == CREDS['B1_EMQX_ADMIN_PW']
-        if self.data != 'ha':
+        if self.data != 'ha' or not self.containers['woow-emqx']['running']:
             return {}
         acl_users = [['b1-gateway', 2], ['b1-sensor', 2]]
-        if self.knobs.get('acl_lost_on_upgrade') and self.version == '5.9.4':
+        if ((self.knobs.get('acl_lost_on_upgrade') and self.upgraded)
+                or (self.knobs.get('acl_lost_on_older') and self.version == '5.8.8')):
             acl_users = [['b1-gateway', 2]]
         users = [u for u, _p in request['mqtt']]
         return {'api_ready_after_s': 1.0, 'dashboard_admin_ha_password': 200, 'dashboard_user2_ha_password': 200,
@@ -317,37 +365,38 @@ class SimDevice:
 
     def op(self, op, request=None, timeout=300):
         request = request or {}
-        self.calls.append('op:' + op)
-        self.stop('op:' + op)
+        self.calls.append('op:' + op + (':' + request['copy'] if 'copy' in request else ''))
+        self.stop('op:' + op + (':' + request['copy'] if op == 'script' else ''))
         return getattr(self, 'op_' + op.replace('-', '_'))(request)
 
     def op_facts(self, q):
-        out = {'files': copy.deepcopy(self.files), 'dirs': dict(self.dirs), 'manifest': dict(self.manifest),
-               'quadlet': {'emqx.container': {'image': [l[6:] for l in self.quadlet_text.splitlines() if l.startswith('Image=')][0],
-                                              'health': [l[10:] for l in self.quadlet_text.splitlines()
-                                                         if l.startswith('HealthCmd=')][0]},
-                           'emqx-entrance.container': {'image': drv.ENTRANCE['ref'], 'health': None}},
-               'images': {ref: copy.deepcopy(self.images.get(ref, {'present': False})) for ref in q.get('refs') or []},
-               'containers': {c: dict(self.containers[c]) for c in q.get('containers') or []},
-               'units': {u: list(self.units[u]) for u in q.get('units') or []},
-               'marker': {'present': self.marker, 'exact': self.marker},
-               'package': {'files': 60, 'digest': 'd' * 64, 'smoke_sha256': sha(OLD_SMOKE)},
-               'lab_source': drv.INSTALLED_COMMIT, 'backup_root': copy.deepcopy(self.backup_root),
-               'backup_parent': copy.deepcopy(self.backup_parent),
-               'secrets': ['woow-emqx-dashboard-password', 'woow-emqx-mqtt-bootstrap', 'woow-emqx-mqtt-password',
-                           'woow-emqx-node-cookie'],
-               'volumes': ['woow_emqx_data', 'woow_emqx_log'], 'container_names': ['hermes-agent', 'woow-emqx', 'woow-emqx-entrance'],
-               'image_list': sorted([v['id'], v['tags'], v['digest']] for k, v in self.images.items() if '@' not in k
-                                    or k in (drv.OLD['ref'], drv.ENTRANCE['ref'])),
-               'run': dict(self.run)}
-        if q.get('deltas'):
-            out['deltas'] = {drv.QUADLET: drv.ops.line_delta(self.captured['quadlet_text'], self.quadlet_text)}
-        return out
+        lines = self.quadlet_text.splitlines()
+        return {'files': copy.deepcopy(self.files), 'dirs': dict(self.dirs), 'manifest': dict(self.manifest),
+                'quadlet': {'emqx.container': {'image': [l[6:] for l in lines if l.startswith('Image=')][0],
+                                               'health': [l[10:] for l in lines if l.startswith('HealthCmd=')][0]},
+                            'emqx-entrance.container': {'image': drv.ENTRANCE['ref'], 'health': None}},
+                'quadlet_text': lines,
+                'images': {ref: copy.deepcopy(self.images.get(ref, {'present': False})) for ref in q.get('refs') or []},
+                'containers': {c: dict(self.containers[c]) for c in q.get('containers') or []},
+                'units': {u: list(self.units[u]) for u in q.get('units') or []},
+                'marker': {'present': self.marker, 'exact': self.marker},
+                'package': {'files': 60, 'digest': 'd' * 64, 'smoke_sha256': sha(OLD_SMOKE)},
+                'lab_source': drv.INSTALLED_COMMIT, 'backup_root': copy.deepcopy(self.backup_root),
+                'backup_parent': copy.deepcopy(self.backup_parent),
+                'secrets': ['woow-emqx-dashboard-password', 'woow-emqx-mqtt-bootstrap', 'woow-emqx-mqtt-password',
+                            'woow-emqx-node-cookie'],
+                'volumes': ['woow_emqx_data', 'woow_emqx_log'],
+                'container_names': ['hermes-agent', 'woow-emqx', 'woow-emqx-entrance'],
+                'image_list': sorted([v['id'], v['tags'], v['digest']] for k, v in self.images.items() if '@' not in k
+                                     or k in (drv.CURRENT['ref'], drv.ENTRANCE['ref'])),
+                'run': copy.deepcopy(self.run)}
 
     def op_capture(self, q):
         if self.run.get('exists'):
             raise drv.Failed('device operation capture refused: fixed-emqx-upgrade-run-dir-exists')
-        self.run = {'exists': True, 'capture': True, 'staged': False, 'upgrade_started': False, 'upgrade_done': False}
+        self.run = {'exists': True, 'capture': True,
+                    'older': {'staged': False, 'started': False, 'done': False},
+                    'upgrade': {'staged': False, 'started': False, 'done': False}}
         self.captured = copy.deepcopy({'files': self.files, 'dirs': self.dirs, 'manifest': self.manifest,
                                        'quadlet_text': self.quadlet_text})
         return {'files': copy.deepcopy(self.files), 'dirs': dict(self.dirs)}
@@ -357,62 +406,56 @@ class SimDevice:
         with tarfile.open(fileobj=io.BytesIO(raw)) as archive:
             got = {m.name: archive.extractfile(m).read() for m in archive}
         assert {k: [sha(v), q['files'][k][1]] for k, v in got.items()} == q['files']
-        self.staged_quadlet = got['quadlet/emqx.container'].decode()
-        self.run['staged'] = True
+        self.staged[q['copy']] = got['quadlet/emqx.container'].decode()
+        self.run[q['copy']]['staged'] = True
         return {'files': len(got), 'equal': not self.knobs.get('stage_differs'), 'differ': []}
 
-    def _upgrade_lines(self, rolled_back=False):
-        lines = ['upgrade.sh: podman 4.9.3 (>= 4.9)', 'backup.sh: exported the broker data',
-                 'upgrade.sh: pre-upgrade data backup: /home/appowner/.local/share/woow-backups/emqx/backup-20261128-150102',
-                 'upgrade.sh: saved the installed units in /home/appowner/.local/share/woow-backups/emqx/upgrade-20261128-150101/units',
-                 'install.sh: changed: emqx.container', 'install.sh: restarting (changed): emqx.service',
-                 'PASS A1 emqx.service is active', 'PASS A1 emqx-entrance.service is active', 'PASS A2 woow-emqx is healthy',
-                 'PASS A2 woow-emqx-entrance is healthy', 'PASS A3 five ports published on 127.0.0.1',
-                 'WARN A4 dashboard login skipped: this broker\'s Dashboard accounts come from a Home Assistant import',
-                 'PASS A9 dashboard entrance answers HTTP 200', 'PASS A9 private endpoints return 404',
-                 'PASS A9 MQTT WebSocket upgrade through /mqtt',
-                 'WARN A5/A6/A10 MQTT access checks skipped: this broker\'s authentication and ACL come from a Home Assistant import',
-                 'PASS A7 bootstrap CSV is 0400 emqx', 'PASS A7 base.hocon is mounted read-only',
-                 'PASS A8 no secret in the journal, the container log or (for the MQTT password) podman inspect']
-        if rolled_back:
-            lines[-6] = 'FAIL A9 MQTT WebSocket upgrade returned HTTP 400'
-            return lines + ['10 passed, 1 failed, 2 warnings',
-                            'upgrade.sh: WARNING: upgrade failed; rolling back to the units saved in /x/units',
-                            'PASS A1 emqx.service is active', '9 passed, 0 failed, 1 warnings (quick)',
-                            'upgrade.sh: ERROR: upgrade failed and was rolled back; the previous version is running again']
-        return lines + ['11 passed, 0 failed, 2 warnings',
-                        'upgrade.sh: upgrade complete (unit snapshot: /home/appowner/.local/share/woow-backups/emqx/upgrade-20261128-150101)']
-
-    def op_upgrade(self, q):
+    def op_script(self, q):
+        copy_name = q['copy']
+        self.run[copy_name]['started'] = True
+        if copy_name == 'older':
+            assert q['timeout'] == drv.INSTALL_TIMEOUT
+            mode = self.knobs.get('older', 'pass')
+            self.install(self.staged['older'])
+            if mode == 'stop':
+                self.script_logs['older'] = install_lines()[:3]
+                raise drv.Stopped('signal 15')
+            self.run['older']['done'] = True
+            if mode == 'nostart':
+                lines = install_lines()[:3] + ['install.sh: WARNING: woow-emqx not healthy after 180s (status=running)',
+                                               'install.sh: ERROR: woow-emqx did not become healthy; see: journalctl']
+                return {'copy': 'older', 'rc': 1, 'timed_out': False, 'seconds': 200.0, 'lines': lines,
+                        'device_secret_hits': 0, 'truncated': False}
+            return {'copy': 'older', 'rc': 0, 'timed_out': False, 'seconds': 60.0, 'lines': install_lines(),
+                    'device_secret_hits': 0, 'truncated': False}
         assert q['timeout'] == drv.UPGRADE_TIMEOUT
         mode = self.knobs.get('upgrade', 'pass')
-        self.run.update(upgrade_started=True)
         self.backup_parent = [['emqx', 'dir']]
         self.backup_root = [['backup-20261128-150102', 'dir'], ['upgrade-20261128-150101', 'dir']]
-        if mode in ('pass', 'stop', 'secret'):
-            self.quadlet_text = render(self.staged_quadlet)
-            self.files[drv.QUADLET] = meta(self.quadlet_text)
-            self.manifest['/home/appowner/' + drv.QUADLET] = self.files[drv.QUADLET]['sha256']
-            self._manifest_meta()
-            self.restart_emqx()
+        if mode in ('pass', 'stop', 'secret', 'extra-file'):
+            self.install(self.staged['upgrade'])
+            self.upgraded = True
         if mode == 'stop':
-            self.upgrade_log = self._upgrade_lines()[:5]
+            self.script_logs['upgrade'] = upgrade_lines()[:5]
             raise drv.Stopped('signal 15')
-        self.run.update(upgrade_done=True)
-        lines = self._upgrade_lines(rolled_back=mode == 'rollback')
+        self.run['upgrade']['done'] = True
         if mode == 'extra-file':
             self.files['.config/emqx/surprise.conf'] = meta('x')
-        return {'rc': 1 if mode == 'rollback' else 0, 'timed_out': False, 'seconds': 95.0, 'lines': lines,
-                'device_secret_hits': 1 if mode == 'secret' else 0, 'truncated': False}
-
-    def op_upgrade_log(self, q):
-        return {'started': True, 'done': False, 'rc': None, 'lines': self.upgrade_log, 'device_secret_hits': 0,
+        return {'copy': 'upgrade', 'rc': 1 if mode == 'rollback' else 0, 'timed_out': False, 'seconds': 95.0,
+                'lines': upgrade_lines(rolled_back=mode == 'rollback'), 'device_secret_hits': 1 if mode == 'secret' else 0,
                 'truncated': False}
 
-    def op_stop_upgrade(self, q):
-        started = bool(self.run.get('upgrade_started'))
-        running = bool(self.knobs.get('upgrade_stuck'))
-        return {'started': started, 'running': running, 'was_running': started and not self.run.get('upgrade_done')}
+    def op_script_log(self, q):
+        return {'copy': q['copy'], 'started': True, 'done': False, 'rc': None, 'lines': self.script_logs.get(q['copy'], []),
+                'device_secret_hits': 0, 'truncated': False}
+
+    def op_stop_scripts(self, q):
+        found = {}
+        for name in ('older', 'upgrade'):
+            state = (self.run.get(name) or {})
+            found[name] = {'started': bool(state.get('started')), 'was_running': bool(state.get('started'))
+                           and not state.get('done'), 'running': bool(self.knobs.get('script_stuck')) and name == 'upgrade'}
+        return {'copies': found, 'running': any(item['running'] for item in found.values())}
 
     def op_restore_files(self, q):
         self.files = copy.deepcopy(self.captured['files'])
@@ -423,10 +466,11 @@ class SimDevice:
                 'files': copy.deepcopy(self.files), 'dirs': dict(self.dirs)}
 
     def op_ready(self, q):
-        return {'ready': True, 'seconds': 2.0}
+        return {'ready': bool(self.containers['woow-emqx']['running']), 'seconds': 2.0}
 
     def op_smoke(self, q):
-        good = self.data == 'baseline' and self.containers['woow-emqx']['image_id'] == drv.OLD['image_id']
+        good = (self.data == 'baseline' and self.containers['woow-emqx']['image_id'] == drv.CURRENT['image_id']
+                and self.containers['woow-emqx']['running'])
         lines = ['PASS A1 emqx.service is active', 'PASS A1 emqx-entrance.service is active', 'PASS A2 woow-emqx is healthy',
                  'PASS A2 woow-emqx-entrance is healthy', 'PASS A3 five ports published on 127.0.0.1',
                  'PASS A4 dashboard login with the generated password' if good else 'FAIL A4 dashboard login returned HTTP 401',
@@ -467,8 +511,8 @@ class Harness:
         self.lease = {'granted': True, 'device': drv.DEVICE, 'case': drv.CASE, 'phase': drv.PHASE, 'run_id': '0123456789ab',
                       'driver_commit': 'a' * 40, 'source': str(source), 'source_commit': 'b' * 40,
                       'package': str(self.tmp / 'package'), 'package_commit': drv.PACKAGE_COMMIT,
-                      'target_image': drv.TARGET['name'], 'target_image_id': drv.TARGET['image_id'],
-                      'target_device_digest': DIGEST, 'image_receipt_sha256': 'c' * 64,
+                      'older_image': drv.OLDER['name'], 'older_image_id': drv.OLDER['image_id'],
+                      'older_device_digest': DIGEST, 'image_receipt_sha256': 'c' * 64,
                       'expires': time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(time.time() + 7200))}
         self.dev = SimDevice(self.secrets, source, **knobs)
         self.ev = drv.Ev(self.secrets, root=self.tmp / 'evidence')
@@ -495,31 +539,36 @@ class Harness:
 
 class DriverTests(unittest.TestCase):
     def assert_restored(self, harness):
-        now, initial = harness.dev.snapshot(), harness.dev.initial
-        self.assertEqual({k: v for k, v in now.items()}, initial)
+        self.assertEqual(harness.dev.snapshot(), harness.dev.initial)
         self.assertFalse(harness.dev.run.get('exists'))
 
-    def test_upgrade_passes_with_55_checks_and_dev_d_is_restored_exactly(self):
+    def test_upgrade_passes_with_61_checks_and_dev_d_is_restored_exactly(self):
         hn = Harness(self)
         self.assertTrue(hn.go(), hn.failed())
-        self.assertEqual(len(hn.ev.results), 55)
+        self.assertEqual(len(hn.ev.results), 61)
         self.assertEqual(hn.failed(), [])
         self.assert_restored(hn)
         receipt = json.loads(hn.receipt.path.read_text())
         self.assertTrue(receipt['complete'] and receipt['restored'] and receipt['cleaned'])
+        self.assertEqual(receipt['started_scripts'], ['older', 'upgrade'])
         calls = hn.dev.calls
-        self.assertEqual(calls.count('op:upgrade'), 1)
-        self.assertLess(calls.index('op:capture'), calls.index('upload'))
-        self.assertLess(calls.index('ha-import-start'), calls.index('op:upgrade'))
-        self.assertLess(calls.index('op:upgrade'), calls.index('op:restore-files'))
-        self.assertLess(calls.index('op:restore-files'), calls.index('restore-start'))
-        self.assertIn('op:stop-upgrade', calls)
-        # every stdout line is a fixed status line of services_a_capture's vocabulary
+        order = [calls.index(c) for c in ('op:capture', 'op:stage:older', 'op:stage:upgrade', 'upload', 'ha-import-start',
+                                          'op:script:older', 'op:script:upgrade', 'op:stop-scripts', 'op:restore-files',
+                                          'restore-start', 'op:cleanup')]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(calls.count('op:script:older') + calls.count('op:script:upgrade'), 2)
         capture = _load('services_a_capture')
-        for line in hn.stdout.splitlines():
+        for line in hn.stdout.splitlines():           # every stdout line is a fixed status line of the capture vocabulary
             self.assertTrue(capture.status_lines(line), line)
         for r in hn.ev.results:
             self.assertLessEqual(len(r['check']), 140)
+        self.assertNotIn('5.9', json.dumps([r['check'] for r in hn.ev.results]))
+
+    def test_the_import_runs_on_dev_d_s_own_5_8_9_before_the_older_version(self):
+        hn = Harness(self)
+        self.assertTrue(hn.go(), hn.failed())
+        self.assertLess(hn.dev.calls.index('ha-check-start'), hn.dev.calls.index('op:script:older'))
+        self.assertTrue(hn.results()['import: it ran on 5.8.9 from dev-d\'s own units (node version, container image ID, Image=)'])
 
     def test_protected_existing_ha_record_is_used_and_kept(self):
         hn = Harness(self, ha_present=True)
@@ -532,38 +581,57 @@ class DriverTests(unittest.TestCase):
         hn = Harness(self, upgrade='rollback')
         self.assertFalse(hn.go())
         results = hn.results()
-        self.assertFalse(results['upgrade: scripts/upgrade.sh of the 5.9.4 copy ran as appowner and exited 0 within its time'])
+        self.assertFalse(results['upgrade: the upgrade copy\'s scripts/upgrade.sh ran as appowner and exited 0 within its time'])
         self.assertFalse(results['upgrade: it was not rolled back (upgrade complete reported, no rollback line)'])
         self.assertFalse(results['upgrade: its smoke.sh lines are exactly the imported set: A4 and A5/A6/A10 WARN, 11 PASS, 0 FAIL'])
-        self.assertNotIn('after upgrade: the node reports EMQX 5.9.4 (was 5.8.9), the same node name, started', results)
+        self.assertFalse(results['upgrade: the container moved from the 5.8.8 image ID to the 5.8.9 one from the new '
+                                 'emqx.container, units active'])
+        self.assertNotIn('after upgrade: the node reports EMQX 5.8.9 (was 5.8.8), the same node name, started', results)
         self.assert_restored(hn)
         self.assertTrue(json.loads(hn.receipt.path.read_text())['complete'])
 
-    def test_missing_new_image_refuses_before_any_change(self):
-        for knobs in ({'no_new_image': True}, {'device_digest': 'sha256:' + '9' * 64}, {'new_id': 'f' * 64}):
+    def test_missing_older_image_refuses_before_any_change(self):
+        for knobs in ({'no_older_image': True}, {'device_digest': 'sha256:' + '9' * 64}, {'older_id': 'f' * 64}):
             with self.subTest(knobs=knobs):
                 hn = Harness(self, **knobs)
                 self.assertFalse(hn.go())
-                self.assertIn('preflight: the new image emqx:5.9.4 is in dev-d\'s owner store with the pinned ID and the '
+                self.assertIn('preflight: the older image emqx:5.8.8 is in dev-d\'s owner store with the pinned ID and the '
                               'leased digest (tag and digest resolve)', hn.failed())
-                for call in ('op:capture', 'upload', 'ha-check-start', 'ha-import-start', 'op:upgrade', 'restore-start',
-                             'delete'):
+                for call in ('op:capture', 'upload', 'ha-check-start', 'ha-import-start', 'op:script:older',
+                             'op:script:upgrade', 'restore-start', 'delete'):
                     self.assertNotIn(call, hn.dev.calls)
                 self.assertFalse(hn.receipt.path.exists())
                 self.assert_restored(hn)
 
+    def test_an_older_broker_that_cannot_start_stops_cleanly_and_dev_d_comes_back(self):
+        hn = Harness(self, older='nostart')
+        self.assertFalse(hn.go())
+        failed = hn.failed()
+        self.assertIn('older: the older copy\'s scripts/install.sh ran as appowner, exited 0 in time and says installed and '
+                      'healthy', failed)
+        self.assertIn('older: the 5.8.8 broker serves exactly what 5.8.9 served after the import (accounts, ACL, data, MQTT)',
+                      failed)
+        self.assertNotIn('op:script:upgrade', hn.dev.calls)
+        self.assertIn('restore-start', hn.dev.calls)
+        self.assertTrue(all(name.startswith(('older:', 'run stopped')) for name in failed), failed)
+        self.assert_restored(hn)
+        self.assertTrue(json.loads(hn.receipt.path.read_text())['complete'])
+
     def test_a_stop_in_every_phase_restores_dev_d(self):
-        # (where, knobs, the baseline is restored, the upgrade process is stopped)
-        cases = [('capture', {'stop_at': 'op:capture'}, False, False),
-                 ('stage', {'stop_at': 'op:stage'}, False, False),
-                 ('check', {'stop_at': 'ha-check-start'}, False, False),
-                 ('import reply lost', {'stop_at': 'ha-import-start:after'}, True, False),
-                 ('import restore job', {'stop_at': 'job-status:restore'}, True, False),
-                 ('import probe', {'stop_at': 'probe:5.8.9'}, True, False),
-                 ('upgrade not started', {'stop_at': 'op:upgrade'}, True, True),
-                 ('upgrade half done', {'upgrade': 'stop'}, True, True),
-                 ('upgraded probe', {'stop_at': 'probe:5.9.4'}, True, True)]
-        for where, knobs, data_touched, upgrade in cases:
+        # (where, knobs, the baseline is restored, scripts were started, the log of an interrupted script is read)
+        cases = [('capture', {'stop_at': 'op:capture'}, False, False, False),
+                 ('stage', {'stop_at': 'op:stage'}, False, False, False),
+                 ('check', {'stop_at': 'ha-check-start'}, False, False, False),
+                 ('import reply lost', {'stop_at': 'ha-import-start:after'}, True, False, False),
+                 ('import restore job', {'stop_at': 'job-status:restore'}, True, False, False),
+                 ('import probe', {'stop_at': 'probe#1'}, True, False, False),
+                 ('older not started', {'stop_at': 'op:script:older'}, True, True, True),
+                 ('older half done', {'older': 'stop'}, True, True, True),
+                 ('older probe', {'stop_at': 'probe#2'}, True, True, False),
+                 ('upgrade not started', {'stop_at': 'op:script:upgrade'}, True, True, True),
+                 ('upgrade half done', {'upgrade': 'stop'}, True, True, True),
+                 ('upgraded probe', {'stop_at': 'probe#3'}, True, True, False)]
+        for where, knobs, data_touched, scripts, log in cases:
             with self.subTest(stop=where):
                 hn = Harness(self, **knobs)
                 self.assertFalse(hn.go())
@@ -571,8 +639,8 @@ class DriverTests(unittest.TestCase):
                 self.assert_restored(hn)
                 calls = hn.dev.calls
                 self.assertEqual('restore-start' in calls, data_touched, where)
-                self.assertEqual('op:stop-upgrade' in calls, upgrade, where)
-                self.assertEqual('op:upgrade-log' in calls, upgrade and where != 'upgraded probe', where)
+                self.assertEqual('op:stop-scripts' in calls, scripts, where)
+                self.assertEqual(any(c.startswith('op:script-log') for c in calls), log, where)
                 self.assertTrue(json.loads(hn.receipt.path.read_text())['complete'], where)
                 self.assertFalse(hn.receipt.pending(), where)
 
@@ -587,8 +655,8 @@ class DriverTests(unittest.TestCase):
     def test_upgrade_changing_another_file_is_a_fail(self):
         hn = Harness(self, upgrade='extra-file')
         self.assertFalse(hn.go())
-        self.assertIn('upgrade: only emqx.container (Image= and HealthCmd lines, the template diff) and the Quadlet '
-                      'manifest changed, all else byte for byte', hn.failed())
+        self.assertIn('upgrade: only emqx.container\'s Image= line (5.8.8 to 5.8.9) and the Quadlet manifest changed, all else '
+                      'byte for byte', hn.failed())
         self.assert_restored(hn)
 
     def test_secret_in_upgrade_output_is_a_fail(self):
@@ -598,12 +666,16 @@ class DriverTests(unittest.TestCase):
                          hn.failed())
         self.assert_restored(hn)
 
-    def test_lost_imported_data_after_the_upgrade_is_a_fail(self):
-        hn = Harness(self, acl_lost_on_upgrade=True)
-        self.assertFalse(hn.go())
-        self.assertIn('after upgrade: Dashboard and MQTT accounts, authenticators, authorization settings, sources and ACL '
-                      'rows exactly as after the import', hn.failed())
-        self.assert_restored(hn)
+    def test_lost_imported_data_is_a_fail_on_either_version(self):
+        for knob, check in (('acl_lost_on_upgrade', 'after upgrade: Dashboard and MQTT accounts, authenticators, authorization '
+                                                    'settings, sources and ACL rows exactly as before it'),
+                            ('acl_lost_on_older', 'older: the 5.8.8 broker serves exactly what 5.8.9 served after the '
+                                                  'import (accounts, ACL, data, MQTT)')):
+            with self.subTest(knob=knob):
+                hn = Harness(self, **{knob: True})
+                self.assertFalse(hn.go())
+                self.assertIn(check, hn.failed())
+                self.assert_restored(hn)
 
     def test_failed_baseline_restore_keeps_everything_for_the_coordinator(self):
         hn = Harness(self, baseline_fails=True)
@@ -615,8 +687,8 @@ class DriverTests(unittest.TestCase):
         self.assertNotIn('op:cleanup', hn.dev.calls)
         self.assertTrue(hn.receipt.pending())
 
-    def test_a_stuck_upgrade_process_stops_the_recovery_before_any_restore(self):
-        hn = Harness(self, upgrade='stop', upgrade_stuck=True)
+    def test_a_stuck_script_stops_the_recovery_before_any_restore(self):
+        hn = Harness(self, upgrade='stop', script_stuck=True)
         self.assertFalse(hn.go())
         calls = hn.dev.calls
         self.assertNotIn('op:restore-files', calls)
@@ -626,7 +698,7 @@ class DriverTests(unittest.TestCase):
     def test_staging_refuses_a_package_with_two_image_lines(self):
         hn = Harness(self, extra_image=True)
         self.assertFalse(hn.go())
-        self.assertNotIn('op:stage', hn.dev.calls)
+        self.assertFalse(any(c.startswith('op:stage') for c in hn.dev.calls))
         self.assert_restored(hn)
 
     def test_a_leftover_run_folder_refuses_before_any_change(self):
@@ -642,7 +714,7 @@ class DriverTests(unittest.TestCase):
         self.assertFalse(hn.go())
         self.assertEqual(hn.dev.calls, [])
 
-    def test_upgrade_output_and_evidence_never_hold_a_registered_value(self):
+    def test_evidence_is_private_and_holds_no_registered_value(self):
         hn = Harness(self)
         self.assertTrue(hn.go(), hn.failed())
         values = [v for v in hn.secrets.secret_values() if len(v) >= 6]
@@ -657,8 +729,8 @@ class PureTests(unittest.TestCase):
         now = time.time()
         lease = {'granted': True, 'device': drv.DEVICE, 'case': drv.CASE, 'phase': drv.PHASE, 'run_id': 'abcdef012345',
                  'driver_commit': 'a' * 40, 'source': '/tmp/product', 'source_commit': 'b' * 40, 'package': '/tmp/package',
-                 'package_commit': drv.PACKAGE_COMMIT, 'target_image': drv.TARGET['name'],
-                 'target_image_id': drv.TARGET['image_id'], 'target_device_digest': DIGEST,
+                 'package_commit': drv.PACKAGE_COMMIT, 'older_image': drv.OLDER['name'],
+                 'older_image_id': drv.OLDER['image_id'], 'older_device_digest': DIGEST,
                  'image_receipt_sha256': 'c' * 64,
                  'expires': time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(now + 120 * 60))}
         lease.update(changes)
@@ -667,10 +739,10 @@ class PureTests(unittest.TestCase):
     def test_lease_validation(self):
         lease, now = self.lease()
         self.assertIs(drv.validate_lease(lease, driver_commit='a' * 40, now=now), lease)
-        bad = [{'granted': False}, {'device': 'woowbk-dev-c'}, {'case': 'page-emqx'}, {'run_id': 'xyz'},
-               {'driver_commit': 'd' * 40}, {'source': 'relative/path'}, {'package_commit': 'e' * 40},
-               {'target_image': 'docker.io/emqx/emqx:5.9.3'}, {'target_image_id': 'f' * 64},
-               {'target_device_digest': 'sha256:short'}, {'image_receipt_sha256': None},
+        bad = [{'granted': False}, {'device': 'woowbk-dev-c'}, {'case': 'page-emqx'}, {'phase': 'upgrade-after-import'},
+               {'run_id': 'xyz'}, {'driver_commit': 'd' * 40}, {'source': 'relative/path'}, {'package_commit': 'e' * 40},
+               {'older_image': 'docker.io/emqx/emqx:5.8.7'}, {'older_image_id': 'f' * 64},
+               {'older_device_digest': 'sha256:short'}, {'image_receipt_sha256': None},
                {'expires': time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(now + 7200))},
                {'expires': time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(now + 30 * 60))},
                {'expires': time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(now + 400 * 60))}]
@@ -682,72 +754,91 @@ class PureTests(unittest.TestCase):
 
     def test_image_receipt_binding(self):
         lease, _now = self.lease()
-        doc = {'device': drv.DEVICE, 'image': drv.TARGET['name'], 'image_id': drv.TARGET['image_id'],
-               'index_digest': drv.TARGET['index_digest'], 'device_digest': DIGEST, 'loaded': True, 'removed': False}
+        doc = {'device': drv.DEVICE, 'image': drv.OLDER['name'], 'image_id': drv.OLDER['image_id'],
+               'index_digest': drv.OLDER['index_digest'], 'device_digest': DIGEST, 'loaded': True, 'removed': False}
         raw = json.dumps(doc).encode()
         lease['image_receipt_sha256'] = sha(raw)
         self.assertTrue(drv.image_receipt_ok(raw, lease))
         self.assertFalse(drv.image_receipt_ok(raw + b' ', lease))
-        for change in ({'device_digest': 'sha256:' + '1' * 64}, {'removed': True}, {'loaded': False}):
+        for change in ({'device_digest': 'sha256:' + '1' * 64}, {'removed': True}, {'loaded': False},
+                       {'image': 'docker.io/emqx/emqx:5.8.7'}):
             other = json.dumps(dict(doc, **change)).encode()
             self.assertFalse(drv.image_receipt_ok(other, dict(lease, image_receipt_sha256=sha(other))))
 
-    def test_lease_template_is_not_granted(self):
+    def test_lease_template_is_not_granted_and_names_only_open_source_images(self):
         doc = drv.lease_template(driver_commit='a' * 40, source='/s', source_commit='b' * 40, package='/p',
-                                 receipt_sha='c' * 64, run_id='0123456789ab', minutes=120)
+                                 receipt_sha='c' * 64, run_id='0123456789ab', minutes=150)
         self.assertFalse(doc['granted'])
-        self.assertEqual(doc['package_commit'], drv.PACKAGE_COMMIT)
+        self.assertEqual((doc['package_commit'], doc['older_image']), (drv.PACKAGE_COMMIT, 'docker.io/emqx/emqx:5.8.8'))
+        self.assertNotIn('5.9', json.dumps(doc))
 
-    def test_upgrade_judgement(self):
-        dev = SimDevice.__new__(SimDevice)
-        lines = SimDevice._upgrade_lines(dev)
-        verdict = drv.judge_upgrade({'rc': 0, 'timed_out': False, 'lines': lines, 'device_secret_hits': 0, 'truncated': False})
-        self.assertTrue(verdict['exit_zero'] and verdict['complete'] and verdict['smoke_exact'] and verdict['secret_free'])
-        self.assertEqual((verdict['snapshot'], verdict['data_backup']), ('upgrade-20261128-150101', 'backup-20261128-150102'))
-        rolled = drv.judge_upgrade({'rc': 1, 'timed_out': False, 'lines': SimDevice._upgrade_lines(dev, True),
+    def test_open_source_pins_only(self):
+        for module in (drv, prep):
+            text = Path(module.__file__).read_text()
+            for gone in ('5.9.4', '37a3bf1a', 'a83299181df6', 'emqx-enterprise'):
+                self.assertNotIn(gone, text)
+        self.assertEqual(prep.TAG, drv.OLDER['name'])
+        self.assertEqual((prep.INDEX_DIGEST, prep.IMAGE_ID), (drv.OLDER['index_digest'], drv.OLDER['image_id']))
+
+    def test_script_judgement(self):
+        verdict = drv.judge_script({'copy': 'older', 'rc': 0, 'timed_out': False, 'lines': install_lines(),
                                     'device_secret_hits': 0, 'truncated': False})
+        self.assertTrue(verdict['exit_zero'] and verdict['complete'] and verdict['smoke_exact'] and verdict['secret_free'])
+        upgrade = drv.judge_script({'copy': 'upgrade', 'rc': 0, 'timed_out': False, 'lines': upgrade_lines(),
+                                    'device_secret_hits': 0, 'truncated': False})
+        self.assertTrue(upgrade['exit_zero'] and upgrade['complete'] and upgrade['smoke_exact'])
+        self.assertEqual((upgrade['snapshot'], upgrade['data_backup']), ('upgrade-20261128-150101', 'backup-20261128-150102'))
+        self.assertFalse(drv.judge_script({'copy': 'upgrade', 'rc': 0, 'timed_out': False, 'lines': install_lines(),
+                                           'device_secret_hits': 0, 'truncated': False})['complete'])
+        rolled = drv.judge_script({'copy': 'upgrade', 'rc': 1, 'timed_out': False, 'lines': upgrade_lines(True),
+                                   'device_secret_hits': 0, 'truncated': False})
         self.assertTrue(rolled['rolled_back'])
         self.assertFalse(rolled['complete'] or rolled['smoke_exact'] or rolled['exit_zero'])
+        lines = upgrade_lines()
         for broken in (lines[:-3] + lines[-2:], lines + ['PASS A5 anonymous MQTT is refused'],
                        [line.replace('WARN A4', 'FAIL A4') for line in lines]):
-            self.assertFalse(drv.judge_upgrade({'rc': 0, 'timed_out': False, 'lines': broken, 'device_secret_hits': 0,
-                                                'truncated': False})['smoke_exact'])
-        self.assertFalse(drv.judge_upgrade({'rc': 0, 'timed_out': True, 'lines': lines, 'device_secret_hits': 0,
-                                            'truncated': False})['exit_zero'])
+            self.assertFalse(drv.judge_script({'copy': 'upgrade', 'rc': 0, 'timed_out': False, 'lines': broken,
+                                               'device_secret_hits': 0, 'truncated': False})['smoke_exact'])
+        self.assertFalse(drv.judge_script({'copy': 'older', 'rc': 0, 'timed_out': True, 'lines': install_lines(),
+                                           'device_secret_hits': 0, 'truncated': False})['exit_zero'])
 
     def test_restore_smoke_judgement(self):
         dev = SimDevice.__new__(SimDevice)
-        dev.data, dev.containers = 'baseline', {'woow-emqx': {'image_id': drv.OLD['image_id']}}
+        dev.data = 'baseline'
+        dev.containers = {'woow-emqx': {'image_id': drv.CURRENT['image_id'], 'running': True}}
         self.assertTrue(drv.judge_restore_smoke(SimDevice.op_smoke(dev, {}))[0])
         dev.data = 'ha'
         self.assertFalse(drv.judge_restore_smoke(SimDevice.op_smoke(dev, {}))[0])
 
-    def test_repin_changes_only_the_two_image_lines(self):
+    def test_two_copies_change_only_their_image_lines(self):
         files = FakePackage().files(drv.PACKAGE_COMMIT)
-        lines = {'quadlet/emqx.container': 'Image=' + NEW_REF, 'quadlet/emqx-entrance.container': 'Image=' + drv.ENTRANCE['ref']}
-        staged, report = drv.repin(files, lines)
-        self.assertTrue(drv.repin_exact(files, staged, lines))
-        self.assertEqual(report['quadlet/emqx.container']['new'], 'Image=' + NEW_REF)
-        self.assertFalse(drv.repin_exact(files, dict(staged, **{'README.md': (b'x', 0o664)}), lines))
+        for pin in (OLDER_REF, drv.CURRENT['ref']):
+            lines = {'quadlet/emqx.container': 'Image=' + pin, 'quadlet/emqx-entrance.container': 'Image=' + drv.ENTRANCE['ref']}
+            staged, report = drv.repin(files, lines)
+            self.assertTrue(drv.repin_exact(files, staged, lines))
+            self.assertEqual(report['quadlet/emqx.container']['new'], 'Image=' + pin)
+            self.assertFalse(drv.repin_exact(files, dict(staged, **{'README.md': (b'x', 0o664)}), lines))
         with self.assertRaises(drv.Failed):
             drv.repin(FakePackage(extra_image_line=True).files(drv.PACKAGE_COMMIT), lines)
         tar_b64, expected = drv.pack(staged)
-        self.assertEqual(expected['scripts/upgrade.sh'][1], True)
-        self.assertEqual(expected['README.md'][1], False)
+        self.assertEqual((expected['scripts/install.sh'][1], expected['README.md'][1]), (True, False))
         with tarfile.open(fileobj=io.BytesIO(base64.b64decode(tar_b64))) as archive:
             modes = {m.name: m.mode for m in archive}
-        self.assertEqual(modes['scripts/upgrade.sh'], 0o755)
-        self.assertEqual(modes['README.md'], 0o644)
+        self.assertEqual((modes['scripts/upgrade.sh'], modes['README.md']), (0o755, 0o644))
 
-    def test_expected_quadlet_delta_is_the_template_diff_with_the_device_pins(self):
-        staged = drv.pinned(NEW_TEMPLATE, 'Image=' + NEW_REF)
-        want = drv.ops.line_delta(drv.pinned(OLD_TEMPLATE, 'Image=' + drv.OLD['ref']), staged)
-        self.assertEqual(want['removed'], sorted(['HealthCmd=emqx ctl status', 'Image=' + drv.OLD['ref']]))
-        self.assertEqual(want['added'], sorted(['# The local node endpoint avoids starting another Erlang VM on each probe.',
+    def test_expected_unit_deltas(self):
+        older = drv.pinned(TPL_MAIN, 'Image=' + OLDER_REF)
+        upgrade = drv.pinned(TPL_MAIN, 'Image=' + drv.CURRENT['ref'])
+        down = drv.ops.line_delta(drv.pinned(TPL_INSTALLED, 'Image=' + drv.CURRENT['ref']), older)
+        self.assertEqual(down['removed'], sorted(['HealthCmd=emqx ctl status', 'Image=' + drv.CURRENT['ref']]))
+        self.assertEqual(down['added'], sorted(['# The local node endpoint avoids starting another Erlang VM on each probe.',
                                                 'HealthCmd=curl -fsS --max-time 8 -o /dev/null http://127.0.0.1:18093/status',
-                                                'Image=' + NEW_REF]))
-        rendered = drv.ops.line_delta(render(drv.pinned(OLD_TEMPLATE, 'Image=' + drv.OLD['ref'])), render(staged))
-        self.assertEqual(rendered, want)
+                                                'Image=' + OLDER_REF]))
+        self.assertEqual(drv.ops.line_delta(older, upgrade), {'removed': ['Image=' + OLDER_REF],
+                                                               'added': ['Image=' + drv.CURRENT['ref']]})
+        self.assertEqual(drv.unit_delta(render(older).splitlines(), render(upgrade).splitlines()),
+                         drv.ops.line_delta(older, upgrade))
+        self.assertIsNone(drv.unit_delta(None, []))
 
     def test_manifest_follows_only_the_quadlet(self):
         before = {'/home/appowner/' + drv.QUADLET: 'a' * 64, '/home/appowner/.config/emqx/base.hocon': 'b' * 64}
@@ -758,20 +849,18 @@ class PureTests(unittest.TestCase):
 
     def test_imported_view_ignores_status_words_and_sys_topics(self):
         dev = SimDevice.__new__(SimDevice)
-        dev.knobs, dev.observed, dev.data = {}, [], 'ha'
-        dev.calls = []
+        dev.knobs, dev.observed, dev.data, dev.calls, dev.probes, dev.upgraded = {}, [], 'ha', [], 0, False
+        dev.containers = {'woow-emqx': {'running': True}}
         dev.secrets = types.SimpleNamespace(register_observed=lambda value: None)
+        request = {'ha_admin_password': CREDS['B1_EMQX_ADMIN_PW'], 'mqtt': [['b1-sensor', 'x'], ['b1-gateway', 'x'], ['b1-admin', 'x']]}
         dev.version = '5.8.9'
-        before = drv.imported_view(SimDevice.probe(dev, {'ha_admin_password': CREDS['B1_EMQX_ADMIN_PW'],
-                                                         'mqtt': [['b1-sensor', 'x'], ['b1-gateway', 'x'], ['b1-admin', 'x']]}))
-        dev.version = '5.9.4'
-        after = drv.imported_view(SimDevice.probe(dev, {'ha_admin_password': CREDS['B1_EMQX_ADMIN_PW'],
-                                                        'mqtt': [['b1-sensor', 'x'], ['b1-gateway', 'x'], ['b1-admin', 'x']]}))
+        before = drv.imported_view(SimDevice.probe(dev, request))
+        dev.version = '5.8.8'
+        after = drv.imported_view(SimDevice.probe(dev, request))
         self.assertEqual(before['data'], after['data'])          # connector status words differ, names do not
         self.assertNotIn('$SYS/brokers', before['data']['retained'])
         self.assertTrue(drv.ha_data_ok(before, SRC) and drv.ha_mqtt_ok(before, SRC))
-        self.assertEqual(drv.node_version(before), ['5.8.9'])
-        self.assertEqual(drv.node_version(after), ['5.9.4'])
+        self.assertEqual((drv.node_version(before), drv.node_version(after)), (['5.8.9'], ['5.8.8']))
         broken = copy.deepcopy(before)
         broken['accounts']['mqtt_users'].append(['woowbk-lab-baseline', False])
         self.assertFalse(drv.ha_data_ok(broken, SRC))
@@ -788,6 +877,18 @@ class PureTests(unittest.TestCase):
         for line, command, fields in found:
             self.assertIn(command, cli.SPECS, line)
             self.assertLessEqual(fields, set(cli.SPECS[command]), (line, command))
+
+    def test_the_product_would_stop_an_import_on_the_older_version(self):
+        sys.path.insert(0, str(HERE.parents[2] / 'backup-engine'))
+        try:
+            from woowbackup import haissues, ha_emqx
+        finally:
+            sys.path.pop(0)
+        upstream = ha_emqx.VERSIONS.upstream('5.9.1')          # the fixture's add-on version
+        self.assertEqual(upstream, '5.8.9')
+        stop = haissues.version_issues('EMQX', '5.9.1', upstream, drv.OLDER['version'])
+        self.assertEqual([(i.id, i.level) for i in stop], [('version.different', 'stop')])
+        self.assertEqual(haissues.version_issues('EMQX', '5.9.1', upstream, drv.CURRENT['version']), [])
 
     def test_self_check(self):
         with contextlib.redirect_stdout(io.StringIO()):
@@ -807,28 +908,34 @@ class RealPackageTests(unittest.TestCase):
                           capture_output=True).returncode != 0:
             self.skipTest('the checkout lacks the pinned package commit')
 
-    def test_the_real_tree_repins_exactly_two_lines_and_the_delta_is_the_health_and_image_lines(self):
+    def test_the_real_tree_gives_the_expected_copies_and_deltas(self):
         files = self.source.files(drv.PACKAGE_COMMIT)
-        self.assertIn('scripts/upgrade.sh', files)
-        self.assertTrue(files['scripts/upgrade.sh'][1] & 0o111)
-        lines = {'quadlet/emqx.container': 'Image=' + NEW_REF, 'quadlet/emqx-entrance.container': 'Image=' + drv.ENTRANCE['ref']}
-        staged, report = drv.repin(files, lines)
-        self.assertTrue(drv.repin_exact(files, staged, lines))
-        self.assertEqual(report['quadlet/emqx.container']['old'],
-                         'Image=docker.io/emqx/emqx:5.8.9@sha256:35b46f7aa7a0d51f3959e4344221ac5ec7f948b03e43099286b6c40a07bb393b')
+        self.assertTrue(files['scripts/install.sh'][1] & 0o111 and files['scripts/upgrade.sh'][1] & 0o111)
+        staged = {}
+        for name, pin in (('older', OLDER_REF), ('upgrade', drv.CURRENT['ref'])):
+            lines = {'quadlet/emqx.container': 'Image=' + pin, 'quadlet/emqx-entrance.container': 'Image=' + drv.ENTRANCE['ref']}
+            staged[name], report = drv.repin(files, lines)
+            self.assertTrue(drv.repin_exact(files, staged[name], lines))
+            self.assertEqual(report['quadlet/emqx.container']['old'], REGISTRY_589.strip())
         old = self.source.show(drv.INSTALLED_COMMIT, 'quadlet/emqx.container').decode()
-        want = drv.ops.line_delta(drv.pinned(old, 'Image=' + drv.OLD['ref']), staged['quadlet/emqx.container'][0].decode())
-        self.assertEqual(want['removed'], sorted(['HealthCmd=emqx ctl status', 'Image=' + drv.OLD['ref']]))
-        self.assertEqual(want['added'], sorted(['# The local node endpoint avoids starting another Erlang VM on each probe.',
+        older = staged['older']['quadlet/emqx.container'][0].decode()
+        upgrade = staged['upgrade']['quadlet/emqx.container'][0].decode()
+        down = drv.ops.line_delta(drv.pinned(old, 'Image=' + drv.CURRENT['ref']), older)
+        self.assertEqual(down['removed'], sorted(['HealthCmd=emqx ctl status', 'Image=' + drv.CURRENT['ref']]))
+        self.assertEqual(down['added'], sorted(['# The local node endpoint avoids starting another Erlang VM on each probe.',
                                                 'HealthCmd=curl -fsS --max-time 8 -o /dev/null http://127.0.0.1:18093/status',
-                                                'Image=' + NEW_REF]))
-        smoke = files['tests/smoke.sh'][0].decode()
-        self.assertIn('woow-ha-import.json', smoke)          # PR #11: the import marker turns A4/A5/A6/A10 into warnings
+                                                'Image=' + OLDER_REF]))
+        self.assertEqual(drv.ops.line_delta(older, upgrade), {'removed': ['Image=' + OLDER_REF],
+                                                               'added': ['Image=' + drv.CURRENT['ref']]})
+        self.assertIn('woow-ha-import.json', files['tests/smoke.sh'][0].decode())      # PR #11
         self.assertIn('if podman image exists "$img" >/dev/null 2>&1; then continue; fi',
-                      files['scripts/lib/quadlet-lib.sh'][0].decode())   # ql_pull_images skips present images
-        tar_b64, expected = drv.pack(staged)
-        self.assertEqual(len(expected), len(files))
-        self.assertLess(len(tar_b64), 4 * 1024 * 1024)
+                      files['scripts/lib/quadlet-lib.sh'][0].decode())                # ql_pull_images skips present images
+        self.assertIn('$APP is installed and healthy.', files['scripts/install.sh'][0].decode())   # INSTALLED_LINE
+        self.assertIn("APP=emqx", files['scripts/common.sh'][0].decode())
+        for name in staged:
+            tar_b64, expected = drv.pack(staged[name])
+            self.assertEqual(len(expected), len(files))
+            self.assertLess(len(tar_b64), 4 * 1024 * 1024)
         self.assertTrue(self.source.show(drv.INSTALLED_COMMIT, 'tests/smoke.sh'))
 
 
@@ -942,22 +1049,21 @@ class DeviceTests(unittest.TestCase):
         self.assertIn(['systemctl', '--user', 'daemon-reload'], self.run.calls)
         self.assertEqual((self.home / '.config/containers/systemd/hermes.container').read_text(), 'Image=hermes\n')
 
-    def test_facts_and_deltas(self):
+    def test_facts(self):
         self.dev.dispatch(self.q('capture'))
         (self.home / '.config/containers/systemd/emqx.container').write_text('Image=new\nHealthCmd=curl\n')
-        facts = self.dev.dispatch(self.q('facts', refs=['docker.io/emqx/emqx:5.9.4@sha256:' + 'e' * 64],
-                                         containers=['woow-emqx'], units=['emqx.service'],
-                                         deltas=['.config/containers/systemd/emqx.container']))
-        self.assertEqual(facts['deltas']['.config/containers/systemd/emqx.container'],
-                         {'removed': ['Image=old'], 'added': ['HealthCmd=curl', 'Image=new']})
+        facts = self.dev.dispatch(self.q('facts', refs=['docker.io/emqx/emqx:5.8.8@sha256:' + 'e' * 64],
+                                         containers=['woow-emqx'], units=['emqx.service']))
+        self.assertEqual(facts['quadlet_text'], ['Image=new', 'HealthCmd=curl'])
+        self.assertEqual(facts['images']['docker.io/emqx/emqx:5.8.8@sha256:' + 'e' * 64]['tags'], ['docker.io/emqx/emqx:5.8.8'])
         self.assertEqual(facts['secrets'], ['woow-emqx-dashboard-password', 'woow-emqx-node-cookie'])
         self.assertEqual(facts['volumes'], ['woow_emqx_data', 'woow_emqx_log'])
         self.assertEqual(facts['lab_source'], drv.INSTALLED_COMMIT)
         self.assertEqual(facts['marker'], {'present': False, 'exact': False})
         self.assertEqual(facts['units'], {'emqx.service': ['active', 'running']})
         self.assertEqual(facts['quadlet']['emqx.container'], {'image': 'new', 'health': 'curl'})
-        self.assertEqual(facts['run'], {'exists': True, 'capture': True, 'staged': False, 'upgrade_started': False,
-                                        'upgrade_done': False})
+        idle = {'staged': False, 'started': False, 'done': False}
+        self.assertEqual(facts['run'], {'exists': True, 'capture': True, 'older': idle, 'upgrade': idle})
         self.assertIsNone(facts['backup_root'])
         json.dumps(facts)
 
@@ -974,31 +1080,35 @@ class DeviceTests(unittest.TestCase):
         self.dev.dispatch(self.q('capture'))
         files = {'scripts/upgrade.sh': (b'#!/bin/sh\necho ok\n', 0o755), 'README.md': (b'x', 0o644)}
         expected = {name: [sha(data), bool(mode & 0o111)] for name, (data, mode) in files.items()}
-        result = self.dev.dispatch(self.q('stage', tar_b64=self.stage_tar(files), files=expected))
-        self.assertTrue(result['equal'])
-        staged = self.home / 'woowbk-emqx-upgrade-0123456789ab/Woow_podman_emqx/scripts/upgrade.sh'
-        self.assertEqual(staged.stat().st_mode & 0o777, 0o755)
+        for copy_name in ('older', 'upgrade'):
+            result = self.dev.dispatch(self.q('stage', copy=copy_name, tar_b64=self.stage_tar(files), files=expected))
+            self.assertTrue(result['equal'])
+            staged = self.home / f'woowbk-emqx-upgrade-0123456789ab/{copy_name}/Woow_podman_emqx/scripts/upgrade.sh'
+            self.assertEqual(staged.stat().st_mode & 0o777, 0o755)
         with self.assertRaisesRegex(ValueError, 'stage-exists'):
-            self.dev.dispatch(self.q('stage', tar_b64=self.stage_tar(files), files=expected))
+            self.dev.dispatch(self.q('stage', copy='older', tar_b64=self.stage_tar(files), files=expected))
+        with self.assertRaisesRegex(ValueError, 'copy'):
+            self.dev.dispatch(self.q('stage', copy='third', tar_b64=self.stage_tar(files), files=expected))
         for run_id, name in (('0123456789ac', '../escape'), ('0123456789ad', '/abs/path')):
-            q = dict(self.q('stage', tar_b64=self.stage_tar({name: (b'x', 0o644)}), files={name: [sha(b'x'), False]}),
-                     run_id=run_id)
+            q = dict(self.q('stage', copy='older', tar_b64=self.stage_tar({name: (b'x', 0o644)}),
+                            files={name: [sha(b'x'), False]}), run_id=run_id)
             self.dev.capture(q)
             with self.assertRaisesRegex(ValueError, 'stage-member-name'):
                 self.dev.stage(q)
 
-    def write_upgrade(self, body):
-        self.dev.dispatch(self.q('capture'))
-        script = self.home / 'woowbk-emqx-upgrade-0123456789ab/Woow_podman_emqx/scripts/upgrade.sh'
+    def write_script(self, copy_name, body):
+        if not (self.home / 'woowbk-emqx-upgrade-0123456789ab').exists():
+            self.dev.dispatch(self.q('capture'))
+        script = (self.home / f'woowbk-emqx-upgrade-0123456789ab/{copy_name}/Woow_podman_emqx'
+                  / self.dev.COPIES[copy_name])
         script.parent.mkdir(parents=True)
         script.write_text('#!/bin/sh\n' + body)
         os.chmod(script, 0o755)
 
-    def test_upgrade_runs_the_staged_script_and_blanks_dev_d_secrets(self):
-        self.write_upgrade('echo "PASS A1 emqx.service is active"\necho "leak device-dashboard-secret-0001"\nexit 0\n')
-        result = self.dev.dispatch(self.q('upgrade', timeout=600))
-        self.assertEqual(result['rc'], 0)
-        self.assertFalse(result['timed_out'])
+    def test_script_runs_the_staged_package_script_and_blanks_dev_d_secrets(self):
+        self.write_script('upgrade', 'echo "PASS A1 emqx.service is active"\necho "leak device-dashboard-secret-0001"\nexit 0\n')
+        result = self.dev.dispatch(self.q('script', copy='upgrade', timeout=600))
+        self.assertEqual((result['copy'], result['rc'], result['timed_out']), ('upgrade', 0, False))
         self.assertEqual(result['device_secret_hits'], 1)
         self.assertIn('leak ' + self.dev.BLANK, result['lines'])
         self.assertNotIn('device-dashboard-secret-0001', json.dumps(result))
@@ -1006,39 +1116,46 @@ class DeviceTests(unittest.TestCase):
         self.assertTrue((run_dir / 'upgrade.done').exists())
         self.assertEqual((run_dir / 'upgrade.log').stat().st_mode & 0o777, 0o600)
         with self.assertRaisesRegex(ValueError, 'already-started'):
-            self.dev.dispatch(self.q('upgrade', timeout=600))
-        self.assertEqual(self.dev.dispatch(self.q('stop-upgrade')), {'started': True, 'running': False, 'was_running': False})
-        log = self.dev.dispatch(self.q('upgrade-log'))
+            self.dev.dispatch(self.q('script', copy='upgrade', timeout=600))
+        with self.assertRaisesRegex(ValueError, 'no-staged-script'):
+            self.dev.dispatch(self.q('script', copy='older', timeout=600))
+        stopped = self.dev.dispatch(self.q('stop-scripts'))
+        self.assertEqual(stopped['copies']['upgrade'], {'started': True, 'was_running': False, 'running': False})
+        self.assertFalse(stopped['running'])
+        log = self.dev.dispatch(self.q('script-log', copy='upgrade'))
         self.assertTrue(log['done'] and log['rc'] == 0)
 
-    def test_upgrade_timeout_stops_the_whole_group(self):
-        self.write_upgrade('sleep 60 &\nsleep 60\n')
-        original = self.dev.bounded
-        self.dev.bounded = lambda value, low, high: value
+    def test_the_older_copy_runs_install_sh_and_its_timeout_stops_the_whole_group(self):
+        self.write_script('older', 'sleep 60 &\nsleep 60\n')
+        self.assertEqual(self.dev.COPIES['older'], 'scripts/install.sh')
+        original = self.dev.SCRIPT_MIN_TIMEOUT
+        self.dev.SCRIPT_MIN_TIMEOUT = 1
         try:
             started = time.monotonic()
-            result = self.dev.dispatch(self.q('upgrade', timeout=1))
+            result = self.dev.dispatch(self.q('script', copy='older', timeout=1))
         finally:
-            self.dev.bounded = original
+            self.dev.SCRIPT_MIN_TIMEOUT = original
         self.assertTrue(result['timed_out'])
         self.assertLess(time.monotonic() - started, 40)
         self.assertNotEqual(result['rc'], 0)
 
-    def test_stop_upgrade_kills_a_recorded_running_group(self):
-        self.dev.dispatch(self.q('capture'))
+    def test_one_script_at_a_time_and_stop_scripts_kills_a_recorded_group(self):
+        self.write_script('upgrade', 'exit 0\n')
         proc = subprocess.Popen(['sleep', '60'], start_new_session=True)
         try:
             run_dir = self.home / 'woowbk-emqx-upgrade-0123456789ab'
-            ticks = self.dev.start_ticks(proc.pid)
-            (run_dir / 'upgrade.pid').write_text(f'{proc.pid} {ticks}\n')
-            with self.assertRaisesRegex(ValueError, 'upgrade-still-running'):
+            (run_dir / 'older.pid').write_text(f'{proc.pid} {self.dev.start_ticks(proc.pid)}\n')
+            with self.assertRaisesRegex(ValueError, 'another-script-running'):
+                self.dev.dispatch(self.q('script', copy='upgrade', timeout=600))
+            with self.assertRaisesRegex(ValueError, 'script-still-running'):
                 self.dev.dispatch(self.q('cleanup', backup_root_before=None, backup_parent_before=None, remove_run_dir=True))
             waiter = __import__('threading').Thread(target=proc.wait)
             waiter.start()
-            result = self.dev.dispatch(self.q('stop-upgrade'))
+            result = self.dev.dispatch(self.q('stop-scripts'))
             waiter.join(20)
-            self.assertTrue(result['was_running'])
+            self.assertTrue(result['copies']['older']['was_running'])
             self.assertFalse(result['running'])
+            self.assertEqual(result['copies']['upgrade'], {'started': False, 'was_running': False, 'running': False})
         finally:
             if proc.poll() is None:
                 proc.kill()
@@ -1088,8 +1205,9 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(sum(1 for call in self.run.calls if call[:3] == ['podman', 'healthcheck', 'run']), 3)
 
     def test_dispatch_refuses_unknown_operations_and_run_ids(self):
-        with self.assertRaisesRegex(ValueError, 'operation'):
-            self.dev.dispatch({'op': 'rm', 'run_id': '0123456789ab'})
+        for gone in ('rm', 'upgrade', 'stop-upgrade'):
+            with self.assertRaisesRegex(ValueError, 'operation'):
+                self.dev.dispatch({'op': gone, 'run_id': '0123456789ab'})
         with self.assertRaisesRegex(ValueError, 'run-id'):
             self.dev.dispatch({'op': 'facts', 'run_id': '../x'})
 

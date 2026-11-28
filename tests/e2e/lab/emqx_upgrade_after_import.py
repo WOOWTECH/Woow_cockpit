@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""EMQX: the REAL package upgrade after a Home Assistant import, on lab device woowbk-dev-d (owner 2026-11-28: the EMQX
-upgrade test may use a newer image from the network, lab only).
+"""EMQX: the REAL package upgrade after a Home Assistant import, on lab device woowbk-dev-d, open-source images only
+(owner 2026-11-28, option B: an older open-source 5.8.x, then the package's own upgrade.sh to the version it pins today).
 
   python3 -B -I tests/e2e/lab/emqx_upgrade_after_import.py                 offline self-check (no device, no secret)
   python3 -B -I tests/e2e/lab/emqx_upgrade_after_import.py --lease-template --source P --package K [--minutes 150]
@@ -11,24 +11,32 @@ upgrade test may use a newer image from the network, lab only).
 
 Why: the H2 lab proof (2026-11-25) showed that after an HA import the package's tests/smoke.sh failed A4/A10, so
 scripts/upgrade.sh would roll every upgrade back; Woow_podman_emqx PR #11 (c01c897) turned those checks into warnings
-when the import marker is there. upgrade.sh itself was never run: it pulls images and the lab has no network. This run
-uses the package's own rule instead (scripts/lib/quadlet-lib.sh ql_pull_images skips `podman pull` when `podman image
-exists <ref>`): emqx_upgrade_image_prep.py pulls the pinned new image into the LAB store on the host and streams it into
-dev-d's owner store beforehand, so dev-d stays network none and nothing is pulled during the run.
+when the import marker is there. upgrade.sh itself was never run: it pulls images and the lab has no network. The
+package's own rule makes that unnecessary: scripts/lib/quadlet-lib.sh ql_pull_images skips `podman pull` when `podman
+image exists <ref>`, and the version the package pins today (5.8.9) is already in dev-d's owner store.
 
-The new version: docker.io/emqx/emqx:5.9.4 (index sha256:37a3bf1a..., amd64 manifest sha256:0bdd5112..., image ID
-a83299181df6...). There is no 5.8.x after 5.8.9 in docker.io/emqx/emqx (5.8.10-5.8.12 exist only as EMQX Enterprise,
-emqx/emqx-enterprise, under a commercial licence); the next minor is 5.9 and its upgrade notes touch nothing this package
-configures; 5.9.0-5.9.2 are older than 5.8.9 (2025-05..11), 5.9.4 (2026-11-27) is the newest 5.9 patch with release
-notes (its image keeps a working curl for the package's HealthCmd). LICENCE: 5.9 is BSL 1.1 (free for a single node,
-not for embedding in products sold to third parties): a lab test, not a production decision.
+The older version: docker.io/emqx/emqx:5.8.8 (index sha256:4593b6e3..., amd64 manifest sha256:2bbadcd6..., image ID
+5a96e360..., Apache-2.0 open-source edition, the same OTP 26.2.5.14-1 as 5.8.9, curl installed for the package's
+HealthCmd), the nearest older open-source 5.8.x. Its 5.8.9 successor changes no data format or setting this package or
+HA's import uses (release notes v5.8.9: HTTP action timeout from request_ttl, MQTT connector static_clientids users,
+{allow|deny, all} matching, empty-username validation; breaking: macOS 13 packages only). Never a BSL/Enterprise image.
 
-The package copy pinned to the new version is generated AT RUN TIME as a throwaway inside dev-d: `git archive` of
-Woow_podman_emqx c01c897 (the leased checkout, unchanged), where only quadlet/emqx.container's Image= line becomes the new
-tag at dev-d's loaded digest and quadlet/emqx-entrance.container's Image= line the entrance pin dev-d already runs (a
-`podman load` changes a manifest digest; deploy-batch1.sh repinned the same way). It lives in
-~/woowbk-emqx-upgrade-<run id>/ (0700) next to the private exact copies of dev-d's EMQX files, and is removed again.
-dev-d's own package copy ~/Woow_podman_emqx (ea5886c) is never touched.
+THE ORDER, and why: the product refuses an EMQX import whose versions differ (haissues.version_issues: HA's add-on 5.9.1
+runs EMQX 5.8.9; this device's version comes from its Quadlet image's label; both known and different = a stop line,
+`version.different`). So the import cannot run on 5.8.8: it runs on dev-d's own 5.8.9, as the product requires. Then
+the package's installer moves dev-d's EMQX to 5.8.8 and the package's upgrade.sh brings it back to 5.8.9:
+  1. the import on 5.8.9 (the product's normal path: check + one-action import, the marker in the data volume);
+  2. the older copy's scripts/install.sh (c01c897 with only its Image= lines repinned: 5.8.8 at dev-d's loaded digest,
+     the installed entrance pin) - the older broker starts ONCE, on the imported data the product's 5.8.9 candidate wrote,
+     never on dev-d's own baseline data (the owner accepted that an older 5.8.x may not read 5.8.9-written data: a broker
+     that does not start fails install.sh's own health wait, and the recovery brings dev-d back);
+  3. the REAL upgrade: the upgrade copy's scripts/upgrade.sh (c01c897, pinned 5.8.9 at dev-d's loaded digest; the image
+     is there, so nothing is pulled), no option.
+Both copies are `git archive` of Woow_podman_emqx c01c897 (the leased checkout, never changed) with only their Image=
+lines changed (a `podman load` changes a manifest digest; deploy-batch1.sh repinned the same way), so the upgrade
+changes exactly ONE unit line: emqx.container's Image=. They live in ~/woowbk-emqx-upgrade-<run id>/ (0700) next to the
+private exact copies of dev-d's EMQX files, and are removed again; dev-d's own package copy ~/Woow_podman_emqx (ea5886c)
+is never touched.
 
 One run = the heavy seat (HEAVY_FREE = the dev-d lock: heavy.sh waited for it), one hold of /tmp/woowbk-dev-d-mutation.lock
 (dev_d_guard.acquire: waits up to 10 minutes, yields to emqx-main), a clean committed checkout at the leased commit, the
@@ -38,33 +46,36 @@ is left on dev-d).
 
   preflight   dev-d isolated (network none, no port); host memory/disk and dev-d headroom; installed engine == the leased
               product source; the leak scan is the reviewed program; no job; the backup schedule masked; the engine says
-              EMQX running from its catalog entry; dev-d runs 5.8.9 from the OLD units (Image= pins, image IDs of both
-              containers); the NEW image is in dev-d's owner store with the pinned ID and the leased digest (and
-              `podman image exists <tag>@<digest>`); dev-d's own package copy is ea5886c; dev-d's own EMQX holds its
-              baseline markers and no import marker; the 11-19 baseline opens with the kit and restores without a
-              confirmation; no unowned EMQX safety backup can be pruned by the two restores; the fixture's HA record is
-              absent (uploaded by this run) or the protected one at the fixture SHA-256
+              EMQX running from its catalog entry; dev-d runs 5.8.9 from its own units (Image= pins, image IDs of both
+              containers); the OLDER image is in dev-d's owner store with the pinned ID and the leased digest (and
+              `podman image exists <tag>@<digest>`); dev-d's own package copy is ea5886c, no run folder yet; dev-d's own
+              EMQX holds its baseline markers and no import marker; the 11-19 baseline opens with the kit and restores
+              without a confirmation; no unowned EMQX safety backup can be pruned by the two restores; the fixture's HA
+              record is absent (uploaded by this run) or the protected one at the fixture SHA-256
   capture     (first change) exact private copies of dev-d's EMQX files, env file and Quadlet state inside dev-d
-  stage       the throwaway package copy (only the two Image= lines differ from c01c897), checked file by file
+  stage       the two throwaway copies (only their Image= lines differ from c01c897), checked file by file
   import      upload when needed, ha-check-start (EMQX importable, nothing stops it, confirmation lines keyed), the
               one-action ha-import-start (conversion + restore, every listed key once), not rolled back, the import
               marker in the data volume, dev-d's EMQX files untouched by it, EMQX serving HA's data (the b1 probe as
               HA's admin: Dashboard and MQTT accounts, ACL, retained, rules, banned client, API key; MQTT logins and
-              refusals), still 5.8.9 from the old units
-  upgrade     the copy's scripts/upgrade.sh, NO option (hot pre-upgrade backup, unit snapshot, install.sh --no-smoke
-              -> no pull because the images exist, restart, health, then tests/smoke.sh), as appowner, bounded; judged:
-              exit 0, NOT rolled back, smoke lines exactly the imported set (A4 and A5/A6/A10 WARN, 11 PASS, 0 FAIL),
-              no dev-d secret in its output, the broker on the new image ID from the new emqx.container, only
-              emqx.container (Image= and HealthCmd lines, as the template diff ea5886c -> c01c897 says) and the Quadlet
-              manifest changed, exactly its backup and snapshot folders new, the import marker still there
-  after       the node reports 5.9.4 and serves EXACTLY what it served after the import (accounts, authenticators,
-              authorization settings and sources, ACL rows, retained, rules, connectors, actions, banned, API keys,
-              MQTT behaviour)
-  recovery    whatever stopped the run (a failed check, an error, SIGTERM/SIGINT): a running upgrade is stopped (TERM,
-              then KILL of its group), every job of the run waited for (30 min), dev-d's EMQX files written back byte for
-              byte (+ daemon-reload), the 11-19 baseline restored with the kit (old units: the broker starts 5.8.9 on
-              5.8.9 data, never on what 5.9.4 wrote), then compared: old image IDs, Image= lines and units as before,
-              dev-d's markers exactly back, no import marker, dev-d's own smoke.sh --quick 10 PASS 0 FAIL 0 WARN
+              refusals), on 5.8.9 from dev-d's own units
+  downgrade   the older copy's scripts/install.sh (no option), as appowner, bounded; judged: exit 0, installed and
+              healthy, its smoke lines the imported set, no dev-d secret in its output, the broker on the 5.8.8 image ID,
+              only emqx.container (the template diff ea5886c -> c01c897 at the two pins) and the Quadlet manifest changed,
+              no backup folder, the marker still there, and the 5.8.8 broker serves EXACTLY what 5.8.9 served
+  upgrade     the upgrade copy's scripts/upgrade.sh, NO option (hot pre-upgrade backup, unit snapshot, install.sh
+              --no-smoke -> no pull, restart, health, then tests/smoke.sh), as appowner, bounded; judged: exit 0, NOT
+              rolled back, smoke lines exactly the imported set (A4 and A5/A6/A10 WARN, 11 PASS, 0 FAIL), no dev-d secret
+              in its output, the container moved from the 5.8.8 image ID to the 5.8.9 one, only emqx.container's Image=
+              line and the Quadlet manifest changed, exactly its backup and snapshot folders new, the marker still there
+  after       the node reports 5.8.9 (was 5.8.8) and serves EXACTLY what it served before the upgrade (accounts,
+              authenticators, authorization settings and sources, ACL rows, retained, rules, connectors, actions, banned,
+              API keys, MQTT behaviour)
+  recovery    whatever stopped the run (a failed check, an error, SIGTERM/SIGINT): a running package script is stopped
+              (TERM, then KILL of its group), every job of the run waited for (30 min), dev-d's EMQX files written back
+              byte for byte (+ daemon-reload), the 11-19 baseline restored with the kit on dev-d's own 5.8.9 units, then
+              compared: image IDs, Image= lines and units as before, dev-d's markers exactly back, no import marker,
+              dev-d's own smoke.sh --quick 10 PASS 0 FAIL 0 WARN
   cleanup     only what this run made, only once dev-d is verifiably back: the conversion and the two safety backups,
               the HA record when uploaded, the package's backup/snapshot folders of this run (they hold dev-d's secrets
               and the export), the run folder; no job object, staging folder or key file. Otherwise all stays (receipt
@@ -77,9 +88,10 @@ is left on dev-d).
 
 stdout carries only fixed lines (`<check>: PASS|FAIL`, the source commit, the lock time, the count line); details go to the
 private, redacted evidence folder ~/.woowbk-lab/evidence/emqx-upgrade-after-import/<time>/ (0700, files 0600). A passing
-run has 55 checks. Exit status: 0 every check passed, 1 a check failed (the recovery ran), 2 refused before the lock
-(nothing on dev-d read), 3 the lock stayed taken. Not covered (stated): a browser, production, ARM, a cold (--cold)
-pre-upgrade backup, a downgrade by the package (the recovery uses the product's baseline restore instead).
+run has 61 checks. Exit status: 0 every check passed, 1 a check failed (the recovery ran), 2 refused before the lock
+(nothing on dev-d read), 3 the lock stayed taken. Not covered (stated): an import ON an older version (the product refuses
+it), a browser, production, ARM, a cold (--cold) pre-upgrade backup, a downgrade by the package (the recovery uses the
+product's baseline restore instead).
 """
 import argparse
 import base64
@@ -105,17 +117,18 @@ LAB = Path.home() / '.woowbk-lab'
 DEVICE = 'woowbk-dev-d'
 LOCK = '/tmp/woowbk-dev-d-mutation.lock'
 CASE = 'emqx-upgrade-after-import'
-PHASE = 'upgrade-after-import'
+PHASE = 'older-then-upgrade'
 AREA = 'emqx-upgrade-after-import'
 RECEIPT = LAB / 'run' / 'emqx_upgrade_after_import.json'
 IMAGE_RECEIPT = LAB / 'run' / 'emqx_upgrade_image_prep.json'
 LOCK_WAIT = 10 * 60               # heavy.sh waited for the lock to be free: a short race only
-HOLD_BUDGET = 55 * 60             # no new forward phase after this many seconds of the hold (recovery always runs)
+HOLD_BUDGET = 60 * 60             # no new forward phase after this many seconds of the hold (recovery always runs)
 RECOVERY_RESERVE = 25 * 60        # a forward phase starts only with this much of the lease left
 MIN_LEASE_LEFT = 90 * 60
 MAX_LEASE_WINDOW = 180 * 60
 JOB_WAIT = 30 * 60                # one job (11-25: check 232-527 s, convert 261-454 s, restore 66-348 s)
-UPGRADE_TIMEOUT = 25 * 60         # upgrade.sh on the device (its own waits: 180 + 90 + 120 s, smoke 270 s)
+INSTALL_TIMEOUT = 15 * 60         # install.sh: health 180 + 90 s, the dashboard 120 s, smoke (A2 waits 270 s)
+UPGRADE_TIMEOUT = 25 * 60         # upgrade.sh: backup, install --no-smoke, smoke, a rollback with its own waits
 READY_TIMEOUT = 5 * 60
 SMOKE_TIMEOUT = 10 * 60
 FLOOR = 13 * 1024 ** 3            # the team keeps >= 12 GiB free on the host at every moment (+1 GiB margin)
@@ -130,12 +143,15 @@ BASELINE = '20261119T072831Z-168aaa02'      # dev-d's own EMQX baseline backup (
 TIMER = 'woowtech-cockpit-backup-schedule.timer'
 PACKAGE_COMMIT = 'c01c897f524e0c7a231c21e823482cdfd1593ede'     # Woow_podman_emqx main with PR #11 (smoke after import)
 INSTALLED_COMMIT = 'ea5886c58ef2c6ab1f4e6a4d01908cc9dc4525de'   # dev-d's own package copy (deploy-batch1.sh REV)
-TARGET = {'name': 'docker.io/emqx/emqx:5.9.4', 'version': '5.9.4',
-          'index_digest': 'sha256:37a3bf1ad11b3d7f37280dd3bef234e4dc7b5282d0ca2d562b6e1827de757e12',
-          'amd64_manifest': 'sha256:0bdd51124b81ca32911d5b11bf262389edc6829e7560e7be569e07d1c4c248e1',
-          'image_id': 'a83299181df64b6f31cb05caf79b5f707f977cb88b00181f2852dc084c8ce617'}
-OLD = {'ref': 'docker.io/emqx/emqx:5.8.9@sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937',
-       'image_id': '3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b', 'version': '5.8.9'}
+# The older open-source image the installer puts dev-d's EMQX on (pulled into the LAB store, streamed into dev-d).
+OLDER = {'name': 'docker.io/emqx/emqx:5.8.8', 'version': '5.8.8',
+         'index_digest': 'sha256:4593b6e30196754779fa14483332cb0be56c233f1c8a387b1308bec4337c0144',
+         'amd64_manifest': 'sha256:2bbadcd6ebdf1e2d032bdd8149c9615867ed25f32b1a09ec5bd92ddcf159e1aa',
+         'image_id': '5a96e36027e748efeb6fef8d05ea6d9b3036810540fd7286227b2e0f951a447f'}
+# The version the package pins today (c01c897: docker.io/emqx/emqx:5.8.9@sha256:35b46f7a..., the registry index) as dev-d
+# has it: deploy-batch1.sh streamed it in, its loaded digest pins dev-d's own units.
+CURRENT = {'ref': 'docker.io/emqx/emqx:5.8.9@sha256:d4ec63c4065c745507e7652d9c0213134697dc1317d8a431b167ae7651c4e937',
+           'image_id': '3f60addfad2bfc6c09400aa48cfbc1b2b2aab04fb6a64d6392c016e02d7fb57b', 'version': '5.8.9'}
 ENTRANCE = {'ref': 'docker.io/nginxinc/nginx-unprivileged:1.27-alpine@sha256:'
                    '7b40c8ed6a73bda24d7510e3be1db31a19878acf65062271302a8a7aafd1682e',
             'image_id': '47ce8258a10e28ce4b4498588c25ef77ae328f4c56cbe3e8d5dcf4f6d8019997'}
@@ -159,14 +175,15 @@ DIGEST = re.compile(r'sha256:[0-9a-f]{64}\Z')
 # The package's smoke.sh lines (tests/smoke.sh of c01c897 after an import; of ea5886c --quick on dev-d's own EMQX).
 SMOKE_ROW = re.compile(r'(PASS|FAIL|WARN) (A[0-9]+(?:/A[0-9]+)*)\b')
 SMOKE_SUMMARY = re.compile(r'[0-9]+ passed, [0-9]+ failed, [0-9]+ warnings( \(quick\))?')
-UPGRADE_SMOKE = {'PASS A1': 2, 'PASS A2': 2, 'PASS A3': 1, 'WARN A4': 1, 'PASS A9': 3, 'WARN A5/A6/A10': 1,
-                 'PASS A7': 2, 'PASS A8': 1}
-UPGRADE_SUMMARY = '11 passed, 0 failed, 2 warnings'
+IMPORTED_SMOKE = {'PASS A1': 2, 'PASS A2': 2, 'PASS A3': 1, 'WARN A4': 1, 'PASS A9': 3, 'WARN A5/A6/A10': 1,
+                  'PASS A7': 2, 'PASS A8': 1}
+IMPORTED_SUMMARY = '11 passed, 0 failed, 2 warnings'
 RESTORE_SMOKE = {'PASS A1': 2, 'PASS A2': 2, 'PASS A3': 1, 'PASS A4': 2, 'PASS A9': 3}
 RESTORE_SUMMARY = '10 passed, 0 failed, 0 warnings (quick)'
 ROLLBACK_WORDS = ('rolling back', 'rolled back', 'rollback failed', 'rollback is unhealthy')
 COMPLETE = re.compile(r'upgrade complete \(unit snapshot: (?:\S*/)?(upgrade-[0-9]{8}-[0-9]{6}(?:-[0-9]+)?)\)')
 DATA_BACKUP = re.compile(r'pre-upgrade data backup: (?:\S*/)?(backup-[0-9]{8}-[0-9]{6}(?:-[0-9]+)?)\s*\Z')
+INSTALLED_LINE = 'emqx is installed and healthy.'          # scripts/install.sh's last words (c01c897)
 
 
 def _load(name):
@@ -336,8 +353,8 @@ def scan_evidence(directory, values):
 
 def validate_lease(lease, *, driver_commit, now):
     """The exact, fresh lease of this case: granted for dev-d, this case/phase and run id, this driver commit, the product
-    source and package checkouts at their commits, the pinned target image at the leased device digest, the image
-    receipt's SHA-256, and an expiry 90-180 minutes ahead."""
+    source and package checkouts at their commits, the pinned older image at the leased device digest, the image receipt's
+    SHA-256, and an expiry 90-180 minutes ahead."""
     try:
         expires = datetime.fromisoformat(lease['expires']).timestamp()
         aware = datetime.fromisoformat(lease['expires']).tzinfo is not None
@@ -350,8 +367,8 @@ def validate_lease(lease, *, driver_commit, now):
             or not COMMIT.fullmatch(str(lease.get('source_commit', '')))
             or not isinstance(lease.get('package'), str) or not os.path.isabs(lease['package'])
             or lease.get('package_commit') != PACKAGE_COMMIT
-            or lease.get('target_image') != TARGET['name'] or lease.get('target_image_id') != TARGET['image_id']
-            or not DIGEST.fullmatch(str(lease.get('target_device_digest', '')))
+            or lease.get('older_image') != OLDER['name'] or lease.get('older_image_id') != OLDER['image_id']
+            or not DIGEST.fullmatch(str(lease.get('older_device_digest', '')))
             or not SHA.fullmatch(str(lease.get('image_receipt_sha256', '')))
             or not aware or not now + MIN_LEASE_LEFT <= expires <= now + MAX_LEASE_WINDOW):
         raise ValueError('exact fresh emqx-upgrade lease required')
@@ -359,15 +376,16 @@ def validate_lease(lease, *, driver_commit, now):
 
 
 def image_receipt_ok(raw, lease):
-    """The receipt emqx_upgrade_image_prep.py --stream wrote: this device, the pinned image, loaded, the leased digest."""
+    """The receipt emqx_upgrade_image_prep.py --stream wrote: this device, the pinned older image, loaded, the leased
+    digest."""
     try:
         doc = json.loads(raw)
     except (TypeError, ValueError):
         return False
     return (hashlib.sha256(raw).hexdigest() == lease.get('image_receipt_sha256') and isinstance(doc, dict)
-            and doc.get('device') == DEVICE and doc.get('image') == TARGET['name']
-            and doc.get('image_id') == TARGET['image_id'] and doc.get('index_digest') == TARGET['index_digest']
-            and doc.get('device_digest') == lease.get('target_device_digest') and doc.get('loaded') is True
+            and doc.get('device') == DEVICE and doc.get('image') == OLDER['name']
+            and doc.get('image_id') == OLDER['image_id'] and doc.get('index_digest') == OLDER['index_digest']
+            and doc.get('device_digest') == lease.get('older_device_digest') and doc.get('loaded') is True
             and doc.get('removed') is not True)
 
 
@@ -375,10 +393,10 @@ def lease_template(*, driver_commit, source, source_commit, package, receipt_sha
     now = now or datetime.now(timezone.utc)
     return {'granted': False, 'device': DEVICE, 'case': CASE, 'phase': PHASE, 'run_id': run_id,
             'driver_commit': driver_commit, 'source': str(source), 'source_commit': source_commit,
-            'package': str(package), 'package_commit': PACKAGE_COMMIT, 'target_image': TARGET['name'],
-            'target_image_id': TARGET['image_id'], 'target_device_digest': None, 'image_receipt_sha256': receipt_sha,
+            'package': str(package), 'package_commit': PACKAGE_COMMIT, 'older_image': OLDER['name'],
+            'older_image_id': OLDER['image_id'], 'older_device_digest': None, 'image_receipt_sha256': receipt_sha,
             'expires': (now + timedelta(minutes=minutes)).replace(microsecond=0).isoformat(),
-            'note': 'set granted true and target_device_digest from the image receipt after review'}
+            'note': 'set granted true (and older_device_digest from the image receipt) after review'}
 
 
 # ---------------------------------------------------------------- the throwaway package copy
@@ -480,19 +498,31 @@ def smoke_rows(lines):
     return dict(rows), summaries
 
 
-def judge_upgrade(result):
+def judge_script(result):
+    """The package script's output (the older copy's install.sh or the upgrade copy's upgrade.sh): exit status, the one
+    success line (install.sh: installed and healthy; upgrade.sh: upgrade complete, its snapshot named), no rollback line,
+    smoke.sh's lines exactly the imported set, no dev-d secret value."""
     lines = [str(line) for line in result.get('lines') or []]
     rows, summaries = smoke_rows(lines)
     snapshot = [m[1] for m in (COMPLETE.search(line) for line in lines) if m]
     data = [m[1] for m in (DATA_BACKUP.search(line) for line in lines) if m]
     rollback = [line for line in lines if any(word in line for word in ROLLBACK_WORDS)]
+    installed = sum(1 for line in lines if line.strip() == INSTALLED_LINE)
+    success = (len(snapshot) == 1 and not installed) if result.get('copy') == 'upgrade' else (installed == 1 and not snapshot)
     return {'exit_zero': result.get('rc') == 0 and result.get('timed_out') is False,
-            'complete': len(snapshot) == 1 and not rollback, 'rolled_back': bool(rollback),
-            'smoke_exact': rows == UPGRADE_SMOKE and summaries == [UPGRADE_SUMMARY],
+            'complete': success and not rollback, 'rolled_back': bool(rollback),
+            'smoke_exact': rows == IMPORTED_SMOKE and summaries == [IMPORTED_SUMMARY],
             'secret_free': result.get('device_secret_hits') == 0 and result.get('truncated') is False,
             'snapshot': snapshot[0] if len(snapshot) == 1 else None, 'data_backup': data[0] if len(data) == 1 else None,
             'rows': rows, 'summaries': summaries, 'seconds': result.get('seconds'), 'rc': result.get('rc'),
-            'timed_out': result.get('timed_out')}
+            'timed_out': result.get('timed_out'), 'copy': result.get('copy')}
+
+
+def unit_delta(before_lines, after_lines):
+    """What changed in the installed emqx.container between two reads of its lines (None when a read is missing)."""
+    if not isinstance(before_lines, list) or not isinstance(after_lines, list):
+        return None
+    return ops.line_delta('\n'.join(before_lines), '\n'.join(after_lines))
 
 
 def judge_restore_smoke(result):
@@ -568,7 +598,7 @@ def file_changes(before, after):
 
 
 def manifest_follows(before, after, files_after):
-    """The manifest after the upgrade == before with only emqx.container's line at the new file's SHA-256."""
+    """The manifest after a package script == before with only emqx.container's line at the new file's SHA-256."""
     if not isinstance(before, dict) or not isinstance(after, dict) or set(before) != set(after):
         return False
     keys = [k for k in before if k.endswith('/' + QUADLET)]
@@ -746,12 +776,11 @@ class Run:
         self.lock_started = time.monotonic()
         self.started_wall = int(time.time()) - 1
         self.lease_expires = datetime.fromisoformat(self.lease['expires']).timestamp()
-        self.digest = self.lease['target_device_digest']
-        self.new_ref = TARGET['name'] + '@' + self.digest
+        self.older_ref = OLDER['name'] + '@' + self.lease['older_device_digest']
         self.changed = False
-        self.facts_before = self.facts_imported = self.markers_before = None
+        self.facts_before = self.facts_imported = self.facts_older = self.markers_before = None
         self.timer_before = self.catalog_before = None
-        self.old_template = None
+        self.templates = {}                         # the unit templates the deltas are judged by
         self.backups_before = self.ha_before = None
         self.jobs_before, self.jobs_recorded = set(), False
         self.ha_owned = None
@@ -759,13 +788,11 @@ class Run:
         self.created = []
         self.capture_requested = self.captured = False
         self.staged = False
-        self.staged_quadlet = None
         self.import_requested = False
         self.chain_root = None
         self.chain = []
-        self.view_import = self.view_after = None
-        self.upgrade_started = self.upgrade_finished = False
-        self.upgrade_verdict = None
+        self.view_import = self.view_older = self.view_after = None
+        self.started_scripts, self.finished_scripts = [], []
         self.files_restored = False
         self.baseline_restored = False
         self.restored = False
@@ -810,7 +837,7 @@ class Run:
             self.note(created_backups=list(self.created))
 
     def facts(self, **request):
-        request.setdefault('refs', [OLD['ref'], ENTRANCE['ref'], TARGET['name'], self.new_ref])
+        request.setdefault('refs', [CURRENT['ref'], ENTRANCE['ref'], OLDER['name'], self.older_ref])
         request.setdefault('containers', list(CONTAINERS))
         request.setdefault('units', list(UNITS))
         return self.dev.op('facts', request, timeout=600)
@@ -840,8 +867,20 @@ class Run:
         self.ev.save(f'probe-{name}.json', summary)
         return ready, imported_view(summary)
 
-    def save_upgrade_output(self, result, name):
+    def save_output(self, result, name):
         self.ev.save(name, '\n'.join(str(line) for line in result.get('lines') or []) + '\n')
+
+    def run_script(self, copy, timeout):
+        """One copy's package script on the device (install.sh of the older copy, upgrade.sh of the upgrade copy)."""
+        self.started_scripts.append(copy)
+        self.note(started_scripts=list(self.started_scripts))     # before the call: a lost reply still stops it
+        result = self.dev.op('script', {'copy': copy, 'timeout': timeout}, timeout=timeout + 240)
+        self.finished_scripts.append(copy)
+        self.note(finished_scripts=list(self.finished_scripts))
+        self.save_output(result, f'{copy}-output.txt')
+        verdict = judge_script(result)
+        self.ev.save(f'{copy}-verdict.json', verdict)
+        return result, verdict
 
     # -------- preflight (read-only: any failure stops the run before a change)
     def step_preflight(self):
@@ -877,23 +916,25 @@ class Run:
         self.facts_before = facts
         ev.save('facts-before.json', facts)
         images, containers, quadlet, units = facts['images'], facts['containers'], facts['quadlet'], facts['units']
-        self.require('preflight: dev-d runs EMQX 5.8.9 from the old units: both Image= pins and both containers on the '
+        self.require('preflight: dev-d runs EMQX 5.8.9 from its own units: both Image= pins and both containers on the '
                      'recorded image IDs, units active',
-                     quadlet['emqx.container']['image'] == OLD['ref'] and quadlet['emqx-entrance.container']['image']
-                     == ENTRANCE['ref'] and (images.get(OLD['ref']) or {}).get('id') == OLD['image_id']
+                     quadlet['emqx.container']['image'] == CURRENT['ref'] and quadlet['emqx-entrance.container']['image']
+                     == ENTRANCE['ref'] and (images.get(CURRENT['ref']) or {}).get('id') == CURRENT['image_id']
                      and (images.get(ENTRANCE['ref']) or {}).get('id') == ENTRANCE['image_id']
-                     and containers['woow-emqx'].get('image_id') == OLD['image_id'] and containers['woow-emqx'].get('running')
+                     and containers['woow-emqx'].get('image_id') == CURRENT['image_id']
+                     and containers['woow-emqx'].get('running')
                      and containers['woow-emqx-entrance'].get('image_id') == ENTRANCE['image_id']
                      and containers['woow-emqx-entrance'].get('running')
                      and units.get('emqx.service') == ['active', 'running']
                      and units.get('emqx-entrance.service') == ['active', 'running'],
                      {'quadlet': quadlet, 'containers': containers, 'units': units})
-        new, by_digest = images.get(TARGET['name']) or {}, images.get(self.new_ref) or {}
-        self.require('preflight: the new image emqx:5.9.4 is in dev-d\'s owner store with the pinned ID and the leased '
+        older, by_digest = images.get(OLDER['name']) or {}, images.get(self.older_ref) or {}
+        self.require('preflight: the older image emqx:5.8.8 is in dev-d\'s owner store with the pinned ID and the leased '
                      'digest (tag and digest resolve)',
-                     new.get('present') and new.get('id') == TARGET['image_id'] and new.get('digest') == self.digest
-                     and TARGET['name'] in (new.get('tags') or []) and by_digest.get('exists') is True
-                     and by_digest.get('id') == TARGET['image_id'], {'image': new, 'by_digest': by_digest})
+                     older.get('present') and older.get('id') == OLDER['image_id']
+                     and older.get('digest') == self.lease['older_device_digest']
+                     and OLDER['name'] in (older.get('tags') or []) and by_digest.get('exists') is True
+                     and by_digest.get('id') == OLDER['image_id'], {'image': older, 'by_digest': by_digest})
         smoke = hashlib.sha256(self.package.show(INSTALLED_COMMIT, 'tests/smoke.sh')).hexdigest()
         self.require('preflight: dev-d\'s own package copy is ea5886c (lab-source, its smoke.sh as in git), no run folder of '
                      'this run id yet', facts.get('lab_source') == INSTALLED_COMMIT
@@ -926,39 +967,47 @@ class Run:
     # -------- capture (the first change)
     def step_capture(self):
         self.changed = self.capture_requested = True
-        self.note(schema=1, case=CASE, run_id=self.run_id, device=DEVICE, evidence=str(self.ev.dir),
+        self.note(schema=2, case=CASE, run_id=self.run_id, device=DEVICE, evidence=str(self.ev.dir),
                   driver_commit=self.lease['driver_commit'], source_commit=self.lease['source_commit'],
-                  package_commit=PACKAGE_COMMIT, target=self.new_ref, run_dir=f'~/woowbk-emqx-upgrade-{self.run_id}',
-                  capture_requested=True, staged=False, ha_record_owned=self.ha_owned, created_ha_record=None,
-                  created_backups=[], import_requested=False, import_root=None, upgrade_started=False,
-                  upgrade_finished=False, files_restored=False, baseline_restored=False, restored=False,
-                  cleaned=False, complete=False)
+                  package_commit=PACKAGE_COMMIT, older=self.older_ref, current=CURRENT['ref'],
+                  run_dir=f'~/woowbk-emqx-upgrade-{self.run_id}', capture_requested=True, staged=False,
+                  ha_record_owned=self.ha_owned, created_ha_record=None, created_backups=[], import_requested=False,
+                  import_root=None, started_scripts=[], finished_scripts=[], files_restored=False,
+                  baseline_restored=False, restored=False, cleaned=False, complete=False)
         result = self.dev.op('capture', {}, timeout=300)
         self.captured = True
         self.require('capture: dev-d\'s installed EMQX files, env file and Quadlet state are copied privately inside dev-d '
                      '(equal to the read)', result.get('files') == self.facts_before['files']
                      and result.get('dirs') == self.facts_before['dirs'], {'files': len(result.get('files') or {})})
 
-    # -------- the throwaway package copy pinned to the new version
+    # -------- the two throwaway package copies (c01c897, only their Image= lines repinned)
     def step_stage(self):
         files = self.package.files(PACKAGE_COMMIT)
-        lines = {'quadlet/emqx.container': 'Image=' + self.new_ref,
-                 'quadlet/emqx-entrance.container': 'Image=' + self.facts_before['quadlet']['emqx-entrance.container']['image']}
-        staged, report = repin(files, lines)
-        self.staged_quadlet = staged['quadlet/emqx.container'][0].decode('utf-8')
-        self.old_template = self.package.show(INSTALLED_COMMIT, 'quadlet/emqx.container').decode('utf-8')
-        self.ev.save('stage-repin.json', report)
-        self.require('stage: the package c01c897 with only the two Image= lines repinned (5.9.4 at the device digest, the '
-                     'installed entrance pin)', repin_exact(files, staged, lines) and len(staged) == len(files), report)
-        tar_b64, expected = pack(staged)
+        pins = {'older': {'quadlet/emqx.container': 'Image=' + self.older_ref,
+                          'quadlet/emqx-entrance.container': 'Image=' + ENTRANCE['ref']},
+                'upgrade': {'quadlet/emqx.container': 'Image=' + CURRENT['ref'],
+                            'quadlet/emqx-entrance.container': 'Image=' + ENTRANCE['ref']}}
+        staged, reports = {}, {}
+        for copy, lines in pins.items():
+            staged[copy], reports[copy] = repin(files, lines)
+        self.templates = {'installed': self.package.show(INSTALLED_COMMIT, 'quadlet/emqx.container').decode('utf-8'),
+                          'older': staged['older']['quadlet/emqx.container'][0].decode('utf-8'),
+                          'upgrade': staged['upgrade']['quadlet/emqx.container'][0].decode('utf-8')}
+        self.ev.save('stage-repin.json', reports)
+        self.require('stage: two copies of c01c897, each with only its Image= lines repinned (older: 5.8.8, upgrade: '
+                     '5.8.9) at dev-d\'s digests', all(repin_exact(files, staged[copy], pins[copy]) and len(staged[copy])
+                                                     == len(files) for copy in pins), reports)
         self.staged = True
         self.note(staged=True)
-        result = self.dev.op('stage', {'tar_b64': tar_b64, 'files': expected}, timeout=300)
-        self.require('stage: the throwaway package copy is in place inside dev-d, every file equal to the staged tree',
-                     result.get('equal') is True and result.get('files') == len(expected),
-                     {'files': result.get('files'), 'differ': result.get('differ')})
+        results = {}
+        for copy in pins:
+            tar_b64, expected = pack(staged[copy])
+            reply = self.dev.op('stage', {'copy': copy, 'tar_b64': tar_b64, 'files': expected}, timeout=300)
+            results[copy] = reply.get('equal') is True and reply.get('files') == len(expected)
+        self.require('stage: both copies are in place inside dev-d, every file equal to its staged tree', all(results.values()),
+                     results)
 
-    # -------- the HA import through the product (the helper calls the page sends)
+    # -------- the HA import through the product, on dev-d's own 5.8.9 (the version the product requires)
     def step_import(self):
         ev = self.ev
         if self.ha_owned:
@@ -1020,10 +1069,10 @@ class Run:
                                                                                      'data': view['data']})
         self.require('import: MQTT as HA: HA\'s users and the bootstrap user log in, retained delivered, anonymous, wrong '
                      'password and banned client refused', ha_mqtt_ok(view, src), view['mqtt'])
-        self.require('import: the broker still runs 5.8.9 from the old units (node version, container image ID, Image=)',
-                     node_version(view) == [OLD['version']] and view['node']['started']
-                     and facts['containers']['woow-emqx'].get('image_id') == OLD['image_id']
-                     and facts['quadlet']['emqx.container']['image'] == OLD['ref'], {'node': view['node']})
+        self.require('import: it ran on 5.8.9 from dev-d\'s own units (node version, container image ID, Image=)',
+                     node_version(view) == [CURRENT['version']] and view['node']['started']
+                     and facts['containers']['woow-emqx'].get('image_id') == CURRENT['image_id']
+                     and facts['quadlet']['emqx.container']['image'] == CURRENT['ref'], {'node': view['node']})
 
     def follow(self, root, timeout=JOB_WAIT):
         """The import's linked jobs from its root (at most two), each waited for; what they made is owned."""
@@ -1042,20 +1091,58 @@ class Run:
         self.note(chain_job_ids=[job.get('id') for job in records])
         return records
 
-    # -------- the package's own upgrade
+    # -------- the package's installer puts dev-d's EMQX on the older open-source 5.8.8 (the imported data stays)
+    def step_older(self):
+        ev = self.ev
+        result, verdict = self.run_script('older', INSTALL_TIMEOUT)
+        checks = [
+            ev.check('older: the older copy\'s scripts/install.sh ran as appowner, exited 0 in time and says installed and '
+                     'healthy', verdict['exit_zero'] and verdict['complete'],
+                     {'rc': verdict['rc'], 'timed_out': verdict['timed_out'], 'seconds': verdict['seconds']}),
+            ev.check('older: its smoke.sh lines are the imported set (A4 and A5/A6/A10 WARN, 11 PASS, 0 FAIL)',
+                     verdict['smoke_exact'], {'rows': verdict['rows'], 'summaries': verdict['summaries']}),
+            ev.check('older: no dev-d EMQX secret value in the installer output', verdict['secret_free'],
+                     {'hits': result.get('device_secret_hits'), 'truncated': result.get('truncated')})]
+        facts = self.facts()
+        self.facts_older = facts
+        ev.save('facts-older.json', facts)
+        containers, quadlet, units = facts['containers'], facts['quadlet'], facts['units']
+        checks.append(ev.check(
+            'older: the broker runs the 5.8.8 image ID from the older emqx.container, the entrance unchanged, units active',
+            containers['woow-emqx'].get('image_id') == OLDER['image_id'] and containers['woow-emqx'].get('running')
+            and quadlet['emqx.container']['image'] == self.older_ref
+            and containers['woow-emqx-entrance'].get('image_id') == ENTRANCE['image_id']
+            and quadlet['emqx-entrance.container']['image'] == ENTRANCE['ref']
+            and units.get('emqx.service') == ['active', 'running'] and units.get('emqx-entrance.service') == ['active', 'running'],
+            {'containers': containers, 'quadlet': quadlet, 'units': units}))
+        base = self.facts_imported
+        changed, added, removed = file_changes(base['files'], facts['files'])
+        want = ops.line_delta(pinned(self.templates['installed'], 'Image=' + CURRENT['ref']), self.templates['older'])
+        delta = unit_delta(base.get('quadlet_text'), facts.get('quadlet_text'))
+        checks.append(ev.check(
+            'older: only emqx.container (template diff ea5886c to c01c897, two pins) and the Quadlet manifest changed, '
+            'no backup folder, marker kept', changed == EXPECTED_CHANGED and not added and not removed and delta == want
+            and manifest_follows(base['manifest'], facts['manifest'], facts['files']) and facts['dirs'] == base['dirs']
+            and facts.get('backup_root') == base.get('backup_root') and facts['marker'].get('present') is True
+            and facts['marker'].get('exact') is True,
+            {'changed': changed, 'added': added, 'removed': removed, 'delta': delta, 'expected_delta': want}))
+        ready, view = self.probe('older')
+        self.view_older = view
+        checks.append(ev.check(
+            'older: the 5.8.8 broker serves exactly what 5.8.9 served after the import (accounts, ACL, data, MQTT)',
+            ready.get('ready') is True and node_version(view) == [OLDER['version']] and view['node']['started']
+            and all(view[group] == self.view_import[group] for group in ('accounts', 'data', 'mqtt')),
+            {'ready': ready, 'node': view['node'],
+             'differ': [group for group in ('accounts', 'data', 'mqtt') if view[group] != self.view_import[group]]}))
+        if not all(checks):
+            raise Failed('the older version is not in place')
+
+    # -------- the package's own upgrade back to the version it pins (5.8.9)
     def step_upgrade(self):
         ev = self.ev
-        self.upgrade_started = True
-        self.note(upgrade_started=True)     # before the call: a lost reply still stops it in the recovery
-        result = self.dev.op('upgrade', {'timeout': UPGRADE_TIMEOUT}, timeout=UPGRADE_TIMEOUT + 240)
-        self.upgrade_finished = True
-        self.note(upgrade_finished=True)
-        self.save_upgrade_output(result, 'upgrade-output.txt')
-        verdict = judge_upgrade(result)
-        self.upgrade_verdict = verdict
-        ev.save('upgrade-verdict.json', verdict)
+        result, verdict = self.run_script('upgrade', UPGRADE_TIMEOUT)
         checks = [
-            ev.check('upgrade: scripts/upgrade.sh of the 5.9.4 copy ran as appowner and exited 0 within its time',
+            ev.check('upgrade: the upgrade copy\'s scripts/upgrade.sh ran as appowner and exited 0 within its time',
                      verdict['exit_zero'], {'rc': verdict['rc'], 'timed_out': verdict['timed_out'], 'seconds': verdict['seconds']}),
             ev.check('upgrade: it was not rolled back (upgrade complete reported, no rollback line)', verdict['complete'],
                      {'rolled_back': verdict['rolled_back'], 'snapshot': verdict['snapshot']}),
@@ -1063,27 +1150,27 @@ class Run:
                      verdict['smoke_exact'], {'rows': verdict['rows'], 'summaries': verdict['summaries']}),
             ev.check('upgrade: no dev-d EMQX secret value in the upgrade output', verdict['secret_free'],
                      {'hits': result.get('device_secret_hits'), 'truncated': result.get('truncated')})]
-        facts = self.facts(deltas=[QUADLET])
+        facts = self.facts()
         ev.save('facts-upgraded.json', facts)
         containers, quadlet, units = facts['containers'], facts['quadlet'], facts['units']
+        base = self.facts_older
         checks.append(ev.check(
-            'upgrade: the broker runs the new image ID from the new emqx.container, the entrance unchanged, both units active',
-            containers['woow-emqx'].get('image_id') == TARGET['image_id'] and containers['woow-emqx'].get('running')
-            and quadlet['emqx.container']['image'] == self.new_ref
+            'upgrade: the container moved from the 5.8.8 image ID to the 5.8.9 one from the new emqx.container, units active',
+            base['containers']['woow-emqx'].get('image_id') == OLDER['image_id']
+            and containers['woow-emqx'].get('image_id') == CURRENT['image_id'] and containers['woow-emqx'].get('running')
+            and quadlet['emqx.container']['image'] == CURRENT['ref']
             and containers['woow-emqx-entrance'].get('image_id') == ENTRANCE['image_id']
-            and quadlet['emqx-entrance.container']['image'] == ENTRANCE['ref']
             and units.get('emqx.service') == ['active', 'running'] and units.get('emqx-entrance.service') == ['active', 'running'],
             {'containers': containers, 'quadlet': quadlet, 'units': units}))
-        base = self.facts_imported      # what the upgrade found (equal to before: checked after the import)
         changed, added, removed = file_changes(base['files'], facts['files'])
-        want = ops.line_delta(pinned(self.old_template, 'Image=' + OLD['ref']), self.staged_quadlet)
-        delta = (facts.get('deltas') or {}).get(QUADLET)
+        want = ops.line_delta(self.templates['older'], self.templates['upgrade'])
+        delta = unit_delta(base.get('quadlet_text'), facts.get('quadlet_text'))
         checks.append(ev.check(
-            'upgrade: only emqx.container (Image= and HealthCmd lines, the template diff) and the Quadlet manifest changed, '
-            'all else byte for byte', changed == EXPECTED_CHANGED and not added and not removed
-            and delta == want and manifest_follows(base['manifest'], facts['manifest'], facts['files'])
-            and facts['dirs'] == base['dirs'],
-            {'changed': changed, 'added': added, 'removed': removed, 'delta': delta, 'expected_delta': want}))
+            'upgrade: only emqx.container\'s Image= line (5.8.8 to 5.8.9) and the Quadlet manifest changed, all else byte for byte',
+            changed == EXPECTED_CHANGED and not added and not removed and delta == want
+            and want == {'removed': ['Image=' + self.older_ref], 'added': ['Image=' + CURRENT['ref']]}
+            and manifest_follows(base['manifest'], facts['manifest'], facts['files']) and facts['dirs'] == base['dirs'],
+            {'changed': changed, 'added': added, 'removed': removed, 'delta': delta}))
         before = {row[0] for row in base.get('backup_root') or []}
         now = {row[0]: row[1] for row in facts.get('backup_root') or []}
         new = sorted(set(now) - before)
@@ -1100,24 +1187,24 @@ class Run:
     def step_after_upgrade(self):
         ready, view = self.probe('upgraded')
         self.view_after = view
-        before = self.view_import
+        before = self.view_older
         names = lambda v: [n[0] for n in v['node'].get('nodes') or [] if isinstance(n, list) and n]   # noqa: E731
         checks = [
-            self.ev.check('after upgrade: the node reports EMQX 5.9.4 (was 5.8.9), the same node name, started',
-                          ready.get('ready') is True and node_version(view) == [TARGET['version']]
-                          and node_version(before) == [OLD['version']] and names(view) == names(before) == [NODE]
+            self.ev.check('after upgrade: the node reports EMQX 5.8.9 (was 5.8.8), the same node name, started',
+                          ready.get('ready') is True and node_version(view) == [CURRENT['version']]
+                          and node_version(before) == [OLDER['version']] and names(view) == names(before) == [NODE]
                           and view['node']['started'], {'ready': ready, 'node': view['node']}),
             self.ev.check('after upgrade: Dashboard and MQTT accounts, authenticators, authorization settings, sources and ACL '
-                          'rows exactly as after the import', view['accounts'] == before['accounts'],
+                          'rows exactly as before it', view['accounts'] == before['accounts'],
                           {'after': view['accounts'], 'before': before['accounts']}),
             self.ev.check('after upgrade: retained messages, rules, connectors, actions, banned clients and API keys exactly as '
-                          'after the import', view['data'] == before['data'], {'after': view['data'], 'before': before['data']}),
-            self.ev.check('after upgrade: MQTT behaves as after the import (logins, retained delivery, ACL deny, refusals)',
+                          'before it', view['data'] == before['data'], {'after': view['data'], 'before': before['data']}),
+            self.ev.check('after upgrade: MQTT behaves as before it (logins, retained delivery, ACL deny, refusals)',
                           view['mqtt'] == before['mqtt'], {'after': view['mqtt'], 'before': before['mqtt']})]
         if not all(checks):
             raise Failed('the upgraded broker does not serve the imported data')
 
-    # -------- recovery: whatever stopped the run, dev-d's own EMQX back on the old version
+    # -------- recovery: whatever stopped the run, dev-d's own EMQX back on its own 5.8.9 units and data
     def new_jobs(self):
         return [row for row in self.ok('jobs').get('jobs') or [] if row.get('id') not in self.jobs_before]
 
@@ -1137,21 +1224,23 @@ class Run:
 
     def recover(self):
         ev = self.ev
-        if self.upgrade_started:
+        if self.started_scripts:
             try:
-                stop = self.dev.op('stop-upgrade', {}, timeout=180)
+                stop = self.dev.op('stop-scripts', {}, timeout=180)
                 ok = stop.get('running') is False
             except (Failed, OSError, subprocess.TimeoutExpired, ValueError) as error:
                 stop, ok = {'error': type(error).__name__}, False
-            ev.check('recovery: no upgrade process of this run is running (stopped when a stop came during it)', ok, stop)
+            ev.check('recovery: no package script of this run is running (stopped when a stop came during it)', ok, stop)
             if not ok:
                 self.settled = False
                 return
-            if not self.upgrade_finished:
+            for copy in self.started_scripts:
+                if copy in self.finished_scripts:
+                    continue
                 try:
-                    self.save_upgrade_output(self.dev.op('upgrade-log', {}, timeout=180), 'upgrade-output-recovered.txt')
+                    self.save_output(self.dev.op('script-log', {'copy': copy}, timeout=180), f'{copy}-output-recovered.txt')
                 except (Failed, OSError, subprocess.TimeoutExpired, ValueError):
-                    ev.log('the interrupted upgrade left no readable output')
+                    ev.log(f'the interrupted {copy} script left no readable output')
         if self.jobs_recorded:
             try:
                 self.settle()
@@ -1163,7 +1252,7 @@ class Run:
                 self.settled = False
                 return
         self.restore_files()
-        if self.import_requested or self.upgrade_started:
+        if self.import_requested or self.started_scripts:
             self.restore_baseline()
         self.verify_restored()
 
@@ -1189,7 +1278,7 @@ class Run:
         self.ev.check(name, ok, detail)
 
     def restore_baseline(self):
-        name = 'recovery: the baseline restore of dev-d\'s EMQX succeeded with the 11-19 kit (old units, not rolled back)'
+        name = 'recovery: the baseline restore of dev-d\'s EMQX succeeded with the 11-19 kit (own 5.8.9 units, not rolled back)'
         try:
             pre = self.ok('inspect', {'backup_id': BASELINE, 'key': self.kit()})
             if not (pre.get('ok') is True and pe.baseline_ready(pre.get('preflight') or {})):
@@ -1219,7 +1308,7 @@ class Run:
             ev.save('facts-restored.json', facts)
             before = self.facts_before
             results.append(ev.check(
-                'recovery: dev-d runs EMQX 5.8.9 again from the old units (container image IDs, Image= lines, units as before)',
+                'recovery: dev-d runs EMQX 5.8.9 again from its own units (container image IDs, Image= lines, units as before)',
                 ready.get('ready') is True and facts['containers'] == before['containers']
                 and facts['quadlet'] == before['quadlet'] and facts['units'] == before['units'],
                 {'ready': ready, 'containers': facts['containers'], 'units': facts['units']}))
@@ -1229,14 +1318,14 @@ class Run:
                                     markers == self.markers_before and facts['marker'].get('present') is False,
                                     {'markers': sorted(b1.marker_names(markers)), 'marker': facts['marker']}))
             smoke = self.dev.op('smoke', {'timeout': SMOKE_TIMEOUT}, timeout=SMOKE_TIMEOUT + 120)
-            self.save_upgrade_output(smoke, 'smoke-restored.txt')
+            self.save_output(smoke, 'smoke-restored.txt')
             passed, detail = judge_restore_smoke(smoke)
             results.append(ev.check('recovery: dev-d\'s own package smoke.sh --quick passes (10 PASS, 0 FAIL, 0 WARN)',
                                     passed, detail))
         except (Failed, OSError, subprocess.TimeoutExpired, ValueError, KeyError) as error:
             results.append(ev.check(f'recovery: the restored state could not be read ({type(error).__name__})', False,
                                     str(error)[:200]))
-        data_needed = self.import_requested or self.upgrade_started
+        data_needed = self.import_requested or bool(self.started_scripts)
         self.restored = (self.files_restored and (self.baseline_restored or not data_needed) and len(results) == 3
                          and all(results))
         self.note(restored=self.restored)
@@ -1278,7 +1367,7 @@ class Run:
                       {'left': self.created_ha})
 
     def cleanup_device(self):
-        name = ('cleanup: the package backup folders of this run and the private run folder (copies, throwaway package) are '
+        name = ('cleanup: the package backup folders of this run and the private run folder (copies, throwaway packages) are '
                 'removed inside dev-d')
         if not self.restored or not self.settled:
             self.ev.check(name, False, {'kept_for_the_coordinator': f'~/woowbk-emqx-upgrade-{self.run_id}'})
@@ -1337,8 +1426,8 @@ class Run:
                  {'new': sorted(set(now) - set(self.backups_before or [])),
                   'gone': sorted(set(self.backups_before or []) - set(now))})
         facts = self.facts()
-        keys = ('image_list', 'container_names', 'secrets', 'volumes', 'units', 'containers', 'quadlet', 'files', 'dirs',
-                'manifest', 'package', 'lab_source', 'backup_root', 'backup_parent')
+        keys = ('image_list', 'container_names', 'secrets', 'volumes', 'units', 'containers', 'quadlet', 'quadlet_text',
+                'files', 'dirs', 'manifest', 'package', 'lab_source', 'backup_root', 'backup_parent')
         differ = [key for key in keys if facts.get(key) != self.facts_before.get(key)]
         timer = self.dev.timer()
         ev.check('after: images, containers, EMQX secrets and volumes, units, EMQX files, dev-d\'s package copy and timer as '
@@ -1357,7 +1446,8 @@ def run_all(run):
     """The forward phases, then -- whatever stopped them -- recovery, cleanup, leak scans and the after checks."""
     ev = run.ev
     steps = (('preflight', run.step_preflight), ('capture', run.step_capture), ('stage', run.step_stage),
-             ('import', run.step_import), ('upgrade', run.step_upgrade), ('after upgrade', run.step_after_upgrade))
+             ('import', run.step_import), ('older', run.step_older), ('upgrade', run.step_upgrade),
+             ('after upgrade', run.step_after_upgrade))
     failed = None
     try:
         for name, step in steps:
@@ -1389,10 +1479,11 @@ def self_check():
         compile(program, '<device program>', 'exec')
     assert len(DEVICE_PROGRAM.encode()) < 120 * 1024          # one argv string (MAX_ARG_STRLEN 128 KiB)
     assert HA_ID == 'ha-0a53e93888209316040a' and SHA.fullmatch(FIXTURE_SHA)
-    assert all(SHA.fullmatch(x) for x in (TARGET['image_id'], OLD['image_id'], ENTRANCE['image_id']))
-    assert all(DIGEST.fullmatch(x) for x in (TARGET['index_digest'], TARGET['amd64_manifest']))
+    assert all(SHA.fullmatch(x) for x in (OLDER['image_id'], CURRENT['image_id'], ENTRANCE['image_id']))
+    assert all(DIGEST.fullmatch(x) for x in (OLDER['index_digest'], OLDER['amd64_manifest']))
+    assert OLDER['name'].startswith('docker.io/emqx/emqx:5.8.') and CURRENT['ref'].startswith('docker.io/emqx/emqx:5.8.9@')
     assert COMMIT.fullmatch(PACKAGE_COMMIT) and COMMIT.fullmatch(INSTALLED_COMMIT)
-    assert sum(UPGRADE_SMOKE.values()) == 13 and sum(RESTORE_SMOKE.values()) == 10
+    assert sum(IMPORTED_SMOKE.values()) == 13 and sum(RESTORE_SMOKE.values()) == 10
     assert all(len(label(name)) == len(name) for name in (
         'upgrade: its smoke.sh lines are exactly the imported set: A4 and A5/A6/A10 WARN, 11 PASS, 0 FAIL',
         'recovery: dev-d\'s own package smoke.sh --quick passes (10 PASS, 0 FAIL, 0 WARN)'))
@@ -1460,7 +1551,7 @@ def main(argv=None):
                                   source_commit=git_text(args.source, 'rev-parse', 'HEAD'), package=args.package.resolve(),
                                   receipt_sha=hashlib.sha256(raw).hexdigest() if raw else None,
                                   run_id=os.urandom(6).hex(), minutes=args.minutes)
-        template['target_device_digest'] = doc.get('device_digest')
+        template['older_device_digest'] = doc.get('device_digest')
         print(json.dumps(template, indent=1))
         return 0
     if not args.run:
@@ -1493,7 +1584,7 @@ def main(argv=None):
     try:
         ev = Ev(secrets)
         ev.save('run.json', {'driver_commit': lease['driver_commit'], 'source_commit': lease['source_commit'],
-                             'package_commit': PACKAGE_COMMIT, 'target': TARGET, 'run_id': lease['run_id'],
+                             'package_commit': PACKAGE_COMMIT, 'older': OLDER, 'current': CURRENT, 'run_id': lease['run_id'],
                              'lock_waited_s': waited, 'commercial_acceptance': 'not-complete'})
         run = Run(args, ev, LabDevice(secrets, lease['run_id']))
         try:

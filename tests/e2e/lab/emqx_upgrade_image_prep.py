@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""EMQX upgrade test (emqx_upgrade_after_import.py): the pinned new EMQX image into dev-d's owner store, while dev-d keeps
-network none. Host side; only ~/.woowbk-lab/bin/labpodman (the separate LAB store), never the host's own podman store.
+"""EMQX upgrade test (emqx_upgrade_after_import.py): the pinned OLDER open-source EMQX image (docker.io/emqx/emqx:5.8.8,
+Apache-2.0) into dev-d's owner store, while dev-d keeps network none (the version the package pins today, 5.8.9, is there
+already). Host side; only ~/.woowbk-lab/bin/labpodman (the separate LAB store), never the host's own podman store.
 
   python3 -B -I tests/e2e/lab/emqx_upgrade_image_prep.py                plan: the pinned target and the steps (no network,
                                                                         no lab access)
@@ -11,7 +12,7 @@ network none. Host side; only ~/.woowbk-lab/bin/labpodman (the separate LAB stor
       python3 -B -I tests/e2e/lab/emqx_upgrade_image_prep.py --stream   LAB store -> dev-d's owner store under dev-d's lock:
                                                                         `labpodman save --format docker-archive <image ID>`
                                                                         piped into `woowbk-owner podman load` inside dev-d,
-                                                                        then `podman tag <ID> docker.io/emqx/emqx:5.9.4`;
+                                                                        then `podman tag <ID> docker.io/emqx/emqx:5.8.8`;
                                                                         checks ID, tag, digest, `podman image exists
                                                                         <tag>@<digest>`; writes the private receipt
                                                                         ~/.woowbk-lab/run/emqx_upgrade_image_prep.json that
@@ -45,12 +46,12 @@ DEVICE = 'woowbk-dev-d'
 OWNER = '/usr/local/bin/woowbk-owner'
 LOCK = '/tmp/woowbk-dev-d-mutation.lock'
 RECEIPT = LAB / 'run' / 'emqx_upgrade_image_prep.json'
-TAG = 'docker.io/emqx/emqx:5.9.4'
-INDEX_DIGEST = 'sha256:37a3bf1ad11b3d7f37280dd3bef234e4dc7b5282d0ca2d562b6e1827de757e12'
-AMD64_MANIFEST = 'sha256:0bdd51124b81ca32911d5b11bf262389edc6829e7560e7be569e07d1c4c248e1'
-IMAGE_ID = 'a83299181df64b6f31cb05caf79b5f707f977cb88b00181f2852dc084c8ce617'
+TAG = 'docker.io/emqx/emqx:5.8.8'          # open-source edition, Apache-2.0 (image labels), OTP 26.2.5.14-1 like 5.8.9
+INDEX_DIGEST = 'sha256:4593b6e30196754779fa14483332cb0be56c233f1c8a387b1308bec4337c0144'
+AMD64_MANIFEST = 'sha256:2bbadcd6ebdf1e2d032bdd8149c9615867ed25f32b1a09ec5bd92ddcf159e1aa'
+IMAGE_ID = '5a96e36027e748efeb6fef8d05ea6d9b3036810540fd7286227b2e0f951a447f'
 PULL_REF = TAG + '@' + INDEX_DIGEST
-COMPRESSED_BYTES = 129_619_093            # 7 gzip layers of the amd64 manifest (123.6 MiB), read 2026-11-28
+COMPRESSED_BYTES = 108_392_173            # 6 gzip layers of the amd64 manifest (103.4 MiB), read 2026-11-28
 FLOOR = 13 * 1024 ** 3                    # the team keeps >= 12 GiB free on the host (+1 GiB margin)
 PEAK = 3 * 1024 ** 3                      # pull + save | load (podman copies stdin, keeps blob copies): generous
 WRAPPER_MARK = '--root "$HOME/.woowbk-lab/storage"'
