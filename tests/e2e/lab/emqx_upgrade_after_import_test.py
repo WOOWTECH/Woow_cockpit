@@ -102,7 +102,9 @@ def upgrade_lines(rolled_back=False):
     lines = ['upgrade.sh: podman 4.9.3 (>= 4.9)', 'backup.sh: exported the broker data',
              'upgrade.sh: pre-upgrade data backup: /home/appowner/.local/share/woow-backups/emqx/backup-20261128-150102',
              'upgrade.sh: saved the installed units in /home/appowner/.local/share/woow-backups/emqx/upgrade-20261128-150101/units',
-             'install.sh: changed: emqx.container', 'install.sh: restarting (changed): emqx.service'] + SMOKE_IMPORTED[:-1]
+             'install.sh: changed: emqx.container', 'install.sh: restarting (changed): emqx.service',
+             'install.sh: woow-emqx is healthy (active check)', 'emqx is installed and healthy.',
+             '  Dashboard  http://127.0.0.1:18083/   user admin'] + SMOKE_IMPORTED[:-1]   # install.sh --no-smoke, then smoke.sh
     if rolled_back:
         lines[-6] = 'FAIL A9 MQTT WebSocket upgrade returned HTTP 400'
         return lines + ['10 passed, 1 failed, 2 warnings',
@@ -989,6 +991,24 @@ class FakeRun:
         if argv[:3] == ['podman', 'healthcheck', 'run']:
             return 0, b''
         raise AssertionError(argv)
+
+
+class UpgradeOutputTests(unittest.TestCase):
+    def test_upgrade_sh_output_holds_install_sh_s_last_words_once_and_its_own_completion(self):
+        # dev-d, 2026-11-28 (emqx-upgrade-02): the real upgrade.sh printed install.sh's 'emqx is installed and healthy.'
+        # (it runs install.sh --no-smoke first) and then 'upgrade complete (unit snapshot: ...)'.
+        ok = drv.judge_script({'copy': 'upgrade', 'rc': 0, 'timed_out': False, 'lines': upgrade_lines(),
+                               'device_secret_hits': 0, 'truncated': False})
+        self.assertTrue(ok['complete'] and not ok['rolled_back'] and ok['smoke_exact'], ok)
+        self.assertEqual(ok['snapshot'], 'upgrade-20261128-150101')
+        missing = [line for line in upgrade_lines() if line != 'emqx is installed and healthy.']
+        twice = upgrade_lines() + ['emqx is installed and healthy.']
+        for label, lines in (('no install line', missing), ('install line twice', twice),
+                             ('rolled back', upgrade_lines(rolled_back=True))):
+            with self.subTest(case=label):
+                verdict = drv.judge_script({'copy': 'upgrade', 'rc': 0, 'timed_out': False, 'lines': lines,
+                                            'device_secret_hits': 0, 'truncated': False})
+                self.assertFalse(verdict['complete'], verdict)
 
 
 class MarkerTests(unittest.TestCase):

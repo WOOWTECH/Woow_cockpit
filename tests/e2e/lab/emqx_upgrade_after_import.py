@@ -508,7 +508,9 @@ def judge_script(result):
     data = [m[1] for m in (DATA_BACKUP.search(line) for line in lines) if m]
     rollback = [line for line in lines if any(word in line for word in ROLLBACK_WORDS)]
     installed = sum(1 for line in lines if line.strip() == INSTALLED_LINE)
-    success = (len(snapshot) == 1 and not installed) if result.get('copy') == 'upgrade' else (installed == 1 and not snapshot)
+    # upgrade.sh runs install.sh --no-smoke first, so install.sh's last words appear once in its output too (dev-d,
+    # 2026-11-28 emqx-upgrade-02: line 26 'emqx is installed and healthy.', line 46 'upgrade complete (unit snapshot: ...)').
+    success = (len(snapshot) == 1 and installed == 1) if result.get('copy') == 'upgrade' else (installed == 1 and not snapshot)
     return {'exit_zero': result.get('rc') == 0 and result.get('timed_out') is False,
             'complete': success and not rollback, 'rolled_back': bool(rollback),
             'smoke_exact': rows == IMPORTED_SMOKE and summaries == [IMPORTED_SUMMARY],
