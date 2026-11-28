@@ -42,6 +42,9 @@ SECRETS = ('unit-salt-secret-0123', 'unit-secret-value-0123', 'unit-dbpassword-s
            'alice-secret-role', 'weird-name-secret')
 ROLE_MISSING = ('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: '
                 'FATAL:  role "{}" does not exist\n')
+# The first S5-A build's builder (run at 4163367c; in this history as the cherry-pick c46f9a31, the same bytes).
+FIRST_BUILDER_IN_HISTORY = 'c46f9a317e47882ed962d3bf30ed0598906bc8a5'
+FIRST_BUILDER_SHA256 = 'd55f2433a1a6419ee932434cb086bd853f97e2bba02bce26d583d012c5abe8b6'
 # What the product (with 7a2023e8) says for a missing postgres role: S5-B's stop text with the account kind's sentence.
 NOW_STOP = diag.S5B_STOP.replace('資料庫還沒有準備好（還在啟動，或沒有在執行）。', podman.SENTENCES['role-missing'])
 CONTROLDATA = b"""pg_control version number:            1300
@@ -368,8 +371,15 @@ def run_worker(device, member=None, **request):
 
 class ProductMechanismTests(unittest.TestCase):
     def test_the_first_build_made_superuser_nextcloud_the_product_opens_as_postgres_the_rebuild_uses_postgres(self):
-        first = subprocess.check_output(['git', '-C', str(REPO), 'show',
-                                         s5b.HISTORY.source_commit + ':tests/e2e/lab/focus_nextcloud_r6_s5.py'], text=True)
+        # The first build ran at 4163367c, which reached this history as the cherry-pick c46f9a31 (the builder file is
+        # byte for byte the same); a checkout without 4163367c (CI) reads that copy, bound by the builder's SHA-256.
+        name = 'tests/e2e/lab/focus_nextcloud_r6_s5.py'
+        shown = subprocess.run(['git', '-C', str(REPO), 'show', s5b.HISTORY.source_commit + ':' + name], capture_output=True)
+        if shown.returncode:
+            shown = subprocess.run(['git', '-C', str(REPO), 'show', FIRST_BUILDER_IN_HISTORY + ':' + name], capture_output=True)
+        self.assertEqual(shown.returncode, 0)
+        self.assertEqual(hashlib.sha256(shown.stdout).hexdigest(), FIRST_BUILDER_SHA256)
+        first = shown.stdout.decode()
         self.assertIn("'--env=POSTGRES_USER=" + diag.S5A_POSTGRES_USER + "'", first)   # the first build (history)
         self.assertEqual(inspect.signature(ha_odoo.Cluster).parameters['superuser'].default, 'postgres')
         self.assertIn("'pg_isready', '-q', '-U', self.superuser", inspect.getsource(ha_odoo.Cluster.wait_ready))
