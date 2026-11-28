@@ -25,7 +25,6 @@ from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-BASE = 'a1ca42b2edecfaef99ea8d7a1db93e8acd0d59ac'
 HA_KEY = 'GENERATED-HA-KEY-0123456789abcdef'
 PASSWORD = 'generated-cockpit-pass-3333'
 USER_PW = 'generated-noshare-user-pass-5555'
@@ -827,15 +826,20 @@ class LeaseAndCommandLineTests(unittest.TestCase):
 
 
 class UnchangedTests(unittest.TestCase):
-    def test_nextcloud_flow_and_the_r6_modules_are_byte_identical_to_the_base(self):
-        names = ['nextcloud_flow.py'] + sorted(q.name for q in HERE.glob('focus_nextcloud_r6*.py')
-                                               if q.name not in ('focus_nextcloud_r6_page.py', 'focus_nextcloud_r6_page_test.py'))
-        for name in names:
-            shown = subprocess.run(['git', '-C', str(REPO), 'show', f'{BASE}:tests/e2e/lab/{name}'], capture_output=True,
-                                   timeout=60)
-            if shown.returncode:
-                self.skipTest(f'base commit {BASE} is not in this checkout')
-            self.assertEqual(sha(shown.stdout), sha(HERE / name), name)
+    def test_nextcloud_flow_and_the_r6_modules_are_unchanged_by_the_page_case(self):
+        # The commit that added this case (cherry-picked or merged, whatever its hash) changed no R6 module and not
+        # nextcloud_flow.py. Later R6 changes are their own commits (S5-B's optional hooks keep R6's defaults).
+        added = subprocess.run(['git', '-C', str(REPO), 'log', '--diff-filter=A', '--format=%H', '--',
+                                'tests/e2e/lab/focus_nextcloud_r6_page.py'], capture_output=True, text=True, timeout=60)
+        commits = added.stdout.split()
+        if added.returncode or not commits:
+            self.skipTest('the commit that added the page case is not in this checkout')
+        changed = subprocess.run(['git', '-C', str(REPO), 'diff-tree', '--no-commit-id', '--name-only', '-r', commits[-1]],
+                                 capture_output=True, text=True, timeout=60).stdout.split()
+        r6 = [n for n in changed if n == 'tests/e2e/lab/nextcloud_flow.py'
+              or (n.startswith('tests/e2e/lab/focus_nextcloud_r6') and not n.startswith('tests/e2e/lab/focus_nextcloud_r6_page'))]
+        self.assertTrue(changed)
+        self.assertEqual(r6, [])
 
     def test_the_device_program_compiles_and_every_label_is_fixed_vocabulary(self):
         p = load_page('r6_page_compile')

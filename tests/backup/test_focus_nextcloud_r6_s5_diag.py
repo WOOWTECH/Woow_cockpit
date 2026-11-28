@@ -42,6 +42,8 @@ SECRETS = ('unit-salt-secret-0123', 'unit-secret-value-0123', 'unit-dbpassword-s
            'alice-secret-role', 'weird-name-secret')
 ROLE_MISSING = ('psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: '
                 'FATAL:  role "{}" does not exist\n')
+# What the product (with 7a2023e8) says for a missing postgres role: S5-B's stop text with the account kind's sentence.
+NOW_STOP = diag.S5B_STOP.replace('資料庫還沒有準備好（還在啟動，或沒有在執行）。', podman.SENTENCES['role-missing'])
 CONTROLDATA = b"""pg_control version number:            1300
 Catalog version number:               202307071
 Database system identifier:           7441234567890123456
@@ -376,9 +378,11 @@ class ProductMechanismTests(unittest.TestCase):
         self.assertIn('--env=POSTGRES_USER=postgres', args)                                # the rebuild
         self.assertEqual(s5.FIXTURE_SHAPE['superuser'], 'postgres')
 
-    def test_a_missing_postgres_role_is_filed_as_not_ready_with_exactly_the_s5b_stop_text(self):
+    def test_a_missing_postgres_role_is_told_as_such_since_7a2023e8(self):
+        # b058df27 (S5-B attempt 01, the diagnosis) filed this as db-not-ready, word for word S5B_STOP: libpq's
+        # 'connection to server on socket' needle came first. Since 7a2023e8 the account kinds come first.
         stderr = ROLE_MISSING.format('postgres').encode()
-        self.assertEqual(podman.classify(stderr, 2)[0], 'db-not-ready')   # the needle before role-missing wins
+        self.assertEqual(podman.classify(stderr, 2)[0], 'role-missing')
         device = FakeDevice()
         runner = podman.OwnerRunner('appowner', runner=device, user_lookup=lookup)    # the engine's own (runuser) form
         with tempctr.TempObjects(runner, JOB) as tmp:
@@ -387,8 +391,9 @@ class ProductMechanismTests(unittest.TestCase):
                                                ha_nextcloud.Pinned(tmp, 'hapg'), PGVECTOR)   # pg_isready: 0
             with self.assertRaises(podman.CommandError) as caught:
                 ha_nextcloud.ha_database(cluster, 'nextcloud')
-        self.assertEqual(caught.exception.message, diag.S5B_STOP)
-        self.assertEqual((caught.exception.returncode, caught.exception.reason), (2, 'db-not-ready'))
+        self.assertEqual(caught.exception.message, NOW_STOP)
+        self.assertNotEqual(caught.exception.message, diag.S5B_STOP)
+        self.assertEqual((caught.exception.returncode, caught.exception.reason), (2, 'role-missing'))
         self.assertEqual(device.prefixes[0][0], podman.RUNUSER)
 
 
@@ -592,8 +597,8 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual([a['at'] for a in attempts], list(diag.SCHEDULE))
         for attempt in attempts:
             self.assertFalse(attempt['ok'])
-            self.assertTrue(attempt['error']['equals_s5b_stop'])
-            self.assertEqual(attempt['error']['reason'], 'db-not-ready')
+            self.assertFalse(attempt['error']['equals_s5b_stop'])   # since 7a2023e8: the account kind, not 'not ready'
+            self.assertEqual(attempt['error']['reason'], 'role-missing')
             call = attempt['failed_call']
             self.assertEqual((call['program'], call['user'], call['database'], call['sql'], call['pinned'], call['rc']),
                              ('psql', 'postgres', 'postgres', 'databases', True, 2))
@@ -866,7 +871,7 @@ class HostTests(unittest.TestCase):
         self.assertEqual(rc, 0, line)
         self.assertEqual((line['status'], line['verdict']), ('diagnosed', 'missing-postgres-role'))
         self.assertTrue(line['device_unchanged'] and line['proof_root_unchanged'] and line['stream_intact'])
-        self.assertTrue(line['first_attempt_equals_s5b_stop'])
+        self.assertFalse(line['first_attempt_equals_s5b_stop'])   # since 7a2023e8 the product names the missing role
         self.assertEqual(line['role_probe'], {'connected_as': 'config-dbuser', 'bootstrap_superuser': 'nextcloud',
                                               'postgres_role': False, 'postgres_database': True})
         self.assertEqual(line['engine_relevant_differs_from_s5b_product'], [])
