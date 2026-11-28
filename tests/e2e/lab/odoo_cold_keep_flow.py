@@ -1180,6 +1180,7 @@ def run_all(run):
             ev.log(f'== {name}')
             step()
     except (Exception, Stopped) as error:   # noqa: BLE001 - any stop (Failed, a signal, an error): the recovery runs
+        SIGNALS['recovering'] = True   # a second signal from here on is counted, never raised
         failed = error
         ev.check(f'run stopped in a step ({type(error).__name__})', False, str(error)[:300])
     finally:
