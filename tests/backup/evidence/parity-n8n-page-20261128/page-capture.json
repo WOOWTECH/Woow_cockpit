@@ -1,0 +1,10 @@
+{
+ "source_commit": "d500e379f4df7cd2a166e79f3f99329c51769348",
+ "scope": "n8n-x86-page",
+ "exit": 0,
+ "elapsed_seconds": 435.2,
+ "stdout_sha256": "a6c31eb43955252612e24ef03276d88b57bb3b0aad6be5669447c85e473a1f67",
+ "fixed_status": [],
+ "stderr_bytes_not_published": 0,
+ "commercial_acceptance": "not-complete"
+}
