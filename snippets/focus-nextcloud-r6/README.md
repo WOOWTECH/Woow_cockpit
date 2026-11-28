@@ -210,9 +210,35 @@ the inactive states and enablement. Whole-case launcher/wake/source deployment
 must be reviewed together before that second lease; no command in this paragraph
 has been run.
 
-**Skipped symlink/.htaccess and genuine server encryption are not ready to run.**
+**2026-11-28: skipped entries PASSED 140/140 on dev-e** (attempt 02, driver `3b4d8823`, frozen product `b058df27`):
+the streamed derivative of the original full-share backup (`focus_nextcloud_r6_skipped_derive.py`: one relative symlink,
+one nested `.htaccess` with `Require all granted` and a control file in a folder no user owns; the share member
+re-encrypted with the same HA key, the original gzip byte for byte after the added segment; 4,467,947,520 bytes,
+sha256 `757ab01f...`; never materialized, streamed from the host into dev-e's upload file) gave exactly the two lines
+`nextcloud.symlinks-skipped` and `nextcloud.htaccess-skipped`; the unacknowledged conversion was refused at the link
+line, the link's key alone at the `.htaccess` line, both keys imported; after the import, a restart and the automatic
+rollback the skipped entries were absent, the control file byte for byte, the device's protection file exact and the
+derived folder 403/404; dev-e returned exactly. Attempt 01 stopped at a judgement that read the named line from
+`error.details` (job records keep only code and message; fixed in `3b4d8823`). The derivative is not a HAOS export
+(HA never writes a multi-segment gzip member; the product's reader accepts it). Results:
+`tests/backup/evidence/focus-nextcloud-r6-20261127/skipped-entries-20261128-*.json`.
+
+(History, before 2026-11-28:) **Skipped symlink/.htaccess and genuine server encryption are not ready to run.**
 The candidate explicitly refuses those cases pending separately reviewed fixture
 construction/oracles. This is a recorded remaining gate, not acceptance evidence.
+
+**2026-11-28: skipped entries prepared as code, NOT run** (`focus_nextcloud_r6_skipped_derive.py` builds the
+derivative, `focus_nextcloud_r6_skipped.py` is the leased case on R6's machinery, offline tests
+`tests/backup/test_focus_nextcloud_r6_skipped.py`). The three reviewed additions sit in a folder of their own below
+HA's data directory (`woowbk-r6-skipped-entries/`: `control.txt`, `.htaccess` with `Require all granted`,
+`control-link.txt -> control.txt`), so no user's file list, files:scan or manifest changes. The share member is
+re-encrypted (SecureTar v3, the same HA key and root salt) around a plaintext that is the reviewed gzip member followed by
+the original gzip stream byte for byte. `--plan` (host only, no lease) streams the derivative into a hash and back
+through the product's own readers and writes the private provenance; the leased run makes the same bytes again straight
+into dev-e's upload file through R6's in-device writer (nothing materialised). Expected check: exactly
+`nextcloud.symlinks-skipped` [`nextcloud/woowbk-r6-skipped-entries/control-link.txt`] and
+`nextcloud.htaccess-skipped` [`woowbk-r6-skipped-entries/.htaccess`]; two refused conversions (none, the link key only),
+then both keys. A passing run prints 140 fixed lines (fullshare05's 118 plus 22).
 
 For skipped entries, use a streamed derivative of the original share fixture:
 add one harmless relative symlink, one nested `.htaccess` with an unsafe allow

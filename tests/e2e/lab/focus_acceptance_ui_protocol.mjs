@@ -62,6 +62,17 @@ const STAGE = /^[a-z0-9-]{1,40}$/;
 const CHECK_TEXT = /^[A-Za-z0-9 ,()/:'<>.=_-]{3,140}$/;   // the capture's fixed status vocabulary
 export const CONFIRMATION_KEY = /^[a-z0-9.-]{4,70}:[0-9a-f]{16}$/;   // haissues.KEY_RE, the page's HA_ISSUE_KEY_RE
 const SHARED = '_shared';
+// The page's three bounded waits (focus_page_bridge.py WAIT_NAMES): the upload with its upload-finish, each check, the
+// import's result. Without `waits_ms` the page waits 10, 10 and 20 minutes, exactly as before; a large backup (the 4.47 GB
+// Nextcloud full share) names its own, each from one minute up to an hour.
+export const DEFAULT_WAITS_MS = Object.freeze({ upload: 10 * 60 * 1000, check: 10 * 60 * 1000, result: 20 * 60 * 1000 });
+const WAIT_MIN_MS = 60 * 1000;
+const WAIT_MAX_MS = 60 * 60 * 1000;
+export function validWaits(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify(Object.keys(DEFAULT_WAITS_MS).sort())
+    && Object.values(value).every(ms => Number.isInteger(ms) && ms >= WAIT_MIN_MS && ms <= WAIT_MAX_MS);
+}
 
 export function pageExpectations(config) {
   const source = config !== null && typeof config === 'object' ? config : {};
@@ -91,13 +102,17 @@ export function pageExpectations(config) {
       || typeof value.device !== 'string' || !DEVICE.test(value.device)
       // An unencrypted HA backup (`encrypted: false`): no key step and no key anywhere. Choices are judged exactly only.
       || (source.encrypted !== undefined && typeof source.encrypted !== 'boolean')
-      || (source.choices !== undefined && (value.exact !== true || !validChoices(source.choices, value.importable))))
+      || (source.choices !== undefined && (value.exact !== true || !validChoices(source.choices, value.importable)))
+      || (source.waits_ms !== undefined && !validWaits(source.waits_ms)))
     throw new Error('invalid page expectations');
-  // `encrypted` and `choices` appear only when the config carries them: an earlier config's expectations stay as they were.
+  // `encrypted`, `choices` and `waits_ms` appear only when the config carries them: an earlier config's expectations stay
+  // as they were.
   const extra = {};
   if (source.encrypted !== undefined) extra.encrypted = source.encrypted;
   if (source.choices !== undefined)
     extra.choices = Object.fromEntries(Object.entries(source.choices).map(([app, kinds]) => [app, { ...kinds }]));
+  if (source.waits_ms !== undefined)
+    extra.waits_ms = Object.fromEntries(Object.keys(DEFAULT_WAITS_MS).map(name => [name, source.waits_ms[name]]));
   return { apps: [...value.apps], importable: [...value.importable], blocked: [...value.blocked],
     result_rows: value.result_rows.map(row => [...row]), exact: value.exact, select_stage: value.select_stage,
     texts: { ...value.texts }, importApps: [...value.importable].sort(), device: value.device, ...extra };

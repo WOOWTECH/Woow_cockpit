@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { issueKeyCount, validImportIntent, pageExpectations, issueKeys, confirmLineCount, acknowledgedOf,
-  exactAcknowledged, planChoices } from './focus_acceptance_ui_protocol.mjs';
+  exactAcknowledged, planChoices, DEFAULT_WAITS_MS } from './focus_acceptance_ui_protocol.mjs';
 import { parseSetCookie, digest, coverage, observedValues, provedPublicTombstone,
   nativeCapabilityProgram, readPrimarySourceProof } from './focus_acceptance_ui_cookies.mjs';
 
@@ -28,6 +28,10 @@ const wireApps = new Set(['hermes', 'omnigent', 'emqx', ...expect.apps]);
 const keyless = expect.encrypted === false;
 const choosing = expect.choices !== undefined;
 if (keyless && config.key !== undefined && config.key !== null) throw new Error('invalid private transport configuration');
+// `waits_ms` (focus_page_bridge.py waits, a large backup such as the 4.47 GB Nextcloud full share): the page's own bounded
+// waits for the upload with its upload-finish, each check and the import's result. Without it the earlier 10, 10 and 20
+// minutes, exactly as before; nothing else of the flow depends on it.
+const waits = expect.waits_ms ?? DEFAULT_WAITS_MS;
 const modes = keyless || choosing;
 const requestsSeen = { check: [], import: null };   // modes only: what each request carried (key: present or not)
 const checkIds = new Set();                         // modes only: the finished checks this page saw
@@ -239,7 +243,7 @@ try {
   await frame.locator('#restore-file').setInputFiles(config.fixture);
   await frame.locator('[data-focus="restore-upload"]:not([disabled])').waitFor();
   await frame.locator('[data-focus="restore-upload"]').click();
-  await frame.waitForFunction(id => window.location.hash === `#/ha/${id}`, config.ha_id, { timeout: 10 * 60 * 1000 });
+  await frame.waitForFunction(id => window.location.hash === `#/ha/${id}`, config.ha_id, { timeout: waits.upload });
   await frame.locator('#ha-info').waitFor();
   check(expect.texts.upload, true);
   stage = expect.select_stage;
@@ -263,7 +267,7 @@ try {
     await frame.locator('#ha-key').fill(config.key);
     await frame.locator('[data-focus="ha-key-next"]').click();
   }
-  await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
+  await frame.locator('#ha-ack').waitFor({ timeout: waits.check });
   if (keyless) {
     keyStep.key_fields_after_check = await frame.locator('#ha-key').count();
     check('UI unencrypted HA backup: the check ran without a key step', keyStep.key_fields_after_check === 0);
@@ -299,7 +303,7 @@ try {
   check('UI one acknowledgement enables import', await frame.locator('[data-focus="ha-import"]').isEnabled());
   await frame.locator('[data-focus="ha-import"]').click(); clicks++;
   stage = 'import-and-result';
-  await frame.locator('[data-result="group"]').waitFor({ timeout: 20 * 60 * 1000 });
+  await frame.locator('[data-result="group"]').waitFor({ timeout: waits.result });
   let resultOk = true;
   for (const [app, status] of expect.result_rows)
     resultOk = resultOk && await frame.locator(`[data-ha-app="${app}"][data-status="${status}"]`).count() === 1;
@@ -347,8 +351,8 @@ async function chooseAsNamed() {
     const seen = checkIds.size;
     await frame.locator('[data-focus="ha-recheck"]').click();
     rechecks++;
-    await until(() => checkIds.size > seen, 10 * 60 * 1000);
-    await frame.locator('#ha-ack').waitFor({ timeout: 10 * 60 * 1000 });
+    await until(() => checkIds.size > seen, waits.check);
+    await frame.locator('#ha-ack').waitFor({ timeout: waits.check });
     plan = planChoices(latestCheck, expect.choices, picked);
     if (plan.clicks.length) plan.problems.push('the recheck did not keep the chosen add-on or node');
   }
@@ -515,7 +519,7 @@ async function finishBrowser() {
     ...(confirmations ? { confirmations } : {}),
     // Only the new modes add records (keys present or not, never a value): an earlier config's record is unchanged.
     ...(keyless ? { key_step: keyStep } : {}), ...(choosing ? { choices: choiceRecord } : {}),
-    ...(modes ? { requests: requestsSeen } : {}) };
+    ...(modes ? { requests: requestsSeen } : {}), ...(expect.waits_ms ? { waits_ms: expect.waits_ms } : {}) };
   writeFileSync(config.result, JSON.stringify(result, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
   })();
   return finishing;
