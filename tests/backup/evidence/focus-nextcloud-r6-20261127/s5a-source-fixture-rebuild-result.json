@@ -1,0 +1,85 @@
+{
+  "status": "passed",
+  "phase": "s5-source-fixture-build",
+  "source_commit": "04bca4d61d92c2c671d16964b5da8815ccca1c65",
+  "builder_sha256": "64a3ece58807a502892d8394cd5a065d920901f80e65c78dd7d9cd0705de5601",
+  "native_status": "passed",
+  "original_target_exact": true,
+  "owned_removal": {
+    "status": "owned-source-removed",
+    "removed": [
+      "html",
+      "pg",
+      "data"
+    ],
+    "fixture_retained": true
+  },
+  "owned_leftovers": {
+    "leaves": [
+      "artifact",
+      "credentials.private.json",
+      "fixed-result.json",
+      "nc-identity.json",
+      "occ-gate.private.json",
+      "pg-identity.json",
+      "redis-identity.json",
+      "source-result.json"
+    ],
+    "command_records": 396,
+    "artifact": [
+      "generated-s5-source.tar",
+      "provenance.private.json"
+    ]
+  },
+  "fixture": {
+    "status": "passed",
+    "kind": "generated-ha-shaped-test-fixture",
+    "haos_export": false,
+    "archive": "/var/lib/woowbk-nextcloud-s5-3d7c8af46600c589/owned/artifact/generated-s5-source.tar",
+    "bytes": 127467520,
+    "sha256": "df9a7adf75d13adcfd3a431027ffe68ce9f5a4c48bbc6db5a406a48eafb4e708",
+    "provenance_sha256": "ebcb22302d932a276ff31b97ece9db5adac022b8e434df6dee47b7e3638452f1",
+    "source_files": 2213,
+    "s5_import_acceptance": false
+  },
+  "engine_commit": "b058df278d661cc6195cd40936ff6494036c63a1",
+  "fixture_shape": {
+    "superuser": "postgres",
+    "superusers": [
+      "postgres"
+    ],
+    "roles": [
+      "nextcloud",
+      "postgres"
+    ],
+    "database": "nextcloud",
+    "database_owner": "nextcloud",
+    "table_owners": [
+      "nextcloud"
+    ],
+    "config_dbname": "nextcloud",
+    "config_dbuser": "nextcloud",
+    "member_root_entries": true
+  },
+  "product_open_check": {
+    "status": "passed",
+    "job_id": "j20261128T012445Z-5d1a51df",
+    "checks": {
+      "proof_unchanged": true,
+      "stream_intact": true,
+      "member_root_entry": true,
+      "config_dbuser": true,
+      "clean_shutdown": true,
+      "started": true,
+      "product_call_answered": true,
+      "nextcloud_database": true,
+      "users": true,
+      "encryption": true,
+      "superuser": true,
+      "cleanup": true
+    },
+    "reason": null
+  },
+  "runtime_s5_import_acceptance": false,
+  "private_receipt_dir": "/home/woowtechopenclaw/.woowbk-lab/evidence/focus-nextcloud-r6-s5/20261128T092201"
+}
