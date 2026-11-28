@@ -365,6 +365,38 @@ python3 -I tests/e2e/lab/hermes_real_capture.py --private=<~/.woowbk-lab/evidenc
   建頻道清單時才執行 `discover_plugins()`，是一次性的冷啟動成本，主機負載約 22–25 時會更慢。第 9、10 次當時沒有記錄端點，
   所以「就是 `/api/env`」是推論，不是觀察。
 
+### EMQX 匯入 HA 之後的真實升級（`emqx_upgrade_after_import.py`，2026-11-28）
+
+擁有者 2026-11-28 授權（只在實驗室、新映像可從網路取得）。H2（11-25）證明匯入後套件的 smoke.sh 會讓 `scripts/upgrade.sh` 回退；
+Woow_podman_emqx PR #11（c01c897）修正後，upgrade.sh 本身從未在實驗室跑過（它會拉映像，實驗室沒有網路）。做法是套件自己的規則：
+`quadlet-lib.sh` 的 `ql_pull_images` 在 `podman image exists <ref>` 時不拉。新版本 `docker.io/emqx/emqx:5.9.4`（index
+`sha256:37a3bf1a…`、amd64 manifest `sha256:0bdd5112…`、映像 ID `a8329918…`；5.8.9 之後沒有 5.8.x 社群版，5.9 是下一個 minor，
+5.9.4 是有發行說明的最新修補版；5.9 起為 BSL 1.1，只是實驗室測試，不是產品決定）。
+
+```bash
+python3 -B -I tests/e2e/lab/emqx_upgrade_image_prep.py --pull                     # 唯一的網路步驟：拉進實驗室儲存
+HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock HEAVY_WAIT=600 <heavy.sh> \
+    python3 -B -I tests/e2e/lab/emqx_upgrade_image_prep.py --stream               # 實驗室儲存 → dev-d appowner（load + tag），寫收據
+python3 -B -I tests/e2e/lab/emqx_upgrade_after_import.py --lease-template --source <dev-d 的產品樹> \
+    --package <Woow_podman_emqx c01c897 的 checkout>                              # 審查後把 granted 改成 true
+HEAVY_FREE=/tmp/woowbk-dev-d-mutation.lock HEAVY_WAIT=600 <heavy.sh> python3 -B -I tests/e2e/lab/services_a_capture.py \
+    --private=<私有 log> <evidence.json> emqx-upgrade-after-import -- \
+    python3 -B -I tests/e2e/lab/emqx_upgrade_after_import.py --run --lease <lease.json>
+python3 -B -I tests/e2e/lab/emqx_upgrade_image_prep.py --verify                   # 之後可選：--remove（dev-d）、--remove-lab
+```
+
+* 一次執行＝一次持有 dev-d 鎖，55 項檢查：前置（隔離、資源、引擎＝租約的產品樹、排程遮蔽、舊單元與兩個映像 ID、新映像 ID 與 dev-d 摘要、
+  dev-d 自己的套件 ea5886c、基準標記、11-19 基準可用緊急金鑰還原、不會刪到別人的 EMQX 還原前備份、HA 紀錄）→ 在 dev-d 內私下複製 EMQX 的
+  單元、設定、env 與 Quadlet 狀態 → 拋棄式套件副本（c01c897，只改兩行 `Image=`：5.9.4 的 dev-d 摘要與已安裝的入口釘選）→ 以產品匯入真實 x86
+  冷備份（`ha-check-start`、一鍵 `ha-import-start`，標記檔在資料卷，HA 的帳號／ACL／保留訊息仍由 5.8.9 提供）→ 以 appowner 執行副本的
+  `scripts/upgrade.sh`（不加選項）：結束碼 0、沒有回退、smoke 只有 A4 與 A5/A6/A10 為 WARN（11 PASS、0 FAIL）、輸出沒有 dev-d 密鑰、
+  容器換成新映像 ID、只有 `emqx.container`（Image= 與 HealthCmd，正是範本差異）和 Quadlet manifest 改變 → 升級後 5.9.4 提供的資料與匯入後
+  逐項相同 → 回復（任何停止都會跑）：停止仍在跑的升級、等作業結束、檔案逐位元組放回、以舊單元還原 11-19 基準（5.8.9 不會讀到 5.9.4 寫的資料）、
+  映像 ID／單元／標記與 dev-d 自己的 smoke `--quick`（10／0／0）→ 只刪這次產生的東西 → 洩漏掃描 → 前後完全比對。
+* 私有證據 `~/.woowbk-lab/evidence/emqx-upgrade-after-import/<時間>/`；收據 `~/.woowbk-lab/run/emqx_upgrade_after_import.json`
+  （未完成時下一次拒絕執行）；映像收據 `~/.woowbk-lab/run/emqx_upgrade_image_prep.json`（租約綁它的 SHA-256 與摘要）。
+  離線測試：`emqx_upgrade_after_import_test.py`（模擬 dev-d）。
+
 ## dev-e：正式主機 Nextcloud、code-server 與 OpenDesign 的複本（HA 匯入第二批）
 
 **用途**：測試「把 Home Assistant 附加元件的備份匯入 Podman 的 OpenDesign、Nextcloud 與 code-server」（HA 匯入第二批，擁有者
