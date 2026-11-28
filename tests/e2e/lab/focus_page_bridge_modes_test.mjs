@@ -301,11 +301,19 @@ test('an unencrypted HA backup: no key enters the page, the wizard asks for none
     check_importable: ['headscale'] });
   assert.deepEqual(run.result.choices, { named: {}, database: null, picks: {}, import_choices: {}, check_choices: {},
     rechecks: 0, problems: [] });
-  for (const name of ['UI unencrypted HA backup: the wizard asks for no key', 'UI unencrypted HA backup: the check ran without a key step',
-    'UI unencrypted HA backup: neither the check nor the import request carried a key',
+  // The exact sequence a keyless run with choices records (headscale_page_pilot_test.page_names uses the same list).
+  const t = HEADSCALE.texts;
+  assert.deepEqual(run.result.checks.map(item => item.check), ['UI real administrative Cockpit bridge reaches this device',
+    t.upload, t.select, 'UI unencrypted HA backup: the wizard asks for no key',
+    'UI unencrypted HA backup: the check ran without a key step',
     'UI selects each choice the run named, only from what the check offers',
-    'UI the check and import requests carry exactly the chosen choices'])
-    assert.equal(byName(run.result)[name], true, name);
+    'UI actual check confirmation keys observed including valid zero', t.view, t.lines,
+    'UI has exactly one acknowledgement and import waits for it', 'UI check did not start an import or separate restore',
+    'UI real key field removed before screenshot', 'UI one acknowledgement enables import', t.result, t.intent, t.keys,
+    'UI unencrypted HA backup: neither the check nor the import request carried a key',
+    'UI the check and import requests carry exactly the chosen choices', 'UI no page script errors during this page flow',
+    'UI cookie observation completed without gaps',
+    'UI every issued credential absent from records journal and private evidence; proved public markers counted separately']);
   // The same run with the key (a config that is not keyless) keeps the key step: no new record, no new check.
   const keyed = drive(one('headscale', { device: 'woowbk-dev-d' }), { ...HS_RUN, keyless: false,
     request: { ...HS_RUN.request, key: 'FAKE-HA-KEY' } });
