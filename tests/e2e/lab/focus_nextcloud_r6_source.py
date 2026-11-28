@@ -61,10 +61,13 @@ def validate_manifest(rows):
         raise ValueError('fixed-source-payload-bound-refused')
 
 
-def frozen_manifest(source=FROZEN):
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+def frozen_manifest(source=FROZEN, *, commit=None, nc_sha=None):
+    """{name: {size, sha256}} of a clean detached product checkout at the bound commit. `commit`/`nc_sha` default to
+    this lane's R6 binding; S5-B (focus_nextcloud_r6_s5b) binds its own frozen checkout with the same rules."""
+    expected, nc_expected = (PRODUCT_COMMIT if commit is None else commit), (NC_SHA if nc_sha is None else nc_sha)
+    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
     dirty = subprocess.check_output(['git', 'status', '--porcelain'], cwd=source, text=True).strip()
-    if commit != PRODUCT_COMMIT or dirty:
+    if head != expected or dirty:
         raise ValueError('fixed-frozen-clean-product-required')
     paths = {'helper': source / 'backup-engine/woowtech-cockpit-backup', 'VERSION': source / 'VERSION'}
     package = source / 'backup-engine/woowbackup'
@@ -82,7 +85,7 @@ def frozen_manifest(source=FROZEN):
             raise ValueError('fixed-source-regular-file-required')
         rows[name] = {'size': s.st_size, 'sha256': digest(p)}
     validate_manifest(rows)
-    if rows['woowbackup/ha_nextcloud.py']['sha256'] != NC_SHA:
+    if rows['woowbackup/ha_nextcloud.py']['sha256'] != nc_expected:
         raise ValueError('fixed-frozen-nextcloud-sha-required')
     return paths, rows
 

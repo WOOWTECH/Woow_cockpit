@@ -29,12 +29,22 @@ What it relies on in Nextcloud (nextcloud/server tag v35.0.1 unless named otherw
   <path>/OC_DEFAULT_MODULE/<id>.shareKey, and every key file is "hex ciphertext|hex iv|hex hmac|3".
 - lib/private/Files/Storage/Wrapper/Encryption.php:326-381: a file without a header that is not marked encrypted is read
   as it is: the file written before encryption stays plaintext and readable (a mixed source).
+
+The database is the real add-on's (FIXTURE_SHAPE): initdb superuser postgres, Nextcloud's own plain role nextcloud
+owning the database nextcloud and every table, config.php dbuser/dbname nextcloud, the member's directory entries (data/
+postgres before its files). Evidence: ha_nextcloud's own model (tests/backup/test_ha_nextcloud.py addon_tar, HA_CONFIG),
+the real B2 backups' config.php (tests/e2e/lab/evidence/nextcloud-import-20261123/noshare-member-scan.json: dbname and
+dbuser nextcloud), the showcase's psql as the add-on's OS user postgres (tests/e2e/lab/showcase_b2/nc-inv.sh), HA
+Supervisor's tar (every directory before its children). The first build (POSTGRES_USER=nextcloud) had no role postgres,
+which the product opens HA's cluster as (ha_odoo.Cluster): its check could not answer (focus_nextcloud_r6_s5_diag). A
+fixture is accepted only after the product's own check path opened it (diag.open_check, OPEN_CHECKS).
 """
 import argparse
 import base64
 import datetime
 import fcntl
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -64,7 +74,7 @@ OWNED_CAP = 7*GIB                       # everything this run allocates (source,
 FIXTURE_CAP = GIB
 START_FREE = 20*GIB
 CLEANUP_GRACE = 600
-HEADROOM = 1800                         # lease seconds still left once the dev-e mutex is held
+HEADROOM = 3000                         # lease seconds left once the dev-e mutex is held: 1800 build + OPEN_RESERVE
 PROBE_TRIES = 3                         # failed or timed-out probes in a row before the watch stops (fullshare04)
 DU_EVERY, DU_TIMEOUT = 10, 15
 # --cpus only when the owner's user manager has the cgroup v2 cpu controller (the product's tempctr.default_cpus rule:
@@ -75,15 +85,33 @@ IMAGES = {
     'pg': '9b05db12a35460fff0587e009f9326e414a53e9484555547f96d214a2ba98ef7',
     'redis': 'd1e21a26915a35a6eb5d820018cd55adfcda02e02f7d629e1f42df397d5494ad',
 }
-# The engine dev-e runs: deploy-src.sh (OpenDesign flow) installed commit 4cf97c25. Its expected bytes come from this
-# repository's git objects (engine_manifest), never from a device.
-ENGINE_COMMIT = '4cf97c2507d5c0fc28905717efe387ee4d6b19f7'
+# The engine dev-e runs: since the 2026-11-28 page runs (OpenDesign, code-server, Nextcloud no-share) deploy-src.sh
+# installed engine files equal to b058df27's (with the SSE fix 50a29370; 4cf97c25 differed in ha_nextcloud.py only), the
+# same product the S5-B import runs. Its expected bytes come from this repository's git objects (engine_manifest), never
+# from a device.
+ENGINE_COMMIT = 'b058df278d661cc6195cd40936ff6494036c63a1'
 PRODUCT_LIB = '/usr/local/lib/woowtech-cockpit-backup'   # device only: the installed engine, proven equal to ENGINE_COMMIT
 SLUG = 'woow-nextcloud-office'
 PROFILE = '0.2.3'  # envelope compatibility profile, NOT an installed add-on version
 VERSION = '35.0.1.1'
 MAX_MEMBERS = 50000
 USER = 's5owner'
+SUPERUSER, NC_ROLE, NC_DB = 'postgres', 'nextcloud', 'nextcloud'    # the real add-on's (module notes)
+FIXTURE_SHAPE = {'superuser': SUPERUSER, 'superusers': [SUPERUSER], 'roles': [NC_ROLE, SUPERUSER], 'database': NC_DB,
+                 'database_owner': NC_ROLE, 'table_owners': [NC_ROLE], 'config_dbname': NC_DB, 'config_dbuser': NC_ROLE,
+                 'member_root_entries': True}
+DB_SHAPE_SQL = ("SELECT json_build_object('superuser', (SELECT rolname FROM pg_catalog.pg_roles WHERE oid = 10), "
+                "'superusers', (SELECT json_agg(rolname ORDER BY rolname) FROM pg_catalog.pg_roles WHERE rolsuper), "
+                "'roles', (SELECT json_agg(rolname ORDER BY rolname) FROM pg_catalog.pg_roles WHERE rolname !~ '^pg_'), "
+                "'database_owner', (SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database "
+                "WHERE datname = 'nextcloud'), 'table_owners', (SELECT coalesce(json_agg(DISTINCT tableowner), '[]'::json) "
+                "FROM pg_catalog.pg_tables WHERE schemaname = 'public'), "
+                "'tables', (SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public'))")
+VERIFIER_RE = r'SCRAM-SHA-256\$4096:[A-Za-z0-9+/]{22}==\$[A-Za-z0-9+/]{43}=:[A-Za-z0-9+/]{43}='
+# The product-path open check of the packed fixture (focus_nextcloud_r6_s5_diag.open_check): every fact true, or no fixture.
+OPEN_CHECKS = ('proof_unchanged', 'stream_intact', 'member_root_entry', 'config_dbuser', 'clean_shutdown', 'started',
+               'product_call_answered', 'nextcloud_database', 'users', 'encryption', 'superuser', 'cleanup')
+OPEN_RESERVE = 1200                     # lease seconds kept after the native build for the open check and its sweep
 ROOT_RE = r'/var/lib/woowbk-nextcloud-s5-[0-9a-f]{16}'
 MODULE = 'OC_DEFAULT_MODULE'
 HEADER_SIZE = 8192
@@ -270,6 +298,25 @@ def plaintexts():
             'encrypted': {'s5-binary.bin': bytes(range(256))*4096, 's5-utf8.txt': ('真實加密來源驗證\n'*2048).encode()}}
 
 
+def scram_verifier(password, salt=None, iterations=4096):
+    """PostgreSQL's SCRAM-SHA-256 verifier of `password` (RFC 5802/7677, as ha_nextcloud.scram_verifier makes it): the role
+    gets it as it is, so the password is in no statement, no command record and no server log."""
+    salt = os.urandom(16) if salt is None else salt
+    salted = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt, iterations)
+    stored = hashlib.sha256(hmac.new(salted, b'Client Key', hashlib.sha256).digest()).digest()
+    server = hmac.new(salted, b'Server Key', hashlib.sha256).digest()
+    b64 = lambda raw: base64.b64encode(raw).decode('ascii')   # noqa: E731
+    return f'SCRAM-SHA-256${iterations}:{b64(salt)}${b64(stored)}:{b64(server)}'
+
+
+def role_sql(verifier):
+    """Nextcloud's own role as the add-on has it: a plain login role that owns the database (in PostgreSQL 15+ that is
+    what lets it create in public), so the installer, connecting as it, keeps it as dbuser and owns every table."""
+    require(re.fullmatch(VERIFIER_RE, verifier) is not None, 'role-verifier')
+    return ("CREATE ROLE %s LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '%s';\nALTER DATABASE %s OWNER TO %s;\n"
+            % (NC_ROLE, verifier, NC_DB, NC_ROLE))
+
+
 def product(lib=PRODUCT_LIB):
     # DEVICE ONLY: the installed reader (proven equal to ENGINE_COMMIT before and after) as a library. Offline tests pass
     # this repository's engine to build_fixture instead. No bytecode anywhere.
@@ -330,6 +377,28 @@ def add_json(out, name, value):
     m.mode, m.size = 0o600, len(raw); out.add_member(m, io.BytesIO(raw))
 
 
+STRUCTURAL = ('.', 'data', 'data/nextcloud')   # HA's own parents of the mapped dirs in the add-on member (no source dir)
+DB_SHAPE_KEYS = ('superuser', 'superusers', 'roles', 'database_owner', 'table_owners')
+
+
+def pack_dir(out, name, st=None):
+    """A directory entry, as HA's tar holds every directory before its children: a mapped source root with its actual
+    owner, mode and time, or (st None) one of HA's structural parents (root's, 0755) that has no source dir here."""
+    m = tarfile.TarInfo(name); m.type = tarfile.DIRTYPE
+    if st is None:
+        m.uid = m.gid = 0; m.mode = 0o755; m.mtime = int(time.time())
+    else:
+        require(stat.S_ISDIR(st.st_mode), 'member-root-not-dir')
+        m.uid, m.gid, m.mode, m.mtime = st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode), st.st_mtime
+    out.add_member(m)
+
+
+class Discard:
+    """Keeps nothing: the product's PgSink writes its volume tar here (its root entry is what is looked at)."""
+    def write(self, data):
+        return len(data)
+
+
 def build_fixture(work, proof, check=lambda: None, libraries=None):
     """Run in podman unshare after all source containers stopped cleanly.
 
@@ -344,9 +413,13 @@ def build_fixture(work, proof, check=lambda: None, libraries=None):
                 'apps': ('html/custom_apps', 'data/nextcloud/custom_apps', 'addon'),
                 'pg': ('pg', 'data/postgres', 'addon'), 'data': ('data', 'nextcloud', 'share')}
     rows = {role: tree(work/src, check) for role, (src, _, _) in mappings.items()}
+    roots = {role: (work/src).lstat() for role, (src, _, _) in mappings.items()}
     require(sum(r['bytes'] for rs in rows.values() for r in rs.values()) < GIB-4*MIB, 'fixture-input-bound')
     require(all(proof.get(k) is True for k in ('webdav_before', 'webdav_after_restart', 'plaintext_before_encryption',
                                                'master_key_mode', 'pg_shutdown')), 'native-source-proof-incomplete')
+    shape = proof.get('database_shape') if isinstance(proof.get('database_shape'), dict) else {}
+    require({k: shape.get(k) for k in DB_SHAPE_KEYS} == {k: FIXTURE_SHAPE[k] for k in DB_SHAPE_KEYS}
+            and type(shape.get('tables')) is int and shape['tables'] >= 20, 'native-database-shape')
     for name, value in proof['cipher_and_keys'].items():
         require(name in rows['data'] and rows['data'][name]['sha256'] == value['sha256']
                 and rows['data'][name]['bytes'] == value['bytes'] > 0, 'cipher-key-source-binding')
@@ -356,7 +429,9 @@ def build_fixture(work, proof, check=lambda: None, libraries=None):
                   'compatibility_profile': {'slug': SLUG, 'addon_version': PROFILE},
                   'actual_components': {'nextcloud': VERSION, 'postgres_major': '16',
                                         'images': IMAGES, 'architecture': 'amd64'},
-                  'native_proof': proof, 'mappings': mappings, 'source_files': rows}
+                  'native_proof': proof, 'mappings': mappings, 'source_files': rows,
+                  'member_directories': {'structural': list(STRUCTURAL),
+                                         'mapped_roots': {role: prefix for role, (_, prefix, _) in mappings.items()}}}
     metadata = {'version': PROFILE, 'state': 'stopped',
                 'system': {'slug': SLUG, 'name': 'Generated Nextcloud SSE test fixture'},
                 # Actual cached image identity; unknown HA image-name architecture is truthful.
@@ -366,9 +441,12 @@ def build_fixture(work, proof, check=lambda: None, libraries=None):
     for kind, name in (('addon', SLUG+'.tar'), ('share', 'share.tar')):
         member = out/name; writer = od.FileTar(member)
         try:
-            if kind == 'addon': add_json(writer, 'addon.json', metadata)
+            if kind == 'addon':
+                pack_dir(writer, STRUCTURAL[0]); add_json(writer, 'addon.json', metadata)
+                for parent in STRUCTURAL[1:]: pack_dir(writer, parent)
             for role, (src, prefix, component) in mappings.items():
-                if component == kind: pack_tree(writer, work/src, prefix, rows[role], check)
+                if component == kind:
+                    pack_dir(writer, prefix, roots[role]); pack_tree(writer, work/src, prefix, rows[role], check)
         finally:
             writer.close()
         require(member.stat().st_size <= GIB, 'member-bound')
@@ -409,20 +487,26 @@ def build_fixture(work, proof, check=lambda: None, libraries=None):
                         if component == kind for rel, r in rows[role].items() if r['sha256'] is not None}
             require(report.complete and not report.skipped_symlinks and not report.skipped_other
                     and seen == expected, 'packed-mapping-mismatch')
-        with opened.open_addon(SLUG) as stream:
-            report = ha.Report(); source = nc.scan_member(stream, report, machine=0x3e, checkpoint=check)
+        with opened.open_addon(SLUG) as stream:   # the product's own member pass, its PgSink included
+            report = ha.Report(); sink = od.PgSink(Discard(), 999, 999)
+            source = nc.scan_member(stream, report, pg=sink, machine=0x3e, checkpoint=check); sink.close()
         require(report.complete and source.pg_version == '16' and source.recovery_files == 0
                 and source.config and source.config.get('version') == VERSION
                 and source.config.get('datadirectory') == '/share/nextcloud'
                 and source.config.get('installed') is True and source.config.get('dbtype') == 'pgsql'
-                and source.config.get('dbtableprefix') == 'oc_', 'native-config-layout')
+                and source.config.get('dbtableprefix') == 'oc_' and source.config.get('dbname') == NC_DB
+                and source.config.get('dbuser') == NC_ROLE, 'native-config-layout')
+        # data/postgres came before its files: PgSink wrote the cluster's root entry first (tempctr.tar_root applies it).
+        require(sink.root_written, 'member-cluster-root-entry')
         with opened.open_member('share.tar') as stream:
             report = ha.Report(); data = nc.scan_datadir(stream, report, 'nextcloud', addon=False,
                                                        instanceid=source.config.get('instanceid'), checkpoint=check)
         require(report.complete and data.present and data.ncdata and data.encryption and not data.symlinks
                 and not data.htaccess, 'native-data-layout')
     # A cold source must still be the same after every consuming pass.
-    for role, (src, _, _) in mappings.items(): require(tree(work/src, check) == rows[role], 'source-changed-after-pack')
+    for role, (src, _, _) in mappings.items():
+        require(tree(work/src, check) == rows[role] and identity((work/src).lstat()) == identity(roots[role]),
+                'source-changed-after-pack')
     provenance['source_mapping_sha256'] = source_mapping_sha
     provenance['members'] = members
     provenance['archive'] = {'bytes': dest.stat().st_size, 'sha256': digest(dest, check)}
@@ -831,20 +915,50 @@ class Native:
                 'webdav-plaintext')
         require(self.dav(password+'-wrong', name, 'GET')['status'] == 401, 'webdav-wrong-auth')
 
+    # ------------------------------------------------------------------ the database, as the add-on has it
+    def pg_json(self, sql):
+        """One JSON object from a fixed catalog query, as the superuser postgres (socket, inside the database container)."""
+        raw = self.pod('exec', self.name('pg'), 'psql', '-X', '-A', '-t', '-q', '-v', 'ON_ERROR_STOP=1', '-U', SUPERUSER,
+                       '-d', NC_DB, '-c', sql)
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            raise ValueError('fixed-s5-psql-json-unreadable') from None
+        require(isinstance(value, dict), 'psql-json-unreadable')
+        return value
+
+    def database_role(self, dbpass):
+        """Nextcloud's own plain role owning its database, made by postgres before the install (role_sql, its verifier
+        on stdin): the installer then keeps dbuser nextcloud and creates every table as it, as in the add-on."""
+        self.call(['podman', 'exec', '-i', self.name('pg'), 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', SUPERUSER,
+                   '-d', NC_DB, '-f', '-'], role_sql(scram_verifier(dbpass)).encode())
+        found = self.pg_json(DB_SHAPE_SQL); keys = DB_SHAPE_KEYS[:4]
+        require({k: found.get(k) for k in keys} == {k: FIXTURE_SHAPE[k] for k in keys}, 'database-role')
+
+    def database_shape(self):
+        """After the install: the shape the product relies on (FIXTURE_SHAPE), every table Nextcloud's own."""
+        found = self.pg_json(DB_SHAPE_SQL); want = {k: FIXTURE_SHAPE[k] for k in DB_SHAPE_KEYS}
+        require({k: found.get(k) for k in want} == want and type(found.get('tables')) is int and found['tables'] >= 20,
+                'database-shape')
+        return dict(want, tables=found['tables'])
+
     # ------------------------------------------------------------------ owned containers
     def source_args(self, role):
         """podman run arguments of each owned source container. No :U anywhere: :U gives a bind source to the container's
         own user, which for the Nextcloud image is root (its entrypoint starts as root and installs as www-data), so the
         0700 /share/nextcloud would stay unwritable for the installer; prepare_owned gives html and data to www-data once,
-        and the postgres entrypoint gives PGDATA to postgres itself."""
-        env = ['--env=POSTGRES_USER=nextcloud', '--env=POSTGRES_DB=nextcloud',
-               '--secret='+self.name('dbpass')+',type=env,target=POSTGRES_PASSWORD']
+        and the postgres entrypoint gives PGDATA to postgres itself. The database's initdb superuser is postgres (its
+        password only in this container's secret); Nextcloud connects as its own role nextcloud (database_role)."""
         if role == 'pg':   # the image's entrypoint, as container root, gives PGDATA to postgres
-            return env+['-v', str(self.work/'pg')+':/var/lib/postgresql/data', 'sha256:'+IMAGES['pg']]
+            return ['--env=POSTGRES_USER='+SUPERUSER, '--env=POSTGRES_DB='+NC_DB,
+                    '--secret='+self.name('superpass')+',type=env,target=POSTGRES_PASSWORD',
+                    '-v', str(self.work/'pg')+':/var/lib/postgresql/data', 'sha256:'+IMAGES['pg']]
         if role == 'redis':
             return ['sha256:'+IMAGES['redis'], 'redis-server', '--save', '', '--appendonly', 'no']
         require(role == 'nc', 'source-role')
-        return env+['--env=POSTGRES_HOST='+self.name('pg'), '--env=REDIS_HOST='+self.name('redis'),
+        return ['--env=POSTGRES_USER='+NC_ROLE, '--env=POSTGRES_DB='+NC_DB,
+                '--secret='+self.name('dbpass')+',type=env,target=POSTGRES_PASSWORD',
+                '--env=POSTGRES_HOST='+self.name('pg'), '--env=REDIS_HOST='+self.name('redis'),
                     '--env=NEXTCLOUD_ADMIN_USER='+USER, '--env=NEXTCLOUD_TRUSTED_DOMAINS=localhost',
                     '--env=NEXTCLOUD_DATA_DIR=/share/nextcloud', '--env=PHP_MEMORY_LIMIT=512M',
                     '--secret='+self.name('admin')+',type=env,target=NEXTCLOUD_ADMIN_PASSWORD',
@@ -918,10 +1032,10 @@ class Native:
         self.stage = 'new-source-bootstrap'
         uid, gid = self.www_ids(); self.facts['www_data'] = [uid, gid]
         self.unshare('prepare', uid=uid, gid=gid)
-        # New generated secrets only through stdin and podman secrets, never argv or public output. The database password
-        # is never written to a file; the admin password is kept (privately) only after a successful build, for S5-B.
-        password, dbpass = secrets.token_hex(24), secrets.token_hex(24)
-        for role, value in (('admin', password), ('dbpass', dbpass)):
+        # New generated secrets only through stdin and podman secrets, never argv or public output. The database passwords
+        # are never written to a file; the admin password is kept (privately) only after a successful build, for S5-B.
+        password, dbpass, superpass = secrets.token_hex(24), secrets.token_hex(24), secrets.token_hex(24)
+        for role, value in (('admin', password), ('dbpass', dbpass), ('superpass', superpass)):
             name = self.name(role); self.secret_ids.append(name)
             self.pod('secret', 'create', '--label', 'woowbk.s5='+self.q['nonce'], name, '-', data=value.encode())
         self.network = self.name('net')
@@ -933,11 +1047,15 @@ class Native:
         self.run_container('redis', self.source_args('redis'))
         until = min(self.deadline, time.time()+120)
         while time.time() < until:
-            code, _ = self.call(['podman', 'exec', self.name('pg'), 'pg_isready', '-U', 'nextcloud', '-d', 'nextcloud'],
-                                allowed=(0, 1, 2))
+            # TCP on 127.0.0.1: only the entrypoint's FINAL server listens there (its init server is socket-only).
+            # pg_isready answers for any role (it asks whether the server is up): database_role then proves postgres.
+            code, _ = self.call(['podman', 'exec', self.name('pg'), 'pg_isready', '-h', '127.0.0.1', '-p', '5432',
+                                 '-U', SUPERUSER, '-d', NC_DB], allowed=(0, 1, 2))
             if code == 0: break
             self.check(); time.sleep(1)
         else: raise ValueError('fixed-s5-postgres-bootstrap-timeout')
+        self.stage = 'database-role'
+        self.database_role(dbpass)
         require(self.pod('exec', self.name('redis'), 'redis-cli', 'ping').strip() == b'PONG', 'redis-readiness')
         pg_banner = self.pod('exec', self.name('pg'), 'postgres', '--version')
         redis_banner = self.pod('exec', self.name('redis'), 'redis-server', '--version')
@@ -975,6 +1093,8 @@ class Native:
                 require(self.dav(password, name, 'GET') == {'status': 200, 'bytes': len(value), 'sha256': sha(value)},
                         'restart-plaintext')
         proof['webdav_after_restart'] = True
+        self.stage = 'database-shape'
+        proof['database_shape'] = self.database_shape()
         self.stage = 'source-cold-shutdown'
         for role in ('nc', 'redis', 'pg'): self.pod('stop', '--time=60', self.name(role))
         for role in ('nc', 'redis', 'pg'):
@@ -1104,6 +1224,7 @@ def contract():
             'fixture_cap_bytes': FIXTURE_CAP, 'reserve_bytes': RESERVE, 'watch_floor_bytes': FLOOR,
             'device_memory_cap_bytes': DEVICE_CAP, 'memory_watch_bytes': MEMORY_WATCH, 'probe_tries': PROBE_TRIES,
             'engine_commit': ENGINE_COMMIT, 'occ_contract_sha256': manifest_hash(OCC_CONTRACT),
+            'fixture_shape': FIXTURE_SHAPE, 'open_checks': list(OPEN_CHECKS), 'open_reserve_seconds': OPEN_RESERVE,
             's5_import_acceptance': False, 'target_wake': False, 'target_source_install': False, 'pulls': 0}
 
 
@@ -1158,11 +1279,12 @@ def lease_template(repo):
             'engine_manifest_sha256': manifest_hash(engine_manifest(repo)),
             'occ_contract_sha256': manifest_hash(OCC_CONTRACT),
             'proof_root': 'REQUIRES_NEW_/var/lib/woowbk-nextcloud-s5-<16 lowercase hex>',
-            'not_before_utc': 'REQUIRES_GRANTED_START', 'expires_utc': 'REQUIRES_GRANTED_START_PLUS_45_MINUTES',
+            'not_before_utc': 'REQUIRES_GRANTED_START', 'expires_utc': 'REQUIRES_GRANTED_START_PLUS_75_MINUTES',
             'reserve_bytes': RESERVE, 'memory_cap_bytes': DEVICE_CAP, 'images': IMAGES, 'component_caps': CAPS,
             'disk_caps': DISK_CAPS, 'minimum_start_free_bytes': START_FREE, 'additional_disk_cap_bytes': OWNED_CAP,
             'fixture_cap_bytes': FIXTURE_CAP, 'cleanup_grace_seconds': CLEANUP_GRACE, 'target_wake': False,
-            'target_source_install': False, 'target_restore': False, 'image_operations': []}
+            'target_source_install': False, 'target_restore': False, 'image_operations': [],
+            'fixture_shape': FIXTURE_SHAPE, 'open_check': open_check_binding()}
 
 
 def admit_lease(lease, commit, code, engine, *, lease_check, now=None):
@@ -1176,7 +1298,8 @@ def admit_lease(lease, commit, code, engine, *, lease_check, now=None):
             and lease.get('additional_disk_cap_bytes') == OWNED_CAP and lease.get('fixture_cap_bytes') == FIXTURE_CAP
             and lease.get('cleanup_grace_seconds') == CLEANUP_GRACE and lease.get('target_wake') is False
             and lease.get('target_source_install') is False and lease.get('target_restore') is False
-            and lease.get('image_operations') == [], 'lease-builder-contract')
+            and lease.get('image_operations') == [] and lease.get('fixture_shape') == FIXTURE_SHAPE
+            and lease.get('open_check') == open_check_binding(), 'lease-builder-contract')
     require(isinstance(lease.get('proof_root'), str) and re.fullmatch(ROOT_RE, lease['proof_root']) is not None,
             'lease-root')
     deadline = datetime.datetime.fromisoformat(lease['expires_utc'].replace('Z', '+00:00')).timestamp()
@@ -1190,9 +1313,18 @@ def locked_admission(lease, commit, deadline, *, lease_check, now=None):
     require(deadline-(time.time() if now is None else now) >= HEADROOM, 'lease-headroom-after-lock')
 
 
+def open_check_binding():
+    """The product-path open check this checkout runs on a packed fixture (focus_nextcloud_r6_s5_diag): lease-bound."""
+    import focus_nextcloud_r6_s5_diag as diag
+    return diag.open_check_binding()
+
+
 def run_locked(lease, commit, code, deadline, engine):
-    """Caller holds the dev-e mutex. Reuses the R6 read-only probes; never reads the 4.47 GB fixture."""
+    """Caller holds the dev-e mutex. Reuses the R6 read-only probes; never reads the 4.47 GB fixture. The native build
+    ends OPEN_RESERVE before the lease; then the product's own check path must open the packed fixture (diag.open_check:
+    every OPEN_CHECKS true) before anything is accepted, and its throwaway objects must be gone (the store snapshot)."""
     import focus_nextcloud_r6_case as case
+    import focus_nextcloud_r6_s5_diag as diag
     import focus_nextcloud_r6_wake as wake
     from focus_nextcloud_r6_inventory import collect, LP, DEVICE
     from focus_nextcloud_r6_plan import lease_check
@@ -1207,7 +1339,8 @@ def run_locked(lease, commit, code, deadline, engine):
     ev.save('binding.json', {'source_commit': commit, 'builder_sha256': sha(code.encode()), 'lease_sha256': lease_sha,
                              'engine_commit': ENGINE_COMMIT, 'engine_manifest_sha256': manifest_hash(engine),
                              'installed_engine_differs': engine_differs(installed, engine),
-                             'occ_contract_sha256': manifest_hash(OCC_CONTRACT)})
+                             'occ_contract_sha256': manifest_hash(OCC_CONTRACT), 'fixture_shape': FIXTURE_SHAPE,
+                             'open_check': diag.open_check_binding()})
     require(installed == engine, 'installed-engine-is-not-the-bound-checkout')
     marker = lab/'run/focus-nextcloud-r6-s5-leases'
     marker.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -1215,10 +1348,11 @@ def run_locked(lease, commit, code, deadline, engine):
     with os.fdopen(fd, 'w') as f:
         json.dump({'source_commit': commit, 'private_receipt_dir': str(ev.path)}, f); f.flush(); os.fsync(f.fileno())
 
-    def snapshot():
+    def snapshot():   # 'retired': the first build's proof root (diag.RETIRED_STATE), untouched while it is there
         return {'engine': wake.device(ENGINE_PROGRAM, root=True), 'target': wake.device(TARGET_STATE, root=True),
                 'units': wake.device(wake.unit_program(), {'action': 'snapshot'}),
-                'baseline': wake.device(wake.BASELINE_HASH, root=True, timeout=600), 'store': wake.device(STORE_SNAPSHOT)}
+                'baseline': wake.device(wake.BASELINE_HASH, root=True, timeout=600), 'store': wake.device(STORE_SNAPSHOT),
+                'retired': wake.device(diag.RETIRED_STATE, root=True, timeout=600)}
     prior = snapshot()
     ev.save('before.private.json', {'inventory': before, **prior})
     lease_check(lease, commit, PHASE)
@@ -1227,7 +1361,7 @@ def run_locked(lease, commit, code, deadline, engine):
             and min(fresh['host_free_bytes'], fresh['root']['varlib_free_bytes']) >= START_FREE
             and wake.device(case.QUIESCENT, root=True)['active_jobs'] == 0, 'fresh-before-first-write')
     root = lease['proof_root']
-    q = {'action': 'build', 'proof_root': root, 'nonce': root[-16:], 'deadline': deadline,
+    q = {'action': 'build', 'proof_root': root, 'nonce': root[-16:], 'deadline': deadline-OPEN_RESERVE,
          'start_free': fresh['root']['varlib_free_bytes'], 'images': IMAGES,
          'builder_source': code, 'builder_sha256': sha(code.encode())}
     wake.device(PROVISION, {'root': root}, root=True)
@@ -1238,16 +1372,24 @@ def run_locked(lease, commit, code, deadline, engine):
             proc = subprocess.Popen([str(LP), 'exec', '-i', DEVICE, '/usr/local/bin/woowbk-owner', 'python3', '-I', '-c',
                                      body], stdin=subprocess.PIPE, stdout=out, stderr=err)
             try:
-                proc.communicate(json.dumps(q).encode(), timeout=max(1, deadline-time.time()+CLEANUP_GRACE))
+                proc.communicate(json.dumps(q).encode(), timeout=max(1, q['deadline']-time.time()+CLEANUP_GRACE))
             except BaseException as exc:
                 ev.save('transport-failure.private.json', {'exception_class': type(exc).__name__,
-                        'errno': getattr(exc, 'errno', None), 'native_cleanup_deadline': deadline+CLEANUP_GRACE})
+                        'errno': getattr(exc, 'errno', None), 'native_cleanup_deadline': q['deadline']+CLEANUP_GRACE})
                 # The in-device supervisor keeps authority over its own containers and cleanup: never race it.
                 proc.wait(timeout=60); raise
         result = json.loads(small(ev.path/'native.stdout.private', MIB))
         ev.save('native-result.private.json', result)
     except BaseException as exc:
         failure = exc
+    built = failure is None and proc.returncode == 0 and isinstance(result, dict) and result.get('status') == 'passed'
+    gate = {'status': 'not-run'}
+    if built:
+        try:   # owned objects of its own job id only (TempObjects, then the product's sweep of that id)
+            gate = diag.open_check(result['fixture'], ev, deadline=deadline)
+        except Exception as exc:   # noqa: BLE001 - recorded: the fixture is then not accepted
+            gate = {'status': 'failed', 'reason': 'fixed-s5-open-check-' + type(exc).__name__}
+        ev.save('product-open-check.private.json', gate)
     after = collect(); later = snapshot()
     exact = (before['owner'] == after['owner'] and before['isolation'] == after['isolation']
              and before['root']['installed_hashes'] == after['root']['installed_hashes']
@@ -1255,7 +1397,8 @@ def run_locked(lease, commit, code, deadline, engine):
              and before['fixture'] == after['fixture'] and prior == later and later['engine'] == engine
              and wake.device(case.QUIESCENT, root=True)['active_jobs'] == 0)
     ev.save('final-target-proof.private.json', {'original_target_exact': exact, 'inventory': after, **later})
-    passed = failure is None and proc.returncode == 0 and isinstance(result, dict) and result.get('status') == 'passed'
+    opened = gate.get('status') == 'passed'
+    passed = built and opened
 
     def owned(action, request, prefix):
         with (ev.path/(prefix+'.stdout.private')).open('xb') as out, (ev.path/(prefix+'.stderr.private')).open('xb') as err:
@@ -1265,24 +1408,29 @@ def run_locked(lease, commit, code, deadline, engine):
         require(p.returncode == 0, prefix+'-failed-retained')
         return json.loads(small(ev.path/(prefix+'.stdout.private'), MIB))
     removal = None
-    if passed and exact:
-        request = dict(q, provenance_sha256=result['fixture']['provenance_sha256'])
+    if passed and exact:   # cleanup actions: the lease's own deadline plus CLEANUP_GRACE (the open check came after)
+        request = dict(q, deadline=deadline, provenance_sha256=result['fixture']['provenance_sha256'])
         removal = owned('remove-source', request, 'source-removal')
         require(removal.get('status') == 'owned-source-removed', 'owned-source-cleanup-failed-retained')
-    elif passed:
-        # The original target changed while the build passed: the run fails; its own source, fixture and credentials go
-        # (the before/after snapshots are the evidence), the records stay.
-        removal = owned('discard', q, 'owned-discard')
+    elif built:
+        # The product could not open the fixture, or the original target changed: the run fails; its own source,
+        # fixture and credentials go (the open check's facts and the before/after snapshots are the evidence).
+        removal = owned('discard', dict(q, deadline=deadline), 'owned-discard')
     leftovers = wake.device(OWNED_LISTING, {'root': root})
-    record = {'status': 'passed' if passed and exact else 'failed', 'phase': PHASE, 'source_commit': commit,
+    accepted = passed and exact
+    record = {'status': 'passed' if accepted else 'failed', 'phase': PHASE, 'source_commit': commit,
+              'builder_sha256': sha(code.encode()),
               'native_status': result.get('status') if isinstance(result, dict) else None,
               'original_target_exact': exact, 'owned_removal': removal, 'owned_leftovers': leftovers,
-              'fixture': result.get('fixture') if passed and exact else None, 'engine_commit': ENGINE_COMMIT,
+              'fixture': result.get('fixture') if accepted else None, 'engine_commit': ENGINE_COMMIT,
+              'fixture_shape': FIXTURE_SHAPE if accepted else None,
+              'product_open_check': {k: gate.get(k) for k in ('status', 'job_id', 'checks', 'reason')},
               'runtime_s5_import_acceptance': False, 'private_receipt_dir': str(ev.path)}
     ev.save('fixed-result.json', record); print(json.dumps(record))
     if failure is not None:
         raise failure
-    require(passed, 'native-build-failed')
+    require(built, 'native-build-failed')
+    require(opened, 'product-open-check-failed-owned-discarded')
     require(exact, 'original-target-changed-owned-discarded')
     return 0
 
@@ -1293,12 +1441,12 @@ def main(argv=None):
     parser.add_argument('--lease-template', action='store_true')
     args = parser.parse_args(argv)
     here = Path(__file__).resolve(); repo = here.parents[3]
+    sys.path.insert(0, str(here.parent))   # python3 -I does not put the script's directory on the path
     if args.lease_template:
         print(json.dumps(lease_template(repo), indent=2, sort_keys=True)); return 0
     if not args.run:
         print(json.dumps(contract(), sort_keys=True)); return 0
     require(args.lease is not None, 'lease-required')
-    sys.path.insert(0, str(here.parent))   # python3 -I does not put the script's directory on the path
     from focus_nextcloud_r6_plan import lease_check
     commit, clean = checkout(repo)
     require(clean, 'clean-checkout')

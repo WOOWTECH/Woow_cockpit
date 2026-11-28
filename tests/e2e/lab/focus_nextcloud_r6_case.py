@@ -111,13 +111,19 @@ def admission(before):
             raise ValueError('fixed-r6-original-image-required')
 
 
-def run(args, lease, commit, facts, flow):
-    """Caller has acquired whole-device mutex. No nested locks or old setup/install."""
-    lease_check(lease,commit,'fullshare')
-    if (lease.get('product_commit')!=source.PRODUCT_COMMIT or lease.get('source_policy')!=SOURCE_POLICY
+def run(args, lease, commit, facts, flow, binding=None):
+    """Caller has acquired whole-device mutex. No nested locks or old setup/install.
+
+    `binding` (None = the R6 full share): another case of this lane on the same cold-to-cold path -- its lease phase,
+    product commit, frozen-manifest reader, evidence area and result phase (focus_nextcloud_r6_s5b.BINDING)."""
+    phase_name=binding.phase if binding else 'fullshare'
+    product_commit=binding.product_commit if binding else source.PRODUCT_COMMIT
+    frozen=binding.frozen_manifest if binding else source.frozen_manifest
+    lease_check(lease,commit,phase_name)
+    if (lease.get('product_commit')!=product_commit or lease.get('source_policy')!=SOURCE_POLICY
             or lease.get('pin_refresh_policy')!=PIN_POLICY or lease.get('recovery_grace_seconds')!=1800):
         raise ValueError('fixed-r6-source-pin-recovery-lease-required')
-    paths,manifest=source.frozen_manifest(args.product_source)
+    paths,manifest=frozen(args.product_source)
     if lease.get('product_manifest_sha256')!=source.manifest_hash(manifest):
         raise ValueError('fixed-r6-frozen-manifest-lease-required')
     before=collect();admission(before)
@@ -138,7 +144,7 @@ def run(args, lease, commit, facts, flow):
     if expires-time.time()<75*60: raise ValueError('fixed-r6-case-lease-headroom-required')
     if flow.RECEIPT.exists() and json.loads(flow.RECEIPT.read_text()).get('pending'):
         raise ValueError('fixed-r6-previous-recovery-pending')
-    ev=Path.home()/'.woowbk-lab/evidence/focus-nextcloud-r6-control'/time.strftime('%Y%m%dT%H%M%S')
+    ev=Path.home()/'.woowbk-lab/evidence'/(binding.area if binding else 'focus-nextcloud-r6-control')/time.strftime('%Y%m%dT%H%M%S')
     ev.mkdir(parents=True,mode=0o700,exist_ok=False);os.chmod(ev.parent,0o700)
     def save(name,value):
         fd=os.open(ev/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -147,7 +153,7 @@ def run(args, lease, commit, facts, flow):
     baseline=wake.device(wake.BASELINE_HASH,root=True,timeout=600)
     save('prior-units.private.json',snapshot);save('prior-inventory.private.json',before)
     save('baseline-hashes.json',baseline);save('product-manifest.json',manifest)
-    nonce=secrets.token_hex(8);save('source-transaction.json',{'nonce':nonce,'product_commit':source.PRODUCT_COMMIT})
+    nonce=secrets.token_hex(8);save('source-transaction.json',{'nonce':nonce,'product_commit':product_commit})
     installed=False;attempted=False;rc=1;reverted=False;preserved=False;data_safe=True;source_return=False
     failure=None;phase='source-staging';case_entered=False;office_claim=None
     try:
@@ -155,13 +161,13 @@ def run(args, lease, commit, facts, flow):
         deployed=source.transact('install',nonce,paths,manifest,expires)
         installed=True;save('source-installed.json',deployed)
         args.product_hashes={n.removeprefix('woowbackup/'):r['sha256'] for n,r in manifest.items() if n.startswith('woowbackup/')}
-        lease_check(lease,commit,'fullshare')
+        lease_check(lease,commit,phase_name)
         phase='native-wake';wake.device(wake.unit_program(),{'action':'pin','snapshot':snapshot});reload_units()
         started=wake.device(wake.CONTROL,{'action':'start','expires_epoch':expires},timeout=1200)
         save('wake-result.json',started)
         office_claim=wake.device(cold.CLAIM);save('owned-office-invocation.json',office_claim)
         if not flow.baseline_verify(): raise RuntimeError('fixed-r6-baseline-before-import-failed')
-        phase='current-fullshare';case_entered=True;data_safe=False
+        phase='current-'+phase_name;case_entered=True;data_safe=False
         rc=flow.run_locked(args,lease,commit,facts,before)
         data_safe=flow.RECEIPT.exists() and not json.loads(flow.RECEIPT.read_text()).get('pending',True)
         if not data_safe: raise RuntimeError('fixed-r6-baseline-recovery-incomplete')
@@ -197,8 +203,8 @@ def run(args, lease, commit, facts, flow):
         except Exception:
             failure='fixed-r6-cold-or-source-return-needs-private-copy-recovery'
     passed=rc==0 and data_safe and reverted and preserved and source_return
-    record={'status':'passed' if passed else 'failed','phase':'fullshare-cold-return','source_commit':commit,
-            'product_commit':source.PRODUCT_COMMIT,'product_manifest_sha256':source.manifest_hash(manifest),
+    record={'status':'passed' if passed else 'failed','phase':binding.result_phase if binding else 'fullshare-cold-return',
+            'source_commit':commit,'product_commit':product_commit,'product_manifest_sha256':source.manifest_hash(manifest),
             'source_deployed':installed,'case_entered':case_entered,'data_baseline_safe':data_safe,
             'prior_quadlets_exact':reverted,'prior_engine_helper_version_exact':source_return,
             'units_images_catalog_baseline_archive_isolation_preserved':preserved,

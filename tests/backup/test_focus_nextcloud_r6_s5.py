@@ -4,16 +4,22 @@ The tiny cluster/key bytes below are structural unit inputs, never released as a
 requires the actual OCC/WebDAV/cipher/key/PG gates. The product library is THIS repository's backup-engine (put on the
 path by tests/backup/__init__.py), never the host's installed /usr/local copy.
 """
+import base64
+import contextlib
 import copy
 import datetime
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -25,6 +31,8 @@ REPO = Path(__file__).resolve().parents[2]
 ENGINE = REPO/'backup-engine'
 LIBRARIES = lambda: (habackup, ha_nextcloud, ha_odoo)   # noqa: E731 - the repository's own engine
 MASTER = 'master_0123abcd'
+# What the native build's database_shape() records of the real add-on's database (FIXTURE_SHAPE, Nextcloud's tables).
+SHAPE = dict({k: s5.FIXTURE_SHAPE[k] for k in s5.DB_SHAPE_KEYS}, tables=154)
 
 
 def no_product(*args, **kwargs):
@@ -88,7 +96,7 @@ class PackagingTests(Base):
         self.write('html/config/config.php', b'''<?php
 $CONFIG = array ('instanceid' => 'ocs5structural', 'passwordsalt' => 'unit-salt',
 'secret' => 'unit-secret', 'version' => '35.0.1.1', 'installed' => true,
-'dbtype' => 'pgsql', 'dbtableprefix' => 'oc_', 'dbname' => 'nextcloud',
+'dbtype' => 'pgsql', 'dbtableprefix' => 'oc_', 'dbname' => 'nextcloud', 'dbuser' => 'nextcloud',
 'datadirectory' => '/share/nextcloud');
 ''')
         self.write('data/.ncdata', b'# Nextcloud data directory')
@@ -96,7 +104,7 @@ $CONFIG = array ('instanceid' => 'ocs5structural', 'passwordsalt' => 'unit-salt'
         self.write('data/s5owner/files/s5-binary.bin', header_block()+b'x'*(3*s5.MIB+7))
         self.write('data/files_encryption/OC_DEFAULT_MODULE/master_unit.privateKey', key_bytes('unit'))
         self.proof = {'webdav_before': True, 'webdav_after_restart': True, 'plaintext_before_encryption': True,
-                      'master_key_mode': True, 'pg_shutdown': True, 'cipher_and_keys': {}}
+                      'master_key_mode': True, 'pg_shutdown': True, 'cipher_and_keys': {}, 'database_shape': SHAPE}
         for name in ('s5owner/files/s5-binary.bin', 'files_encryption/OC_DEFAULT_MODULE/master_unit.privateKey'):
             p = self.work/'data'/name
             self.proof['cipher_and_keys'][name] = {'bytes': p.stat().st_size, 'sha256': s5.digest(p)}
@@ -121,8 +129,23 @@ $CONFIG = array ('instanceid' => 'ocs5structural', 'passwordsalt' => 'unit-salt'
         with tarfile.open(path) as tar:
             self.assertEqual([m.name for m in tar], [s5.SLUG+'.tar', 'share.tar', './backup.json'])
             doc = json.load(tar.extractfile('./backup.json'))
+            addon = tarfile.open(fileobj=tar.extractfile(s5.SLUG+'.tar'))
+            share = tarfile.open(fileobj=tar.extractfile('share.tar'))
+            names, entries = [m.name for m in addon], {m.name: m for m in addon}
+            share_names = [m.name for m in share]
         self.assertFalse(doc['protected']); self.assertFalse(doc['extra']['haos_export'])
         self.assertTrue(doc['extra']['generated_test_fixture'])
+        # HA's tar order: the structural parents, then every mapped directory before its own children (data/postgres
+        # first of the cluster: the product's PgSink writes the cluster's root entry first, tempctr.tar_root applies it).
+        self.assertEqual(names[:5], ['.', 'addon.json', 'data', 'data/nextcloud', 'data/nextcloud/config'])
+        for root in ('data/nextcloud/config', 'data/nextcloud/custom_apps', 'data/postgres'):
+            self.assertTrue(entries[root].isdir())
+            children = [i for i, n in enumerate(names) if n.startswith(root+'/')]
+            self.assertLess(names.index(root), min(children, default=len(names)))
+        self.assertEqual(entries['data/postgres'].mode, (self.work/'pg').stat().st_mode & 0o777)
+        self.assertEqual((entries['.'].uid, entries['.'].mode), (0, 0o755))
+        self.assertEqual(share_names[0], 'nextcloud')
+        self.assertEqual(provenance['member_directories']['structural'], ['.', 'data', 'data/nextcloud'])
         with habackup.open_backup(path) as opened:
             with opened.open_member('share.tar') as stream:
                 report = habackup.Report(); names = {}
@@ -167,6 +190,29 @@ $CONFIG = array ('instanceid' => 'ocs5structural', 'passwordsalt' => 'unit-salt'
         p.write_bytes(p.read_bytes().replace(b'/share/nextcloud', b'/elsewhere/nextcloud'))
         with self.assertRaisesRegex(ValueError, 'native-config-layout'):
             self.build()
+
+    def test_the_database_must_have_the_real_add_ons_shape(self):
+        """The first build's shape (superuser nextcloud, the installer's own oc_ role owning the tables) is refused."""
+        for change in ({'superuser': 'nextcloud', 'superusers': ['nextcloud']}, {'roles': ['nextcloud', 'oc_s5owner']},
+                       {'table_owners': ['oc_s5owner']}, {'database_owner': 'postgres'}, {'tables': 0}):
+            with self.subTest(change=sorted(change)):
+                with self.assertRaisesRegex(ValueError, 'native-database-shape'):
+                    self.build(dict(self.proof, database_shape=dict(SHAPE, **change)))
+                self.assertFalse((self.work/'artifact').exists() and any((self.work/'artifact').iterdir()))
+                if (self.work/'artifact').exists(): (self.work/'artifact').rmdir()
+        p = self.work/'html/config/config.php'
+        p.write_bytes(p.read_bytes().replace(b"'dbuser' => 'nextcloud'", b"'dbuser' => 'oc_s5owner'"))
+        with self.assertRaisesRegex(ValueError, 'native-config-layout'):
+            self.build()
+
+    def test_the_products_own_member_pass_sees_the_cluster_root_first(self):
+        result = self.build()
+        with habackup.open_backup(result['archive']) as opened, opened.open_addon(s5.SLUG) as stream:
+            sink = ha_odoo.PgSink(s5.Discard(), 999, 999)
+            source = ha_nextcloud.scan_member(stream, habackup.Report(), pg=sink, machine=0x3e)
+            sink.close()
+        self.assertTrue(sink.root_written)
+        self.assertEqual((source.config['dbuser'], source.config['dbname']), ('nextcloud', 'nextcloud'))
 
     def test_wrong_pg_major_and_live_pid_refuse(self):
         for fault in ('major', 'pid'):
@@ -243,7 +289,7 @@ class LeaseTests(unittest.TestCase):
         self.engine = {'helper': 'a'*64, 'lib/VERSION': 'b'*64}
         self.now = 1_900_000_000.0
         start = datetime.datetime.fromtimestamp(self.now-60, datetime.timezone.utc)
-        end = datetime.datetime.fromtimestamp(self.now+45*60, datetime.timezone.utc)
+        end = datetime.datetime.fromtimestamp(self.now+75*60, datetime.timezone.utc)
         self.lease = {'lane': 'nextcloud-r6', 'device': 'woowbk-dev-e', 'phases': [s5.PHASE], 'source_commit': 'c'*40,
                       'builder_sha256': s5.sha(self.code.encode()), 'engine_commit': s5.ENGINE_COMMIT,
                       'engine_manifest_sha256': s5.manifest_hash(self.engine),
@@ -256,7 +302,8 @@ class LeaseTests(unittest.TestCase):
                       'minimum_start_free_bytes': s5.START_FREE, 'additional_disk_cap_bytes': s5.OWNED_CAP,
                       'fixture_cap_bytes': s5.FIXTURE_CAP, 'cleanup_grace_seconds': s5.CLEANUP_GRACE,
                       'target_wake': False, 'target_source_install': False, 'target_restore': False,
-                      'image_operations': []}
+                      'image_operations': [], 'fixture_shape': copy.deepcopy(s5.FIXTURE_SHAPE),
+                      'open_check': s5.open_check_binding()}
         from focus_nextcloud_r6_plan import lease_check
         self.lease_check = lambda lease, commit, phase: lease_check(
             lease, commit, phase, now=datetime.datetime.fromtimestamp(self.now, datetime.timezone.utc))
@@ -266,34 +313,42 @@ class LeaseTests(unittest.TestCase):
                               now=self.now if now is None else now)
 
     def test_exact_lease_is_admitted_and_every_bound_field_matters(self):
-        self.assertEqual(self.admit(self.lease), self.now+45*60)
+        self.assertEqual(self.admit(self.lease), self.now+75*60)
+        self.assertEqual(s5.HEADROOM, 1800+s5.OPEN_RESERVE)   # the native build's 30 minutes and the open check's reserve
+        shape = dict(s5.FIXTURE_SHAPE, superuser='nextcloud')
         for field, value in (('builder_sha256', '0'*64), ('engine_commit', '0'*40), ('engine_manifest_sha256', '0'*64),
                              ('occ_contract_sha256', '0'*64), ('disk_caps', dict(s5.DISK_CAPS, data=32*s5.MIB)),
                              ('component_caps', {}), ('images', {}), ('minimum_start_free_bytes', 1),
                              ('additional_disk_cap_bytes', 1), ('fixture_cap_bytes', 1), ('cleanup_grace_seconds', 1),
-                             ('target_wake', True), ('target_restore', None), ('image_operations', ['pull'])):
+                             ('target_wake', True), ('target_restore', None), ('image_operations', ['pull']),
+                             ('fixture_shape', shape), ('open_check', dict(self.lease['open_check'], tool_sha256='0'*64))):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, 'lease-builder-contract'):
                     self.admit(dict(self.lease, **{field: value}))
         with self.assertRaisesRegex(ValueError, 'lease-root'):
             self.admit(dict(self.lease, proof_root='/var/lib/woowbk-nextcloud-s5-../x'))
         with self.assertRaisesRegex(ValueError, 'lease-headroom'):
-            self.admit(self.lease, now=self.now+16*60)
+            self.admit(self.lease, now=self.now+26*60)   # 49 minutes left: less than the build plus the open check
 
     def test_template_binds_this_checkout(self):
         template = s5.lease_template(REPO)
         for field in ('builder_sha256', 'engine_commit', 'occ_contract_sha256', 'images', 'component_caps', 'disk_caps',
                       'minimum_start_free_bytes', 'additional_disk_cap_bytes', 'fixture_cap_bytes',
                       'cleanup_grace_seconds', 'target_wake', 'target_source_install', 'target_restore',
-                      'image_operations', 'reserve_bytes', 'memory_cap_bytes', 'phases', 'lane', 'device'):
+                      'image_operations', 'reserve_bytes', 'memory_cap_bytes', 'phases', 'lane', 'device',
+                      'fixture_shape', 'open_check'):
             self.assertEqual(template[field], self.lease[field], field)
         self.assertEqual(template['engine_manifest_sha256'], s5.manifest_hash(s5.engine_manifest(REPO)))
         self.assertTrue(template['proof_root'].startswith('REQUIRES_'))
+        self.assertEqual(template['expires_utc'], 'REQUIRES_GRANTED_START_PLUS_75_MINUTES')
+        import focus_nextcloud_r6_s5_diag as diag
+        self.assertEqual(template['open_check'], {'tool_sha256': s5.sha(Path(diag.__file__).read_bytes()),
+                                                  'worker_sha256': diag.WORKER_SHA, 'sweep_sha256': s5.sha(diag.SWEEP.encode())})
 
     def test_blocking_lock_then_the_lease_must_still_have_thirty_minutes(self):
         """Gap 4: flock waits (LOCK_EX without LOCK_NB); after the wait the headroom is checked before any device step."""
         flags = []; deadline = self.admit(self.lease)
-        def flock(fd, flag): flags.append(flag); self.now += 20*60   # someone else held the lock for 20 minutes
+        def flock(fd, flag): flags.append(flag); self.now += 30*60   # someone else held the lock for 30 minutes
         with tempfile.TemporaryDirectory() as tmp, patch.object(s5, 'LOCK', str(Path(tmp)/'lock')), \
                 patch.object(s5.fcntl, 'flock', flock), patch.dict(os.environ, {'HEAVY_FREE': str(Path(tmp)/'lock')}), \
                 patch.object(s5, 'checkout', lambda repo: ('c'*40, True)), \
@@ -306,7 +361,7 @@ class LeaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'lease-headroom-after-lock'):
                     s5.main(['--run', '--lease', str(lease)])
         self.assertEqual(flags, [s5.fcntl.LOCK_EX])
-        self.assertEqual(deadline, self.now-20*60+45*60)
+        self.assertEqual(deadline, self.now-30*60+75*60)
 
     def test_lock_wait_shorter_than_the_slack_proceeds(self):
         deadline = self.admit(self.lease)
@@ -717,6 +772,28 @@ class OwnershipTests(Base):
         self.assertFalse(any(':U' in a or a.endswith(',U') for row in args.values() for a in row))
         self.assertIn('--env=NEXTCLOUD_DATA_DIR=/share/nextcloud', args['nc'])
         self.assertFalse(any('PASSWORD=' in a for row in args.values() for a in row))   # secrets only
+        # The real add-on's database: initdb superuser postgres (its password only in the database container's secret);
+        # Nextcloud connects as its own role nextcloud (made by postgres before the install, database_role).
+        env = {role: sorted(a for a in row if a.startswith(('--env=POSTGRES_', '--secret='))) for role, row in args.items()}
+        self.assertEqual(env['pg'], ['--env=POSTGRES_DB=nextcloud', '--env=POSTGRES_USER=postgres',
+                                     '--secret=woowbk-s5-'+'0'*16+'-superpass,type=env,target=POSTGRES_PASSWORD'])
+        self.assertEqual(env['nc'], ['--env=POSTGRES_DB=nextcloud', '--env=POSTGRES_HOST=woowbk-s5-'+'0'*16+'-pg',
+                                     '--env=POSTGRES_USER=nextcloud',
+                                     '--secret=woowbk-s5-'+'0'*16+'-admin,type=env,target=NEXTCLOUD_ADMIN_PASSWORD',
+                                     '--secret=woowbk-s5-'+'0'*16+'-dbpass,type=env,target=POSTGRES_PASSWORD'])
+
+    def test_nextcloud_s_role_gets_a_verifier_never_the_password(self):
+        salt = bytes(range(16)); password = 'ab'*24
+        verifier = s5.scram_verifier(password, salt=salt)
+        self.assertEqual(verifier, ha_nextcloud.scram_verifier(password, salt=salt))   # the product's own computation
+        self.assertRegex(s5.scram_verifier(password), s5.VERIFIER_RE)
+        sql = s5.role_sql(verifier)
+        self.assertEqual(sql, "CREATE ROLE nextcloud LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '%s';\n"
+                              "ALTER DATABASE nextcloud OWNER TO nextcloud;\n" % verifier)
+        self.assertNotIn(password, sql)
+        for bad in (password, "x'; DROP ROLE postgres; --", 'md5'+'0'*32):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'role-verifier'):
+                s5.role_sql(bad)
 
     def test_cpu_limit_only_when_the_controller_is_delegated(self):
         native = s5.Native({'proof_root': str(self.work.parent), 'deadline': 4e9, 'nonce': '0'*16, 'action': 'unit',
@@ -757,6 +834,238 @@ class RenderedProgramTests(unittest.TestCase):
                 patch('builtins.print') as shown:
             self.assertEqual(s5.main([]), 0)
         self.assertEqual(json.loads(shown.call_args[0][0])['engine_commit'], s5.ENGINE_COMMIT)
+
+
+class FakePostgres:
+    """The official PostgreSQL image's cluster as the native build meets it: initdb's superuser is POSTGRES_USER; a role
+    and its database ownership come from the SQL sent; Nextcloud's installer, connecting as POSTGRES_USER of its own
+    container, keeps that role when it cannot create roles, and makes its own oc_<admin> role when it can."""
+
+    def __init__(self, superuser):
+        self.superuser, self.roles, self.owner, self.tables, self.sql = superuser, {superuser: True}, superuser, None, []
+
+    def run_sql(self, text):
+        self.sql.append(text)
+        role = re.match(r"CREATE ROLE ([a-z_]+) LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '(SCRAM-[^']+)';", text)
+        if role and role.group(1) in self.roles:   # ERROR: role "..." already exists; psql -v ON_ERROR_STOP=1 exits 3
+            raise ValueError('fixed-s5-native-command-refused')
+        if role:
+            self.roles[role.group(1)] = False
+        owner = re.search(r'ALTER DATABASE nextcloud OWNER TO ([a-z_]+);', text)
+        if owner:
+            self.owner = owner.group(1)
+
+    def install(self, user):
+        self.tables = user if not self.roles.get(user) else 'oc_'+s5.USER   # a superuser may create roles
+        self.roles.setdefault(self.tables, False)
+
+    def shape(self):
+        return {'superuser': self.superuser, 'superusers': sorted(r for r, sup in self.roles.items() if sup),
+                'roles': sorted(self.roles), 'database_owner': self.owner,
+                'table_owners': [self.tables] if self.tables else [], 'tables': 154 if self.tables else 0}
+
+
+class SimulatedBuildTests(Base):
+    """Native.execute end to end against a fake dev-e: what proves the postgres superuser before anything is packed."""
+
+    def native(self, pg):
+        native = s5.Native({'proof_root': str(self.work.parent), 'deadline': 4e9, 'nonce': '0'*16, 'action': 'build',
+                            'start_free': 30*s5.GIB, 'images': dict(s5.IMAGES)})
+        native.work, native.check = self.work, lambda: None
+        self.events, self.secrets, self.proof, known = [], {}, None, s5.plaintexts()
+        env = {}
+
+        def call(argv, data=None, timeout=180, allowed=(0,), cleanup=False):
+            argv = [str(a) for a in argv]; args = argv[1:]
+            if args[:2] == ['image', 'inspect']:
+                return 0, (args[-1]+' amd64 linux\n').encode()
+            if args[:2] == ['secret', 'create']:
+                self.secrets[args[-2].rsplit('-', 1)[1]] = data.decode(); return 0, b'id\n'
+            if args[:2] == ['network', 'create']:
+                return 0, b'net\n'
+            if args[:2] == ['network', 'inspect']:
+                return 0, json.dumps([{'internal': True, 'labels': {'woowbk.s5': '0'*16}}]).encode()
+            if args[0] == 'exec' and 'pg_isready' in args:
+                self.events.append(('pg_isready', args[args.index('pg_isready')+1:])); return 0, b''
+            if args[0] == 'exec' and 'psql' in args and '-f' in args:
+                self.events.append(('psql-stdin', args[args.index('-U')+1])); pg.run_sql(data.decode()); return 0, b''
+            if args[0] == 'exec' and 'psql' in args:
+                self.events.append(('psql-shape', args[args.index('-U')+1])); return 0, json.dumps(pg.shape()).encode()
+            if args[0] == 'exec' and args[-1] == 'ping':
+                return 0, b'PONG\n'
+            if args[0] == 'exec' and args[-1] == '--version':
+                return 0, b'postgres (PostgreSQL) 16.11\n' if 'postgres' in args else b'Redis server v=8.10.1 sha=0\n'
+            if args[0] in ('restart', 'stop'):
+                self.events.append((args[0], args[-1])); return 0, b''
+            if args[0] == 'inspect':
+                return 0, json.dumps({'Running': False, 'OOMKilled': False, 'ExitCode': 0}).encode()
+            if args[0] == 'run' and '--entrypoint=pg_controldata' in args:
+                return 0, b'Database cluster state:               shut down\n'
+            raise AssertionError(argv)
+
+        def run_container(role, args):
+            env[role] = args; self.events.append(('run', role))
+            if role == 'nc':
+                pg.install(next(a[len('--env=POSTGRES_USER='):] for a in args if a.startswith('--env=POSTGRES_USER=')))
+
+        def unshare(action, cleanup=False, **extra):
+            if action == 'cipher':
+                return {'encrypted': [], 'plaintext': [], 'keys': {}, 'public_share_keys': 2, 'cipher_and_keys': {}}
+            if action == 'package':
+                self.proof = extra['proof']; return {'status': 'passed'}
+            return {'status': 'prepared'}
+        native.call, native.run_container, native.unshare = call, run_container, unshare
+        native.www_ids = lambda: (33, 33)
+        native.wait_nc = native.occ_gate_before = native.enable_encryption = lambda *a: None
+        native.put_get = lambda *a: None
+        native.master_key_id = lambda: MASTER
+        rows = {n: v for kind in known.values() for n, v in kind.items()}
+        native.dav = lambda password, name, method: {'status': 200, 'bytes': len(rows[name]), 'sha256': s5.sha(rows[name])}
+        self.env = env
+        return native
+
+    def test_the_native_build_makes_the_real_add_ons_database_and_proves_it(self):
+        pg = FakePostgres('postgres')
+        self.native(pg).execute()
+        self.assertEqual(self.proof['database_shape'], SHAPE)
+        self.assertIn('--env=POSTGRES_USER=postgres', self.env['pg'])
+        self.assertIn('--env=POSTGRES_USER=nextcloud', self.env['nc'])
+        self.assertEqual(sorted(self.secrets), ['admin', 'dbpass', 'superpass'])
+        names = [e[0] if e[0] != 'run' else 'run-'+e[1] for e in self.events]
+        self.assertEqual(names[:6], ['run-pg', 'run-redis', 'pg_isready', 'psql-stdin', 'psql-shape', 'run-nc'])
+        self.assertEqual(self.events[2][1], ['-h', '127.0.0.1', '-p', '5432', '-U', 'postgres', '-d', 'nextcloud'])
+        self.assertEqual({e[1] for e in self.events if e[0].startswith('psql')}, {'postgres'})   # always as postgres
+        self.assertLess(names.index('restart'), len(names)-1-names[::-1].index('psql-shape'))   # the shape after the install
+        self.assertLess(len(names)-1-names[::-1].index('psql-shape'), names.index('stop'))
+        [sql] = pg.sql
+        self.assertNotIn(self.secrets['dbpass'], sql)                      # a verifier, never the password
+        verifier = re.search(r"PASSWORD '([^']+)'", sql).group(1)
+        salt = base64.b64decode(verifier.split('$')[1].split(':')[1])
+        self.assertEqual(verifier, s5.scram_verifier(self.secrets['dbpass'], salt=salt))
+        self.assertNotIn(self.secrets['superpass'], json.dumps(self.proof))
+
+    def test_the_first_builds_shape_is_refused_before_nextcloud_is_installed(self):
+        """A cluster whose initdb superuser is nextcloud (POSTGRES_USER=nextcloud, the first build) has no role postgres."""
+        for superuser in ('nextcloud', 'oc_admin'):
+            with self.subTest(superuser=superuser):
+                native = self.native(FakePostgres(superuser))
+                with self.assertRaisesRegex(ValueError, 'database-role|native-command-refused'):
+                    native.execute()
+                self.assertNotIn(('run', 'nc'), self.events)
+                self.assertEqual(native.stage, 'database-role')
+                for name in ('html', 'pg', 'data', 'occ-gate.private.json'):
+                    p = self.work/name
+                    if p.is_dir(): __import__('shutil').rmtree(p)
+
+
+def inventory_row():
+    from focus_nextcloud_r6_inventory import ORIGINALS
+    return {'isolation': {'running': True, 'network': 'none', 'ports': {}, 'memory_limit': s5.DEVICE_CAP},
+            'root': {'memory_max': str(s5.DEVICE_CAP), 'memory_current': 200*s5.MIB, 'varlib_free_bytes': 100*s5.GIB,
+                     'installed_hashes': {'ha_nextcloud.py': 'a'*64}, 'catalog_sha256': 'c'*64},
+            'host_memory_available_mib': 8000, 'host_free_bytes': 100*s5.GIB, 'fixture': {'exists': True},
+            'owner': {'units': {'nextcloud.target': {'ActiveState': 'inactive'}},
+                      'images': [{'ref': r, 'present': True, 'identity': {'id': 'sha256:'+c, 'architecture': 'amd64',
+                                                                          'os': 'linux'}} for r, c in ORIGINALS.items()],
+                      'quadlets': {}}}
+
+
+class RunLockedGateTests(unittest.TestCase):
+    """s5.run_locked against a fake dev-e: the native build, then the product-path open check, then the exact after-state;
+    only an opened fixture is kept, its result names the shape and the gate."""
+
+    def run_gate(self, gate, retired_after=None):
+        import focus_nextcloud_r6_case as case
+        import focus_nextcloud_r6_inventory as inventory
+        import focus_nextcloud_r6_plan as plan
+        import focus_nextcloud_r6_s5_diag as diag
+        import focus_nextcloud_r6_wake as wake
+        home = Path(tempfile.mkdtemp()); self.addCleanup(__import__('shutil').rmtree, home, True)
+        root = '/var/lib/woowbk-nextcloud-s5-'+'5'*16
+        engine = {'helper': 'a'*64, 'lib/VERSION': 'b'*64}
+        events, requests, retired = [], {}, [{'present': True, 'valid': True, 'fixture_sha256': 'f'*64}]
+        if retired_after is not None:
+            retired.append(retired_after)
+        fixture = {'archive': root+'/owned/artifact/generated-s5-source.tar', 'bytes': 1000, 'sha256': 'ab'*32,
+                   'provenance_sha256': 'cd'*32, 'status': 'passed', 'kind': 'generated-ha-shaped-test-fixture',
+                   'haos_export': False, 's5_import_acceptance': False}
+
+        def device(program, request=None, *, root=False, timeout=300):
+            if program == diag.RETIRED_STATE:
+                events.append('retired'); return retired[min(events.count('retired'), len(retired))-1]
+            if program == s5.PROVISION:
+                events.append('provision'); return {'status': 'created'}
+            if program == s5.OWNED_LISTING:
+                return {'leaves': ['artifact'], 'command_records': 1, 'artifact': ['generated-s5-source.tar']}
+            return {s5.ENGINE_PROGRAM: engine, case.QUIESCENT: {'active_jobs': 0}}.get(program, {'same': True})
+
+        class Proc:
+            returncode = 0
+            def __init__(self, argv, stdin, stdout, stderr): self.out = stdout
+            def communicate(self, data, timeout):
+                requests['native'] = json.loads(data); events.append('native-build')
+                self.out.write(json.dumps({'status': 'passed', 'fixture': fixture}).encode())
+            def wait(self, timeout=None): return 0
+
+        def run(argv, input, stdout, stderr, timeout):
+            q = json.loads(input); requests[q['action']] = q; events.append(q['action'])
+            reply = ({'status': 'owned-source-removed', 'removed': ['html', 'pg', 'data'], 'fixture_retained': True}
+                     if q['action'] == 'remove-source' else {'status': 'owned-discarded', 'removed': list(s5.OWNED_LEAVES)})
+            stdout.write(json.dumps(reply).encode()); return SimpleNamespace(returncode=0)
+
+        def open_check(fx, ev, *, deadline):
+            events.append('open-check'); requests['open'] = (fx, deadline); return dict(gate)
+        lease = {'proof_root': root}
+        out = io.StringIO()
+        with patch.object(Path, 'home', return_value=home), patch.object(inventory, 'collect', inventory_row), \
+                patch.object(wake, 'device', device), patch.object(plan, 'lease_check', lambda *a: None), \
+                patch.object(diag, 'open_check', open_check), patch.object(s5.subprocess, 'Popen', Proc), \
+                patch.object(s5.subprocess, 'run', run), contextlib.redirect_stdout(out):
+            try:
+                s5.run_locked(lease, 'c'*40, 'builder code', 5000.0+time.time(), engine)
+                error = None
+            except ValueError as exc:
+                error = str(exc)
+        record = json.loads(out.getvalue().strip().splitlines()[-1])
+        return record, events, requests, error
+
+    def test_an_opened_fixture_is_kept_and_its_result_names_the_shape_and_the_gate(self):
+        checks = {name: True for name in s5.OPEN_CHECKS}
+        record, events, requests, error = self.run_gate({'status': 'passed', 'job_id': 'j20261129T010203Z-5d1a0b0c',
+                                                         'checks': checks, 'reason': None})
+        self.assertIsNone(error)
+        self.assertEqual(record['status'], 'passed')
+        self.assertEqual((record['fixture_shape'], record['builder_sha256']), (s5.FIXTURE_SHAPE, s5.sha(b'builder code')))
+        self.assertEqual(record['product_open_check'], {'status': 'passed', 'job_id': 'j20261129T010203Z-5d1a0b0c',
+                                                        'checks': checks, 'reason': None})
+        self.assertEqual(events, ['retired', 'provision', 'native-build', 'open-check', 'retired', 'remove-source'])
+        deadline = requests['open'][1]
+        self.assertEqual(requests['native']['deadline'], deadline-s5.OPEN_RESERVE)   # the build leaves the reserve
+        self.assertEqual(requests['remove-source']['deadline'], deadline)          # cleanup: the lease's own deadline
+        self.assertEqual(requests['open'][0]['archive'], '/var/lib/woowbk-nextcloud-s5-'+'5'*16+s5b_tail())
+
+    def test_a_fixture_the_product_cannot_open_is_discarded_and_the_run_fails(self):
+        checks = dict({name: True for name in s5.OPEN_CHECKS}, product_call_answered=False, superuser=False)
+        record, events, requests, error = self.run_gate({'status': 'failed', 'job_id': 'j20261129T010203Z-5d1a0b0c',
+                                                         'checks': checks, 'reason': 'x'})
+        self.assertEqual(error, 'fixed-s5-product-open-check-failed-owned-discarded')
+        self.assertEqual((record['status'], record['fixture'], record['fixture_shape']), ('failed', None, None))
+        self.assertEqual(record['product_open_check']['status'], 'failed')
+        self.assertEqual(events[-1], 'discard')
+        self.assertEqual(requests['discard']['deadline'], requests['open'][1])
+
+    def test_the_first_builds_root_must_stay_as_it_was(self):
+        checks = {name: True for name in s5.OPEN_CHECKS}
+        record, events, requests, error = self.run_gate({'status': 'passed', 'job_id': 'j20261129T010203Z-5d1a0b0c',
+                                                         'checks': checks, 'reason': None},
+                                                        retired_after={'present': False})
+        self.assertEqual(error, 'fixed-s5-original-target-changed-owned-discarded')
+        self.assertFalse(record['original_target_exact'])
+        self.assertEqual(events[-1], 'discard')
+
+
+def s5b_tail():
+    return '/owned/artifact/generated-s5-source.tar'
 
 
 if __name__ == '__main__': unittest.main()
