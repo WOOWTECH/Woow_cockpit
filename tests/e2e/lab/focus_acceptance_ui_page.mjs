@@ -303,7 +303,13 @@ try {
   let resultOk = true;
   for (const [app, status] of expect.result_rows)
     resultOk = resultOk && await frame.locator(`[data-ha-app="${app}"][data-status="${status}"]`).count() === 1;
-  if (expect.exact) resultOk = resultOk && await frame.locator('#view li.ha-group-row').count() === expect.result_rows.length;
+  if (expect.exact && resultOk) {
+    // A restore's kept copy (Odoo's cold cluster) is listed below the apps as an li.ha-group-row.ha-kept-item, not an app
+    // row. It is counted only when the rows differ, so every earlier result asks exactly what it asked before.
+    let rows = await frame.locator('#view li.ha-group-row').count();
+    if (rows !== expect.result_rows.length) rows -= await frame.locator('#view li.ha-group-row.ha-kept-item').count();
+    resultOk = rows === expect.result_rows.length;
+  }
   check(expect.texts.result, resultOk);
   check(expect.texts.intent, choosing ? validImportIntent(wire, ticks, clicks, expect.importApps, 1 + rechecks)
     : validImportIntent(wire, ticks, clicks, expect.importApps));

@@ -104,7 +104,8 @@ function count(selector) {
   if ((m = selector.match(/^\[data-ha-app="([a-z0-9-]+)"\]\[data-status="([a-z-]+)"\]$/)))
     return view === 'result' ? scenario.rows.filter(([id, status]) => id === m[1] && status === m[2]).length : 0;
   if (selector === '#ha-confirm-list .ha-issue-confirm') return view === 'confirm' ? scenario.lines_shown : 0;
-  if (selector === '#view li.ha-group-row') return view === 'result' ? scenario.rows.length : 0;
+  if (selector === '#view li.ha-group-row') return view === 'result' ? scenario.rows.length + (scenario.kept || 0) : 0;
+  if (selector === '#view li.ha-group-row.ha-kept-item') return view === 'result' ? scenario.kept || 0 : 0;
   if (selector === '#ha-ack') return view === 'confirm' ? 1 : 0;
   if (selector === '#ha-key') return view === 'key' || (view === 'confirm' && scenario.key_field_after_check) ? 1 : 0;
   if (selector === '.stepper li[data-step="key"]') return scenario.key_step_shown || 0;
@@ -361,6 +362,20 @@ test('Odoo: the named database of several is chosen; its lines, the line about t
   const preselected = drive(ODOO, { ...ODOO_RUN, radios: { 'ha-odoo-database': 'woowtest2' } });
   assert.equal(preselected.status, 0);
   assert.equal(actions(preselected).some(line => line.startsWith('check input[name="ha-odoo-database"]')), false);
+});
+
+test('Odoo: the result lists the restore\'s kept copy as its own row; it is no app row, another app row still fails', () => {
+  // dev-c, 2026-11-28 (odoo-page-20261128-02): the import succeeded, the result showed the odoo row imported and one
+  // li.ha-group-row.ha-kept-item below it, and the exact count (2 rows for 1 app) failed the check.
+  const kept = drive(ODOO, { ...ODOO_RUN, kept: 1 });
+  assert.ok(kept.result.checks.every(item => item.ok), JSON.stringify(kept.result.checks));
+  assert.equal(kept.status, 0);
+  assert.deepEqual(kept.log.unknown, []);
+  const extra = drive(ODOO, { ...ODOO_RUN, rows: [['odoo', 'imported'], ['n8n', 'imported']] });
+  assert.equal(byName(extra.result)['UI result shows odoo imported'], false);
+  assert.notEqual(extra.status, 0);
+  const keptAndExtra = drive(ODOO, { ...ODOO_RUN, kept: 1, rows: [['odoo', 'imported'], ['n8n', 'imported']] });
+  assert.equal(byName(keptAndExtra.result)['UI result shows odoo imported'], false);
 });
 
 test('Odoo: the only database that can move needs no name; several without a name or a named one that cannot move stop', () => {

@@ -58,7 +58,8 @@ function count(selector) {
   if ((m = selector.match(/^\[data-ha-app="([a-z0-9-]+)"\]\[data-status="([a-z-]+)"\]$/)))
     return view === 'result' ? scenario.rows.filter(([id, status]) => id === m[1] && status === m[2]).length : 0;
   if (selector === '#ha-confirm-list .ha-issue-confirm') return view === 'confirm' ? scenario.lines_shown : 0;
-  if (selector === '#view li.ha-group-row') return view === 'result' ? scenario.rows.length : 0;
+  if (selector === '#view li.ha-group-row') return view === 'result' ? scenario.rows.length + (scenario.kept || 0) : 0;
+  if (selector === '#view li.ha-group-row.ha-kept-item') return view === 'result' ? scenario.kept || 0 : 0;
   if (selector === '#ha-ack') return view === 'confirm' ? 1 : 0;
   if (selector === '#ha-key') return view === 'key' ? 1 : 0;
   log.unknown.push(selector);
