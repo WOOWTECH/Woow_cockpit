@@ -512,6 +512,24 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         return before
 
     # -------- --via-page: upload, check, conversion and import through dev-d's real Cockpit page (focus_page_bridge)
+    def page_wait(self, jid, timeout):
+        """The bridge's wait for one page job: its terminal record, every backup it names recorded as this case's own at
+        once. The quiet unit is waited for afterwards (page_jobs): the chain's jobs share the first job's unit until the
+        last one ends, so waiting for it here would hold the conversion's wait for the whole chain."""
+        if not plan.JOB.fullmatch(jid): raise ValueError('job ID')
+        stop=min(self.deadline,self.clock()+max(1,timeout))
+        while self.clock()<stop:
+            job=self.helper('job-status',{'job_id':jid})['job']
+            if job.get('state') not in ('queued','running'):
+                for key in ('backup_id','safety_backup_id'):
+                    bid=(job.get('result') or {}).get(key)
+                    if bid:
+                        if not plan.BACKUP.fullmatch(bid) or bid in self.r.get('before_backups',[]): raise ValueError('foreign backup')
+                        if bid not in self.r['created_backups']: self.r['created_backups'].append(bid)
+                self.save(); return job
+            self.sleep(3)
+        raise TimeoutError('page job still running; recovery waits for it')
+
     def page_jobs(self, summary):
         """Every job the page started, waited for (terminal, its unit quiet) and recorded in the receipt: recovery never
         starts while one runs, every backup one made is this case's own. Returns {job id: record}."""
@@ -529,8 +547,13 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
     def adopt_page(self, summary):
         keep=('phase','ha_id','ha_record_existed','check_job_id','check_job_ids','root_job_id','root_job_ids',
               'chain_job_ids','created_backups','passed','gates','reasons','chosen')
-        self.r['page']={k:summary.get(k) for k in keep if k in summary}; self.save()
+        self.r['page']={k:summary.get(k) for k in keep if k in summary}
+        root=summary.get('root_job_id') or next(iter(summary.get('root_job_ids') or []),None)
+        if root:   # until every page job is quiet, recovery's settle() waits for the chain (its first job's unit) first
+            self.r['pending']={'command':'page','request_id':'page','tag':'page','job_id':root}
+        self.save()
         jobs=self.page_jobs(summary)
+        self.r['pending']=None; self.save()
         first=jobs.get(summary.get('root_job_id') or next(iter(summary.get('root_job_ids') or []),None)) or {}
         converted=(first.get('result') or {}).get('backup_id')
         if first.get('type')=='backup' and converted: self.r['converted']=converted
@@ -551,7 +574,7 @@ print(json.dumps({'headroom':int(Path('/sys/fs/cgroup/memory.max').read_text())-
         self.r['upload_intent']=True; self.r['page_intent']=True; self.save()
         secrets=self.run.args.secrets
         ops_=bridge.Ops(helper=lambda command,request=None:self.helper(command,request),
-                        wait_job=lambda job_id,timeout:self.wait_job(job_id),
+                        wait_job=self.page_wait,
                         root_json=lambda script,request:self.root_json(script,request,timeout=300))
         try:
             page=bridge.import_via_page(device=plan.DEVICE,lock=str(self.saved.LOCK),apps=['litellm'],importable=['litellm'],
