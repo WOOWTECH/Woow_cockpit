@@ -422,8 +422,10 @@ class ProductRoundTripTests(product_case.NextcloudCase):
             with self.subTest(keys=keys), self.assertRaises(BackupError) as caught:
                 self.convert_with_key(derived_id, None if keys is None else {'nextcloud': keys})
             self.assertEqual(caught.exception.code, 'confirmation-required')
-            job = {'state': 'failed', 'error': caught.exception.as_dict(), 'result': caught.exception.result}
-            ok, detail = skipped.judge_refusal(0, {'job_id': 'j1'}, job, {'a'}, {'a'}, found=found, raised=raised)
+            kept = {k: v for k, v in caught.exception.as_dict().items() if k in ('code', 'message')}   # the job record's
+            job = {'state': 'failed', 'error': kept, 'result': caught.exception.result}
+            ok, detail = skipped.judge_refusal(0, {'job_id': 'j1'}, job, {'a'}, {'a'}, found=found, raised=raised,
+                                               acknowledged=keys)
             self.assertTrue(ok, detail)
             self.assertEqual(self.world.dirs, {}, 'nothing is handed to the restore')
         with self.assertRaises(BackupError) as caught:      # the .htaccess key alone: the link line comes first
@@ -692,7 +694,8 @@ def check_job(issues=None, *, state='succeeded', section=None, **app):
 def refusal_job(found, named, *, state='failed', code='confirmation-required', status='skipped', extra=()):
     error = haissues.confirmation_required({'nextcloud': named}, 'x')
     issues = list(found) + list(extra)
-    return {'state': state, 'error': error.as_dict() if code == 'confirmation-required' else {'code': code},
+    kept = {k: v for k, v in error.as_dict().items() if k in ('code', 'message')}   # what a job record keeps (dev-e)
+    return {'state': state, 'error': kept if code == 'confirmation-required' else {'code': code},
             'result': {'results': [dict(haimport.convert_result('nextcloud', error, issues), status=status)]}}
 
 
@@ -730,13 +733,22 @@ class VerdictTests(unittest.TestCase):
         self.assertTrue(ok, detail)
         ok, detail = skipped.judge_refusal(0, {'job_id': 'j1'}, refusal_job([link_issue(), htaccess_issue()],
                                                                             [htaccess_issue()]), {'a'}, {'a'},
-                                           found=list(derive.KEYS), raised=derive.HTACCESS_KEY)
+                                           found=list(derive.KEYS), raised=derive.HTACCESS_KEY,
+                                           acknowledged=[derive.SYMLINK_KEY])
         self.assertTrue(ok, detail)
         self.assertTrue(skipped.judge_refusal(1, {'error': {'code': 'confirmation-required'}}, None, {'a'}, {'a'},
                                               found=[], raised=derive.SYMLINK_KEY)[0])
+        # The row names the line (the job record keeps no details): an unacknowledged line besides it, or an
+        # acknowledged line after it, is another answer than the product's.
+        for label, (found_lines, acknowledged, raised) in {
+                'two unacknowledged lines': ([link_issue(), htaccess_issue()], None, derive.SYMLINK_KEY),
+                'a line after the named one': ([link_issue(), htaccess_issue()], [derive.HTACCESS_KEY], derive.SYMLINK_KEY),
+                'another line named': ([htaccess_issue()], None, derive.SYMLINK_KEY)}.items():
+            with self.subTest(fault=label):
+                self.assertFalse(skipped.judge_refusal(0, {'job_id': 'j1'}, refusal_job(found_lines, found_lines), {'a'},
+                                                       {'a'}, found=[i.key('nextcloud') for i in found_lines],
+                                                       raised=raised, acknowledged=acknowledged)[0])
         faults = {
-            'another line named': (refusal_job([link_issue()], [htaccess_issue()]), [derive.SYMLINK_KEY], derive.SYMLINK_KEY,
-                                   {'a'}),
             'converted': (refusal_job([link_issue()], [link_issue()], state='succeeded'), [derive.SYMLINK_KEY],
                           derive.SYMLINK_KEY, {'a'}),
             'other code': (refusal_job([link_issue()], [link_issue()], code='incompatible', status='failed'),

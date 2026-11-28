@@ -453,10 +453,12 @@ def judge_check(job, section):
         'section_differ': {k: [v, have.get(k)] for k, v in section.items() if have.get(k) != v}}
 
 
-def judge_refusal(rc, reply, job, before, after, *, found, raised):
+def judge_refusal(rc, reply, job, before, after, *, found, raised, acknowledged=None):
     """A conversion refused at the line of `raised` (its bound key): refused at the start (confirmation-required) or the
-    job fails with it, Nextcloud skipped, the error naming exactly that line, the row holding exactly the confirmation
-    lines `found` (the acknowledged ones met before it and it), no stop, no backup added."""
+    job fails with it, Nextcloud skipped, the row holding exactly the confirmation lines `found` (the acknowledged ones
+    met before it and it, in the order met), the one it names - the row's lines minus the keys the request acknowledged
+    (`acknowledged`) - exactly `raised` and the last of them, no stop, no backup added. The job's error keeps only its
+    code and message (dev-e, 2026-11-28: no `details`), so the row names the line, as S5-B judged it."""
     added = sorted(set(after) - set(before))
     if rc != 0:
         refused = (reply.get('error') or {}).get('code') == 'confirmation-required' and job is None
@@ -466,12 +468,11 @@ def judge_refusal(rc, reply, job, before, after, *, found, raised):
     row = results[0] if len(results) == 1 else {}
     issues = row.get('issues') or []
     keys = [i.get('key') for i in issues if i.get('level') == 'confirm']
-    named = [i.get('key') for i in ((error.get('details') or {}).get('apps') or {}).get('nextcloud') or []
-             if i.get('level') == 'confirm']
+    named = [key for key in keys if key not in set(acknowledged or ())]
     ok = ((job or {}).get('state') == 'failed' and error.get('code') == 'confirmation-required'
           and row.get('app_id') == 'nextcloud' and row.get('status') == 'skipped' and row.get('code') == 'confirmation-required'
-          and sorted(keys) == sorted(found) and named == [raised] and not any(i.get('level') == 'stop' for i in issues)
-          and not added)
+          and sorted(keys) == sorted(found) and named == [raised] and keys[-1:] == [raised]
+          and not any(i.get('level') == 'stop' for i in issues) and not added)
     return ok, {'start_refused': False, 'state': (job or {}).get('state'), 'error': error.get('code'), 'named': named,
                 'result': {k: row.get(k) for k in ('app_id', 'status', 'code')}, 'confirm_keys': keys, 'added': added}
 
@@ -658,7 +659,7 @@ def make_run(Base, ctx, variant):
             rc, reply = d.helper('ha-convert-start', request, timeout=300)
             job = wait(reply['job_id'], ev=ev) if rc == 0 and reply.get('job_id') else None
             after = {b['id'] for b in d.ok('list', ev=ev).get('backups') or []}
-            ok, detail = judge_refusal(rc, reply, job, before, after, found=found, raised=raised)
+            ok, detail = judge_refusal(rc, reply, job, before, after, found=found, raised=raised, acknowledged=keys)
             ev.save(f'convert-refused-{label}.json', detail)
             require_check(text, ok)
 
