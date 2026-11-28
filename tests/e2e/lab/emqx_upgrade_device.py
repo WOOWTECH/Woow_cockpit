@@ -67,6 +67,9 @@ QUADLET_DIR = '.config/containers/systemd'
 QUADLETS = ('emqx.container', 'emqx-entrance.container')
 MARKER = '/opt/emqx/data/woow-ha-import.json'
 MARKER_BODY = '{"kind":"woow-ha-import","version":1,"app":"emqx"}\n'    # ha_emqx.MARKER_BODY
+# The bytes on disk: ha_emqx.write_marker writes printf '%s' of MARKER_BODY.strip() (no trailing newline; dev-d,
+# 2026-11-28 emqx-upgrade-01). The package's smoke.sh only tests that the file exists.
+MARKER_WRITTEN = MARKER_BODY.strip().encode()
 DEVICE_SECRETS = ('woow-emqx-dashboard-password', 'woow-emqx-node-cookie', 'woow-emqx-mqtt-password',
                   'woow-emqx-mqtt-bootstrap')
 BLANK = '<dev-d-secret>'
@@ -312,7 +315,7 @@ def marker():
     if rc != 0:
         return {'present': None, 'exact': False}
     rc, out = RUN(['podman', 'exec', 'woow-emqx', 'cat', MARKER], timeout=60)
-    return {'present': True, 'exact': rc == 0 and out == MARKER_BODY.encode()}
+    return {'present': True, 'exact': rc == 0 and out == MARKER_WRITTEN}
 
 
 def tree(path):

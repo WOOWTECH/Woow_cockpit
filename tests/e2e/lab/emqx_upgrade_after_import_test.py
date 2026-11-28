@@ -991,6 +991,20 @@ class FakeRun:
         raise AssertionError(argv)
 
 
+class MarkerTests(unittest.TestCase):
+    def test_the_marker_is_the_bytes_the_product_writes(self):
+        # dev-d, 2026-11-28 (emqx-upgrade-01): ha_emqx.write_marker writes printf '%s' of MARKER_BODY.strip(), no newline.
+        dev = _load('emqx_upgrade_device')
+        self.assertEqual(dev.MARKER_WRITTEN, b'{"kind":"woow-ha-import","version":1,"app":"emqx"}')
+        for body, exact in ((dev.MARKER_WRITTEN, True), (dev.MARKER_BODY.encode(), False), (b'{}', False)):
+            answers = iter([(0, b''), (0, body)])
+            dev.RUN = lambda argv, timeout=None, answers=answers: next(answers)
+            with self.subTest(body=body):
+                self.assertEqual(dev.marker(), {'present': True, 'exact': exact})
+        dev.RUN = lambda argv, timeout=None: (1, b'')
+        self.assertEqual(dev.marker(), {'present': False, 'exact': False})
+
+
 class DeviceTests(unittest.TestCase):
     def setUp(self):
         self.dev = _load('emqx_upgrade_device')
