@@ -214,6 +214,19 @@ has been run.
 The candidate explicitly refuses those cases pending separately reviewed fixture
 construction/oracles. This is a recorded remaining gate, not acceptance evidence.
 
+**2026-11-28: skipped entries prepared as code, NOT run** (`focus_nextcloud_r6_skipped_derive.py` builds the
+derivative, `focus_nextcloud_r6_skipped.py` is the leased case on R6's machinery, offline tests
+`tests/backup/test_focus_nextcloud_r6_skipped.py`). The three reviewed additions sit in a folder of their own below
+HA's data directory (`woowbk-r6-skipped-entries/`: `control.txt`, `.htaccess` with `Require all granted`,
+`control-link.txt -> control.txt`), so no user's file list, files:scan or manifest changes. The share member is
+re-encrypted (SecureTar v3, the same HA key and root salt) around a plaintext that is the reviewed gzip member followed by
+the original gzip stream byte for byte. `--plan` (host only, no lease) streams the derivative into a hash and back
+through the product's own readers and writes the private provenance; the leased run makes the same bytes again straight
+into dev-e's upload file through R6's in-device writer (nothing materialised). Expected check: exactly
+`nextcloud.symlinks-skipped` [`nextcloud/woowbk-r6-skipped-entries/control-link.txt`] and
+`nextcloud.htaccess-skipped` [`woowbk-r6-skipped-entries/.htaccess`]; two refused conversions (none, the link key only),
+then both keys. A passing run prints 140 fixed lines (fullshare05's 118 plus 22).
+
 For skipped entries, use a streamed derivative of the original share fixture:
 add one harmless relative symlink, one nested `.htaccess` with an unsafe allow
 directive, and an ordinary control file. Preserve all original bytes/metadata
